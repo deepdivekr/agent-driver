@@ -1,0 +1,28 @@
+{
+  "name": "agent-driver",
+  "version": "0.1.0-alpha.1",
+  "private": true,
+  "description": "Evidence-led local execution control plane (experimental)",
+  "type": "module",
+  "engines": {
+    "node": "22.22.0",
+    "npm": "11.11.0"
+  },
+  "bin": {
+    "agent-driver": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
+    "test": "npm run test:runtime",
+    "test:runtime": "npm run build && node --test --test-concurrency=1 --test-reporter=./scripts/runtime/test-reporter.mjs tests/runtime-*.test.mjs",
+    "runtime": "node dist/cli.js"
+  },
+  "dependencies": {
+    "@lydell/node-pty": "1.2.0-beta.15",
+    "playwright": "1.63.0"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.3",
+    "typescript": "7.0.2"
+  }
+}

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.runtime/
+.env
+.env.*
+*.log
+*.sqlite*
+tests/report.json
+tests/evidence/
+*:Zone.Identifier
+.public-export*
