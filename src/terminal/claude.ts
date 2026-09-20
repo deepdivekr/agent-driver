@@ -6,6 +6,7 @@ import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {redact, type CliEvent, type TerminalSession, type TurnResult} from './contracts.js';
 import {brokerTools, wirePrompt} from './file-contracts.js';
+import {OutputPump} from './output-pump.js';
 
 export interface CliTransport {
   readonly child: ChildProcessWithoutNullStreams;
@@ -64,18 +65,22 @@ export class JsonLineDecoder {
     this.pending += this.decoder.end();
     requireCondition(!this.pending.trim(), 'CLI_TRUNCATED_FRAME');
   }
+  discard() {this.pending = ''; this.decoder = new StringDecoder('utf8');}
 }
 export function transportFromChild(child: ChildProcessWithoutNullStreams, session: TerminalSession, callbacks: CliCallbacks, files = false): CliTransport {
   let stopped = false, closed = false, stopPromise: Promise<void> | null = null;
   const decoder = new JsonLineDecoder(callbacks.event);
   const fail = (code: string) => {if (!stopped) {stopped = true; callbacks.failure(code);}};
-  child.stdout.on('data', (chunk: Buffer) => {if (!stopped) try {decoder.push(chunk);} catch (error) {fail(error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'CLI_PROTOCOL_ERROR');}});
-  child.stdout.on('end', () => {if (!stopped) try {decoder.end();} catch {fail('CLI_TRUNCATED_FRAME');}});
+  let outputDrained = false, exitNotified = false;
+  let resolveEnded: () => void;
+  const ended = new Promise<void>(resolve => {resolveEnded = resolve;});
+  const maybeExit = () => {if (closed && outputDrained && !exitNotified) {exitNotified = true; try {callbacks.exit();} finally {resolveEnded();}}};
+  const pump = new OutputPump(child.stdout, decoder, fail, () => {outputDrained = true; maybeExit();});
   // Always drain stderr, but do not persist arbitrary CLI stderr (paths/secrets).
   child.stderr.on('data', () => {});
-  child.on('error', () => fail('CLI_PROCESS_ERROR'));
-  child.stdin.on('error', () => fail('CLI_STDIN_ERROR'));
-  const ended = new Promise<void>(resolve => child.once('close', () => {closed = true; callbacks.exit(); resolve();}));
+  child.on('error', () => {try {fail('CLI_PROCESS_ERROR');} finally {pump.abort();}});
+  child.stdin.on('error', () => {try {fail('CLI_STDIN_ERROR');} finally {pump.abort();}});
+  child.once('close', () => {closed = true; maybeExit();});
   return {
     child,
     writable: () => !closed && !stopped && child.exitCode === null && child.signalCode === null && child.stdin.writable && !child.stdin.destroyed,
@@ -89,6 +94,7 @@ export function transportFromChild(child: ChildProcessWithoutNullStreams, sessio
       if (stopPromise) return stopPromise;
       stopPromise = (async () => {
         stopped = true;
+        pump.abort();
         if (closed) return;
         child.stdin.end(); child.kill('SIGTERM');
         const timer = setTimeout(() => {if (!closed) child.kill('SIGKILL');}, 2000);

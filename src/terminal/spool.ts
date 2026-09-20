@@ -13,6 +13,8 @@ export function writeSpoolSegment(database:string,segment:SpoolSegment,line:Buff
       const stat=fstatSync(fd);requireCondition(stat.isFile()&&stat.nlink===1&&stat.size===segment.bytes,'CLI_SPOOL_DURABILITY_GAP');
       let written=0;while(written<line.length){const n=writeSync(fd,line,written);requireCondition(n>0,'CLI_SPOOL_WRITE_FAILED');written+=n;}fsyncSync(fd);
     } finally {closeSync(fd);}
-    fsyncSync(dir);
+    // Append changes file contents/size, already fsynced above. Only creation
+    // changes the directory entry; syncing it for every frame adds no durability.
+    if(created)fsyncSync(dir);
   } finally {closeSync(dir);}
 }
