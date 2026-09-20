@@ -18,6 +18,7 @@ import {RecoveryStore,remainingBudget} from '../dist/supervisor/store.js';
 import {processIdentity,liveness,profileOccupancy} from '../dist/supervisor/identity.js';
 import {MIGRATION_1,MIGRATION_2} from '../dist/store/migration.js';
 import {failureCode,workerStages} from '../dist/supervisor/diagnostics.js';
+import {runBoundDraft} from '../dist/browser/bound-draft.js';
 
 const body=id=>({request_id:id,capability:'fixture.draft.save',account_ref:'account-a',input:{name:'중단 시험',note:'저장 중복 금지 🐈'},deadline_ms:60000});
 async function until(fn,timeout=15000){const end=performance.now()+timeout;while(performance.now()<end){const value=await fn();if(value)return value;await delay(25);}throw Error('condition timed out');}
@@ -207,4 +208,13 @@ test('runtime native browser pre-intent rejection remains prepared with a durabl
   assert.equal(JSON.stringify(records).includes('wrong-account-private-marker'),false);
   await s.step();assert.equal(s.store.submission(id).attempt_count,1);assert.equal(effects(x),0);
   const reopened=new RecoveryStore(x.config.dbPath);assert.deepEqual(diagnostics(x,{store:reopened},id),records);reopened.close();
+});
+test('runtime native diagnostic write failure during cleanup never skips owned browser close',{timeout:60000},async t=>{
+  const x=await setup(t),id=enqueue(x);
+  await runBoundDraft(x.api.store,x.config,id,body('first'),60000,undefined,d=>{
+    if(d.kind==='progress'&&d.stage==='context_close')throw Error('diagnostic-storage-unavailable');
+  });
+  assert.equal(x.api.store.task(id).status,'succeeded');assert.equal(effects(x),1);
+  assert.equal(x.api.store.resourceBusy(x.config.project.id),false);
+  await until(async()=>await profileOccupancy(x.config.project.profileRef)==='clear');
 });

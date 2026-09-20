@@ -84,7 +84,10 @@ export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:
     }
     diagnostic?.({kind:'failure',stage,code:failureCode(error)});
   } finally {
-    if(timer)clearTimeout(timer);progress('context_close');await context?.close();
+    if(timer)clearTimeout(timer);
+    // Diagnostic storage failure must never skip closing the owned browser.
+    try{progress('context_close');}catch{/* The missing diagnostic remains unobserved. */}
+    await context?.close();
     // Do not hand a shared profile to another worker until this context is closed.
     if(lease&&['succeeded','cancelled','paused_dependency'].includes(store.task(taskId).status))store.release(lease);
     storage.release(reservation);
