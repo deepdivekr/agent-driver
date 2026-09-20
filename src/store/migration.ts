@@ -37,3 +37,22 @@ CREATE TABLE submission(
  PRIMARY KEY(project_id,request_id));
 UPDATE schema_version SET version=2;
 `;
+
+export const MIGRATION_3 = `
+CREATE TABLE supervisor(
+ project_id TEXT PRIMARY KEY REFERENCES project(id),nonce TEXT NOT NULL,identity_json TEXT NOT NULL,
+ config_hash TEXT NOT NULL,active INTEGER NOT NULL,stop_requested INTEGER NOT NULL DEFAULT 0,started_at TEXT NOT NULL);
+ALTER TABLE submission ADD COLUMN worker_identity_json TEXT;
+ALTER TABLE submission ADD COLUMN launch_nonce TEXT;
+ALTER TABLE submission ADD COLUMN launch_owner TEXT;
+ALTER TABLE submission ADD COLUMN dispatch_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE submission ADD COLUMN attempt_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE submission ADD COLUMN recovery_state TEXT NOT NULL DEFAULT 'pending';
+ALTER TABLE submission ADD COLUMN recovery_generation INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE submission ADD COLUMN retry_after_ms REAL NOT NULL DEFAULT 0;
+ALTER TABLE submission ADD COLUMN last_error TEXT;
+ALTER TABLE submission ADD COLUMN accepted_boot_id TEXT;
+ALTER TABLE submission ADD COLUMN accepted_uptime_ms REAL;
+UPDATE submission SET recovery_state='legacy_unknown' WHERE worker_nonce IS NOT NULL;
+UPDATE schema_version SET version=3;
+`;

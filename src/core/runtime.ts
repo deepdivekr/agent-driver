@@ -1,4 +1,5 @@
 import { RuntimeStore } from '../store/runtime-store.js';
+import {type CheckpointHook} from '../supervisor/contracts.js';
 import { guard } from '../policy/dispatch-guard.js';
 import { requireCondition, type Capability, type Lease, type RuntimeAdapter, type DispatchContext, type Verification } from './contracts.js';
 export class Runtime {
@@ -7,15 +8,17 @@ export class Runtime {
     this.#capabilities=new Map(capabilities.map(c=>[c.route,Object.freeze({...c,environments:[...c.environments]})]));
     requireCondition(this.#capabilities.size===capabilities.length,'DUPLICATE_ROUTE');
   }
-  async execute(taskId:string,callerRef:string,lease:Lease,route:string,input:unknown,adapter:RuntimeAdapter,options:{releaseLeaseOnComplete?:boolean}={}) {
+  async execute(taskId:string,callerRef:string,lease:Lease,route:string,input:unknown,adapter:RuntimeAdapter,options:{releaseLeaseOnComplete?:boolean;checkpoint?:CheckpointHook}={}) {
     const capability=this.#capabilities.get(route);requireCondition(capability,'UNREGISTERED_ROUTE');
     const context:DispatchContext={taskId,callerRef,lease,capability,observation:await adapter.observe(),maxObservationAgeMs:3000};
     guard(this.store,context);
     const intentId=this.store.begin(lease,capability.id,capability.effect,input,route);
-    // There is no await between durable intent + fencing and invoking execute.
+    // Production has no checkpoint; only trusted test harnesses can pause here.
+    if(options.checkpoint)await options.checkpoint('intent_recorded');
     let responseOk=true;
     try {await adapter.execute();} catch {responseOk=false;}
     this.store.response(lease,intentId,responseOk);
+    if(options.checkpoint)await options.checkpoint('response_recorded');
     let verification:Verification={result:'UNKNOWN',source:'unobserved',accountRef:context.observation.accountRef,targetRef:context.observation.targetRef,generation:lease.generation,observedMonoMs:performance.now(),detail:{response_ok:responseOk}};
     try {
       const fresh=await adapter.observe();guard(this.store,{...context,observation:fresh},performance.now(),true);
@@ -25,6 +28,7 @@ export class Runtime {
       verification=candidate;
     } catch { /* No replay: retain UNKNOWN, including when the target vanished. */ }
     const task=this.store.complete(lease,intentId,verification);
+    if(options.checkpoint)await options.checkpoint('verified');
     if(options.releaseLeaseOnComplete!==false&&(task.status==='succeeded'||task.status==='cancelled'))this.store.release(lease);
     return {task_id:task.id,project_id:task.project_id,status:task.status,selected_route:task.selected_route,session_ref:task.target_ref,effect_state:task.effect_state,verification,artifacts:[],next_action:task.next_action,intent_id:intentId};
   }

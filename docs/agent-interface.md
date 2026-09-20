@@ -1,14 +1,14 @@
-# Agent interface — Phase 16
+# Agent interface — Phase 17
 
 ## 실제 지원과 남은 범위
 
 CLI와 stdio MCP는 같은 RuntimeApi를 사용한다. 원문에 열거된 19개 도구와 추가 `runtime_task_intake`를 제공한다. 원문의 “15종” 문구 대신 명명된 전체 목록을 기준으로 했다.
 
-사용 가능: health, capabilities list/describe, task start/status/cancel, recovery status, artifacts list(미지원/빈 목록 명시), events read/ack, intake.
+사용 가능: health, capabilities list/describe, task start/status/cancel/resume, recovery status/prepare, artifacts list(미지원/빈 목록 명시), events read/ack, intake. resume/prepare는 안전하게 준비된 미전송 작업에만 적용한다.
 
-명시적 `NOT_IMPLEMENTED`: task resume, recovery prepare, terminal start/status/submit_prompt/resume/interrupt, browser session open/status. `verify`, `soak`, `ops` CLI 역시 미구현이며 help에 표시한다. 이 목록을 MCP 완전 구현이나 공식 릴리즈 완료라고 부르지 않는다.
+명시적 `NOT_IMPLEMENTED`: terminal start/status/submit_prompt/resume/interrupt, browser session open/status. `verify`, `soak`, `ops` CLI 역시 미구현이며 help에 표시한다. 이 목록을 MCP 완전 구현이나 공식 릴리즈 완료라고 부르지 않는다.
 
-실제 write capability는 `fixture.draft.save` 한 개이며 **host 설정에 environment=fixture가 있어야** 보인다. production 기본값에는 실행 capability가 없다. 실제 사이트 지원과 자동 세션 복구는 후속 단계다.
+실제 write capability는 `fixture.draft.save` 한 개이며 **host 설정에 environment=fixture가 있어야** 보인다. production 기본값에는 실행 capability가 없다. Linux 동일 부팅 세션의 worker 복구만 지원하며 실제 사이트·Windows/재부팅 복구는 후속 단계다.
 
 ## 사용 흐름
 
@@ -46,10 +46,10 @@ node dist/cli.js mcp --config .runtime/lab-01/host.json
 
 ## 지속성·소유권·보안
 
-- 요청 수락은 task와 submission을 같은 SQLite WAL/FULL transaction으로 기록한다. source DB v1은 데이터를 보존하며 v2로 migration한다. 이전 실행 파일로 되돌릴 때 v2 DB 호환성은 보장하지 않는다. 업그레이드 백업/복원 검증은 출시 전 별도 gate다.
-- gateway는 detached worker를 shell 없이 시작한다. stdout/stderr를 연결하지 않고 OS 입력/창 활성화를 사용하지 않는다. worker는 독립 nonce/PID/시작 시각으로 기록되고 gateway 종료에 연결되지 않는다. PID만으로 다른 프로세스를 정리하지 않는다.
+- 요청 수락은 task와 submission을 같은 SQLite WAL/FULL transaction으로 기록한다. source DB v1/v2는 기존 데이터·intent·이벤트를 보존하며 v3로 migration한다. v2의 시작 신원이 없는 worker는 `legacy_unknown`, 같은 boot의 monotonic 접수 시점이 없는 요청은 자동 실행 차단이다. 구버전 실행 파일의 v3 DB 호환성은 보장하지 않는다. 업그레이드 백업/복원 검증은 출시 전 별도 gate다.
+- gateway는 먼저 독립 감독자를 확보한 뒤 durable queue에 접수한다. 감독자가 단일 실행 예약을 발급하고 고정 worker를 shell 없이 시작한다. stdout/stderr를 연결하지 않고 OS 입력/창 활성화를 사용하지 않는다. Linux 부팅 ID·PID·kernel 시작 tick 및 nonce/generation으로 신원을 확인하며 PID만으로 종료/lease 회수하지 않는다.
 - 동일 profile의 작업은 lease로 직렬화하며 context가 닫힌 뒤에만 다음 worker가 사용한다. 프로젝트의 수락 대기/실행 task 수는 16개로 제한하고 deadline은 1~120초다. 이는 장기 운영 supervisor·crash-loop·global resource budget 전체를 대체하지 않는다.
-- worker 중단/미확인 쓰기는 임의로 재전송하지 않는다. 현재 자동 supervisor/relaunch는 없다. 수락 직후 gateway가 죽어 spawn 전이었다면 queued/worker_start에 남으며 후속 복구 구현이 필요하다. 성공처럼 표시하지 않는다.
+- worker 사망과 profile 비점유를 확인한 미전송 작업만 최대 3회/지수 backoff로 재개한다. 하나라도 intent가 있으면 identity/record GET만 수행하고 불일치·UNKNOWN은 중단한다. 감독자 자체의 사망은 다음 명시적 start/접수로 복구하며 OS watchdog 자동 복구는 아직 없다. 자세한 정책·중지법은 [감독/복구 계약](supervisor-recovery.md)을 따른다.
 - caller/project/profile/account는 host 파일에서 고정한다. MCP 입력으로 바꾸거나 승인 발급할 수 없다. scope 검사에는 읽기/취소/이벤트도 포함한다. 동일 OS 사용자가 설정·DB를 바꿀 수 있는 권한은 보안 경계 밖이다.
 - 입력/파일 크기 및 request schema를 제한한다. DB는 POSIX 0600, 새 데이터 디렉터리는 0700. Windows ACL 강화를 검증했다고 주장하지 않는다. worker에는 필요한 환경변수만 넘기며 모델 API 키와 NODE_OPTIONS를 상속하지 않는다.
 - 합성 앱의 업무 데이터는 메모리에 있으므로 lab 프로세스를 종료하면 사라진다. 실행 DB와 dedicated profile은 보존한다. API 키·로그인 쿠키·실사용 자료를 이 테스트 팩에 넣지 않는다.

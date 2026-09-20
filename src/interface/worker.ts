@@ -1,22 +1,28 @@
-import {randomUUID} from 'node:crypto';
+import {fileURLToPath} from 'node:url';
 import {loadHostConfig} from './config.js';
 import {startRequest} from './catalog.js';
-import {RuntimeStore} from '../store/runtime-store.js';
+import {RecoveryStore,remainingBudget} from '../supervisor/store.js';
+import {processIdentity} from '../supervisor/identity.js';
+import {type CheckpointHook} from '../supervisor/contracts.js';
 import {runBoundDraft} from '../browser/bound-draft.js';
 import {requireCondition} from '../core/contracts.js';
 
-const [configPath,taskId]=process.argv.slice(2);
-let store:RuntimeStore|undefined,claimed=false;
-try{
-  requireCondition(configPath&&taskId,'WORKER_ARGUMENTS_REQUIRED');
-  const config=loadHostConfig(configPath);store=new RuntimeStore(config.dbPath);
+export async function runWorker(configPath:string,taskId:string,ticket:string,generation:number,checkpoint?:CheckpointHook){
+  const config=loadHostConfig(configPath),store=new RecoveryStore(config.dbPath);
+  try{
   requireCondition(store.task(taskId).project_id===config.project.id,'TASK_SCOPE_MISMATCH');
-  const submission=store.claimSubmission(taskId,config.fingerprint,randomUUID());claimed=true;
-  const request=startRequest.parse(submission.payload);
-  const age=Math.max(0,Date.now()-Date.parse(submission.acceptedAt));
-  await runBoundDraft(store,config,taskId,request,request.deadline_ms-age);
-}catch{
-  // Never print prompts, configuration values or upstream errors to inherited logs.
-  if(claimed&&store&&taskId){try{const t=store.task(taskId);if(!['succeeded','failed','cancelled','paused_dependency','reconciliation_required'].includes(t.status))store.recoverTask(taskId);}catch{}}
-  process.exitCode=1;
-}finally{store?.close();}
+  const identity=await processIdentity(process.pid);requireCondition(typeof identity!=='string','PROCESS_IDENTITY_UNSUPPORTED');
+  const row=store.claimWorker(taskId,config.fingerprint,ticket,generation,identity);
+  if(checkpoint)await checkpoint('claimed');
+  await runBoundDraft(store,config,taskId,startRequest.parse(JSON.parse(row.payload_json)),remainingBudget(row),checkpoint);
+  store.workerFinished(taskId,ticket,generation);
+  }catch{
+    // Recovery and lease reclamation belong to the supervisor after death/profile checks.
+    throw Error('WORKER_FAILED');
+  }finally{store.close();}
+}
+if(process.argv[1]===fileURLToPath(import.meta.url)){
+  const [configPath,taskId,ticket,generation]=process.argv.slice(2);
+  try{requireCondition(configPath&&taskId&&ticket&&generation,'WORKER_ARGUMENTS_REQUIRED');await runWorker(configPath,taskId,ticket,Number(generation));}
+  catch{process.exitCode=1;}
+}

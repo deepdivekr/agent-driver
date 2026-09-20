@@ -9,7 +9,7 @@
 Linux 또는 Ubuntu/WSL의 Bash에서 실행합니다. Node **22.22.0**, npm **11.11.0**을 사용합니다. 이 버전의 내장 SQLite는 experimental 경고를 stderr에 출력할 수 있습니다.
 
 ```bash
-git clone --branch phase-16-agent-interface https://github.com/deepdivekr/agent-driver.git
+git clone --branch phase-17-supervisor-recovery https://github.com/deepdivekr/agent-driver.git
 cd agent-driver
 npm ci
 npx playwright install chromium
@@ -17,7 +17,7 @@ npm run build
 npm run runtime -- demo
 ```
 
-위 명령은 아직 merge되지 않은 agent interface 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-16-agent-interface`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
+위 명령은 아직 merge되지 않은 supervisor 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-17-supervisor-recovery`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
 
 `demo`는 새 전용 프로필과 loopback 테스트 앱만 사용합니다. 기존 Chrome에 연결하지 않고 외부 사이트에 쓰지 않으며 모델 API를 호출하지 않습니다. 결과의 `task_id`와 `project_id`로 상태/이벤트를 조회할 수 있습니다. `.runtime/`에는 로컬 DB와 전용 프로필이 남고 공개되지 않습니다.
 
@@ -53,13 +53,14 @@ npm run runtime -- demo --wrong-account true
 |프로세스 강제 종료 뒤 intent 보존|실제 child kill 검증; 전원 상실 인증 아님|
 |Jev calibration 후보|평가 완료, shadow-only; 실행 권한 없음|
 |stdio MCP·공통 CLI·요청 ID dedup·gateway와 별도 worker|합성 앱에서 구현·검증; 미구현 도구는 명시적 오류|
+|독립 감독자·worker 사망 복구·읽기 전용 재조정|Linux 동일 부팅의 합성 앱에서 구현; OS watchdog/Windows/재부팅 복구는 미완료|
 |한 줄 요청→출처 있는 인수 제안|intake 연결; 범용 자연어 이해/실제 Task Pack은 후속|
 |다중 executor 자동 takeover·CLI host|후속 구현|
 |Windows foreground 비간섭·guest 설치·soak|미검증/후속 구현|
 
 상세 설계는 [v0.7](docs/control-plane-design-v0.7.md), 평가 근거는 [평가 요약](docs/evaluation-summary.md), 공개 범위는 [PUBLICATION.md](PUBLICATION.md)를 참고하세요. 프로세스 내부의 신뢰된 adapter 코드는 보안 샌드박스가 아니며, 동일 OS 사용자 권한으로 DB를 바꿀 수 있는 공격자를 막는다는 보장은 없습니다.
 
-에이전트 연결과 합성 앱 실습은 [Agent interface 안내](docs/agent-interface.md)에 있습니다. 19개 기본 MCP 이름과 intake를 노출하지만 terminal/browser session/resume 계열은 아직 미구현입니다. production 기본값에서 테스트 쓰기 경로는 비활성화됩니다.
+에이전트 연결과 합성 앱 실습은 [Agent interface 안내](docs/agent-interface.md), 시작·중지·복구는 [감독자 안내](docs/supervisor-recovery.md)에 있습니다. 19개 기본 MCP 이름과 intake를 노출하지만 terminal/browser session 계열은 아직 미구현입니다. production 기본값에서 테스트 쓰기 경로는 비활성화됩니다.
 
 ## 검사와 프로젝트 관리
 

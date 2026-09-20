@@ -2,13 +2,15 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync,chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { MIGRATION_1, MIGRATION_2 } from './migration.js';
+import { MIGRATION_1, MIGRATION_2, MIGRATION_3 } from './migration.js';
+import {bootClock} from '../supervisor/identity.js';
 import { requireCondition, type ProjectBinding, type TaskRecord, type TaskStatus, type Lease, type Effect, type Verification } from '../core/contracts.js';
 
 const terminal = new Set<TaskStatus>(['succeeded','failed','cancelled']);
 const timestamp = () => new Date().toISOString();
 export class RuntimeStore {
   readonly #db: DatabaseSync;
+  protected get connection(){return this.#db;}
   constructor(path: string) {
     requireCondition(path!==':memory:', 'DURABLE_DATABASE_REQUIRED');
     mkdirSync(dirname(resolve(path)), {recursive:true,mode:0o700});
@@ -18,9 +20,10 @@ export class RuntimeStore {
     this.transaction(()=>{
       this.#db.exec(MIGRATION_1);
       const versions=this.#db.prepare('SELECT version FROM schema_version').all();
-      requireCondition(versions.length===0 || (versions.length===1&&[1,2].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
+      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
       if(!versions.length)this.#db.prepare('INSERT INTO schema_version VALUES (1)').run();
       if(!versions.length||versions[0]?.version===1)this.#db.exec(MIGRATION_2);
+      if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===2)this.#db.exec(MIGRATION_3);
     });
   }
   close() { this.#db.close(); }
@@ -34,7 +37,8 @@ export class RuntimeStore {
       requireCondition(Number(active?.count)<16,'PROJECT_QUEUE_FULL');
       const taskId=randomUUID(),at=timestamp();
       this.#db.prepare("INSERT INTO task(id,project_id,capability,status,next_action,created_at,updated_at) VALUES (?,?,?,'queued','worker_start',?,?)").run(taskId,projectId,capability,at,at);
-      this.#db.prepare('INSERT INTO submission(project_id,request_id,task_id,request_hash,payload_json,config_hash,accepted_at) VALUES (?,?,?,?,?,?,?)').run(projectId,requestId,taskId,digest,encoded,configHash,at);
+      const clock=bootClock();
+      this.#db.prepare('INSERT INTO submission(project_id,request_id,task_id,request_hash,payload_json,config_hash,accepted_at,accepted_boot_id,accepted_uptime_ms) VALUES (?,?,?,?,?,?,?,?,?)').run(projectId,requestId,taskId,digest,encoded,configHash,at,clock.bootId,clock.uptimeMs);
       this.event(taskId,'task.accepted',{request_id:requestId,input_hash:digest});
       return {task:this.task(taskId),created:true};
     });
@@ -44,15 +48,17 @@ export class RuntimeStore {
       const row=this.#db.prepare('SELECT * FROM submission WHERE task_id=?').get(taskId);requireCondition(row,'SUBMISSION_NOT_FOUND');
       requireCondition(row.config_hash===configHash,'CONFIG_CHANGED');requireCondition(!row.worker_nonce,'WORKER_ALREADY_CLAIMED');
       requireCondition(this.task(taskId).status==='queued','TASK_NOT_DISPATCHABLE');
-      this.#db.prepare('UPDATE submission SET worker_nonce=?,worker_pid=?,worker_started_at=? WHERE task_id=?').run(nonce,process.pid,timestamp(),taskId);
+      this.#db.prepare("UPDATE submission SET worker_nonce=?,worker_pid=?,worker_started_at=?,recovery_state='legacy_unknown' WHERE task_id=?").run(nonce,process.pid,timestamp(),taskId);
       this.event(taskId,'worker.claimed',{worker_nonce:nonce,pid:process.pid});
       return {payload:JSON.parse(String(row.payload_json)) as unknown,acceptedAt:String(row.accepted_at)};
     });
   }
   outcome(taskId:string) {
     const task=this.task(taskId),intent=this.#db.prepare('SELECT verification_json FROM command_intent WHERE task_id=? ORDER BY created_at DESC LIMIT 1').get(taskId);
+    const recovery=this.#db.prepare('SELECT recovery_generation,recovery_state,last_error FROM submission WHERE task_id=?').get(taskId);
     return {task_id:task.id,project_id:task.project_id,status:task.status,selected_route:task.selected_route,session_ref:task.target_ref,effect_state:task.effect_state,
-      verification:intent?.verification_json?JSON.parse(String(intent.verification_json)) as unknown:{result:'UNKNOWN',source:'unobserved'},artifacts:[],next_action:task.next_action};
+      verification:intent?.verification_json?JSON.parse(String(intent.verification_json)) as unknown:{result:'UNKNOWN',source:'unobserved'},artifacts:[],next_action:task.next_action,
+      recovery_generation:recovery?.recovery_generation??0,recovery_state:recovery?.recovery_state??'unmanaged',recovery_reason:recovery?.last_error??null};
   }
   transaction<T>(fn:()=>T):T {
     this.#db.exec('BEGIN IMMEDIATE');
@@ -79,11 +85,11 @@ export class RuntimeStore {
     const row=this.#db.prepare('SELECT * FROM task WHERE id=?').get(id);requireCondition(row,'TASK_NOT_FOUND');return row as unknown as TaskRecord;
   }
   tasks(projectId:string):TaskRecord[] {this.project(projectId);return this.#db.prepare('SELECT * FROM task WHERE project_id=? ORDER BY created_at,id').all(projectId) as unknown as TaskRecord[];}
-  private event(taskId:string,kind:string,data:Record<string,unknown>) {
+  protected event(taskId:string,kind:string,data:Record<string,unknown>) {
     const task=this.task(taskId),id=this.#db.prepare('INSERT INTO event(project_id,task_id,kind,data_json,created_at) VALUES (?,?,?,?,?)').run(task.project_id,taskId,kind,JSON.stringify(data),timestamp()).lastInsertRowid;
     this.#db.prepare('INSERT INTO outbox VALUES (?)').run(id);
   }
-  private state(taskId:string,status:TaskStatus,nextAction:string,effect?:'none'|'unknown'|'observed') {
+  protected state(taskId:string,status:TaskStatus,nextAction:string,effect?:'none'|'unknown'|'observed') {
     const old=this.task(taskId);requireCondition(!terminal.has(old.status),'TASK_TERMINAL');
     this.#db.prepare('UPDATE task SET status=?,next_action=?,effect_state=?,updated_at=? WHERE id=?').run(status,nextAction,effect??old.effect_state,timestamp(),taskId);
     this.event(taskId,'task.state',{from:old.status,to:status,next_action:nextAction,effect_state:effect??old.effect_state});
@@ -145,11 +151,19 @@ export class RuntimeStore {
   recoverTask(taskId:string) {
     // Explicit operator-selected task only. Never called implicitly by opening a DB.
     return this.transaction(()=>{
+      requireCondition(!this.#db.prepare('SELECT task_id FROM submission WHERE task_id=?').get(taskId),'MANAGED_RECOVERY_REQUIRES_SUPERVISOR');
       const task=this.task(taskId);if(terminal.has(task.status))return task;
       const pending=this.#db.prepare('SELECT id,effect FROM command_intent WHERE task_id=? AND status!=\'verified\'').get(taskId);
       if(pending)this.state(taskId,'reconciliation_required','read_authoritative_result_no_write_retry',pending.effect==='write_external'?'unknown':'none');
       else {this.state(taskId,'ready_to_resume','rebind_owned_target');this.#db.prepare('UPDATE lease SET active=0 WHERE task_id=? AND inflight_intent IS NULL').run(taskId);}
       return this.task(taskId);
+    });
+  }
+  markUncertain(lease:Lease){
+    this.transaction(()=>{
+      this.assertLease(lease);
+      requireCondition(this.#db.prepare('SELECT inflight_intent FROM lease WHERE resource=?').get(lease.resource)?.inflight_intent,'INTENT_REQUIRED');
+      this.state(lease.taskId,'reconciliation_required','read_authoritative_result_no_write_retry','unknown');
     });
   }
   events(projectId:string,consumerId:string,limit=100) {

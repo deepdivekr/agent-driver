@@ -18,6 +18,8 @@ import {intake} from '../dist/interface/intake.js';
 import {tools} from '../dist/interface/catalog.js';
 import {MIGRATION_1} from '../dist/store/migration.js';
 import {RuntimeStore} from '../dist/store/runtime-store.js';
+import {stopSupervisor} from '../dist/supervisor/manager.js';
+import {liveness} from '../dist/supervisor/identity.js';
 
 async function setup(t,environment='fixture'){
   const root=await mkdtemp(join(tmpdir(),'driver-interface-')),fixture=await startFixture();
@@ -25,7 +27,9 @@ async function setup(t,environment='fixture'){
   const raw={schema_version:1,project_id:'test-project',caller_ref:'test-agent',account_ref:'account-a',worktree:root,data_dir:join(root,'data'),environment,...(environment==='fixture'?{fixture_url:url}:{})};
   await writeFile(path,JSON.stringify(raw));const config=loadHostConfig(path),api=new RuntimeApi(config),clients=[];
   const state={root,path,raw,config,api,fixture,spec,clients};
-  t.after(async()=>{for(const c of clients)await c.close().catch(()=>{});state.api.close();await fixture.close();await rm(root,{recursive:true,force:true});});
+  t.after(async()=>{for(const c of clients)await c.close().catch(()=>{});assert.equal((await stopSupervisor(state.config)).stopped,true);
+    for(const row of state.api.store.submissions(state.config.project.id)){if(row.worker_identity_json){const end=performance.now()+10000;while(await liveness(JSON.parse(row.worker_identity_json))==='alive'&&performance.now()<end)await delay(25);assert.equal(await liveness(JSON.parse(row.worker_identity_json)),'dead');}}
+    state.api.close();await fixture.close();await rm(root,{recursive:true,force:true});});
   return state;
 }
 const request=id=>({request_id:id,capability:'fixture.draft.save',account_ref:'account-a',input:{name:'한글 🐈',note:'원문 그대로 저장'},deadline_ms:20000});
@@ -54,7 +58,7 @@ test('runtime native schema v1 upgrades without discarding existing project/task
   const root=await mkdtemp(join(tmpdir(),'driver-migrate-'));t.after(()=>rm(root,{recursive:true,force:true}));const path=join(root,'old.sqlite');
   const old=new DatabaseSync(path);old.exec(MIGRATION_1);old.exec('INSERT INTO schema_version VALUES (1)');old.prepare('INSERT INTO project VALUES (?,?)').run('old',JSON.stringify({id:'old',capabilities:[]}));old.close();
   const store=new RuntimeStore(path);assert.equal(store.project('old').id,'old');store.close();
-  const db=new DatabaseSync(path);assert.equal(db.prepare('SELECT version FROM schema_version').get().version,2);db.close();
+  const db=new DatabaseSync(path);assert.equal(db.prepare('SELECT version FROM schema_version').get().version,3);db.close();
 });
 test('runtime native C01 CLI and SDK stdio share capability semantics with independent tasks',{timeout:60000},async t=>{
   const x=await setup(t),r=request('cli-first'),file=join(x.root,'request.json');await writeFile(file,JSON.stringify(r));

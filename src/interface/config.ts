@@ -10,10 +10,12 @@ export const HostConfigSchema=z.object({
   account_ref:identifier, worktree:z.string().min(1), data_dir:z.string().min(1),
   environment:z.enum(['production','fixture']).default('production'),
   fixture_url:z.string().url().optional(),
+  recovery_policy:z.enum(['auto_resume','prepare_only']).default('auto_resume'),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
   fixtureUrl:string|null; project:ProjectBinding;
+  recoveryPolicy:'auto_resume'|'prepare_only';
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
@@ -30,6 +32,6 @@ export function loadHostConfig(path:string):HostConfig {
     origin=url.origin;
   }
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:origin?[origin]:[],capabilities:origin?['fixture.draft.save']:[]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,
+  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,
     fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data})).digest('hex')};
 }

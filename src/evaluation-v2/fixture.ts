@@ -58,6 +58,7 @@ export async function startFixture() {
     const { spec, state } = entry;
     if (parts.length === 2) { res.writeHead(200, { "content-type": "text/html; charset=utf-8" }); res.end(page(spec, account)); return; }
     if (parts[2] !== "api") return send(res, 404, {});
+    if (parts[3] === "identity" && req.method === "GET") return send(res, 200, {account,run_id:spec.runId});
     if (parts[3] === "record" && req.method === "GET") return send(res, 200, state.records[account]);
     if (parts[3] === "download" && req.method === "GET") {
       state.effects.push({ account, kind: "download" });
