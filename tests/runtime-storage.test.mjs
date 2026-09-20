@@ -64,7 +64,7 @@ test('runtime native storage exhaustion blocks API dispatch while health history
 test('runtime native storage schema v5 migration preserves prior project records and does not require writes on current-version reopen',t=>{
   const x=setup(t),path=join(x.root,'old.sqlite'),db=new DatabaseSync(path);db.exec(MIGRATION_1);db.exec('INSERT INTO schema_version VALUES (1)');for(const sql of [MIGRATION_2,MIGRATION_3,MIGRATION_4,MIGRATION_5])db.exec(sql);db.prepare('INSERT INTO project VALUES (?,?)').run('prior',JSON.stringify({id:'prior'}));db.close();
   const current=new TerminalStore(path);assert.equal(current.project('prior').id,'prior');current.close();
-  const check=new DatabaseSync(path);assert.equal(check.prepare('SELECT version FROM schema_version').get().version,6);check.close();
+  const check=new DatabaseSync(path);assert.equal(check.prepare('SELECT version FROM schema_version').get().version,7);check.close();
 });
 test('runtime native actual ENOSPC and SQLITE_FULL preserve committed intent and forbid replay inside finite private tmpfs',async t=>{
   const x=setup(t),outside=join(x.root,'outside-sentinel');writeFileSync(outside,'unchanged');

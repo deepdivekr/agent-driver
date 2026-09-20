@@ -9,7 +9,7 @@
 Linux 또는 Ubuntu/WSL의 Bash에서 실행합니다. Node **22.22.0**, npm **11.11.0**을 사용합니다. 이 버전의 내장 SQLite는 experimental 경고를 stderr에 출력할 수 있습니다.
 
 ```bash
-git clone --branch phase-23-output-control https://github.com/deepdivekr/agent-driver.git
+git clone --branch phase-24-backup-restore https://github.com/deepdivekr/agent-driver.git
 cd agent-driver
 npm ci
 npx playwright install chromium
@@ -17,7 +17,7 @@ npm run build
 npm run runtime -- demo
 ```
 
-위 명령은 아직 merge되지 않은 출력·제어 응답성 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-23-output-control`을 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
+위 명령은 아직 merge되지 않은 백업·격리 복원 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-24-backup-restore`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
 
 대량 CLI 출력 중 제어 요청의 응답성과 유한 부하 관측 방법은 [출력·제어 계약](docs/output-control.md)에 있습니다. 장기 운영·Windows 무간섭 인증과는 구분합니다.
 
@@ -62,6 +62,7 @@ npm run runtime -- demo --wrong-account true
 |독립 Node 입출력/종료 계약 검증|bubblewrap 격리 snapshot과 고정 oracle; 일반 프로젝트 테스트 runner 아님|
 |합산 CPU·메모리·PID 경계|명시적 host 설정·Linux user systemd/cgroupv2; kernel readback과 자손 회수 검증. 예산 미설정은 unverified|
 |저장 예산·분할 로그·보존 만료 사본 정리|host 정책·프로세스별 예약·실제 ENOSPC·정리 중단 복구 시험; 애플리케이션 admission이며 hard disk quota 아님|
+|일관된 WAL 백업·새 경로 격리 복원|운영자 CLI·artifact hash·중단/no-replay 검증; [정상 업무 재개와는 구분](docs/backup-restore.md)|
 |과거 턴·정규화 출력 조회·실제 Git 인계|세션 범위·변경/변조 확인; 프로젝트 테스트 실행·완료 판정은 하지 않음|
 |다중 executor 자동 takeover|후속 구현|
 |Windows foreground 비간섭·guest 설치·soak|미검증/후속 구현|

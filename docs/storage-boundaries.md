@@ -59,4 +59,4 @@ global byte offset, 프레임 hash, 세션/generation, 페이지 revision은 파
 
 실제 파일·동시 프로세스 예약, owner SIGKILL, private32MiB tmpfs의 ENOSPC/SQLite FULL, 부분 spool 쓰기와 재접수 차단, 삭제 세 지점의 실제 SIGKILL을 시험한다. 보존 시간·CLI 세션 상태는 합성 fixture로 조절하며 실제 장기 보존 또는 실제 CLI 성공으로 혼동하지 않는다. 별도의 opt-in actual CLI 시험은 저장/자원 예산을 적용한 실제 broker·검증·재개 경로를 확인한다.
 
-Windows quota/JobObject, 모든 CLI cache·gateway·browser profile의 OS 디스크/I/O 상한, snapshot/staging의 소유권 기반 회수, 장기 soak, 재부팅/전원 상실, 백업·복원·설정 migration은 여전히 출시 gate다. `health=ready`가 이 범위의 검증 완료라는 뜻은 아니다.
+Phase24에서 [일관된 백업·격리 복원](backup-restore.md)을 추가했다. 정상 업무 재개·설정 migration까지 완료한 것은 아니다. Windows quota/JobObject, 모든 CLI cache·gateway·browser profile의 OS 디스크/I/O 상한, snapshot/staging의 소유권 기반 회수, 장기 soak, 재부팅/전원 상실·전체 운영 복구는 여전히 출시 gate다. `health=ready`가 이 범위의 검증 완료라는 뜻은 아니다.

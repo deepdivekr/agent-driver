@@ -33,7 +33,7 @@ async function setup(t,environment='fixture'){
   return state;
 }
 const request=id=>({request_id:id,capability:'fixture.draft.save',account_ref:'account-a',input:{name:'한글 🐈',note:'원문 그대로 저장'},deadline_ms:20000});
-async function client(x){const client=new Client({name:'interface-test',version:'1.0.0'});const transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.path],stderr:'pipe'});let errors='';transport.stderr?.on('data',b=>errors+=b);await client.connect(transport);assert.deepEqual(client.getServerVersion(),{name:'agent-driver',version:'0.1.0-alpha.9'});x.clients.push(client);return {client,transport,errors:()=>errors};}
+async function client(x){const client=new Client({name:'interface-test',version:'1.0.0'});const transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.path],stderr:'pipe'});let errors='';transport.stderr?.on('data',b=>errors+=b);await client.connect(transport);assert.deepEqual(client.getServerVersion(),{name:'agent-driver',version:'0.1.0-alpha.10'});x.clients.push(client);return {client,transport,errors:()=>errors};}
 async function call(client,name,args={}){const reply=await client.callTool({name,arguments:args});assert.notEqual(reply.isError,true,JSON.stringify(reply));return JSON.parse(reply.content[0].text);}
 async function complete(x,taskId){const end=performance.now()+20000;let last;while(performance.now()<end){last=await x.api.call('runtime_task_status',{task_id:taskId});if(['succeeded','cancelled','failed','paused_dependency','reconciliation_required'].includes(last.status))return last;await delay(50);}throw Error(`worker did not finish: ${JSON.stringify(last)}`);}
 async function cli(args){const c=spawn(process.execPath,['dist/cli.js',...args],{stdio:['ignore','pipe','pipe']});let out='',err='';c.stdout.on('data',b=>out+=b);c.stderr.on('data',b=>err+=b);const [code]=await once(c,'close');return {code,out,err};}
@@ -58,7 +58,7 @@ test('runtime native schema v1 upgrades without discarding existing project/task
   const root=await mkdtemp(join(tmpdir(),'driver-migrate-'));t.after(()=>rm(root,{recursive:true,force:true}));const path=join(root,'old.sqlite');
   const old=new DatabaseSync(path);old.exec(MIGRATION_1);old.exec('INSERT INTO schema_version VALUES (1)');old.prepare('INSERT INTO project VALUES (?,?)').run('old',JSON.stringify({id:'old',capabilities:[]}));old.close();
   const store=new RuntimeStore(path);assert.equal(store.project('old').id,'old');store.close();
-  const db=new DatabaseSync(path);assert.equal(db.prepare('SELECT version FROM schema_version').get().version,6);db.close();
+  const db=new DatabaseSync(path);assert.equal(db.prepare('SELECT version FROM schema_version').get().version,7);db.close();
 });
 test('runtime native C01 CLI and SDK stdio share capability semantics with independent tasks',{timeout:60000},async t=>{
   const x=await setup(t),r=request('cli-first'),file=join(x.root,'request.json');await writeFile(file,JSON.stringify(r));

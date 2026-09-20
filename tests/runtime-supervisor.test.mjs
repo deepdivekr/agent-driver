@@ -103,7 +103,9 @@ test('runtime native prepare_only requires the exact recovery generation before 
   await assert.rejects(x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:prepared.recovery_generation-1}),/STALE_RECOVERY/);
   await x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:prepared.recovery_generation});
   await assert.rejects(x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:prepared.recovery_generation}),/STALE_RECOVERY/);
-  assert.equal((await finish(x,s,id)).status,'succeeded');assert.equal(effects(x),1);
+  const final=await finish(x,s,id);
+  const evidence={outcome:final,attempts:s.store.submission(id).attempt_count,states:s.store.events(x.config.project.id,'prepare-only-diagnostic',1000).filter(e=>e.kind==='task.state').map(e=>e.data)};
+  assert.equal(final.status,'succeeded',JSON.stringify(evidence));assert.equal(effects(x),1);
 });
 test('runtime native repeated pre-claim process deaths stop after three launches with bounded backoff',{timeout:60000},async t=>{
   const x=await setup(t);let launches=0;const s=await supervise(x,async()=>{launches++;const process=child(x,'profile');await process.message;await kill(process);return 'dead';}),id=enqueue(x);

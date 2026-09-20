@@ -63,6 +63,8 @@ Phase19 구현 보완: 중단 복구의 입력 자료는 마지막 출력 한 �
 
 ## 구현 순서와 종료 기준
 
+Phase24 설계 보완: [백업·격리 복원](backup-restore.md)은 WAL read snapshot과 artifact 길이/hash를 결속하며 새 디렉터리만 사용한다. source snapshot 이후의 외부 효과는 unknown이므로 백업·복원 DB에 intrinsic quarantine/새 identity를 남기고 일반 runtime의 시작·dispatch를 차단한다. 운영자 검사와 MCP 실행권한을 구분한다. 이것은 정상 업무 재개 전 안전 경계이며 전체 운영 복구·업데이트 rollback 완료가 아니다.
+
 Phase23 설계 보완: [출력·제어 계약](output-control.md)은 stdout pull backpressure와 유한 frame/byte/time 처리 구간을 추가한다. 처리 구간 사이의 짧은 휴지로 같은 event loop의 제어와 별도 프로세스의 SQLite writer가 진행할 기회를 만든다. ordered spool·EOF·완료 증거를 유지하며 취소는 이미 발생한 효과를 되돌리지 않는다. 동기 OS 호출의 hard real-time 상한이나 짧은 합성 부하를 장기 운영 인증으로 주장하지 않는다.
 
 Phase22 설계 보완: [저장 경계](storage-boundaries.md)는 durable 예약과 dispatch 재검사, 회전된 출력의 global offset/hash, 기본 꺼진 소유 자료 정리를 추가한다. 실제 공간 부족에서는 새 효과를 차단하고 이미 확정된 intent를 보존한다. 정리는 삭제 의도를 먼저 저장하며 진행·불확실·미등록 증거를 제외한다. 애플리케이션 admission은 hard filesystem quota가 아니며 snapshot/staging·모든 CLI cache·장기 보존·Windows/재부팅은 별도 gate로 남긴다.

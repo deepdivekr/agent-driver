@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync,chmodSync,lstatSync,realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6 } from './migration.js';
+import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7 } from './migration.js';
 import {StorageLedger} from '../storage/budget.js';
 import {type HostConfig} from '../interface/config.js';
 import {bootClock} from '../supervisor/identity.js';
@@ -12,32 +12,49 @@ const terminal = new Set<TaskStatus>(['succeeded','failed','cancelled']);
 const timestamp = () => new Date().toISOString();
 export class RuntimeStore {
   readonly #db: DatabaseSync;
+  #instanceId: string | null = null;
   readonly databasePath: string;
-  protected get connection(){return this.#db;}
+  protected get connection(){this.assertRuntimeIdentity(); return this.#db;}
   constructor(path: string) {
     requireCondition(path!==':memory:', 'DURABLE_DATABASE_REQUIRED');
     this.databasePath = resolve(path);
     mkdirSync(dirname(resolve(path)), {recursive:true,mode:0o700});
     requireCondition(realpathSync(dirname(this.databasePath)) === dirname(this.databasePath), 'STORAGE_ROOT_REDIRECTED');
+    // Durable staging marker precedes even the first snapshot byte. Interrupted
+    // maintenance must never become an executable runtime by opening its path.
+    try {lstatSync(dirname(this.databasePath)+'/.agent-driver-maintenance.json');throw Error('RESTORE_RECONCILIATION_REQUIRED');}
+    catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
     try {const stat=lstatSync(path);requireCondition(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1,'STORAGE_DATABASE_REDIRECTED');}
     catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
     this.#db=new DatabaseSync(path,{enableForeignKeyConstraints:true,allowExtension:false,timeout:2000});
+    try {
+    const identityTable=this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='runtime_identity'").get();
+    if(identityTable)requireCondition(this.#db.prepare('SELECT mode FROM runtime_identity WHERE singleton=1').get()?.mode==='active','RESTORE_RECONCILIATION_REQUIRED');
     chmodSync(path,0o600);
     if (this.#db.prepare('PRAGMA journal_mode').get()?.journal_mode !== 'wal') this.#db.exec('PRAGMA journal_mode=WAL;');
     this.#db.exec('PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     const exists = this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'").get();
     const current = exists ? this.#db.prepare('SELECT version FROM schema_version').all() : [];
-    if (!(current.length === 1 && current[0]?.version === 6)) this.transaction(()=>{
+    if (!(current.length === 1 && current[0]?.version === 7)) this.transaction(()=>{
       this.#db.exec(MIGRATION_1);
       const versions=this.#db.prepare('SELECT version FROM schema_version').all();
-      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4,5,6].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
+      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4,5,6,7].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
       if(!versions.length)this.#db.prepare('INSERT INTO schema_version VALUES (1)').run();
       if(!versions.length||versions[0]?.version===1)this.#db.exec(MIGRATION_2);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===2)this.#db.exec(MIGRATION_3);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===3)this.#db.exec(MIGRATION_4);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===4)this.#db.exec(MIGRATION_5);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===5)this.#db.exec(MIGRATION_6);
+      if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===6)this.#db.exec(MIGRATION_7);
     });
+    const identity=this.#db.prepare('SELECT instance_id,mode FROM runtime_identity WHERE singleton=1').get();
+    requireCondition(identity?.mode==='active'&&typeof identity.instance_id==='string','RUNTIME_IDENTITY_INVALID');this.#instanceId=identity.instance_id;
+    } catch(error){this.#db.close();throw error;}
+  }
+  private assertRuntimeIdentity() {
+    if(this.#instanceId===null)return; // Only the constructor's migration transaction.
+    const row=this.#db.prepare('SELECT instance_id,mode FROM runtime_identity WHERE singleton=1').get();
+    requireCondition(row?.mode==='active'&&row.instance_id===this.#instanceId,'RUNTIME_IDENTITY_REVOKED');
   }
   close() { this.#db.close(); }
   storage(config: HostConfig) {requireCondition(resolve(config.dbPath) === this.databasePath, 'STORAGE_DATABASE_MISMATCH'); return new StorageLedger(this.#db, fn => this.transaction(fn), config);}
@@ -76,11 +93,12 @@ export class RuntimeStore {
   }
   transaction<T>(fn:()=>T):T {
     this.#db.exec('BEGIN IMMEDIATE');
-    try { const result=fn(); this.#db.exec('COMMIT'); return result; }
+    try { this.assertRuntimeIdentity(); const result=fn(); this.#db.exec('COMMIT'); return result; }
     catch(error) { try {this.#db.exec('ROLLBACK');} catch {/* SQLITE_FULL may already have rolled back. Preserve the original failure. */} throw error; }
   }
   durability() { return {journal_mode:this.#db.prepare('PRAGMA journal_mode').get()?.journal_mode,synchronous:this.#db.prepare('PRAGMA synchronous').get()?.synchronous}; }
   registerProject(binding:ProjectBinding) {
+    this.assertRuntimeIdentity();
     requireCondition(binding.id&&binding.callerRef&&binding.accountRef&&binding.profileRef,'INVALID_PROJECT');
     for(const origin of binding.allowedOrigins){const url=new URL(origin);requireCondition(url.origin===origin&&!url.username&&!url.password&&['http:','https:'].includes(url.protocol),'INVALID_ORIGIN');}
     const payload=JSON.stringify(binding),existing=this.#db.prepare('SELECT binding_json FROM project WHERE id=?').get(binding.id);
@@ -120,6 +138,7 @@ export class RuntimeStore {
     });
   }
   assertLease(lease:Lease) {
+    this.assertRuntimeIdentity();
     const row=this.#db.prepare('SELECT * FROM lease WHERE resource=?').get(lease.resource);
     requireCondition(row?.active===1&&row.project_id===lease.projectId&&row.task_id===lease.taskId&&row.generation===lease.generation&&row.token===lease.token,'STALE_FENCE');
   }

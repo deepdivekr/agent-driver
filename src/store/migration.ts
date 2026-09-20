@@ -92,3 +92,9 @@ INSERT INTO terminal_spool_segment SELECT id,0,spool_bytes,id||'.jsonl','open' F
 CREATE TABLE storage_artifact(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES project(id),session_id TEXT NOT NULL REFERENCES terminal_session(id),generation INTEGER NOT NULL,kind TEXT NOT NULL,manifest_json TEXT NOT NULL,created_at TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'retained',pruned_at TEXT);
 UPDATE schema_version SET version=6;
 `;
+
+export const MIGRATION_7 = `
+CREATE TABLE runtime_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),instance_id TEXT NOT NULL,mode TEXT NOT NULL CHECK(mode IN ('active','quarantined')),provenance_json TEXT);
+INSERT INTO runtime_identity VALUES (1,lower(hex(randomblob(16))),'active',NULL);
+UPDATE schema_version SET version=7;
+`;
