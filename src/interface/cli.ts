@@ -6,6 +6,7 @@ import {requireCondition} from '../core/contracts.js';
 import {serveFixtureLab} from './fixture-lab.js';
 import {ensureSupervisor,stopSupervisor,supervisorStatus} from '../supervisor/manager.js';
 import {Supervisor} from '../supervisor/supervisor.js';
+import {stopTerminalHost} from '../terminal/manager.js';
 export const interfaceHelp=`
 Host-configured agent interface (JSON output):
   doctor --config PATH --json
@@ -24,11 +25,13 @@ Host-configured agent interface (JSON output):
   call --config PATH --tool NAME --request-file PATH
   mcp --config PATH
   fixture serve --data-dir NEW_DIRECTORY (synthetic lab only)
-  terminal submit --config PATH --request-file PATH (not implemented)
+  terminal start|submit|resume|interrupt --config PATH --request-file PATH
+  terminal status SESSION_ID --config PATH
+  terminal stop-host --config PATH (stops only this runtime's owned CLI children)
   verify --suite fixture|windows (not implemented; use npm test)
   soak start --config-file PATH (not implemented)
   ops status --config PATH (not implemented)
-No real-site/CLI session or model automation yet. Fixture execution requires explicit host test configuration.
+No real-site or file-editing automation yet. CLI structured sessions require explicit host configuration; terminal tools are disabled.
 `;
 function options(args:string[]){
   const values=new Map<string,string>();const positional:string[]=[];
@@ -80,10 +83,14 @@ export async function runInterfaceCli(args:string[]):Promise<boolean>{
       requireCondition(['status','prepare'].includes(sub??''),'UNKNOWN_COMMAND');tool=`runtime_recovery_${sub}`;body=sub==='prepare'?{task_id:target(),expected_recovery_generation:Number(o.get('--generation'))}:{};
     }else if(command==='events'){
       requireCondition(o.get('--consumer'),'CONSUMER_REQUIRED');tool=`runtime_events_${sub}`;body=sub==='ack'?{consumer_id:o.get('--consumer'),event_id:Number(o.get('--event'))}:{consumer_id:o.get('--consumer')};
-    }else if(command==='terminal'){requireCondition(sub==='submit','UNKNOWN_COMMAND');throw Error('NOT_IMPLEMENTED');}
+    }else if(command==='terminal'){
+      requireCondition(['start','status','submit','resume','interrupt','stop-host'].includes(sub??''),'UNKNOWN_COMMAND');
+      if(sub==='stop-host'){requireCondition(parsed.positional.length===0,'UNEXPECTED_ARGUMENT');console.log(JSON.stringify(await stopTerminalHost(api.config)));return true;}
+      tool=`runtime_terminal_${sub==='submit'?'submit_prompt':sub}`;body=sub==='status'?{session_ref:target()}:requestFile();
+    }
     else if(command==='intake'){tool='runtime_task_intake';requireCondition(!(o.has('--prompt')&&o.has('--request-file')),'AMBIGUOUS_INPUT');body=o.has('--prompt')?{prompt:o.get('--prompt')}:requestFile();}
     else {requireCondition(command==='call'&&o.get('--tool'),'TOOL_REQUIRED');tool=o.get('--tool')!;body=requestFile();}
-    if(!((command==='task'&&sub!=='start')||(command==='recovery'&&sub==='prepare')))requireCondition(parsed.positional.length===0,'UNEXPECTED_ARGUMENT');
+    if(!((command==='task'&&sub!=='start')||(command==='recovery'&&sub==='prepare')||(command==='terminal'&&sub==='status')))requireCondition(parsed.positional.length===0,'UNEXPECTED_ARGUMENT');
     console.log(JSON.stringify(await api.call(tool,body)));return true;
   }finally{api.close();}
 }

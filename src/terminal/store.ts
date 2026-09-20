@@ -1,0 +1,232 @@
+import {createHash, randomUUID} from 'node:crypto';
+import {RecoveryStore} from '../supervisor/store.js';
+import {requireCondition} from '../core/contracts.js';
+import {bootClock, type ProcessIdentity} from '../supervisor/identity.js';
+import {type HostConfig} from '../interface/config.js';
+import {type TerminalHostRecord, type TerminalSession, type TerminalSubmit, type TerminalTurn, type TurnResult} from './contracts.js';
+
+export class TerminalStore extends RecoveryStore {
+  session(id: string): TerminalSession {
+    const row = this.connection.prepare('SELECT * FROM terminal_session WHERE id=?').get(id);
+    requireCondition(row, 'SESSION_NOT_FOUND');
+    return row as unknown as TerminalSession;
+  }
+  sessions(project: string) {
+    return this.connection.prepare('SELECT * FROM terminal_session WHERE project_id=? ORDER BY created_at,id').all(project) as unknown as TerminalSession[];
+  }
+  turn(id: string): TerminalTurn {
+    const row = this.connection.prepare('SELECT * FROM terminal_turn WHERE id=?').get(id);
+    requireCondition(row, 'TURN_NOT_FOUND'); return row as unknown as TerminalTurn;
+  }
+  terminalHost(project: string) {
+    return this.connection.prepare('SELECT * FROM terminal_host WHERE project_id=?').get(project) as unknown as TerminalHostRecord | undefined;
+  }
+  claimTerminalHost(config: HostConfig, identity: ProcessIdentity, previous: string | null, endpoint: string, token: string) {
+    return this.transaction(() => {
+      const old = this.terminalHost(config.project.id);
+      requireCondition((old?.instance_id ?? null) === previous, 'HOST_CLAIM_RACE');
+      const instance = randomUUID();
+      this.connection.prepare('INSERT INTO terminal_host VALUES (?,?,?,?,?,?,1,0) ON CONFLICT(project_id) DO UPDATE SET instance_id=excluded.instance_id,identity_json=excluded.identity_json,config_hash=excluded.config_hash,endpoint=excluded.endpoint,token=excluded.token,active=1,stop_requested=0').run(config.project.id, instance, JSON.stringify(identity), config.fingerprint, endpoint, token);
+      return instance;
+    });
+  }
+  assertHost(project: string, instance: string) {
+    const host = this.terminalHost(project);
+    requireCondition(host?.active === 1 && host.instance_id === instance && !host.stop_requested, 'STALE_TERMINAL_HOST');
+  }
+  stopTerminalHost(project: string, instance: string) {
+    this.connection.prepare('UPDATE terminal_host SET stop_requested=1 WHERE project_id=? AND instance_id=?').run(project, instance);
+  }
+  retireTerminalHost(project: string, instance: string) {
+    this.connection.prepare('UPDATE terminal_host SET active=0 WHERE project_id=? AND instance_id=?').run(project, instance);
+  }
+  startSession(config: HostConfig, request: string) {
+    requireCondition(config.terminal, 'TERMINAL_DISABLED');
+    requireCondition(this.project(config.project.id).capabilities.includes('coding.session'), 'CAPABILITY_NOT_DELEGATED');
+    return this.transaction(() => {
+      const old = this.connection.prepare('SELECT id,config_hash FROM terminal_session WHERE project_id=? AND request_id=?').get(config.project.id, request);
+      if (old) {
+        requireCondition(old.config_hash === config.fingerprint, 'REQUEST_ID_CONFLICT');
+        return {session: this.session(String(old.id)), created: false};
+      }
+      requireCondition(this.sessions(config.project.id).filter(s => !['session_closed', 'process_exited'].includes(s.state) || s.resume_requested).length < 4, 'TERMINAL_SESSION_LIMIT');
+      const id = randomUUID(), task = randomUUID(), at = new Date().toISOString();
+      this.connection.prepare("INSERT INTO task(id,project_id,capability,status,next_action,selected_route,target_ref,created_at,updated_at) VALUES (?,?,'coding.session','queued','terminal_host_start','claude.structured',?,?,?)").run(task, config.project.id, id, at, at);
+      this.connection.prepare('INSERT INTO terminal_session(id,project_id,task_id,request_id,cli_session_id,worktree,executable,version,config_hash,created_at) VALUES (?,?,?,?,?,?,?,?,?,?)').run(id, config.project.id, task, request, randomUUID(), config.project.worktree, config.terminal!.executable, config.terminal!.version, config.fingerprint, at);
+      this.event(task, 'terminal.accepted', {session_ref: id, request_id: request});
+      return {session: this.session(id), created: true};
+    });
+  }
+  private bound(id: string, instance: string, generation?: number) {
+    const session = this.session(id); this.assertHost(session.project_id, instance);
+    requireCondition(session.host_instance_id === instance && (generation === undefined || session.generation === generation), 'STALE_TERMINAL_BINDING');
+    return session;
+  }
+  claimSession(id: string, instance: string, config: HostConfig) {
+    return this.transaction(() => {
+      this.assertHost(config.project.id, instance);
+      const session = this.session(id);
+      requireCondition(session.project_id === config.project.id && session.config_hash === config.fingerprint, 'CONFIG_CHANGED');
+      const resume = session.resume_requested === 1;
+      requireCondition(!session.manual_control && !session.interrupt_requested && !this.task(session.task_id).cancel_requested, 'TERMINAL_WRITER_DISABLED');
+      requireCondition((session.state === 'starting' && !session.host_instance_id) || (resume && session.state === 'process_exited' && !session.active_turn_id && session.last_turn_id), 'SESSION_NOT_STARTABLE');
+      const generation = session.generation + (resume ? 1 : 0);
+      this.connection.prepare("UPDATE terminal_session SET host_instance_id=?,process_identity_json=NULL,generation=?,state='starting',resume_requested=0,interrupt_requested=0,error_code=NULL WHERE id=?").run(instance, generation, id);
+      // Persist ownership before spawn: a crash here is ambiguous, never a blind restart.
+      this.event(session.task_id, resume ? 'terminal.resume_started' : 'terminal.starting', {session_ref: id, generation, cli_session_id: session.cli_session_id});
+      return {session: this.session(id), resume};
+    });
+  }
+  stopBeforeStart(id: string, instance: string) {
+    this.transaction(() => {
+      const session = this.session(id); this.assertHost(session.project_id, instance);
+      requireCondition(session.state === 'starting' && !session.host_instance_id && !session.process_identity_json, 'PROCESS_MAY_HAVE_STARTED');
+      requireCondition(session.interrupt_requested || session.manual_control || this.task(session.task_id).cancel_requested, 'STOP_NOT_REQUESTED');
+      this.connection.prepare("UPDATE terminal_session SET state='session_closed',error_code='STOPPED_BEFORE_START' WHERE id=?").run(id);
+      this.state(session.task_id, 'cancelled', 'stopped_before_start', 'none');
+      this.event(session.task_id, 'terminal.stopped_before_start', {session_ref: id, process_started: false});
+    });
+  }
+  bindProcess(id: string, instance: string, generation: number, identity: ProcessIdentity) {
+    this.transaction(() => {
+      const session = this.bound(id, instance, generation);
+      requireCondition(session.state === 'starting' && !session.process_identity_json, 'PROCESS_ALREADY_BOUND');
+      this.connection.prepare('UPDATE terminal_session SET process_identity_json=? WHERE id=?').run(JSON.stringify(identity), id);
+      this.event(session.task_id, 'terminal.process_bound', {session_ref: id, generation, process_identity: identity});
+    });
+  }
+  ready(id: string, instance: string, generation: number) {
+    this.transaction(() => {
+      const session = this.bound(id, instance, generation);
+      requireCondition(['starting', 'turn_completed'].includes(session.state) && session.process_identity_json && !session.active_turn_id && !session.manual_control && !session.interrupt_requested && !this.task(session.task_id).cancel_requested, 'NOT_INPUT_READY');
+      this.connection.prepare("UPDATE terminal_session SET state='input_ready' WHERE id=?").run(id);
+      this.state(session.task_id, 'waiting_orchestrator', 'submit_next_verified_prompt');
+      this.event(session.task_id, 'terminal.input_ready', {session_ref: id, generation, source: 'host_live_writable_transport', official_cli_ready_event: false});
+    });
+  }
+  submit(config: HostConfig, request: TerminalSubmit) {
+    requireCondition(config.terminal, 'TERMINAL_DISABLED');
+    const hash = createHash('sha256').update(JSON.stringify(request)).digest('hex');
+    return this.transaction(() => {
+      const session = this.session(request.session_ref);
+      requireCondition(session.project_id === config.project.id && session.config_hash === config.fingerprint, 'SESSION_SCOPE_MISMATCH');
+      const previous = this.connection.prepare('SELECT id,request_hash FROM terminal_turn WHERE session_id=? AND request_id=?').get(session.id, request.request_id);
+      if (previous) {
+        requireCondition(previous.request_hash === hash, 'REQUEST_ID_CONFLICT');
+        return {turn: this.turn(String(previous.id)), created: false};
+      }
+      requireCondition(session.generation === request.expected_generation, 'STALE_SESSION_GENERATION');
+      requireCondition(session.last_turn_id === request.expected_previous_turn_id, 'PREVIOUS_TURN_MISMATCH');
+      requireCondition(session.state === 'input_ready' && !session.active_turn_id && !session.manual_control && !session.interrupt_requested && !this.task(session.task_id).cancel_requested, 'TERMINAL_NOT_INPUT_READY');
+      requireCondition(session.turn_count < config.terminal!.max_turns, 'TURN_BUDGET_EXHAUSTED');
+      const id = randomUUID();
+      this.connection.prepare('INSERT INTO terminal_turn(id,session_id,request_id,request_hash,generation,prompt,created_at) VALUES (?,?,?,?,?,?,?)').run(id, session.id, request.request_id, hash, session.generation, request.prompt, new Date().toISOString());
+      this.connection.prepare("UPDATE terminal_session SET active_turn_id=?,state='streaming',turn_count=turn_count+1 WHERE id=?").run(id, session.id);
+      this.state(session.task_id, 'running', 'terminal_turn_accepted');
+      this.event(session.task_id, 'terminal.prompt_accepted', {turn_id: id, generation: session.generation, request_id: request.request_id, input_hash: hash});
+      if (session.turn_count + 1 === config.terminal!.max_turns) this.event(session.task_id, 'orchestrator.replan_required', {reason: 'TURN_BUDGET_REACHED', automatically_submitted: false});
+      return {turn: this.turn(id), created: true};
+    });
+  }
+  dispatch(id: string, instance: string, generation: number, config: HostConfig) {
+    return this.transaction(() => {
+      const session = this.bound(id, instance, generation);
+      requireCondition(session.config_hash === config.fingerprint && session.worktree === config.project.worktree && session.executable === config.terminal?.executable && session.version === config.terminal.version, 'CONFIG_CHANGED');
+      requireCondition(session.state === 'streaming' && session.active_turn_id && session.process_identity_json && !session.manual_control && !session.interrupt_requested && !this.task(session.task_id).cancel_requested, 'TERMINAL_WRITER_DISABLED');
+      const turn = this.turn(session.active_turn_id);
+      requireCondition(turn.status === 'accepted' && turn.generation === generation, 'TURN_ALREADY_DISPATCHED');
+      this.connection.prepare("UPDATE terminal_turn SET status='dispatched',deadline_uptime_ms=? WHERE id=?").run(bootClock().uptimeMs + config.terminal.turn_deadline_ms, turn.id);
+      this.state(session.task_id, 'running', 'await_cli_receipt', 'unknown');
+      this.event(session.task_id, 'terminal.prompt_started', {turn_id: turn.id, generation, effect_not_yet_verified: true});
+      return this.turn(turn.id);
+    });
+  }
+  acknowledge(id: string, instance: string, generation: number, turnId: string) {
+    this.transaction(() => {
+      const session = this.bound(id, instance, generation);
+      requireCondition(session.active_turn_id === turnId && this.turn(turnId).status === 'dispatched', 'CLI_RECEIPT_MISMATCH');
+      this.connection.prepare("UPDATE terminal_turn SET status='acknowledged' WHERE id=?").run(turnId);
+      this.event(session.task_id, 'terminal.prompt_received', {turn_id: turnId, source: 'official_user_replay'});
+    });
+  }
+  result(id: string, instance: string, generation: number, result: TurnResult) {
+    this.transaction(() => {
+      const session = this.bound(id, instance, generation);
+      requireCondition(session.active_turn_id && this.turn(session.active_turn_id).status === 'acknowledged', 'UNBOUND_CLI_RESULT');
+      const turn = session.active_turn_id;
+      this.connection.prepare("UPDATE terminal_turn SET status='turn_completed',result_json=? WHERE id=?").run(JSON.stringify(result), turn);
+      this.connection.prepare('UPDATE terminal_session SET state=?,last_turn_id=?,active_turn_id=NULL WHERE id=?').run(result.outcome === 'completed' ? 'turn_completed' : result.outcome, turn, id);
+      this.state(session.task_id, 'waiting_orchestrator', 'verify_diff_and_tests_before_project_completion', 'unknown');
+      this.event(session.task_id, 'terminal.turn_completed', {turn_id: turn, generation, outcome: result.outcome, project_completed: false, verification: 'unobserved'});
+      const recent = this.connection.prepare("SELECT result_json FROM terminal_turn WHERE session_id=? AND status='turn_completed' ORDER BY created_at DESC,id DESC LIMIT 3").all(id);
+      if (recent.length === 3 && recent.every(row => row.result_json === JSON.stringify(result))) this.event(session.task_id, 'orchestrator.replan_required', {reason: 'REPEATED_RESULT_REQUIRES_PROGRESS_CHECK', progress: 'unobserved', automatically_submitted: false});
+    });
+  }
+  noteSpool(id: string, instance: string, generation: number, bytes: number, kind: string) {
+    this.transaction(() => {
+      const session = this.bound(id, instance, generation);
+      this.connection.prepare('UPDATE terminal_session SET spool_bytes=spool_bytes+? WHERE id=?').run(bytes, id);
+      this.event(session.task_id, 'terminal.output', {session_ref: id, generation, bytes, spool_offset: session.spool_bytes + bytes, event_type: kind});
+    });
+  }
+  failed(id: string, instance: string, generation: number, reason: string, hostFailure = false) {
+    this.transaction(() => {
+      const session = this.session(id), owner = this.terminalHost(session.project_id);
+      requireCondition(owner?.active === 1 && owner.instance_id === instance, 'STALE_TERMINAL_HOST');
+      requireCondition(session.generation === generation && (hostFailure || session.host_instance_id === instance), 'STALE_TERMINAL_BINDING');
+      const turn = session.active_turn_id ? this.turn(session.active_turn_id) : null;
+      const uncertain = !!turn && turn.status !== 'accepted';
+      if (turn) this.connection.prepare('UPDATE terminal_turn SET status=? WHERE id=?').run(uncertain ? 'uncertain' : 'cancelled', turn.id);
+      const next = uncertain ? 'reconciliation_required' : reason === 'PROCESS_EXITED' || reason === 'HOST_DIED_CLI_DEAD' ? 'process_exited' : 'state_unknown';
+      this.connection.prepare('UPDATE terminal_session SET state=?,error_code=?,active_turn_id=NULL WHERE id=?').run(next, reason, id);
+      if (!['cancelled', 'succeeded', 'failed'].includes(this.task(session.task_id).status)) this.state(session.task_id, uncertain ? 'reconciliation_required' : 'paused_dependency', uncertain ? 'handoff_no_prompt_replay' : reason, uncertain ? 'unknown' : undefined);
+      this.event(session.task_id, hostFailure ? 'terminal.host_lost' : 'terminal.process_stopped', {session_ref: id, generation, reason, pending_effect: uncertain ? 'unknown' : 'unobserved'});
+      if (uncertain) this.event(session.task_id, 'orchestrator.replan_required', {reason, automatically_submitted: false, next_action: 'reconcile_before_new_prompt'});
+    });
+  }
+  observedExit(id: string, instance: string, generation: number) {
+    this.transaction(() => {
+      const session = this.session(id), owner = this.terminalHost(session.project_id);
+      requireCondition(owner?.instance_id === instance && session.host_instance_id === instance && session.generation === generation, 'STALE_TERMINAL_BINDING');
+      if (['HOST_STOPPED', 'INTERRUPTED'].includes(session.error_code ?? '') && session.state === 'state_unknown' && !session.active_turn_id) this.connection.prepare("UPDATE terminal_session SET state='process_exited' WHERE id=?").run(id);
+      this.event(session.task_id, 'terminal.process_exited', {session_ref: id, generation, source: 'owned_child_close', project_completed: false});
+    });
+  }
+  requestInterrupt(id: string, generation: number, manual = false) {
+    return this.transaction(() => {
+      const session = this.session(id); requireCondition(session.generation === generation, 'STALE_SESSION_GENERATION');
+      this.connection.prepare('UPDATE terminal_session SET interrupt_requested=1,manual_control=MAX(manual_control,?) WHERE id=?').run(manual ? 1 : 0, id);
+      this.event(session.task_id, manual ? 'terminal.writer_relinquished' : 'terminal.interrupt_requested', {session_ref: id, effect_not_rolled_back: true});
+      return this.session(id);
+    });
+  }
+  requestResume(id: string, generation: number, config: HostConfig) {
+    return this.transaction(() => {
+      const session = this.session(id); requireCondition(session.generation === generation, 'STALE_SESSION_GENERATION');
+      requireCondition(session.config_hash === config.fingerprint && session.project_id === config.project.id, 'CONFIG_CHANGED');
+      requireCondition(session.state === 'process_exited' && session.last_turn_id && !session.active_turn_id && !session.manual_control && !this.task(session.task_id).cancel_requested, 'RESUME_REQUIRES_FINISHED_TRANSCRIPT');
+      requireCondition(!this.connection.prepare("SELECT id FROM terminal_turn WHERE session_id=? AND status IN ('dispatched','acknowledged','uncertain')").get(id), 'UNCERTAIN_TURN_NO_RESUME');
+      requireCondition(this.sessions(config.project.id).filter(s => s.id !== id && (!['session_closed', 'process_exited'].includes(s.state) || s.resume_requested)).length < 4, 'TERMINAL_SESSION_LIMIT');
+      this.connection.prepare('UPDATE terminal_session SET resume_requested=1,interrupt_requested=0 WHERE id=?').run(id);
+      this.event(session.task_id, 'terminal.resume_requested', {session_ref: id, generation, cli_session_id: session.cli_session_id});
+      return this.session(id);
+    });
+  }
+  override cancel(taskId: string) {
+    const row = this.connection.prepare('SELECT id,generation FROM terminal_session WHERE task_id=?').get(taskId);
+    if (!row) return super.cancel(taskId);
+    this.transaction(() => {
+      this.connection.prepare('UPDATE task SET cancel_requested=1 WHERE id=?').run(taskId);
+      this.connection.prepare('UPDATE terminal_session SET interrupt_requested=1 WHERE id=?').run(String(row.id));
+      this.event(taskId, 'task.cancel_requested', {effect_not_rolled_back: true});
+    });
+    return this.task(taskId);
+  }
+  terminalStatus(id: string) {
+    const session = this.session(id), turnId = session.active_turn_id ?? session.last_turn_id;
+    const turn = turnId ? this.turn(turnId) : null;
+    return {...this.outcome(session.task_id), session_ref: id, session_generation: session.generation, cli_session_id: session.cli_session_id, host_instance_id: session.host_instance_id, process_identity: session.process_identity_json ? JSON.parse(session.process_identity_json) as unknown : null,
+      terminal_state: session.state, previous_turn_id: session.last_turn_id, active_turn_id: session.active_turn_id, turn_status: turn?.status ?? null, result: turn?.result_json ? JSON.parse(turn.result_json) as unknown : null,
+      mode: 'structured', project_completed: false, verified_for_environment: false, error_code: session.error_code, spool_bytes: session.spool_bytes};
+  }
+}

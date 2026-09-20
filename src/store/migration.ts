@@ -56,3 +56,19 @@ ALTER TABLE submission ADD COLUMN accepted_uptime_ms REAL;
 UPDATE submission SET recovery_state='legacy_unknown' WHERE worker_nonce IS NOT NULL;
 UPDATE schema_version SET version=3;
 `;
+
+export const MIGRATION_4=`
+CREATE TABLE terminal_host(project_id TEXT PRIMARY KEY REFERENCES project(id),instance_id TEXT NOT NULL,identity_json TEXT NOT NULL,config_hash TEXT NOT NULL,endpoint TEXT NOT NULL,token TEXT NOT NULL,active INTEGER NOT NULL,stop_requested INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE terminal_session(
+ id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES project(id),task_id TEXT NOT NULL UNIQUE REFERENCES task(id),request_id TEXT NOT NULL,
+ cli_session_id TEXT NOT NULL UNIQUE,worktree TEXT NOT NULL,executable TEXT NOT NULL,version TEXT NOT NULL,config_hash TEXT NOT NULL,
+ host_instance_id TEXT,process_identity_json TEXT,generation INTEGER NOT NULL DEFAULT 1,state TEXT NOT NULL DEFAULT 'starting',
+ last_turn_id TEXT,active_turn_id TEXT,turn_count INTEGER NOT NULL DEFAULT 0,interrupt_requested INTEGER NOT NULL DEFAULT 0,
+ resume_requested INTEGER NOT NULL DEFAULT 0,manual_control INTEGER NOT NULL DEFAULT 0,error_code TEXT,spool_bytes INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,
+ UNIQUE(project_id,request_id));
+CREATE TABLE terminal_turn(
+ id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES terminal_session(id),request_id TEXT NOT NULL,request_hash TEXT NOT NULL,
+ generation INTEGER NOT NULL,prompt TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'accepted',deadline_uptime_ms REAL,result_json TEXT,created_at TEXT NOT NULL,
+ UNIQUE(session_id,request_id));
+UPDATE schema_version SET version=4;
+`;

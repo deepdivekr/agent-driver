@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync,chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { MIGRATION_1, MIGRATION_2, MIGRATION_3 } from './migration.js';
+import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4 } from './migration.js';
 import {bootClock} from '../supervisor/identity.js';
 import { requireCondition, type ProjectBinding, type TaskRecord, type TaskStatus, type Lease, type Effect, type Verification } from '../core/contracts.js';
 
@@ -20,10 +20,11 @@ export class RuntimeStore {
     this.transaction(()=>{
       this.#db.exec(MIGRATION_1);
       const versions=this.#db.prepare('SELECT version FROM schema_version').all();
-      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
+      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
       if(!versions.length)this.#db.prepare('INSERT INTO schema_version VALUES (1)').run();
       if(!versions.length||versions[0]?.version===1)this.#db.exec(MIGRATION_2);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===2)this.#db.exec(MIGRATION_3);
+      if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===3)this.#db.exec(MIGRATION_4);
     });
   }
   close() { this.#db.close(); }
@@ -143,7 +144,7 @@ export class RuntimeStore {
     });
   }
   cancel(taskId:string) {
-    return this.transaction(()=>{const task=this.task(taskId);if(terminal.has(task.status))return task;this.#db.prepare('UPDATE task SET cancel_requested=1 WHERE id=?').run(taskId);const pending=this.#db.prepare('SELECT id FROM command_intent WHERE task_id=? AND status!=\'verified\'').get(taskId);if(!pending){this.state(taskId,'cancelled','none');this.#db.prepare('UPDATE lease SET active=0 WHERE task_id=? AND inflight_intent IS NULL AND NOT EXISTS (SELECT 1 FROM submission WHERE task_id=? AND worker_nonce IS NOT NULL)').run(taskId,taskId);}else this.event(taskId,'task.cancel_requested',{effect_not_rolled_back:true});return this.task(taskId);});
+    return this.transaction(()=>{requireCondition(!this.#db.prepare('SELECT task_id FROM terminal_session WHERE task_id=?').get(taskId),'MANAGED_CANCELLATION_REQUIRES_TERMINAL_HOST');const task=this.task(taskId);if(terminal.has(task.status))return task;this.#db.prepare('UPDATE task SET cancel_requested=1 WHERE id=?').run(taskId);const pending=this.#db.prepare('SELECT id FROM command_intent WHERE task_id=? AND status!=\'verified\'').get(taskId);if(!pending){this.state(taskId,'cancelled','none');this.#db.prepare('UPDATE lease SET active=0 WHERE task_id=? AND inflight_intent IS NULL AND NOT EXISTS (SELECT 1 FROM submission WHERE task_id=? AND worker_nonce IS NOT NULL)').run(taskId,taskId);}else this.event(taskId,'task.cancel_requested',{effect_not_rolled_back:true});return this.task(taskId);});
   }
   pauseBeforeDispatch(taskId:string,reason:string) {
     return this.transaction(()=>{const pending=this.#db.prepare('SELECT id FROM command_intent WHERE task_id=?').get(taskId);requireCondition(!pending,'INTENT_ALREADY_EXISTS');this.state(taskId,'paused_dependency',reason);return this.task(taskId);});
@@ -152,6 +153,7 @@ export class RuntimeStore {
     // Explicit operator-selected task only. Never called implicitly by opening a DB.
     return this.transaction(()=>{
       requireCondition(!this.#db.prepare('SELECT task_id FROM submission WHERE task_id=?').get(taskId),'MANAGED_RECOVERY_REQUIRES_SUPERVISOR');
+      requireCondition(!this.#db.prepare('SELECT task_id FROM terminal_session WHERE task_id=?').get(taskId),'MANAGED_RECOVERY_REQUIRES_TERMINAL_HOST');
       const task=this.task(taskId);if(terminal.has(task.status))return task;
       const pending=this.#db.prepare('SELECT id,effect FROM command_intent WHERE task_id=? AND status!=\'verified\'').get(taskId);
       if(pending)this.state(taskId,'reconciliation_required','read_authoritative_result_no_write_retry',pending.effect==='write_external'?'unknown':'none');

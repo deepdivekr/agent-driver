@@ -53,6 +53,8 @@ Phase 15는 durable core, deterministic guard/router, CLI, owned headless test-a
 
 Phase 17 구현 보완: 접수와 실행 사이의 단절을 durable queue+독립 감독자로 연결한다. SQLite schema v3에 감독자/실행 예약/worker kernel identity/복구 세대를 추가한다. claim 전 예약과 이미 claim된 worker의 복구 조건은 다르다. 후자는 사망과 profile 비점유 증명이 모두 필요하다. intent 이후의 복구는 identity-bound GET으로만 수행한다. 자세한 구현 범위와 Linux/Windows 한계는 [감독·복구 계약](supervisor-recovery.md)에 분리한다. 모델 추론을 이 안전 경계의 승인 근거로 추가하지 않는다.
 
+Phase 18 구현 보완: CLI도 gateway와 독립된 host가 소유하고, v4 session/turn/host 기록과 token IPC를 추가한다. 입력 수락·전송·공식 수신·턴 완료·입력 준비는 서로 다른 사건이다. 정상 턴에도 발생하는 `rate_limit_event`나 성공 exit만으로 상태를 추정하지 않는다. 완료되지 않은 턴을 CLI resume가 자동 실행할 위험 때문에, 결과 불명확 세션은 재개보다 조정/인계를 우선한다. [CLI 근거표](cli-adapter-matrix.md)의 실제 구조화 세션 검증은 대화형/Windows·파일 수정·프로젝트 완료와 구분한다. 현재 file tools는 경계 검증 전 비활성화한다.
+
 기본 정책은 host foreground 전환·OS 입력·사용자 탭·클립보드·파일 대화상자 금지다. 첫 브라우저 경로는 runtime이 새로 소유한 headless persistent context에서만 실행한다. 타인의 Chrome에 attach하지 않는다.
 
 이 정책과 headless 실행 자체가 Windows 이벤트 기반 비간섭 인증을 대체하지 않는다. 무료 guest/전용 세션 배포는 후속 설계이며 VMware/Broadcom 계정을 설치 전제조건으로 넣지 않는다. 작업환경 분리와 악성 페이지 보안 경계는 별개다. 신뢰된 plugin이 같은 OS 권한으로 실행되는 상태를 샌드박스로 부르지 않는다.
