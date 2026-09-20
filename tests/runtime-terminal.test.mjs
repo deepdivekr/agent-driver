@@ -36,7 +36,11 @@ async function setup(t, overrides = {}, external = false) {
 async function until(x, predicate, max = 7000) {
   const end = performance.now() + max;
   while (performance.now() < end) {await x.host?.tick(); if (await predicate()) return; await delay(10);}
-  throw Error('condition timeout');
+  // Buffered stdout may settle durable state while it holds the event loop past the
+  // observation deadline. Read once more; do not dispatch another host tick.
+  if(await predicate())return;
+  const observed=x.api.store.sessions(x.config.project.id).map(s=>({state:s.state,error_code:s.error_code,spool_bytes:s.spool_bytes,active_turn_status:s.active_turn_id?x.api.store.turn(s.active_turn_id).status:null}));
+  throw Error('condition timeout '+JSON.stringify(observed));
 }
 async function session(x) {
   const result = await x.api.call('runtime_terminal_start', {request_id: 'session-start'});
@@ -48,6 +52,13 @@ function request(x, id, name, prompt = '한글 🐈\r\n두 번째 줄') {
   return {request_id: name, session_ref: id, expected_generation: session.generation, expected_previous_turn_id: session.last_turn_id, prompt};
 }
 const received = async x => existsSync(join(x.root, 'received.jsonl')) ? (await readFile(join(x.root, 'received.jsonl'), 'utf8')).trim().split('\n').filter(Boolean).map(JSON.parse) : [];
+
+test('runtime contract terminal polling observes settled state at the deadline without another dispatch',async()=>{
+  let ticks=0,reads=0;
+  const x={host:{tick:async()=>{ticks++;}},api:{store:{sessions:()=>[]}},config:{project:{id:'fixture'}}};
+  await until(x,()=>{reads++;return true;},0);assert.equal(ticks,0);assert.equal(reads,1);
+  await assert.rejects(until(x,()=>false,0),/condition timeout/);assert.equal(ticks,0);
+});
 
 test('runtime native terminal schema v3 migration preserves historical records', async t => {
   const root = await mkdtemp(join(tmpdir(), 'terminal-migration-')); t.after(() => rm(root, {recursive: true, force: true}));
@@ -132,6 +143,7 @@ for (const [mode, reason] of [['wrong-session', 'CLI_SESSION_MISMATCH'], ['no-ac
     await x.api.call('runtime_terminal_submit_prompt', request(x, id, mode));
     await until(x, () => !!x.api.store.session(id).error_code);
     const snapshot = x.api.store.session(id); assert.equal(snapshot.state, 'reconciliation_required'); assert.equal(snapshot.error_code, reason); assert.equal(snapshot.last_turn_id, null);
+    if(mode==='flood')assert.ok(snapshot.spool_bytes<=x.config.terminal.spool_bytes,'durable output exceeds the configured quota');
     assert.equal((await received(x)).length, 1);
   });
 }
