@@ -40,16 +40,17 @@ export class Supervisor{
       if(row.recovery_state==='reserved'){
         // Revoking an UNCLAIMED ticket is safe even if its process is alive: the
         // atomic worker claim is required before ANY browser or external effect.
-        if(row.launch_owner!==nonce||row.retry_after_ms<=bootClock().uptimeMs||(row.worker_identity_json&&await liveness(JSON.parse(row.worker_identity_json) as ProcessIdentity)==='dead')){
+        const trigger=row.launch_owner!==nonce?'supervisor_replaced':row.retry_after_ms<=bootClock().uptimeMs?'startup_timeout':row.worker_identity_json&&await liveness(JSON.parse(row.worker_identity_json) as ProcessIdentity)==='dead'?'worker_dead':null;
+        if(trigger){
           const latest=this.store.submission(row.task_id);
-          if(latest.recovery_state==='reserved')this.store.recoverDead(latest,nonce,this.config.recoveryPolicy,this.config.fingerprint);
+          if(latest.recovery_state==='reserved')this.store.recoverDead(latest,nonce,this.config.recoveryPolicy,this.config.fingerprint,trigger);
         }
         continue;
       }
       if(row.recovery_state==='running'){
         if(await liveness(row.worker_identity_json?JSON.parse(row.worker_identity_json) as ProcessIdentity:null)!=='dead')continue;
         if(await profileOccupancy(this.config.project.profileRef)!=='clear')continue;
-        this.store.recoverDead(row,nonce,this.config.recoveryPolicy,this.config.fingerprint);
+        this.store.recoverDead(row,nonce,this.config.recoveryPolicy,this.config.fingerprint,'worker_dead');
       }
       const current=this.store.submission(row.task_id);
       if(current.recovery_state==='reconcile'){
@@ -62,18 +63,18 @@ export class Supervisor{
     if(rows.some(r=>['reserved','running','reconcile','legacy_unknown'].includes(r.recovery_state))||this.store.resourceBusy(project))return;
     for(const row of rows){
       if(row.recovery_state!=='pending')continue;
-      if(this.store.task(row.task_id).status==='cancelled'){this.store.recoverDead(row,nonce,this.config.recoveryPolicy,this.config.fingerprint);continue;}
+      if(this.store.task(row.task_id).status==='cancelled'){this.store.recoverDead(row,nonce,this.config.recoveryPolicy,this.config.fingerprint,'cancelled_pending');continue;}
       const reason=row.config_hash!==this.config.fingerprint?'CONFIG_CHANGED':remainingBudget(row)<=0?'DEADLINE_OR_BOOT_CHANGED':row.attempt_count>=3?'RESTART_BUDGET_EXHAUSTED':null;
       if(reason){this.store.block(row,nonce,reason);continue;}
       if(row.retry_after_ms>bootClock().uptimeMs)continue;
       if(await profileOccupancy(this.config.project.profileRef)!=='clear')return;
       const reserved=this.store.reserve(project,nonce,row.task_id);
-      let launched:ProcessIdentity|'dead'|'unknown';
-      try{launched=await this.launch(this.config,reserved);}catch{launched='dead';}
+      let launched:ProcessIdentity|'dead'|'unknown',launchFailed=false;
+      try{launched=await this.launch(this.config,reserved);}catch{launched='dead';launchFailed=true;}
       if(typeof launched!=='string')this.store.noteLaunch(reserved,nonce,launched);
       else if(launched==='dead'){
         const current=this.store.submission(row.task_id);
-        if(current.recovery_state==='reserved')this.store.recoverDead(current,nonce,this.config.recoveryPolicy,this.config.fingerprint);
+        if(current.recovery_state==='reserved')this.store.recoverDead(current,nonce,this.config.recoveryPolicy,this.config.fingerprint,launchFailed?'launch_failed':'launch_dead');
       }
       return;
     }

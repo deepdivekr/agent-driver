@@ -9,7 +9,7 @@
 Linux 또는 Ubuntu/WSL의 Bash에서 실행합니다. Node **22.22.0**, npm **11.11.0**을 사용합니다. 이 버전의 내장 SQLite는 experimental 경고를 stderr에 출력할 수 있습니다.
 
 ```bash
-git clone --branch phase-24-backup-restore https://github.com/deepdivekr/agent-driver.git
+git clone --branch phase-25-recovery-diagnostics https://github.com/deepdivekr/agent-driver.git
 cd agent-driver
 npm ci
 npx playwright install chromium
@@ -17,7 +17,9 @@ npm run build
 npm run runtime -- demo
 ```
 
-위 명령은 아직 merge되지 않은 백업·격리 복원 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-24-backup-restore`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
+위 명령은 아직 merge되지 않은 복구 진단 보강 브랜치를 받습니다. merge 이후에는 `--branch phase-25-recovery-diagnostics`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
+
+복구 재진입은 [세대별 단계·실패 기록](docs/supervisor-recovery.md)으로 추적합니다. [간헐 재개 실패 #22](https://github.com/deepdivekr/agent-driver/issues/22)는 아직 원인 미확정이며 공식 출시 gate로 유지합니다.
 
 대량 CLI 출력 중 제어 요청의 응답성과 유한 부하 관측 방법은 [출력·제어 계약](docs/output-control.md)에 있습니다. 장기 운영·Windows 무간섭 인증과는 구분합니다.
 

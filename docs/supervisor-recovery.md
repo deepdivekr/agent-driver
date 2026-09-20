@@ -34,6 +34,26 @@ prepare_only에서 죽은 미전송 worker의 lease를 안전하게 정리한 �
 
 ## 검증 범위와 남은 출시 조건
 
+### 세대별 복구 진단
+
+Phase25는 기존 event/outbox에 `worker.progress`, `worker.failure`, `recovery.observed`를 추가한다. 기존 events fetch/ack로 읽는다. progress/failure는 dispatch·recovery generation, 닫힌 stage/code, worker 시작 후 단조 경과 ms만 담는다. 원문 오류·stack·URL·입력·경로·인증값은 기록하지 않는다. 같은 stage/kind/attempt의 중복은 저장하지 않으며 최대 15단계 × 2종류다. 새 DB schema나 MCP 권한은 없다.
+
+복구 관측은 launch 실패/사망, claim 5초 만료, 감독자 교체, claim 이후 worker 사망을 구분한다. `startup_timeout`은 예약 만료 판정이지 프로세스가 죽었다는 뜻이 아니다. `worker_dead`도 OS 수준 사망 관측이며 원인 확정이 아니다. browser launch/navigation/observation 경과와 failure code를 함께 확인해야 한다. unknown 또는 누락은 미관측이다. config 로드·DB open 이전 실패, DB 쓰기 자체 실패, SIGKILL 직전 간격에는 failure event가 없을 수 있다. 마지막 progress만으로 해당 단계가 실패 원인이라고 단정하지 않는다.
+
+진단은 승인·재실행·완료 증거가 아니다. prepare_only가 다시 준비 상태가 된 경우 사용자 재개 승인을 자동 반복하지 않는다. intent 이후 불확실 효과는 계속 읽기 전용 조정하며 5초 startup 제한·3회 launch 상한·원래 deadline은 그대로다.
+
+[#22](https://github.com/deepdivekr/agent-driver/issues/22)의 Phase24 최초 prepare_only 재진입 실패는 사후 원인 미확정이며 마지막 효과 수는 미관측이다. 새 진단 및 후속 성공은 과거 원인의 소급 증명이 아니다. 확정된 원인과 회귀가 확보되기 전까지 이 이슈는 열린 출시 gate다.
+
+Ubuntu/WSL Bash에서 독립 재개 반복을 기록할 수 있다. 매회 새 소유 프로필·프로세스로 실행하며 첫 실패에서 멈춘다. 합성 앱만 사용하고 모델은 호출하지 않는다.
+
+```bash
+cd agent-driver
+npm run build
+node scripts/runtime/recovery-repeat.mjs 20
+```
+
+`tests/evidence/recovery-repeat-*.json`은 각 실행 원본/hash·실제 effect count·시도 수·단계 기록과 경과 시간을 보존한다. 이는 동일 환경의 단기 반복이며 실사이트/CPU 압박/장기soak 신뢰도 인증이 아니다. CI artifact에는 합성 시험의 진단만 포함한다.
+
 테스트는 실제 SQLite, owned headless Chromium, 별도 Node 프로세스와 SIGKILL을 사용한다. 서버의 별도 효과 counter를 기대값으로 삼는다. 접수→launch 전, claim 직후, browser 준비 후, intent 전/후, 저장 후, response 기록 후, verification 후를 끊는다. 서버는 저장했지만 브라우저 응답이 막힌 경우도 검증한다. 잘못된 identity, 살아 있는 worker, 점유 profile, stale ticket/generation, 취소/config 변경/deadline을 음성 대조군으로 둔다.
 
 실제 사이트·다중 executor 인계·로그인/CAPTCHA·CLI host·native Windows identity/ConPTY·Task Scheduler/OS watchdog·재부팅/전원 상실·backup restore·disk pressure·장기 soak·독립 실제 사용자 라벨은 아직 출시 gate다. Linux 결과를 해당 gate의 PASS로 표시하지 않는다.

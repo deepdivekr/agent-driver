@@ -17,6 +17,7 @@ import {Supervisor,launchWorker} from '../dist/supervisor/supervisor.js';
 import {RecoveryStore,remainingBudget} from '../dist/supervisor/store.js';
 import {processIdentity,liveness,profileOccupancy} from '../dist/supervisor/identity.js';
 import {MIGRATION_1,MIGRATION_2} from '../dist/store/migration.js';
+import {failureCode,workerStages} from '../dist/supervisor/diagnostics.js';
 
 const body=id=>({request_id:id,capability:'fixture.draft.save',account_ref:'account-a',input:{name:'중단 시험',note:'저장 중복 금지 🐈'},deadline_ms:60000});
 async function until(fn,timeout=15000){const end=performance.now()+timeout;while(performance.now()<end){const value=await fn();if(value)return value;await delay(25);}throw Error('condition timed out');}
@@ -47,6 +48,7 @@ async function setup(t,policy='auto_resume'){
 async function supervise(x,launch=launchWorker){const s=new Supervisor(x.config,launch);x.supervisors.push(s);await s.start();return s;}
 function enqueue(x,id='first',overrides={}){return x.api.store.enqueue(x.config.project.id,id,'fixture.draft.save',{...body(id),...overrides},x.config.fingerprint).task.id;}
 function effects(x){return x.fixture.snapshot(x.spec.runId).effects.filter(e=>e.kind==='save').length;}
+function diagnostics(x,s,id){return s.store.events(x.config.project.id,'diagnostics',1000).filter(e=>e.task_id===id&&['worker.progress','worker.failure','recovery.observed'].includes(e.kind));}
 async function finish(x,s,id){return until(async()=>{await s.step();const row=s.store.submission(id);return ['done','blocked','prepared'].includes(row.recovery_state)?s.store.outcome(id):false;},25000);}
 function cutLauncher(x,point){let first;const launch=async(config,row)=>{
   if(first)return launchWorker(config,row);
@@ -90,6 +92,9 @@ for(const point of ['claimed','browser_ready','before_intent','intent_recorded',
     assert.throws(()=>s.store.recoverTask(id),/MANAGED_RECOVERY_REQUIRES_SUPERVISOR/);
     await kill(worker);
     const final=await finish(x,s,id);
+    const observed=diagnostics(x,s,id);
+    assert.ok(observed.some(e=>e.kind==='worker.progress'&&e.data.stage===point&&e.data.dispatch_generation===1));
+    assert.ok(observed.some(e=>e.kind==='recovery.observed'&&e.data.trigger==='worker_dead'&&e.data.dispatch_generation===1));
     if(['claimed','browser_ready','before_intent'].includes(point)){assert.equal(final.status,'succeeded');assert.equal(s.store.submission(id).attempt_count,2);assert.equal(effects(x),1);}
     else if(point==='intent_recorded'){assert.equal(final.status,'reconciliation_required');assert.equal(final.verification.result,'NOT_MATCH');assert.equal(effects(x),0);assert.equal(s.store.submission(id).attempt_count,1);}
     else{assert.equal(final.status,'succeeded');assert.equal(final.verification.result,'MATCH');assert.equal(effects(x),1);assert.equal(s.store.submission(id).attempt_count,1);}
@@ -104,7 +109,8 @@ test('runtime native prepare_only requires the exact recovery generation before 
   await x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:prepared.recovery_generation});
   await assert.rejects(x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:prepared.recovery_generation}),/STALE_RECOVERY/);
   const final=await finish(x,s,id);
-  const evidence={outcome:final,attempts:s.store.submission(id).attempt_count,states:s.store.events(x.config.project.id,'prepare-only-diagnostic',1000).filter(e=>e.kind==='task.state').map(e=>e.data)};
+  const evidence={outcome:final,attempts:s.store.submission(id).attempt_count,effect_count:effects(x),diagnostics:diagnostics(x,s,id),states:s.store.events(x.config.project.id,'prepare-only-diagnostic',1000).filter(e=>e.kind==='task.state').map(e=>e.data)};
+  t.diagnostic('recovery-observation:'+JSON.stringify({status:final.status,attempts:evidence.attempts,effect_count:evidence.effect_count,diagnostics:evidence.diagnostics.map(e=>({kind:e.kind,data:e.data}))}));
   assert.equal(final.status,'succeeded',JSON.stringify(evidence));assert.equal(effects(x),1);
 });
 test('runtime native repeated pre-claim process deaths stop after three launches with bounded backoff',{timeout:60000},async t=>{
@@ -126,9 +132,10 @@ for(const change of ['cancel','deadline','config']){
   });
 }
 
-async function proxyConfig(t,x,{badIdentity=false,holdSave=false}={}){
+async function proxyConfig(t,x,{badIdentity=false,holdSave=false,badPage=false}={}){
   let release,seen;const gate=new Promise(r=>{release=r;}),arrived=new Promise(r=>{seen=r;});
   const proxy=createServer((req,res)=>{
+    if(badPage&&req.url.endsWith('/account-a/')){res.writeHead(200,{'content-type':'text/html'});res.end('<p id="account">wrong-account-private-marker</p>');return;}
     if(badIdentity&&req.url.endsWith('/api/identity')){res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify({account:'account-b',run_id:x.spec.runId}));return;}
     const upstream=httpRequest(x.fixture.baseUrl+req.url,{method:req.method,headers:req.headers},response=>{void(async()=>{
       if(holdSave&&req.url.endsWith('/api/save')){seen();await gate;}
@@ -164,5 +171,40 @@ test('runtime native unclaimed startup timeout revokes an alive process ticket b
   const s=await supervise(x,async(config,reserved)=>{
     if(first)return launchWorker(config,reserved);row=reserved;first=child(x,'profile');await first.message;return processIdentity(first.handle.pid);
   }),id=enqueue(x);await s.step();await delay(5100);await s.step();
+  assert.ok(diagnostics(x,s,id).some(e=>e.kind==='recovery.observed'&&e.data.trigger==='startup_timeout'&&e.data.from==='reserved'));
   await assert.rejects(runWorker(x.path,id,row.launch_nonce,row.dispatch_generation),/WORKER_FAILED/);assert.equal((await finish(x,s,id)).status,'succeeded');assert.equal(effects(x),1);
+});
+
+test('runtime native recovery diagnostics bind generation and bound repeated or invalid records',async t=>{
+  const x=await setup(t),s=await supervise(x),id=enqueue(x),row=s.store.reserve(x.config.project.id,s.nonce,id);
+  const d={kind:'failure',stage:'claim',code:'UNKNOWN'};
+  for(let i=0;i<100;i++)s.store.workerDiagnostic(id,row.launch_nonce,1,d,i);
+  const records=diagnostics(x,s,id);assert.equal(records.length,1);assert.equal(records[0].data.elapsed_ms,0);
+  for(const invalid of [{...d,stage:'private-marker'},{...d,code:'PRIVATE_MARKER'},{...d,kind:'secret'}]){
+    assert.throws(()=>s.store.workerDiagnostic(id,row.launch_nonce,1,invalid,1),/INVALID_DIAGNOSTIC/);
+  }
+  assert.throws(()=>s.store.workerDiagnostic(id,row.launch_nonce,1,d,NaN),/INVALID_DIAGNOSTIC/);
+  assert.throws(()=>s.store.workerDiagnostic(id,'old-ticket',1,d,1),/STALE_LAUNCH/);
+  assert.throws(()=>s.store.workerDiagnostic(id,row.launch_nonce,2,d,1),/STALE_LAUNCH/);
+  assert.equal(diagnostics(x,s,id).length,1);
+  assert.equal(failureCode(Error('PRIVATE_MARKER')),'UNKNOWN');
+  assert.equal(failureCode(Object.assign(Error('private url/auth message'),{name:'TimeoutError'})),'TIMEOUT');
+  assert.equal(workerStages.length,15);assert.equal(effects(x),0);
+});
+test('runtime native thrown launch error retains only closed recovery classification',async t=>{
+  const x=await setup(t,'prepare_only'),s=await supervise(x,async()=>{throw Error('private-launch-error-marker');}),id=enqueue(x);
+  const final=await finish(x,s,id);assert.equal(final.status,'ready_to_resume');assert.equal(effects(x),0);
+  const records=diagnostics(x,s,id);assert.ok(records.some(e=>e.kind==='recovery.observed'&&e.data.trigger==='launch_failed'));
+  assert.equal(JSON.stringify(records).includes('private-launch-error-marker'),false);
+  assert.equal(s.store.submission(id).attempt_count,1);
+});
+test('runtime native browser pre-intent rejection remains prepared with a durable stage and no effect',{timeout:60000},async t=>{
+  const x=await setup(t,'prepare_only');await proxyConfig(t,x,{badPage:true});const s=await supervise(x),id=enqueue(x);
+  const final=await finish(x,s,id);assert.equal(final.status,'ready_to_resume');assert.equal(effects(x),0);assert.equal(s.store.hasIntent(id),false);
+  const records=diagnostics(x,s,id),failure=records.find(e=>e.kind==='worker.failure');
+  assert.equal(failure.data.stage,'observation');assert.equal(failure.data.code,'ACCOUNT_OR_PROFILE_MISMATCH');assert.equal(failure.data.dispatch_generation,1);
+  assert.ok(failure.data.elapsed_ms>=0);assert.ok(records.some(e=>e.kind==='recovery.observed'&&e.data.from==='running'&&e.data.trigger==='worker_dead'));
+  assert.equal(JSON.stringify(records).includes('wrong-account-private-marker'),false);
+  await s.step();assert.equal(s.store.submission(id).attempt_count,1);assert.equal(effects(x),0);
+  const reopened=new RecoveryStore(x.config.dbPath);assert.deepEqual(diagnostics(x,{store:reopened},id),records);reopened.close();
 });

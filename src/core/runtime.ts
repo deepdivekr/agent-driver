@@ -13,7 +13,7 @@ export class Runtime {
     const context:DispatchContext={taskId,callerRef,lease,capability,observation:await adapter.observe(),maxObservationAgeMs:3000};
     guard(this.store,context);
     const intentId=this.store.begin(lease,capability.id,capability.effect,input,route);
-    // Production has no checkpoint; only trusted test harnesses can pause here.
+    // The worker records bounded progress here; only trusted test harnesses pause.
     if(options.checkpoint)await options.checkpoint('intent_recorded');
     let responseOk=true;
     try {await adapter.execute();} catch {responseOk=false;}

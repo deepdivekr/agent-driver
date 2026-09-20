@@ -3,6 +3,7 @@ import {RuntimeStore} from '../store/runtime-store.js';
 import {requireCondition,type Verification} from '../core/contracts.js';
 import {bootClock,type ProcessIdentity} from './identity.js';
 import {type SupervisorRecord,type SubmissionRecord} from './contracts.js';
+import {workerStages,failureCodes,recoveryTriggers,type WorkerDiagnostic,type RecoveryTrigger} from './diagnostics.js';
 
 const terminal=new Set(['succeeded','failed','cancelled']);
 export function remainingBudget(row:SubmissionRecord):number{
@@ -59,6 +60,18 @@ export class RecoveryStore extends RuntimeStore{
       this.event(task,'worker.context_closed',{dispatch_generation:generation});
     });
   }
+  workerDiagnostic(task:string,ticket:string,generation:number,diagnostic:WorkerDiagnostic,elapsedMs:number){
+    this.transaction(()=>{
+      const row=this.submission(task);
+      requireCondition(row.launch_nonce===ticket&&row.dispatch_generation===generation&&['reserved','running'].includes(row.recovery_state),'STALE_LAUNCH');
+      requireCondition(workerStages.includes(diagnostic.stage)&&['progress','failure'].includes(diagnostic.kind)&&Number.isFinite(elapsedMs)&&elapsedMs>=0,'INVALID_DIAGNOSTIC');
+      if(diagnostic.kind==='failure')requireCondition(failureCodes.includes(diagnostic.code),'INVALID_DIAGNOSTIC');
+      const kind='worker.'+diagnostic.kind;
+      // At most one record per stage/kind/attempt, even if a hook repeats.
+      if(this.connection.prepare("SELECT 1 FROM event WHERE task_id=? AND kind=? AND json_extract(data_json,'$.dispatch_generation')=? AND json_extract(data_json,'$.stage')=? LIMIT 1").get(task,kind,generation,diagnostic.stage))return;
+      this.event(task,kind,{dispatch_generation:generation,recovery_generation:row.recovery_generation,stage:diagnostic.stage,elapsed_ms:Math.round(elapsedMs),...(diagnostic.kind==='failure'?{code:diagnostic.code}:{})});
+    });
+  }
   hasIntent(task:string){return !!this.connection.prepare('SELECT id FROM command_intent WHERE task_id=?').get(task);}
   resourceBusy(project:string){return !!this.connection.prepare('SELECT resource FROM lease WHERE project_id=? AND (active=1 OR inflight_intent IS NOT NULL)').get(project);}
   private same(row:SubmissionRecord,nonce:string){
@@ -73,9 +86,11 @@ export class RecoveryStore extends RuntimeStore{
     });
   }
   // Caller proves recorded worker dead and configured profile clear before entering.
-  recoverDead(row:SubmissionRecord,nonce:string,policy:'auto_resume'|'prepare_only',hash:string){
+  recoverDead(row:SubmissionRecord,nonce:string,policy:'auto_resume'|'prepare_only',hash:string,trigger:RecoveryTrigger='unobserved'){
     this.transaction(()=>{
       this.same(row,nonce);const task=this.task(row.task_id);
+      requireCondition(recoveryTriggers.includes(trigger),'INVALID_DIAGNOSTIC');
+      this.event(task.id,'recovery.observed',{dispatch_generation:row.dispatch_generation,recovery_generation:row.recovery_generation,attempt:row.attempt_count,from:row.recovery_state,policy,trigger,task_status:task.status,effect_state:task.effect_state,has_intent:this.hasIntent(task.id)});
       if(terminal.has(task.status)){
         this.connection.prepare('UPDATE lease SET active=0 WHERE task_id=? AND inflight_intent IS NULL').run(task.id);
         this.connection.prepare("UPDATE submission SET recovery_state='done' WHERE task_id=?").run(task.id);return;
