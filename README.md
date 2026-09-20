@@ -2,14 +2,14 @@
 
 에이전트의 브라우저·코딩 CLI 업무를 실행하고 **소유권·중단·복구·완료 증거**를 관리하는 실행 control plane입니다. 사용자의 작업을 방해하지 않는 실행 환경을 목표로 개발합니다.
 
-현재는 **MVP 기반 구현 단계**입니다. SQLite 실행 기록, 소유권/fencing, 이벤트 재전달, 자체 앱의 headless 브라우저 저장·재조회, 별도 host를 통한 Claude 구조화 세션 통신이 동작합니다. CLI 파일 작업·범용 사이트 지원·Windows 무간섭을 인증한 제품은 아닙니다.
+현재는 **실험적 MVP 구현 단계**입니다. SQLite 실행 기록, 소유권/fencing, 이벤트 재전달, 자체 앱의 headless 브라우저 저장·재조회, Claude 구조화 세션과 명시적으로 위임된 파일 작업을 구현하고 있습니다. 범용 사이트·일반 프로젝트 빌드·Windows 무간섭을 인증한 제품은 아닙니다.
 
 ## 바로 실행
 
 Linux 또는 Ubuntu/WSL의 Bash에서 실행합니다. Node **22.22.0**, npm **11.11.0**을 사용합니다. 이 버전의 내장 SQLite는 experimental 경고를 stderr에 출력할 수 있습니다.
 
 ```bash
-git clone --branch phase-19-cli-handoff https://github.com/deepdivekr/agent-driver.git
+git clone --branch phase-20-file-effects https://github.com/deepdivekr/agent-driver.git
 cd agent-driver
 npm ci
 npx playwright install chromium
@@ -17,7 +17,7 @@ npm run build
 npm run runtime -- demo
 ```
 
-위 명령은 아직 merge되지 않은 CLI 조회·인계 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-19-cli-handoff`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
+위 명령은 아직 merge되지 않은 파일 작업 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-20-file-effects`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
 
 `demo`는 새 전용 프로필과 loopback 테스트 앱만 사용합니다. 기존 Chrome에 연결하지 않고 외부 사이트에 쓰지 않으며 모델 API를 호출하지 않습니다. 결과의 `task_id`와 `project_id`로 상태/이벤트를 조회할 수 있습니다. `.runtime/`에는 로컬 DB와 전용 프로필이 남고 공개되지 않습니다.
 
@@ -55,14 +55,16 @@ npm run runtime -- demo --wrong-account true
 |stdio MCP·공통 CLI·요청 ID dedup·gateway와 별도 worker|합성 앱에서 구현·검증; 미구현 도구는 명시적 오류|
 |독립 감독자·worker 사망 복구·읽기 전용 재조정|Linux 동일 부팅의 합성 앱에서 구현; OS watchdog/Windows/재부팅 복구는 미완료|
 |한 줄 요청→출처 있는 인수 제안|intake 연결; 범용 자연어 이해/실제 Task Pack은 후속|
-|독립 CLI host·명시적 세션/턴·중복 방지·재개|Linux 구조화 통신 검증; 파일 작업·대화형/native ConPTY 후속|
+|독립 CLI host·명시적 세션/턴·중복 방지·재개|Linux 구조화 통신·실제 CLI 검증; 대화형/native ConPTY 후속|
+|정확한 경로 위임·파일 broker·쓰기 intent/readback|Linux 전용, 독점 작업 사본만 지원; 기본 CLI 도구/shell은 닫음|
+|독립 Node 입출력/종료 계약 검증|bubblewrap 격리 snapshot과 고정 oracle; 일반 프로젝트 테스트 runner 아님|
 |과거 턴·정규화 출력 조회·실제 Git 인계|세션 범위·변경/변조 확인; 프로젝트 테스트 실행·완료 판정은 하지 않음|
 |다중 executor 자동 takeover|후속 구현|
 |Windows foreground 비간섭·guest 설치·soak|미검증/후속 구현|
 
 상세 설계는 [v0.7](docs/control-plane-design-v0.7.md), 평가 근거는 [평가 요약](docs/evaluation-summary.md), 공개 범위는 [PUBLICATION.md](PUBLICATION.md)를 참고하세요. 프로세스 내부의 신뢰된 adapter 코드는 보안 샌드박스가 아니며, 동일 OS 사용자 권한으로 DB를 바꿀 수 있는 공격자를 막는다는 보장은 없습니다.
 
-에이전트 연결과 합성 앱 실습은 [Agent interface 안내](docs/agent-interface.md), 브라우저 복구는 [감독자 안내](docs/supervisor-recovery.md), CLI 세션은 [CLI adapter 안내](docs/cli-adapter-matrix.md), 과거 기록과 실제 변경 수집은 [조회·인계 안내](docs/terminal-handoff.md)에 있습니다. 기본19개+intake+목록/조회/인계4개로 MCP 이름24개를 노출하며 browser session 계열은 아직 미구현입니다. production 기본값에서 테스트 쓰기와 CLI 경로는 비활성화되며 CLI는 별도 설정이 필요합니다.
+에이전트 연결과 합성 앱 실습은 [Agent interface](docs/agent-interface.md), 브라우저 복구는 [감독자 안내](docs/supervisor-recovery.md), CLI는 [adapter 안내](docs/cli-adapter-matrix.md), 기록 수집은 [조회·인계](docs/terminal-handoff.md), 파일 위임과 테스트는 [파일 작업 계약](docs/terminal-file-effects.md)에 있습니다. MCP 이름26개를 노출하며 browser session 계열은 아직 미구현입니다. production 기본값에서 테스트 쓰기와 CLI 경로는 비활성화되며 CLI·파일 위임은 별도 host 설정이 필요합니다.
 
 ## 검사와 프로젝트 관리
 
@@ -72,6 +74,8 @@ npm test
 ```
 
 테스트는 외부 모델 API나 실제 사용자 사이트를 사용하지 않습니다. 각 결과에 `evidence_level`과 `status`를 별도로 기록하며 `tests/report.json`과 `tests/evidence/`에 누적합니다. 이 생성 기록은 기본 커밋 대상이 아닙니다.
+
+파일 검증 시험에는 Linux user namespace·bubblewrap·util-linux가 필요합니다. Ubuntu24.04 Bash에서 저장소로 이동한 뒤 `sudo apt-get install bubblewrap util-linux`로 의존성을 설치할 수 있습니다. 격리 실행을 허용하지 않는 환경은 명시적으로 실패/차단하며 비격리 실행으로 대체하지 않습니다. 강한 보안/DoS 방어·cgroup 전체 자원 예산은 아직 출시 gate입니다.
 
 - [로드맵 #1](https://github.com/deepdivekr/agent-driver/issues/1)
 - [현재 구현 #2](https://github.com/deepdivekr/agent-driver/issues/2)

@@ -2,7 +2,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync,chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4 } from './migration.js';
+import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5 } from './migration.js';
 import {bootClock} from '../supervisor/identity.js';
 import { requireCondition, type ProjectBinding, type TaskRecord, type TaskStatus, type Lease, type Effect, type Verification } from '../core/contracts.js';
 
@@ -20,11 +20,12 @@ export class RuntimeStore {
     this.transaction(()=>{
       this.#db.exec(MIGRATION_1);
       const versions=this.#db.prepare('SELECT version FROM schema_version').all();
-      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
+      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4,5].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
       if(!versions.length)this.#db.prepare('INSERT INTO schema_version VALUES (1)').run();
       if(!versions.length||versions[0]?.version===1)this.#db.exec(MIGRATION_2);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===2)this.#db.exec(MIGRATION_3);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===3)this.#db.exec(MIGRATION_4);
+      if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===4)this.#db.exec(MIGRATION_5);
     });
   }
   close() { this.#db.close(); }

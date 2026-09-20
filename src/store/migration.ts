@@ -72,3 +72,14 @@ CREATE TABLE terminal_turn(
  UNIQUE(session_id,request_id));
 UPDATE schema_version SET version=4;
 `;
+
+export const MIGRATION_5=`
+CREATE TABLE terminal_broker(session_id TEXT NOT NULL REFERENCES terminal_session(id),generation INTEGER NOT NULL,identity_json TEXT NOT NULL,cli_identity_json TEXT NOT NULL,host_instance_id TEXT NOT NULL,PRIMARY KEY(session_id,generation));
+CREATE TABLE terminal_tool_call(id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES terminal_session(id),turn_id TEXT NOT NULL REFERENCES terminal_turn(id),generation INTEGER NOT NULL,name TEXT NOT NULL,input_hash TEXT NOT NULL,result_json TEXT,observed INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE terminal_file_intent(
+ id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES terminal_session(id),turn_id TEXT NOT NULL REFERENCES terminal_turn(id),generation INTEGER NOT NULL,
+ path TEXT NOT NULL,request_id TEXT NOT NULL,request_hash TEXT NOT NULL,before_hash TEXT,after_hash TEXT NOT NULL,before_content TEXT,content TEXT NOT NULL,
+ status TEXT NOT NULL DEFAULT 'intent',result_json TEXT,created_at TEXT NOT NULL,UNIQUE(session_id,request_id));
+CREATE TABLE terminal_verification(id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES terminal_session(id),turn_id TEXT NOT NULL REFERENCES terminal_turn(id),generation INTEGER NOT NULL,request_id TEXT NOT NULL,config_hash TEXT NOT NULL,manifest_json TEXT NOT NULL,owner_identity_json TEXT NOT NULL,result_json TEXT,created_at TEXT NOT NULL,UNIQUE(session_id,request_id));
+UPDATE schema_version SET version=5;
+`;

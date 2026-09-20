@@ -3,6 +3,8 @@ import {ensureTerminalHost} from '../terminal/manager.js';
 import {terminalSubmit,terminalList,terminalHistory,terminalOutput} from '../terminal/contracts.js';
 import {readTerminalOutput} from '../terminal/output.js';
 import {prepareTerminalHandoff} from '../terminal/handoff.js';
+import {verifyFiles} from '../terminal/verify-files.js';
+import {ScopedFiles} from '../terminal/scoped-files.js';
 import {liveness,type ProcessIdentity} from '../supervisor/identity.js';
 import {ensureSupervisor} from '../supervisor/manager.js';
 import {requireCondition} from '../core/contracts.js';
@@ -27,7 +29,7 @@ export class RuntimeApi{
       if(!tool.readOnly)requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
     }
     switch(name){
-      case 'runtime_health':return {health:this.config.environment==='fixture'&&process.platform==='linux'?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null,autonomous_planning_enabled:false};
+      case 'runtime_health':return {health:this.config.environment==='fixture'&&process.platform==='linux'?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null,autonomous_planning_enabled:false};
       case 'runtime_capabilities_list':return {capabilities:[draftManifest,terminalManifest].filter(m=>this.config.project.capabilities.includes(m.id))};
       case 'runtime_capability_describe':requireCondition(this.config.project.capabilities.includes(String(input.capability)),'CAPABILITY_NOT_DELEGATED');return input.capability==='coding.session'?terminalManifest:draftManifest;
       case 'runtime_terminal_start':{
@@ -39,6 +41,8 @@ export class RuntimeApi{
       case 'runtime_terminal_history':return this.store.history(this.config.project.id,terminalHistory.parse(input));
       case 'runtime_terminal_output_read':return readTerminalOutput(this.store,this.config,terminalOutput.parse(input));
       case 'runtime_terminal_handoff':return prepareTerminalHandoff(this.store,this.config,String(input.session_ref),Number(input.expected_generation),Boolean(input.include_diff));
+      case 'runtime_terminal_verify':return verifyFiles(this.store,this.config,String(input.session_ref),Number(input.expected_generation),String(input.expected_turn_id),String(input.request_id));
+      case 'runtime_terminal_reconcile_files':return this.store.reconcileFiles(this.config,String(input.session_ref),Number(input.expected_generation),path=>new ScopedFiles(this.config).read(path));
       case 'runtime_terminal_submit_prompt':{
         requireCondition(!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(String(input.prompt)),'CREDENTIAL_LIKE_INPUT');
         await ensureTerminalHost(this.config);const result=this.store.submit(this.config,terminalSubmit.parse(input));

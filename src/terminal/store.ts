@@ -1,8 +1,10 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {RecoveryStore} from '../supervisor/store.js';
 import {requireCondition} from '../core/contracts.js';
-import {bootClock, type ProcessIdentity} from '../supervisor/identity.js';
-import {type HostConfig} from '../interface/config.js';
+import {bootClock, processIdentitySync, type ProcessIdentity} from '../supervisor/identity.js';
+import {loadHostConfig, type HostConfig} from '../interface/config.js';
+import {type FileAuthority, type FileIntent, type FileWrite, brokerTools} from './file-contracts.js';
+import {sha256, type FileObservation} from './scoped-files.js';
 import {redact, type TerminalList, type TerminalHistory, type TerminalOutput, type TerminalHostRecord, type TerminalSession, type TerminalSubmit, type TerminalTurn, type TurnResult} from './contracts.js';
 
 export class TerminalStore extends RecoveryStore {
@@ -119,6 +121,7 @@ export class TerminalStore extends RecoveryStore {
       requireCondition(session.last_turn_id === request.expected_previous_turn_id, 'PREVIOUS_TURN_MISMATCH');
       requireCondition(session.state === 'input_ready' && !session.active_turn_id && !session.manual_control && !session.interrupt_requested && !this.task(session.task_id).cancel_requested, 'TERMINAL_NOT_INPUT_READY');
       requireCondition(session.turn_count < config.terminal!.max_turns, 'TURN_BUDGET_EXHAUSTED');
+      requireCondition(!this.pendingVerification(session.worktree), 'VERIFIER_IN_PROGRESS');
       const id = randomUUID();
       this.connection.prepare('INSERT INTO terminal_turn(id,session_id,request_id,request_hash,generation,prompt,created_at) VALUES (?,?,?,?,?,?,?)').run(id, session.id, request.request_id, hash, session.generation, request.prompt, new Date().toISOString());
       this.connection.prepare("UPDATE terminal_session SET active_turn_id=?,state='streaming',turn_count=turn_count+1 WHERE id=?").run(id, session.id);
@@ -310,5 +313,131 @@ export class TerminalStore extends RecoveryStore {
     }
     // Event sequence, not timestamps or random UUID order, is the durable acceptance order.
     return this.connection.prepare("SELECT t.* FROM terminal_turn t JOIN event e ON e.task_id=? AND e.kind='terminal.prompt_accepted' AND json_extract(e.data_json,'$.turn_id')=t.id WHERE t.session_id=? AND e.id>? ORDER BY e.id LIMIT ?").all(session.task_id, session.id, sequence, limit) as unknown as TerminalTurn[];
+  }
+  bindBroker(config: HostConfig, authority: FileAuthority) {
+    return this.transaction(() => {
+      const s = this.bound(authority.session, authority.host, authority.generation);
+      requireCondition(s.config_hash === config.fingerprint && s.process_identity_json === authority.cli, 'BROKER_CLI_BINDING_MISMATCH');
+      const old = this.connection.prepare('SELECT identity_json FROM terminal_broker WHERE session_id=? AND generation=?').get(s.id, s.generation);
+      requireCondition(!old || old.identity_json === authority.broker, 'BROKER_ALREADY_BOUND');
+      this.connection.prepare('INSERT OR IGNORE INTO terminal_broker VALUES (?,?,?,?,?)').run(s.id, s.generation, authority.broker, authority.cli, authority.host);
+      if (!old) this.event(s.task_id, 'terminal.broker_bound', {session_ref: s.id, generation: s.generation, identity: JSON.parse(authority.broker) as unknown});
+    });
+  }
+  broker(id: string, generation: number) {return this.connection.prepare('SELECT * FROM terminal_broker WHERE session_id=? AND generation=?').get(id, generation);}
+  fileFence(config: HostConfig, authority: FileAuthority, turn: string) {
+    requireCondition(loadHostConfig(config.path).fingerprint === config.fingerprint, 'CONFIG_CHANGED');
+    const s = this.bound(authority.session, authority.host, authority.generation), host = this.terminalHost(s.project_id)!, broker = this.broker(s.id, s.generation);
+    const alive = (encoded: string) => {const old = JSON.parse(encoded) as ProcessIdentity; return JSON.stringify(processIdentitySync(old.pid)) === encoded;};
+    requireCondition(config.terminal?.files && s.project_id === config.project.id && s.config_hash === config.fingerprint && s.worktree === config.project.worktree, 'FILE_SCOPE_MISMATCH');
+    requireCondition(broker?.identity_json === authority.broker && broker.cli_identity_json === authority.cli && broker.host_instance_id === authority.host && s.process_identity_json === authority.cli, 'STALE_BROKER');
+    requireCondition(alive(host.identity_json) && alive(authority.cli) && alive(authority.broker), 'FILE_OWNER_NOT_ALIVE');
+    requireCondition(s.state === 'streaming' && s.active_turn_id === turn && !s.interrupt_requested && !s.manual_control && !this.task(s.task_id).cancel_requested, 'FILE_TURN_NOT_ACTIVE');
+    requireCondition(!this.pendingVerification(s.worktree), 'VERIFIER_IN_PROGRESS');
+    const current = this.turn(turn);
+    requireCondition(current.generation === authority.generation && current.status === 'acknowledged' && current.deadline_uptime_ms !== null && current.deadline_uptime_ms > bootClock().uptimeMs, 'FILE_TURN_NOT_ACKNOWLEDGED');
+    return s;
+  }
+  toolRequested(id: string, instance: string, generation: number, toolId: string, name: string, input: unknown) {
+    this.transaction(() => {
+      const s = this.bound(id, instance, generation);
+      requireCondition(s.active_turn_id && this.turn(s.active_turn_id).status === 'acknowledged' && brokerTools.includes(name as typeof brokerTools[number]), 'CLI_TOOL_NOT_DELEGATED');
+      requireCondition(Number(this.connection.prepare('SELECT COUNT(*) AS n FROM terminal_tool_call WHERE turn_id=?').get(s.active_turn_id)!.n) < 64, 'CLI_TOOL_BUDGET');
+      requireCondition(!this.connection.prepare('SELECT id FROM terminal_tool_call WHERE id=?').get(toolId), 'CLI_DUPLICATE_TOOL_ID');
+      this.connection.prepare('INSERT INTO terminal_tool_call(id,session_id,turn_id,generation,name,input_hash) VALUES (?,?,?,?,?,?)').run(toolId, id, s.active_turn_id, generation, name, sha256(JSON.stringify(input)));
+      this.event(s.task_id, 'terminal.tool_requested', {tool_id: toolId, turn_id: s.active_turn_id, name, input_hash: sha256(JSON.stringify(input))});
+    });
+  }
+  pendingTool(authority: FileAuthority, turn: string, name: string, input: unknown) {
+    return this.connection.prepare('SELECT id FROM terminal_tool_call WHERE session_id=? AND generation=? AND turn_id=? AND name=? AND input_hash=? AND result_json IS NULL ORDER BY rowid LIMIT 1').get(authority.session, authority.generation, turn, name, sha256(JSON.stringify(input)))?.id as string | undefined;
+  }
+  answerTool(id: string, session: string, result: unknown) {
+    requireCondition(this.connection.prepare('UPDATE terminal_tool_call SET result_json=? WHERE id=? AND session_id=? AND result_json IS NULL').run(JSON.stringify(result), id, session).changes === 1, 'TOOL_ALREADY_ANSWERED');
+  }
+  observeToolResult(id: string, instance: string, generation: number, toolId: string, content: unknown, isError: boolean) {
+    this.transaction(() => {
+      const s = this.bound(id, instance, generation), row = this.connection.prepare('SELECT * FROM terminal_tool_call WHERE id=?').get(toolId);
+      requireCondition(row && row.session_id === s.id && row.turn_id === s.active_turn_id && row.generation === generation && !row.observed && row.result_json, 'UNBOUND_TOOL_RESULT');
+      const expected = JSON.parse(String(row.result_json)) as {content: unknown; isError?: boolean};
+      requireCondition(JSON.stringify(expected.content) === JSON.stringify(content) && !!expected.isError === isError, 'TOOL_RESULT_MISMATCH');
+      this.connection.prepare('UPDATE terminal_tool_call SET observed=1 WHERE id=?').run(toolId);
+      this.event(s.task_id, 'terminal.tool_result_observed', {tool_id: toolId, turn_id: s.active_turn_id, is_error: isError});
+    });
+  }
+  assertToolsSettled(id: string) {
+    const s = this.session(id);
+    requireCondition(!this.connection.prepare('SELECT id FROM terminal_tool_call WHERE turn_id=? AND observed=0').get(s.active_turn_id), 'CLI_TOOL_RESULT_UNOBSERVED');
+    requireCondition(!this.connection.prepare("SELECT id FROM terminal_file_intent WHERE session_id=? AND status IN ('intent','uncertain')").get(id), 'FILE_EFFECT_UNCERTAIN');
+  }
+  fileIntents(id: string) {return this.connection.prepare('SELECT * FROM terminal_file_intent WHERE session_id=? ORDER BY rowid').all(id) as unknown as FileIntent[];}
+  beginFile(config: HostConfig, authority: FileAuthority, request: FileWrite, before: FileObservation) {
+    return this.transaction(() => {
+      const s = this.fileFence(config, authority, request.turn_id), hash = sha256(JSON.stringify(request));
+      const old = this.connection.prepare('SELECT * FROM terminal_file_intent WHERE session_id=? AND request_id=?').get(s.id, request.request_id) as unknown as FileIntent | undefined;
+      if (old) {requireCondition(old.request_hash === hash, 'REQUEST_ID_CONFLICT'); return {intent: old, created: false};}
+      requireCondition(!this.connection.prepare("SELECT f.id FROM terminal_file_intent f JOIN terminal_session s ON s.id=f.session_id WHERE s.worktree=? AND f.status IN ('intent','uncertain')").get(s.worktree), 'FILE_EFFECT_UNCERTAIN');
+      requireCondition(Number(this.connection.prepare('SELECT COUNT(*) AS n FROM terminal_file_intent WHERE turn_id=?').get(request.turn_id)!.n) < config.terminal!.files!.max_writes_per_turn, 'FILE_WRITE_BUDGET');
+      requireCondition(request.expected_sha256 === before.sha256, 'FILE_PRECONDITION_CHANGED');
+      const id = randomUUID();
+      this.connection.prepare('INSERT INTO terminal_file_intent(id,session_id,turn_id,generation,path,request_id,request_hash,before_hash,after_hash,before_content,content,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id, s.id, request.turn_id, s.generation, request.path, request.request_id, hash, before.sha256, sha256(request.content), before.content, request.content, new Date().toISOString());
+      this.event(s.task_id, 'terminal.file_intent', {intent_id: id, turn_id: request.turn_id, path: request.path, before_sha256: before.sha256, after_sha256: sha256(request.content)});
+      return {intent: this.fileIntents(s.id).find(i => i.id === id)!, created: true};
+    });
+  }
+  finishFile(intent: FileIntent, status: FileIntent['status'], result: unknown) {
+    this.connection.prepare('UPDATE terminal_file_intent SET status=?,result_json=? WHERE id=?').run(status, JSON.stringify(result), intent.id);
+    this.event(this.session(intent.session_id).task_id, 'terminal.file_observed', {intent_id: intent.id, status, observation: result});
+  }
+  pendingVerification(worktree: string) {return this.connection.prepare('SELECT v.id FROM terminal_verification v JOIN terminal_session s ON s.id=v.session_id WHERE s.worktree=? AND v.result_json IS NULL').get(worktree);}
+  verifications(id: string) {return this.connection.prepare('SELECT * FROM terminal_verification WHERE session_id=? ORDER BY rowid').all(id);}
+  beginVerification(config: HostConfig, id: string, generation: number, turn: string, request: string, manifest: unknown) {
+    return this.transaction(() => {
+      const s = this.readSession(config.project.id, id, generation);
+      requireCondition(s.config_hash === config.fingerprint && loadHostConfig(config.path).fingerprint === config.fingerprint, 'CONFIG_CHANGED');
+      const old = this.connection.prepare('SELECT * FROM terminal_verification WHERE session_id=? AND request_id=?').get(id, request);
+      if (old) {requireCondition(old.turn_id === turn && old.generation === generation && old.config_hash === config.fingerprint, 'REQUEST_ID_CONFLICT'); return {record: old, created: false};}
+      requireCondition(s.last_turn_id === turn && !s.active_turn_id && ['input_ready','process_exited','turn_completed'].includes(s.state), 'VERIFICATION_REQUIRES_FINISHED_TURN');
+      requireCondition(!s.interrupt_requested && !s.manual_control && !this.task(s.task_id).cancel_requested, 'VERIFICATION_CANCELLED');
+      requireCondition(!this.pendingVerification(s.worktree), 'VERIFIER_IN_PROGRESS');
+      requireCondition(!this.sessions(config.project.id).some(row => row.active_turn_id), 'VERIFICATION_REQUIRES_IDLE_WORKTREE');
+      requireCondition(!this.connection.prepare("SELECT f.id FROM terminal_file_intent f JOIN terminal_session s ON s.id=f.session_id WHERE s.worktree=? AND f.status IN ('intent','uncertain')").get(s.worktree), 'FILE_EFFECT_UNCERTAIN');
+      requireCondition(this.verifications(id).length < 100, 'VERIFICATION_BUDGET');
+      const identity = processIdentitySync(process.pid); requireCondition(typeof identity !== 'string', 'VERIFIER_IDENTITY_UNAVAILABLE');
+      const verification = randomUUID();
+      this.connection.prepare('INSERT INTO terminal_verification(id,session_id,turn_id,generation,request_id,config_hash,manifest_json,owner_identity_json,created_at) VALUES (?,?,?,?,?,?,?,?,?)').run(verification, id, turn, generation, request, config.fingerprint, JSON.stringify(manifest), JSON.stringify(identity), new Date().toISOString());
+      this.event(s.task_id, 'terminal.verification_started', {verification_id: verification, turn_id: turn, manifest});
+      return {record: this.verifications(id).at(-1)!, created: true};
+    });
+  }
+  finishVerification(id: string, session: string, result: unknown) {
+    this.transaction(() => {
+      requireCondition(this.connection.prepare('UPDATE terminal_verification SET result_json=? WHERE id=? AND session_id=? AND result_json IS NULL').run(JSON.stringify(result), id, session).changes === 1, 'VERIFICATION_ALREADY_FINISHED');
+      this.event(this.session(session).task_id, 'terminal.verification_observed', {verification_id: id, result});
+    });
+  }
+  reconcileFiles(config: HostConfig, id: string, generation: number, observe: (path: string) => FileObservation) {
+    return this.transaction(() => {
+      const s = this.readSession(config.project.id, id, generation);
+      requireCondition(s.config_hash === config.fingerprint && loadHostConfig(config.path).fingerprint === config.fingerprint, 'CONFIG_CHANGED');
+      const dead = (encoded: string | null) => {if (!encoded) return false; const old = JSON.parse(encoded) as ProcessIdentity, now = processIdentitySync(old.pid); return now === 'dead' || typeof now !== 'string' && JSON.stringify(now) !== encoded;};
+      requireCondition(dead(s.process_identity_json), 'RECONCILIATION_REQUIRES_DEAD_CLI');
+      const broker = this.broker(id, generation); requireCondition(broker && dead(String(broker.identity_json)), 'RECONCILIATION_REQUIRES_DEAD_BROKER');
+      const interruptedVerifiers = [];
+      for (const row of this.verifications(id).filter(v => !v.result_json)) {
+        requireCondition(dead(String(row.owner_identity_json)), 'RECONCILIATION_REQUIRES_DEAD_VERIFIER_OWNER');
+        const result = {status: 'NOT_RUN', reason: 'VERIFIER_OWNER_DIED', checks: 'unobserved', automatic_retry: false, project_completed: false};
+        this.connection.prepare('UPDATE terminal_verification SET result_json=? WHERE id=? AND result_json IS NULL').run(JSON.stringify(result), String(row.id));
+        this.event(s.task_id, 'terminal.verification_interrupted', {verification_id: row.id, ...result}); interruptedVerifiers.push(row.id);
+      }
+      const observations = [];
+      for (const intent of this.fileIntents(id).filter(i => ['intent','uncertain'].includes(i.status))) {
+        let hash: string | null | 'unobserved' = 'unobserved';
+        try {hash = observe(intent.path).sha256;} catch { /* Unknown remains unknown. */ }
+        const state = hash === intent.after_hash ? 'verified' : hash === intent.before_hash ? 'not_applied' : 'uncertain';
+        const result = {intent_id: intent.id, path: intent.path, observed_sha256: hash, match: state === 'verified' ? 'desired_content_now' : state === 'not_applied' ? 'previous_content_now' : 'unknown', execution_happened: 'unobserved', automatically_replayed: false};
+        this.finishFile(intent, state, result); observations.push(result);
+      }
+      return {observations, interrupted_verifiers: interruptedVerifiers, automatic_resume: false, prompt_effects: 'not_reconciled_by_file_hashes'};
+    });
   }
 }

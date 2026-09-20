@@ -1,8 +1,9 @@
 import {readFileSync, realpathSync, statSync} from 'node:fs';
-import {dirname, isAbsolute, resolve} from 'node:path';
+import {dirname, isAbsolute, resolve, relative} from 'node:path';
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
 import {requireCondition, type ProjectBinding} from '../core/contracts.js';
+import {fileDelegation} from '../terminal/file-contracts.js';
 
 const identifier=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const TerminalConfigSchema=z.object({
@@ -11,6 +12,7 @@ const TerminalConfigSchema=z.object({
   max_turns:z.number().int().min(1).max(100).default(20),
   turn_deadline_ms:z.number().int().min(1000).max(600000).default(120000),
   spool_bytes:z.number().int().min(65536).max(16777216).default(4194304),
+  files:fileDelegation.optional(),
 }).strict();
 export type TerminalConfig=z.infer<typeof TerminalConfigSchema>;
 export const HostConfigSchema=z.object({
@@ -47,6 +49,15 @@ export function loadHostConfig(path:string):HostConfig {
     const executable=realpathSync(raw.terminal.executable),stat=statSync(executable);requireCondition(stat.isFile(),'CLI_EXECUTABLE_REQUIRED');
     requireCondition(new Set(raw.terminal.tools).size===raw.terminal.tools.length,'DUPLICATE_CLI_TOOL');
     requireCondition(raw.terminal.tools.length===0,'CLI_FILE_TOOLS_UNVERIFIED');
+    const files=raw.terminal.files;
+    if(files){
+      requireCondition(process.platform==='linux','FILE_BROKER_PLATFORM_UNVERIFIED');
+      const outside=(path:string)=>{const rel=relative(worktree,path);return rel==='..'||rel.startsWith('../')||isAbsolute(rel);};
+      requireCondition(outside(actual)&&outside(data),'FILE_CONFIG_AND_DATA_MUST_BE_OUTSIDE_WORKTREE');
+      requireCondition(new Set(files.read).size===files.read.length&&new Set(files.write).size===files.write.length,'DUPLICATE_FILE_DELEGATION');
+      requireCondition(files.write.every(path=>files.read.includes(path)),'FILE_WRITE_REQUIRES_READ');
+      if(files.verifier)requireCondition(files.read.includes(files.verifier.entry)&&new Set(files.verifier.cases.map(c=>c.id)).size===files.verifier.cases.length,'INVALID_VERIFIER_DELEGATION');
+    }
     terminal={...raw.terminal,executable};executableStamp={executable,size:stat.size,mtime:stat.mtimeMs};
   }
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:origin?[origin]:[],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[])]};

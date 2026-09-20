@@ -10,6 +10,7 @@ import {processIdentity, liveness, bootClock, type ProcessIdentity} from '../sup
 import {TerminalStore} from './store.js';
 import {launchClaude, verifyClaude, classifyResult, type CliLauncher, type CliTransport} from './claude.js';
 import {redact, type CliEvent, type TerminalSession} from './contracts.js';
+import {brokerTools, fileRead, fileWrite, wirePrompt} from './file-contracts.js';
 
 interface Managed {session: TerminalSession; transport: CliTransport | null; failed: boolean; exited: boolean; starting: boolean; pending: CliEvent[]}
 export class TerminalHost {
@@ -82,13 +83,27 @@ export class TerminalHost {
     this.record(id, event);
     if (event.type === 'system') {
       requireCondition(event.subtype === 'init' && event.permissionMode === 'dontAsk' && Array.isArray(event.tools), 'CLI_INIT_MISMATCH');
-      requireCondition(JSON.stringify([...event.tools].sort()) === JSON.stringify([...this.config.terminal!.tools].sort()), 'CLI_TOOL_SCOPE_MISMATCH');
+      const expected = this.config.terminal!.files ? [...brokerTools] : [];
+      requireCondition(JSON.stringify([...event.tools].sort()) === JSON.stringify(expected.sort()), 'CLI_TOOL_SCOPE_MISMATCH');
+      if (this.config.terminal!.files) {
+        requireCondition(JSON.stringify(event.mcp_servers) === JSON.stringify([{name: 'runtime_files', status: 'connected'}]), 'CLI_BROKER_NOT_CONNECTED');
+        requireCondition(this.store.broker(id, generation), 'CLI_BROKER_UNBOUND');
+      }
     } else if (event.type === 'user') {
-      requireCondition(session.active_turn_id && event.uuid === session.active_turn_id, 'CLI_RECEIPT_MISMATCH');
       const message = event.message as {role?: unknown; content?: unknown} | undefined;
-      requireCondition(message?.role === 'user' && message.content === this.store.turn(session.active_turn_id).prompt, 'CLI_PROMPT_ECHO_MISMATCH');
-      this.store.acknowledge(id, this.instance!, generation, session.active_turn_id);
+      if (Array.isArray(message?.content)) {
+        requireCondition(this.config.terminal!.files && message.role === 'user' && event.parent_tool_use_id === null && message.content.length > 0, 'CLI_TOOL_RESULT_MISMATCH');
+        for (const item of message.content as Array<Record<string, unknown>>) {
+          requireCondition(item.type === 'tool_result' && typeof item.tool_use_id === 'string' && (item.is_error === undefined || typeof item.is_error === 'boolean'), 'CLI_TOOL_RESULT_MISMATCH');
+          this.store.observeToolResult(id, this.instance!, generation, item.tool_use_id, item.content, item.is_error === true);
+        }
+      } else {
+        requireCondition(session.active_turn_id && event.uuid === session.active_turn_id, 'CLI_RECEIPT_MISMATCH');
+        requireCondition(message?.role === 'user' && message.content === wirePrompt(session.active_turn_id, this.store.turn(session.active_turn_id).prompt, !!this.config.terminal!.files), 'CLI_PROMPT_ECHO_MISMATCH');
+        this.store.acknowledge(id, this.instance!, generation, session.active_turn_id);
+      }
     } else if (event.type === 'result') {
+      this.store.assertToolsSettled(id);
       const result = classifyResult(event);
       this.store.result(id, this.instance!, generation, result);
       const completed = this.store.session(id);
@@ -96,7 +111,17 @@ export class TerminalHost {
     } else if (event.type === 'rate_limit_event') {
       // This event also appears on successful turns. Never infer a wait from its name.
       // Until installed-version payloads are verified it is telemetry only; deadline/result governs input.
-    } else requireCondition(session.active_turn_id, 'CLI_UNSOLICITED_ASSISTANT');
+    } else {
+      requireCondition(session.active_turn_id, 'CLI_UNSOLICITED_ASSISTANT');
+      const message = event.message as {content?: unknown} | undefined;
+      if (Array.isArray(message?.content)) for (const item of message.content as Array<Record<string, unknown>>) if (item.type === 'tool_use') {
+        requireCondition(this.config.terminal!.files && event.parent_tool_use_id === null && typeof item.id === 'string' && item.id.length <= 128, 'CLI_TOOL_NOT_DELEGATED');
+        const schema = item.name === brokerTools[0] ? fileRead : item.name === brokerTools[1] ? fileWrite : null;
+        requireCondition(schema, 'CLI_TOOL_NOT_DELEGATED'); const input = schema.parse(item.input);
+        requireCondition(input.turn_id === session.active_turn_id, 'CLI_TOOL_TURN_MISMATCH');
+        this.store.toolRequested(id, this.instance!, generation, item.id, String(item.name), input);
+      }
+    }
   }
   private fail(id: string, reason: string) {
     const managed = this.managed.get(id); if (!managed || managed.failed) return;

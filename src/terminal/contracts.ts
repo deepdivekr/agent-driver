@@ -14,6 +14,7 @@ export type TerminalHistory=z.infer<typeof terminalHistory>;
 export const terminalOutput=terminalBound.extend({limit:z.number().int().min(1).max(50).default(20),cursor:z.object({revision,after_event_id:revision}).strict().optional()}).strict();
 export type TerminalOutput=z.infer<typeof terminalOutput>;
 export const terminalHandoff=terminalBound.extend({include_diff:z.boolean().default(false)}).strict();
+export const terminalVerify=terminalBound.extend({request_id:identifier,expected_turn_id:z.string().uuid()}).strict();
 export interface TerminalSession{
   id:string;project_id:string;task_id:string;request_id:string;cli_session_id:string;
   worktree:string;executable:string;version:string;config_hash:string;host_instance_id:string|null;

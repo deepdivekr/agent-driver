@@ -1,9 +1,11 @@
 import {spawn, execFile, type ChildProcessWithoutNullStreams} from 'node:child_process';
 import {promisify} from 'node:util';
 import {StringDecoder} from 'node:string_decoder';
+import {fileURLToPath} from 'node:url';
 import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {redact, type CliEvent, type TerminalSession, type TurnResult} from './contracts.js';
+import {brokerTools, wirePrompt} from './file-contracts.js';
 
 export interface CliTransport {
   readonly child: ChildProcessWithoutNullStreams;
@@ -15,17 +17,19 @@ export interface CliCallbacks {event(event: CliEvent): void; failure(code: strin
 export type CliLauncher = (config: HostConfig, session: TerminalSession, resume: boolean, callbacks: CliCallbacks) => Promise<CliTransport>;
 
 export function cliEnvironment() {
-  const env: NodeJS.ProcessEnv = {DISABLE_AUTOUPDATER: '1'};
+  const env: NodeJS.ProcessEnv = {DISABLE_AUTOUPDATER: '1', ENABLE_TOOL_SEARCH: 'false'};
   for (const key of ['PATH', 'HOME', 'USERPROFILE', 'LANG', 'LC_ALL', 'TMPDIR', 'TEMP', 'TMP', 'SystemRoot']) if (process.env[key]) env[key] = process.env[key];
   return env;
 }
 export function claudeArgs(config: HostConfig, session: TerminalSession, resume: boolean) {
   requireCondition(config.terminal && session.worktree === config.project.worktree, 'CLI_BINDING_REQUIRED');
   // These flags were verified on 2.1.126. OAuth remains in the CLI's own auth store.
-  const permissions = config.terminal.tools.length ? [`Read(/${config.project.worktree}/**)`, `Edit(/${config.project.worktree}/**)`] : [];
+  const permissions = config.terminal.files ? [...brokerTools] : [];
+  const mcp = config.terminal.files ? {runtime_files: {type: 'stdio', command: process.execPath, args: [fileURLToPath(new URL('./file-entry.js', import.meta.url)), config.path, session.id, String(session.generation), session.host_instance_id]}} : {};
   return ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--replay-user-messages',
     resume ? '--resume' : '--session-id', session.cli_session_id,
-    '--tools', config.terminal.tools.join(','), '--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}',
+    '--tools', '', '--strict-mcp-config', '--mcp-config', JSON.stringify({mcpServers: mcp}),
+    ...(permissions.length ? ['--allowedTools', permissions.join(',')] : []),
     '--setting-sources', '', '--settings', JSON.stringify({disableAllHooks: true, permissions: {allow: permissions}}),
     '--disable-slash-commands', '--no-chrome', '--permission-mode', 'dontAsk'];
 }
@@ -61,7 +65,7 @@ export class JsonLineDecoder {
     requireCondition(!this.pending.trim(), 'CLI_TRUNCATED_FRAME');
   }
 }
-export function transportFromChild(child: ChildProcessWithoutNullStreams, session: TerminalSession, callbacks: CliCallbacks): CliTransport {
+export function transportFromChild(child: ChildProcessWithoutNullStreams, session: TerminalSession, callbacks: CliCallbacks, files = false): CliTransport {
   let stopped = false, closed = false, stopPromise: Promise<void> | null = null;
   const decoder = new JsonLineDecoder(callbacks.event);
   const fail = (code: string) => {if (!stopped) {stopped = true; callbacks.failure(code);}};
@@ -77,7 +81,7 @@ export function transportFromChild(child: ChildProcessWithoutNullStreams, sessio
     writable: () => !closed && !stopped && child.exitCode === null && child.signalCode === null && child.stdin.writable && !child.stdin.destroyed,
     send(turn, prompt) {
       requireCondition(!closed && !stopped && child.exitCode === null && child.signalCode === null && child.stdin.writable && !child.stdin.destroyed, 'CLI_NOT_WRITABLE');
-      const message = {type: 'user', uuid: turn, session_id: session.cli_session_id, message: {role: 'user', content: prompt}, parent_tool_use_id: null};
+      const message = {type: 'user', uuid: turn, session_id: session.cli_session_id, message: {role: 'user', content: wirePrompt(turn, prompt, files)}, parent_tool_use_id: null};
       // One bounded prompt at a time; never a shell command, even after child exit.
       child.stdin.write(`${JSON.stringify(message)}\n`);
     },
@@ -96,7 +100,7 @@ export function transportFromChild(child: ChildProcessWithoutNullStreams, sessio
 }
 export const launchClaude: CliLauncher = async (config, session, resume, callbacks) => {
   const child = spawn(config.terminal!.executable, claudeArgs(config, session, resume), {cwd: session.worktree, env: cliEnvironment(), shell: false, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe']});
-  return transportFromChild(child, session, callbacks);
+  return transportFromChild(child, session, callbacks, !!config.terminal!.files);
 };
 export function classifyResult(event: CliEvent): TurnResult {
   requireCondition(event.type === 'result' && typeof event.is_error === 'boolean' && Array.isArray(event.permission_denials), 'UNRECOGNIZED_CLI_RESULT');

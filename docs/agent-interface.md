@@ -56,6 +56,8 @@ node dist/cli.js mcp --config .runtime/lab-01/host.json
 
 ## 검증
 
+Phase20은 기존 DB v1~v4의 기록을 보존하며 v5로 올린다. v5는 file broker identity, 공식 tool call, file intent, independent verification을 추가한다. 파일 기능은 `terminal.files`가 있는 host에만 켜지며 정확한 범위와 명령은 [파일 작업 안내](terminal-file-effects.md)를 따른다. `runtime_terminal_verify`와 `runtime_terminal_reconcile_files` 2개 도구가 추가되었다. CLI는 `terminal verify|reconcile-files --config PATH --request-file PATH`다. 과거 v4 설명은 당시 migration 단계이며 구버전 실행 파일로 v5를 열지 않는다.
+
 실제 SDK initialize/list/call/close, CLI↔MCP 같은 동작/별도 task, 두 gateway 동시 duplicate, 인수 충돌, 다른 project 접근, 실제 navigation barrier 중 gateway SIGKILL, 재연결 뒤 이벤트 redelivery/ack, shared profile 동시 요청 직렬화를 검사한다. 합성 fixture 기반 C01은 fixture_integration으로 기록한다. SDK 1.30.0 / Zod 4.4.3을 고정했다.
 
 프로토콜 근거: [MCP stdio transport](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports). 공식 SDK의 실제 설치 버전 구현과 왕복 검사를 함께 확인했다. stdio 출력은 프로토콜 전용이고 진단 로그는 stderr다.

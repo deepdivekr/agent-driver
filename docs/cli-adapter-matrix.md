@@ -39,7 +39,7 @@ host 사망과 CLI 사망을 구분한다. host가 살아 있으면 IPC로 같�
 
 공개 상태 API는 현재/마지막 턴 결과와 프로세스 신원을, events API는 전달 가능한 상태/출력 메타데이터를 제공한다. private spool은 감사용 로컬 파일이며 전체 assistant 스트림을 그대로 복제하지 않는다. 과거 모든 턴 내용·spool을 외부 agent가 scope 검사와 함께 조회하는 전용 API는 아직 없고 후속 구현이다.
 
-현재 `tools=[]`만 허용한다. 파일 읽기/수정·Bash·MCP·Chrome·hook을 켠 코딩 route는 작업 폴더/인증/설정 파일 경계의 독립 검증 전 차단한다. 이 단계는 **세션 통신 기반**이지 코딩 업무를 완수하는 CLI adapter 완성판이 아니다. 같은 OS 사용자 권한의 악성 코드에 대한 보안 sandbox도 아니다. 실제 작업 파일·인증을 억지로 public test에 넣지 않는다.
+기본 CLI 도구는 계속 `tools=[]`만 허용한다. Phase20에서는 별도 host의 `terminal.files` 위임으로 runtime 소유 MCP read_file/write_file만 연다. 실제 Claude 2.1.126의 assistant tool_use/user tool_result와 broker의 durable 결과를 결속한다. 상세 범위·실측·제약은 [파일 작업 계약](terminal-file-effects.md)을 따른다. Bash·다른 MCP·Chrome·hooks는 비활성 상태다. 일반 프로젝트 빌드·interactive·Windows 완성판이나 같은 OS 사용자 공격자를 막는 보안 sandbox는 아니다. 실제 인증/사용자 파일을 public test에 넣지 않는다.
 
 ## 실험적 사용
 

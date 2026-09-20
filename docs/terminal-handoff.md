@@ -52,4 +52,6 @@ Git2.43.0/Linux에서 직접 executable과 고정 인수, 정제된 환경, 명�
 
 redaction은 알려진 자격증명 패턴에 대한 best effort일 뿐 비밀 완전 제거 보장이 아니다. 웹/파일/모델 내용은 비신뢰 데이터이며 승인·실행 지시로 승격하지 않는다. 신뢰된 Git binary를 실행하며 동일 OS 사용자 공격자나 악성 Git 구현을 격리하는 보안 sandbox가 아니다. raw/private artifact는 공개 projection에서 제외한다.
 
-파일 수정 도구·interactive CLI·linked worktree 수집·Windows/ConPTY/ACL·실제 외부 테스트 결과 수집·ENOSPC/회전/soak·실제 사이트·독립 사람 라벨/라이선스는 후속 범위다.
+Phase20부터 명시된 [파일 broker·독립 Node 검증](terminal-file-effects.md)의 결과를 인계에 연결한다. file intent의 hash/status와 verification의 snapshot/turn/generation을 포함하고, 최신 검증 이후 내용이 바뀌면 project_tests는 NOT_RUN이다. 인계 생성 자체는 테스트를 실행하지 않는다. 위의 “테스트 NOT_RUN”은 이 검증 기록이 없을 때의 기본값이다.
+
+interactive CLI·linked worktree 수집·Windows/ConPTY/ACL·일반 프로젝트 테스트·ENOSPC/회전/soak·실제 사이트·독립 사람 라벨/라이선스는 후속 범위다.

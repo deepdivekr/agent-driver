@@ -1,0 +1,21 @@
+// Synthetic authority, real SQLite/filesystem and process death. NOT a Claude fixture.
+import {writeFileSync} from 'node:fs';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {loadHostConfig} from '../../dist/interface/config.js';
+import {TerminalStore} from '../../dist/terminal/store.js';
+import {processIdentitySync} from '../../dist/supervisor/identity.js';
+import {FileBroker} from '../../dist/terminal/file-broker.js';
+import {fileWrite} from '../../dist/terminal/file-contracts.js';
+import {ScopedFiles} from '../../dist/terminal/scoped-files.js';
+const config = loadHostConfig(process.argv[2]), point = process.argv[3], store = new TerminalStore(config.dbPath);
+store.registerProject(config.project); const identity = processIdentitySync(process.pid), encoded = JSON.stringify(identity);
+const host = store.claimTerminalHost(config, identity, null, 'test-only', 'test-only'), {session} = store.startSession(config, 'crash');
+store.claimSession(session.id, host, config); store.bindProcess(session.id, host, 1, identity); store.ready(session.id, host, 1);
+const {turn} = store.submit(config, {request_id:'turn',session_ref:session.id,expected_generation:1,expected_previous_turn_id:null,prompt:'synthetic crash'});
+store.dispatch(session.id,host,1,config);store.acknowledge(session.id,host,1,turn.id);
+const authority = {session:session.id,generation:1,host,broker:encoded,cli:encoded};store.bindBroker(config,authority);
+const input = fileWrite.parse({turn_id:turn.id,path:'src/app.mjs',request_id:'write-once',expected_sha256:new ScopedFiles(config).read('src/app.mjs').sha256,content:'after crash 🐈'});
+store.toolRequested(session.id,host,1,randomUUID(),'mcp__runtime_files__write_file',input);
+await new FileBroker(config,store,authority,at=>{if(at===point){writeFileSync(join(config.project.worktree,'checkpoint.json'),JSON.stringify({session:session.id,turn:turn.id,authority,point:at}));process.kill(process.pid,'SIGSTOP');}}).call('write_file',input);
+throw Error('CRASH_POINT_NOT_REACHED');

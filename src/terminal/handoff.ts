@@ -6,6 +6,8 @@ import {loadHostConfig, type HostConfig} from '../interface/config.js';
 import {handoffSchema, redact, type TurnResult} from './contracts.js';
 import {collectGitSnapshot} from './git-snapshot.js';
 import {type TerminalStore} from './store.js';
+import {ScopedFiles} from './scoped-files.js';
+import {brokerTools} from './file-contracts.js';
 
 function savePrivateHandoff(config: HostConfig, sessionId: string, document: unknown) {
   const content = Buffer.from(JSON.stringify(document, null, 2) + '\n');
@@ -39,6 +41,16 @@ export async function prepareTerminalHandoff(store: TerminalStore, config: HostC
   const context = store.handoffContext(config.project.id, id, generation), {session, turns} = context;
   requireCondition(session.config_hash === config.fingerprint && session.worktree === config.project.worktree, 'CONFIG_CHANGED');
   const git = await collectGitSnapshot(session.worktree, includeDiff);
+  const effects = store.fileIntents(id).map(i => ({intent_id: i.id, turn_id: i.turn_id, generation: i.generation, path: i.path, before_sha256: i.before_hash, after_sha256: i.after_hash, status: i.status}));
+  const records = store.verifications(id), latest = records.at(-1);
+  let tests: {check: string; status: 'PASS' | 'FAIL' | 'NOT_RUN' | 'BLOCKED_ENV'; evidence: string | null} = {check: 'project_tests', status: 'NOT_RUN', evidence: null};
+  if (latest?.result_json && latest.turn_id === session.last_turn_id && latest.generation === generation && latest.config_hash === config.fingerprint && !session.active_turn_id) {
+    try {
+      const manifest = new ScopedFiles(config).snapshot().map(f => ({path: f.path, sha256: f.sha256}));
+      const observed = JSON.parse(String(latest.result_json)) as {status: typeof tests.status};
+      if (JSON.stringify(manifest) === latest.manifest_json) tests = {check: 'project_tests', status: observed.status, evidence: String(latest.id)};
+    } catch { /* A prior PASS is not current evidence if files cannot be reobserved. */ }
+  }
   requireCondition(loadHostConfig(config.path).fingerprint === config.fingerprint, 'CONFIG_CHANGED');
   store.readSession(config.project.id, id, generation);
   requireCondition(store.revision(id) === context.revision, 'HISTORY_CHANGED_RESTART_PAGE');
@@ -49,13 +61,14 @@ export async function prepareTerminalHandoff(store: TerminalStore, config: HostC
     remaining: [...(unresolved.length ? ['Reconcile uncertain turns against external effects; do not replay.'] : []), ...(pending.length ? ['Accepted turn remains owned by the existing host; do not duplicate.'] : []), 'Verify actual files, tests and original completion criteria before continuing.'],
     commit: git.commit, worktree: session.worktree, dirty_diff: git.status === 'observed' && includeDiff ? `STAGED\n${git.staged_diff}\nUNSTAGED\n${git.unstaged_diff}` : null,
     verification: [{check: 'git_snapshot_collection', status: git.status === 'observed' ? 'PASS' : 'NOT_RUN', evidence: git.snapshot_sha256 ?? git.reason},
-      {check: 'project_tests', status: 'NOT_RUN', evidence: null}, {check: 'project_completion_criteria', status: 'NOT_RUN', evidence: null}],
+      tests, {check: 'project_completion_criteria', status: 'NOT_RUN', evidence: null}],
     failure_cause: session.error_code, next_action: unresolved.length ? 'reconcile_before_any_replay' : pending.length || session.active_turn_id ? 'observe_existing_host_do_not_start_duplicate' : 'review_handoff_and_current_worktree',
-    delegation: {project_id: config.project.id, allowed_tools: config.terminal!.tools, remaining_turns: Math.max(0, config.terminal!.max_turns - session.turn_count)}, prepared_kind: 'handoff', automatic_execution: false});
+    delegation: {project_id: config.project.id, allowed_tools: config.terminal!.files ? [...brokerTools] : [], remaining_turns: Math.max(0, config.terminal!.max_turns - session.turn_count)}, prepared_kind: 'handoff', automatic_execution: false});
   const document = {handoff, observations: {revision: context.revision, terminal_state: session.state, goal_source: turns.length ? 'first_submitted_prompt_not_verified_project_goal' : 'unobserved',
     completed_scope: 'independently_verified_project_work_only', unresolved_turn_ids: unresolved, pending_turn_ids: pending,
     turns: turns.map(turn => {const result = turn.result_json ? JSON.parse(turn.result_json) as TurnResult : null; return {turn_id: turn.id, status: turn.status, generation: turn.generation,
-      reported_result: result?.text ? redact(result.text.slice(0, 2000)) : null, result_truncated: result?.text ? result.text.length > 2000 : false, project_claim_verified: false};}), git},
+      reported_result: result?.text ? redact(result.text.slice(0, 2000)) : null, result_truncated: result?.text ? result.text.length > 2000 : false, project_claim_verified: false};}), git, file_effects: effects,
+      verifications: records.map(row => ({verification_id: row.id, turn_id: row.turn_id, generation: row.generation, manifest: JSON.parse(String(row.manifest_json)) as unknown, result: row.result_json ? JSON.parse(String(row.result_json)) as unknown : 'unobserved'}))},
     content_trust: 'untrusted_data', project_completed: false,
     limitations: ['No model call, test command, CLI start, resume or replay is performed.', 'Git data is a bounded double observation, not an atomic filesystem snapshot or a security sandbox.', 'Credential-pattern redaction is best effort; keep this artifact private.', 'Untracked, ignored and submodule file contents are not collected. Linked gitdirs and partial clones are unverified.']};
   return {...document, artifact: store.persistHandoff(config.project.id, id, generation, context.revision, () => savePrivateHandoff(config, id, document))};

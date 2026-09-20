@@ -5,6 +5,14 @@ import {resolve} from 'node:path';
 
 export interface ProcessIdentity {platform:'linux';pid:number;bootId:string;startTicks:string}
 export type Liveness='alive'|'dead'|'unknown';
+export function processIdentitySync(pid:number):ProcessIdentity|'dead'|'unknown'{
+  if(process.platform!=='linux'||!Number.isSafeInteger(pid)||pid<1)return 'unknown';
+  try{const stat=readFileSync(`/proc/${pid}/stat`,'utf8'),fields=stat.slice(stat.lastIndexOf(')')+2).trim().split(/\s+/),clock=bootClock();
+    if(['Z','X'].includes(fields[0]??''))return 'dead';
+    if(!fields[19]||!/^\d+$/.test(fields[19])||clock.bootId==='unknown')return 'unknown';
+    return {platform:'linux',pid,bootId:clock.bootId,startTicks:fields[19]};
+  }catch(e){return (e as NodeJS.ErrnoException).code==='ENOENT'?'dead':'unknown';}
+}
 export function bootClock(){
   try{return {bootId:readFileSync('/proc/sys/kernel/random/boot_id','utf8').trim(),uptimeMs:Number(readFileSync('/proc/uptime','utf8').split(' ')[0])*1000};}
   catch{return {bootId:'unknown',uptimeMs:uptime()*1000};}
