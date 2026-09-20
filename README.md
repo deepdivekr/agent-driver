@@ -9,7 +9,7 @@
 Linux 또는 Ubuntu/WSL의 Bash에서 실행합니다. Node **22.22.0**, npm **11.11.0**을 사용합니다. 이 버전의 내장 SQLite는 experimental 경고를 stderr에 출력할 수 있습니다.
 
 ```bash
-git clone --branch phase-25-recovery-diagnostics https://github.com/deepdivekr/agent-driver.git
+git clone --branch phase-26-soak https://github.com/deepdivekr/agent-driver.git
 cd agent-driver
 npm ci
 npx playwright install chromium
@@ -17,13 +17,13 @@ npm run build
 npm run runtime -- demo
 ```
 
-위 명령은 아직 merge되지 않은 복구 진단 보강 브랜치를 받습니다. merge 이후에는 `--branch phase-25-recovery-diagnostics`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
+위 명령은 아직 merge되지 않은 독립 soak 보강 브랜치를 받습니다. merge 이후에는 `--branch phase-26-soak`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
 
 복구 재진입은 [세대별 단계·실패 기록](docs/supervisor-recovery.md)으로 추적합니다. [간헐 재개 실패 #22](https://github.com/deepdivekr/agent-driver/issues/22)는 아직 원인 미확정이며 공식 출시 gate로 유지합니다.
 
 대량 CLI 출력 중 제어 요청의 응답성과 유한 부하 관측 방법은 [출력·제어 계약](docs/output-control.md)에 있습니다. 장기 운영·Windows 무간섭 인증과는 구분합니다.
 
-독립적인 유한 시간 반복 시험은 [soak 실행·관측 안내](docs/soak.md)를 참고하세요. 같은 DB와 전용 프로필에서 실제 브라우저·합성 CLI를 시험하며, 모델이나 실계정 사이트는 호출하지 않습니다. 실행기 제공과 실제 2시간/장기 시험의 완료는 별개입니다.
+독립적인 유한 시간 반복 시험은 [soak 실행·관측 안내](docs/soak.md)를 참고하세요. 같은 DB와 전용 프로필에서 실제 브라우저·합성 CLI를 시험하며, 모델이나 실계정 사이트는 호출하지 않습니다. alpha.12의 fresh public 설치는 2시간 smoke(1,056 cycles, 실패·중복 효과·중복 CLI receipt 모두 0)를 통과했지만, 실제 모델·실사이트·Windows 무간섭 또는 72시간 이상 운영 인증은 아닙니다.
 
 `demo`는 새 전용 프로필과 loopback 테스트 앱만 사용합니다. 기존 Chrome에 연결하지 않고 외부 사이트에 쓰지 않으며 모델 API를 호출하지 않습니다. 결과의 `task_id`와 `project_id`로 상태/이벤트를 조회할 수 있습니다. `.runtime/`에는 로컬 DB와 전용 프로필이 남고 공개되지 않습니다.
 
