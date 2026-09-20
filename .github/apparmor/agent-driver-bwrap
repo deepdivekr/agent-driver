@@ -1,0 +1,9 @@
+abi <abi/4.0>,
+include <tunables/global>
+
+# CI-only, root-owned executable. Ubuntu 24.04 otherwise denies capabilities
+# inside unprivileged user namespaces. This does not grant host capabilities.
+# The runtime still drops all sandbox capabilities and disables nested userns.
+profile agent-driver-bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+}

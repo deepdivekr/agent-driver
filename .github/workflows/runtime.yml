@@ -17,8 +17,15 @@ jobs:
       - run: npm install --global npm@11.11.0
       - run: npm ci
       - run: npm audit --omit=dev --audit-level=low
-      - run: sudo apt-get update && sudo apt-get install -y bubblewrap util-linux
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap util-linux apparmor
       - run: bwrap --version && /usr/bin/prlimit --version
+      - name: Configure the CI sandbox executable's user namespace permission
+        run: |
+          if test -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then
+            sudo install -m 0644 .github/apparmor/agent-driver-bwrap /etc/apparmor.d/agent-driver-bwrap
+            sudo apparmor_parser --replace /etc/apparmor.d/agent-driver-bwrap
+            sysctl kernel.apparmor_restrict_unprivileged_userns
+          fi
       - run: npx playwright install --with-deps chromium
       - run: npm test
       - uses: actions/upload-artifact@v4

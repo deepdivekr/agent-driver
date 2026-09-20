@@ -55,6 +55,8 @@ CLI 응답·exit0·도구 성공 메시지는 프로젝트 완료 증거가 아�
 
 ## 증거와 미완료 범위
 
+Ubuntu24.04의 기본 AppArmor 정책은 user namespace 생성은 허용해도 내부 capability 사용을 거절할 수 있다. 최초 GitHub CI에서 bubblewrap의 loopback 구성 RTM_NEWADDR가 EPERM으로 실패했고 verifier는 BLOCKED_ENV로 멈췄다. CI는 전용 disposable runner의 root 소유 `/usr/bin/bwrap`에만 `.github/apparmor/agent-driver-bwrap`의 명시 userns 프로필을 로드한다. 전역 userns 제한 값은 변경하지 않는다. 사용자 PC의 보안 정책은 자동 변경하지 않으며, 같은 문제가 있는 호스트의 관리자가 별도로 검토해야 한다. namespace·cap-drop·read-only/no-network 검사는 그대로 실행한다. 근거: [Ubuntu24.04 user namespace 정책](https://documentation.ubuntu.com/release-notes/24.04/#unprivileged-user-namespace-restrictions).
+
 합성 authority/protocol, 실제 filesystem/namespace, 실제 Claude opt-in 코딩 시험을 구분한다. 실제 CLI의 기존 구독 인증을 사용하며 키를 broker 설정·공개 증거에 복사하지 않는다. 실패 기록도 보존한다.
 
 Windows broker/ConPTY, linked Git worktree 수집, 일반 프로젝트 빌드, 모든 tool/error payload, 강한 보안 격리, 장기 보존·disk pressure·재부팅은 별도 검증 대상이다. Phase20 성공으로 원래 미완료 범위를 삭제하지 않는다.
