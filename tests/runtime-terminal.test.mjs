@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {spawn} from 'node:child_process';
 import {once} from 'node:events';
+import {createServer} from 'node:net';
 import {setTimeout as delay} from 'node:timers/promises';
 import {DatabaseSync} from 'node:sqlite';
 import {loadHostConfig} from '../dist/interface/config.js';
@@ -171,6 +172,15 @@ test('runtime fixture terminal no PID attach or generic recovery bypass; host IP
   assert.throws(() => x.api.store.recoverTask(x.api.store.session(id).task_id), /MANAGED_RECOVERY_REQUIRES_TERMINAL_HOST/);
   const legacy = new RuntimeStore(x.config.dbPath), task = x.api.store.session(id).task_id;
   try {assert.throws(() => legacy.cancel(task), /MANAGED_CANCELLATION_REQUIRES_TERMINAL_HOST/); assert.equal(legacy.task(task).cancel_requested, 0);} finally {legacy.close();}
+});
+test('runtime terminal host reattach tolerates a bounded delayed liveness reply without relaxing control health', async t => {
+  const root = await mkdtemp(join(tmpdir(), 'driver-terminal-probe-')), endpoint = join(root, 'host.sock');
+  const identity_json = JSON.stringify({platform: 'linux', pid: 1, bootId: 'fixture', startTicks: '1'}), row = {endpoint, token: 'probe-token', instance_id: 'probe-instance', identity_json};
+  const server = createServer(socket => {socket.once('data', () => {setTimeout(() => socket.end(JSON.stringify({instance_id: row.instance_id, process_identity: JSON.parse(identity_json)}) + '\n'), 1250);});});
+  await new Promise(resolve => server.listen(endpoint, resolve));
+  t.after(async () => {await new Promise(resolve => server.close(resolve)); await rm(root, {recursive: true, force: true});});
+  assert.equal(await pingTerminalHost(row), false);
+  assert.equal(await pingTerminalHost(row, 3000), true);
 });
 test('runtime fixture terminal config mutation is checked again at dispatch and sends nothing', async t => {
   const x = await setup(t), id = await session(x); await x.api.call('runtime_terminal_submit_prompt', request(x, id, 'config-change'));

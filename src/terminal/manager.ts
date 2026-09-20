@@ -9,11 +9,18 @@ import {cliEnvironment} from './claude.js';
 import {type TerminalHostRecord} from './contracts.js';
 import {configuredBoundary,launchConfigured} from '../resources/configured.js';
 
-export async function pingTerminalHost(row: TerminalHostRecord) {
+// A control-health probe remains one second by default.  Re-attaching an
+// already-owned host gets a wider, still bounded window: a CPU-constrained
+// host may be alive but briefly unable to service its Unix socket while its
+// own owned workload is scheduled.  This only proves identity/liveness; it
+// never retries a prompt or any external effect.
+const HOST_REATTACH_TIMEOUT_MS = 5000;
+
+export async function pingTerminalHost(row: TerminalHostRecord, timeoutMs = 1000) {
   return new Promise<boolean>(resolve => {
     const socket = createConnection(row.endpoint); let text = '', settled = false;
     const done = (ok: boolean) => {if (!settled) {settled = true; socket.destroy(); resolve(ok);}};
-    socket.setTimeout(1000, () => done(false));
+    socket.setTimeout(timeoutMs, () => done(false));
     socket.on('error', () => done(false)); socket.on('end', () => done(false));
     socket.on('connect', () => socket.write(row.token + '\n'));
     socket.on('data', chunk => {
@@ -36,7 +43,7 @@ export async function ensureTerminalHost(config: HostConfig) {
       if (state === 'alive') {
         requireCondition(old.active === 1 && !old.stop_requested && old.config_hash === config.fingerprint, 'TERMINAL_HOST_CONFIG_OR_STOP_CHANGED');
         await configuredBoundary(config,(JSON.parse(old.identity_json) as ProcessIdentity).pid);
-        requireCondition(await pingTerminalHost(old), 'TERMINAL_HOST_IPC_UNAVAILABLE'); return old;
+        requireCondition(await pingTerminalHost(old, HOST_REATTACH_TIMEOUT_MS), 'TERMINAL_HOST_IPC_UNAVAILABLE'); return old;
       }
     }
     const child = await launchConfigured(config,process.execPath, [fileURLToPath(new URL('./entry.js', import.meta.url)), config.path], {detached: true, windowsHide: true, shell: false, stdio: 'ignore', env: cliEnvironment()});

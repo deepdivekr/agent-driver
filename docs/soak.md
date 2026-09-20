@@ -35,6 +35,8 @@ node dist/cli.js soak stop --run .runtime/soak-two-hour
 
 manifest/input hashes, launch unit, heartbeat, append-only journal, progress, 최종 report를 run 디렉터리에 보존한다. 로그에는 합성값만 있지만 경로·PID·DB/profile은 private 운영 자료로 취급해 공개 커밋하지 않는다. stop은 이 run의 정확한 무작위 resource domain만 확인 후 중지하며 이미 생긴 효과를 되돌리지 않는다. 완료된 run의 stop은 비어 있는 소유 domain을 정리한다. 파일은 자동 삭제하지 않는다.
 
+terminal host의 일반 control-health probe는 1초다. 이미 identity와 resource boundary가 확인된 host를 재접속할 때만 CPU 제한으로 인한 순간 지연을 최대 5초까지 기다린다. 이 확인은 prompt나 외부 효과를 재시도하지 않으며, 별도 workload control-health 측정의 1초 기준을 완화하지 않는다.
+
 최종 report가 없는데 프로세스가 죽었으면 interrupted이며 PASS가 아니다. service/DB/실행 파일을 바꾸지 않은 동일 핸들을 관찰한다. 관측 timeout만으로 복제 실행하지 않는다. status는 상태 조회이며 중지/복구 승인이나 외부 쓰기를 발생시키지 않는다.
 
 실행기 자체가 강제 종료되면 별도 terminal host 서비스가 남을 수 있다. 이 경우에도 동일한 CPU/메모리/PID 상한이 적용되지만 자동 정리나 OS watchdog을 보장하지 않는다. 동일 run에 `soak stop`을 실행해 확인된 소유 domain 전체를 정리한다. 이런 중단은 완료 기록으로 보정하지 않는다.
