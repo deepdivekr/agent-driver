@@ -1,4 +1,3 @@
-import {spawn} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
 import {requireCondition} from '../core/contracts.js';
@@ -6,6 +5,7 @@ import {type HostConfig} from '../interface/config.js';
 import {RecoveryStore} from './store.js';
 import {liveness,type ProcessIdentity} from './identity.js';
 import {workerEnvironment} from './supervisor.js';
+import {configuredBoundary,launchConfigured} from '../resources/configured.js';
 
 export async function ensureSupervisor(config:HostConfig){
   const store=new RecoveryStore(config.dbPath);store.registerProject(config.project);
@@ -14,10 +14,10 @@ export async function ensureSupervisor(config:HostConfig){
     if(old?.active){
       const live=await liveness(JSON.parse(old.identity_json) as ProcessIdentity);
       requireCondition(live!=='unknown','SUPERVISOR_IDENTITY_UNKNOWN');
-      if(live==='alive'){requireCondition(old.config_hash===config.fingerprint&&!old.stop_requested,'SUPERVISOR_CONFIG_OR_STOP_CHANGED');return old;}
+      if(live==='alive'){requireCondition(old.config_hash===config.fingerprint&&!old.stop_requested,'SUPERVISOR_CONFIG_OR_STOP_CHANGED');await configuredBoundary(config,(JSON.parse(old.identity_json) as ProcessIdentity).pid);return old;}
     }
-    const child=spawn(process.execPath,[fileURLToPath(new URL('./entry.js',import.meta.url)),config.path],{detached:true,windowsHide:true,shell:false,stdio:'ignore',env:workerEnvironment()});
-    await new Promise<void>((resolve,reject)=>{child.once('error',reject);child.once('spawn',()=>{child.unref();resolve();});});
+    const child=await launchConfigured(config,process.execPath,[fileURLToPath(new URL('./entry.js',import.meta.url)),config.path],{detached:true,windowsHide:true,shell:false,stdio:'ignore',env:workerEnvironment()});
+    await new Promise<void>((resolve,reject)=>{child.once('error',reject);if(child.pid){child.unref();resolve();}else child.once('spawn',()=>{child.unref();resolve();});});
     const end=performance.now()+10000;
     while(performance.now()<end){
       const row=store.supervisor(config.project.id);

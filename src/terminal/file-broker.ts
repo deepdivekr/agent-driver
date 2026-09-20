@@ -9,19 +9,25 @@ import {processIdentitySync, type ProcessIdentity} from '../supervisor/identity.
 import {TerminalStore} from './store.js';
 import {ScopedFiles} from './scoped-files.js';
 import {fileRead, fileWrite, type FileAuthority, type FileWrite} from './file-contracts.js';
+import {configuredBoundary,resourceFence} from '../resources/configured.js';
+import {type BudgetHandle} from '../resources/budget.js';
 
 const result = (value: unknown, failed = false): CallToolResult => ({...(failed ? {isError: true} : {}), content: [{type: 'text', text: JSON.stringify(value)}]});
 const safeError = (error: unknown) => error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'FILE_OPERATION_REJECTED';
 export type FileCutPoint = (point: 'intent_committed' | 'before_replace' | 'after_replace') => void;
 export class FileBroker {
   readonly files: ScopedFiles;
-  constructor(readonly config: HostConfig, readonly store: TerminalStore, readonly authority: FileAuthority, private readonly cut?: FileCutPoint) {this.files = new ScopedFiles(config);}
+  constructor(readonly config: HostConfig, readonly store: TerminalStore, readonly authority: FileAuthority, private readonly cut?: FileCutPoint,private readonly resourceBoundary:BudgetHandle|null=null) {
+    requireCondition(!config.resources||resourceBoundary,'RESOURCE_BOUNDARY_REQUIRED');this.files = new ScopedFiles(config);
+  }
   async call(name: 'read_file' | 'write_file', raw: unknown): Promise<CallToolResult> {
+    resourceFence(this.resourceBoundary);
     const input = (name === 'read_file' ? fileRead : fileWrite).parse(raw), qualified = `mcp__runtime_files__${name}`;
     // CLI stdout and its MCP child are separate pipes; require the durable matching
     // official tool-use event, allowing only a bounded observation-order delay.
     let tool: string | undefined;
     for (let n = 0; n < 100; n++) {
+      resourceFence(this.resourceBoundary);
       this.store.fileFence(this.config, this.authority, input.turn_id);
       tool = this.store.pendingTool(this.authority, input.turn_id, qualified, input);
       if (tool) break;
@@ -32,6 +38,7 @@ export class FileBroker {
     try {
       this.files.ownership();
       if (name === 'read_file') answer = this.store.transaction(() => {
+        resourceFence(this.resourceBoundary);
         this.store.fileFence(this.config, this.authority, input.turn_id);
         const observation = this.files.read(input.path);
         return result({path: observation.path, sha256: observation.sha256, content: observation.content, turn_id: input.turn_id});
@@ -49,9 +56,10 @@ export class FileBroker {
     this.cut?.('intent_committed');
     try {
       return this.store.transaction(() => {
+        resourceFence(this.resourceBoundary);
         this.store.fileFence(this.config, this.authority, input.turn_id);
         const observed = this.files.replace(input.path, before, input.content, intent.id, () => {
-          this.cut?.('before_replace'); this.store.fileFence(this.config, this.authority, input.turn_id);
+          this.cut?.('before_replace');resourceFence(this.resourceBoundary); this.store.fileFence(this.config, this.authority, input.turn_id);
         }, () => this.cut?.('after_replace'));
         const value = {intent_id: intent.id, turn_id: input.turn_id, path: input.path, sha256: observed.sha256, effect: 'readback_verified', tests: 'NOT_RUN', project_completed: false};
         this.store.finishFile(intent, 'verified', value);
@@ -68,6 +76,7 @@ export class FileBroker {
 
 export async function serveFileBroker(path: string, session: string, generation: number, host: string) {
   const config = loadHostConfig(path), store = new TerminalStore(config.dbPath);
+  const resourceBoundary=await configuredBoundary(config);
   requireCondition(config.terminal?.files, 'FILE_DELEGATION_REQUIRED');
   const self = processIdentitySync(process.pid), parent = processIdentitySync(process.ppid);
   requireCondition(typeof self !== 'string' && typeof parent !== 'string', 'BROKER_IDENTITY_UNAVAILABLE');
@@ -75,7 +84,7 @@ export async function serveFileBroker(path: string, session: string, generation:
   let bound = false;
   for (let n = 0; n < 100; n++) {const s = store.session(session); if (s.process_identity_json) {store.bindBroker(config, authority); bound = true; break;} await delay(20);}
   requireCondition(bound, 'BROKER_CLI_UNBOUND');
-  const broker = new FileBroker(config, store, authority), server = new McpServer({name: 'runtime-files', version: '1.0.0'});
+  const broker = new FileBroker(config, store, authority,undefined,resourceBoundary), server = new McpServer({name: 'runtime-files', version: '1.0.0'});
   for (const name of ['read_file', 'write_file'] as const) server.registerTool(name, {
     description: `${name}. Exact delegated paths only: ${config.terminal.files.read.join(', ')}. Use the Runtime turn_id from the current prompt. No shell, test execution or approval grant.`,
     inputSchema: name === 'read_file' ? fileRead : fileWrite,

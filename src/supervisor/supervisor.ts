@@ -7,6 +7,8 @@ import {RecoveryStore,remainingBudget} from './store.js';
 import {bootClock,liveness,processIdentity,profileOccupancy,type ProcessIdentity} from './identity.js';
 import {type SubmissionRecord} from './contracts.js';
 import {readDraftResult} from './reconcile.js';
+import {configuredBoundary,resourceFence} from '../resources/configured.js';
+import {type BudgetHandle} from '../resources/budget.js';
 
 export function workerEnvironment(){
   const keys=['PATH','HOME','USERPROFILE','SystemRoot','WINDIR','TEMP','TMP','TMPDIR','LANG','LC_ALL','PLAYWRIGHT_BROWSERS_PATH','XDG_CACHE_HOME'];
@@ -20,14 +22,17 @@ export function launchWorker(config:HostConfig,row:SubmissionRecord):Promise<Pro
 }
 export class Supervisor{
   readonly store:RecoveryStore;nonce:string|null=null;
+  private resourceBoundary:BudgetHandle|null=null;
   constructor(readonly config:HostConfig,readonly launch:typeof launchWorker=launchWorker){this.store=new RecoveryStore(config.dbPath);this.store.registerProject(config.project);}
   async start(){
+    this.resourceBoundary=await configuredBoundary(this.config);
     const old=this.store.supervisor(this.config.project.id);
     if(old?.active){requireCondition(await liveness(JSON.parse(old.identity_json) as ProcessIdentity)==='dead','SUPERVISOR_ALREADY_ACTIVE_OR_UNKNOWN');}
     const identity=await processIdentity(process.pid);requireCondition(typeof identity!=='string','PROCESS_IDENTITY_UNSUPPORTED');
     this.nonce=this.store.claimSupervisor(this.config.project.id,this.config.fingerprint,identity,old?.nonce??null);
   }
   async step(){
+    resourceFence(this.resourceBoundary);
     requireCondition(this.nonce,'SUPERVISOR_NOT_STARTED');const nonce=this.nonce,project=this.config.project.id;
     this.store.own(project,nonce);requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
     for(const row of this.store.submissions(project)){

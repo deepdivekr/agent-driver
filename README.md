@@ -9,7 +9,7 @@
 Linux 또는 Ubuntu/WSL의 Bash에서 실행합니다. Node **22.22.0**, npm **11.11.0**을 사용합니다. 이 버전의 내장 SQLite는 experimental 경고를 stderr에 출력할 수 있습니다.
 
 ```bash
-git clone --branch phase-20-file-effects https://github.com/deepdivekr/agent-driver.git
+git clone --branch phase-21-resource-boundaries https://github.com/deepdivekr/agent-driver.git
 cd agent-driver
 npm ci
 npx playwright install chromium
@@ -17,7 +17,7 @@ npm run build
 npm run runtime -- demo
 ```
 
-위 명령은 아직 merge되지 않은 파일 작업 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-20-file-effects`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
+위 명령은 아직 merge되지 않은 자원 경계 구현 브랜치를 받습니다. merge 이후에는 `--branch phase-21-resource-boundaries`를 생략할 수 있습니다. 브라우저 Linux 시스템 의존성이 없는 환경은 설치 관리자 권한이 필요한 `npx playwright install --with-deps chromium`을 사용합니다.
 
 `demo`는 새 전용 프로필과 loopback 테스트 앱만 사용합니다. 기존 Chrome에 연결하지 않고 외부 사이트에 쓰지 않으며 모델 API를 호출하지 않습니다. 결과의 `task_id`와 `project_id`로 상태/이벤트를 조회할 수 있습니다. `.runtime/`에는 로컬 DB와 전용 프로필이 남고 공개되지 않습니다.
 
@@ -58,6 +58,7 @@ npm run runtime -- demo --wrong-account true
 |독립 CLI host·명시적 세션/턴·중복 방지·재개|Linux 구조화 통신·실제 CLI 검증; 대화형/native ConPTY 후속|
 |정확한 경로 위임·파일 broker·쓰기 intent/readback|Linux 전용, 독점 작업 사본만 지원; 기본 CLI 도구/shell은 닫음|
 |독립 Node 입출력/종료 계약 검증|bubblewrap 격리 snapshot과 고정 oracle; 일반 프로젝트 테스트 runner 아님|
+|합산 CPU·메모리·PID 경계|명시적 host 설정·Linux user systemd/cgroupv2; kernel readback과 자손 회수 검증. 예산 미설정은 unverified|
 |과거 턴·정규화 출력 조회·실제 Git 인계|세션 범위·변경/변조 확인; 프로젝트 테스트 실행·완료 판정은 하지 않음|
 |다중 executor 자동 takeover|후속 구현|
 |Windows foreground 비간섭·guest 설치·soak|미검증/후속 구현|
@@ -75,7 +76,7 @@ npm test
 
 테스트는 외부 모델 API나 실제 사용자 사이트를 사용하지 않습니다. 각 결과에 `evidence_level`과 `status`를 별도로 기록하며 `tests/report.json`과 `tests/evidence/`에 누적합니다. 이 생성 기록은 기본 커밋 대상이 아닙니다.
 
-파일 검증 시험에는 Linux user namespace·bubblewrap·util-linux가 필요합니다. Ubuntu24.04 Bash에서 저장소로 이동한 뒤 `sudo apt-get install bubblewrap util-linux`로 의존성을 설치할 수 있습니다. 격리 실행을 허용하지 않는 환경은 명시적으로 실패/차단하며 비격리 실행으로 대체하지 않습니다. 강한 보안/DoS 방어·cgroup 전체 자원 예산은 아직 출시 gate입니다.
+파일 검증 시험에는 Linux user namespace·bubblewrap·util-linux가 필요합니다. Ubuntu24.04 Bash에서 저장소로 이동한 뒤 `sudo apt-get install bubblewrap util-linux`로 의존성을 설치할 수 있습니다. 자원 검사는 활성 user systemd255·cgroupv2 cpu/memory/pids도 필요합니다. 격리 실행을 허용하지 않는 환경은 명시적으로 실패/차단하며 비격리·무제한 실행으로 대체하지 않습니다. [자원 경계 설정과 한계](docs/resource-boundaries.md)를 참고하세요. 강한 보안/DoS·디스크/I/O·gateway 전체 예산은 여전히 출시 gate입니다.
 
 - [로드맵 #1](https://github.com/deepdivekr/agent-driver/issues/1)
 - [현재 구현 #2](https://github.com/deepdivekr/agent-driver/issues/2)
@@ -83,5 +84,6 @@ npm test
 - [브라우저/인계 #4](https://github.com/deepdivekr/agent-driver/issues/4)
 - [CLI host #5](https://github.com/deepdivekr/agent-driver/issues/5)
 - [출시 조건 #6](https://github.com/deepdivekr/agent-driver/issues/6)
+- [자원 경계 #14](https://github.com/deepdivekr/agent-driver/issues/14)
 
 코드 변경은 검증 근거가 있는 PR로 관리합니다. 공개 저장소이지만 배포 라이선스는 아직 결정하지 않았습니다.

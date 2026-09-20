@@ -5,8 +5,9 @@ import {requireCondition} from '../core/contracts.js';
 import {loadHostConfig, type HostConfig} from '../interface/config.js';
 import {TerminalStore} from './store.js';
 import {ScopedFiles, sha256, writeAll, type FileObservation} from './scoped-files.js';
+import {launchResourceUnit,readBudget,type ResourceBudget} from '../resources/budget.js';
 
-interface Execution {exit: number | null; signal: string | null; stdout: string; stderr: string; reason: string | null; elapsed_ms: number}
+interface Execution {exit: number | null; signal: string | null; stdout: string; stderr: string; reason: string | null; elapsed_ms: number;resources?:unknown}
 export function sandboxArgs(snapshot: string, nodeArgs: string[], timeout: number) {
   return ['--unshare-all', '--unshare-user', '--disable-userns', '--die-with-parent', '--new-session', '--cap-drop', 'ALL',
     '--size', '16777216', '--tmpfs', '/',
@@ -15,19 +16,30 @@ export function sandboxArgs(snapshot: string, nodeArgs: string[], timeout: numbe
     '--clearenv', '--setenv', 'PATH', '/usr/bin:/bin', '--setenv', 'LANG', 'C.UTF-8',
     '/usr/bin/prlimit', `--cpu=${Math.ceil(timeout / 1000) + 1}`, '--as=8589934592', '--fsize=10485760', '--nofile=64', '--', '/runtime/node', ...nodeArgs];
 }
-export async function runSandbox(snapshot: string, args: string[], stdin: string, timeout: number, cancelled: () => boolean): Promise<Execution> {
-  const started = performance.now(), child = spawn('/usr/bin/bwrap', sandboxArgs(snapshot, args, timeout), {stdio: ['pipe','pipe','pipe'], shell: false, windowsHide: true, env: {PATH: '/usr/bin:/bin', LANG: 'C.UTF-8'}});
+export async function runSandbox(snapshot: string, args: string[], stdin: string, timeout: number, cancelled: () => boolean, resources:ResourceBudget|null=null): Promise<Execution> {
+  const started=performance.now(),options={stdio:['pipe','pipe','pipe'] as ['pipe','pipe','pipe'],shell:false,windowsHide:true,env:{PATH:'/usr/bin:/bin',LANG:'C.UTF-8'}};
+  let managed:Awaited<ReturnType<typeof launchResourceUnit>>|null=null;
+  try{if(resources)managed=await launchResourceUnit(resources,'/usr/bin/bwrap',sandboxArgs(snapshot,args,timeout),options,timeout+1000);}
+  catch{return {exit:null,signal:null,stdout:'',stderr:'',reason:'RESOURCE_BOUNDARY_UNAVAILABLE',elapsed_ms:performance.now()-started,resources:{status:'unobserved'}};}
+  const child=managed?managed.child:spawn('/usr/bin/bwrap',sandboxArgs(snapshot,args,timeout),options);
+  const resourceBefore=managed?readBudget(managed.handle):null;
   let stdout = Buffer.alloc(0), stderr = Buffer.alloc(0), reason: string | null = null;
-  const stop = (why: string) => {reason ??= why; child.kill('SIGKILL');};
-  child.stdin.on('error', () => {});
-  child.stdout.on('data', (b: Buffer) => {if (stdout.length + b.length > 65536) stop('OUTPUT_LIMIT'); else stdout = Buffer.concat([stdout,b]);});
-  child.stderr.on('data', (b: Buffer) => {if (stderr.length + b.length > 65536) stop('OUTPUT_LIMIT'); else stderr = Buffer.concat([stderr,b]);});
-  const timer = setTimeout(() => stop('VERIFICATION_DEADLINE'), timeout);
+  let stopping=false;
+  const stop = (why: string) => {reason ??= why;if(stopping)return;stopping=true;
+    if(managed)void managed.stop().catch(()=>{reason='RESOURCE_STOP_UNCONFIRMED';});else child.kill('SIGKILL');};
+  child.stdin!.on('error', () => {});
+  child.stdout!.on('data', (b: Buffer) => {if (stdout.length + b.length > 65536) stop('OUTPUT_LIMIT'); else stdout = Buffer.concat([stdout,b]);});
+  child.stderr!.on('data', (b: Buffer) => {if (stderr.length + b.length > 65536) stop('OUTPUT_LIMIT'); else stderr = Buffer.concat([stderr,b]);});
+  const timer = setTimeout(() => stop('VERIFICATION_DEADLINE'), Math.max(1,timeout-(performance.now()-started)));
   const monitor = setInterval(() => {try {if (cancelled()) stop('VERIFICATION_CANCELLED');} catch {stop('VERIFICATION_FENCE_LOST');}}, 50);
   return await new Promise(resolve => {
     child.once('error', () => {reason = 'SANDBOX_UNAVAILABLE';});
-    child.once('close', (exit, signal) => {clearTimeout(timer); clearInterval(monitor); resolve({exit, signal, stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), reason, elapsed_ms: performance.now() - started});});
-    child.stdin.end(stdin);
+    child.once('close', (exit, signal) => {clearTimeout(timer); clearInterval(monitor);
+      let resourceAfter:unknown='unobserved';if(managed)try{resourceAfter=readBudget(managed.handle);}catch{reason??='RESOURCE_OBSERVATION_LOST';}
+      resolve({exit, signal, stdout: stdout.toString('utf8'), stderr: stderr.toString('utf8'), reason, elapsed_ms: performance.now() - started,
+        resources:managed?{unit:managed.unit,before:resourceBefore,after:resourceAfter}:{status:'unconfigured'}});
+    });
+    child.stdin!.end(stdin);
   });
 }
 const manifestOf = (files: FileObservation[]) => files.map(f => ({path: f.path, sha256: f.sha256}));
@@ -49,13 +61,13 @@ export async function verifyFiles(store: TerminalStore, config: HostConfig, sess
     }
     // No fallback to the host: even the preflight runs under the exact namespace policy.
     requireCondition(!cancelled(), 'VERIFICATION_CANCELLED');
-    const preflight = await runSandbox(snapshot, ['--eval', "process.stdout.write('apd-isolated:'+process.version)"], '', 5000, cancelled);
+    const preflight = await runSandbox(snapshot, ['--eval', "process.stdout.write('apd-isolated:'+process.version)"], '', 5000, cancelled,config.resources);
     if (preflight.reason || preflight.exit !== 0 || preflight.stdout !== 'apd-isolated:v22.22.0' || preflight.stderr !== '') observation = {status: 'BLOCKED_ENV', reason: preflight.reason ?? 'SANDBOX_PREFLIGHT_FAILED', checks: [], preflight, project_completed: false};
     else {
       const checks = [];
       for (const item of verifier.cases) {
         if (cancelled()) {checks.push({id: item.id, status: 'NOT_RUN', reason: 'VERIFICATION_CANCELLED'}); continue;}
-        const actual = await runSandbox(snapshot, [`/workspace/${verifier.entry}`, ...item.args], item.stdin, verifier.timeout_ms, cancelled);
+        const actual = await runSandbox(snapshot, [`/workspace/${verifier.entry}`, ...item.args], item.stdin, verifier.timeout_ms, cancelled,config.resources);
         const pass = !actual.reason && actual.exit === item.exit && actual.stdout === item.stdout && actual.stderr === item.stderr;
         checks.push({id: item.id, status: pass ? 'PASS' : 'FAIL', actual, oracle_sha256: sha256(JSON.stringify(item))});
       }

@@ -6,10 +6,12 @@ import {processIdentity} from '../supervisor/identity.js';
 import {type CheckpointHook} from '../supervisor/contracts.js';
 import {runBoundDraft} from '../browser/bound-draft.js';
 import {requireCondition} from '../core/contracts.js';
+import {configuredBoundary} from '../resources/configured.js';
 
 export async function runWorker(configPath:string,taskId:string,ticket:string,generation:number,checkpoint?:CheckpointHook){
   const config=loadHostConfig(configPath),store=new RecoveryStore(config.dbPath);
   try{
+  await configuredBoundary(config);
   requireCondition(store.task(taskId).project_id===config.project.id,'TASK_SCOPE_MISMATCH');
   const identity=await processIdentity(process.pid);requireCondition(typeof identity!=='string','PROCESS_IDENTITY_UNSUPPORTED');
   const row=store.claimWorker(taskId,config.fingerprint,ticket,generation,identity);

@@ -10,6 +10,7 @@ import {FIXTURE_DRAFT} from './fixture-driver.js';
 import {loadHostConfig,type HostConfig} from '../interface/config.js';
 import {type StartRequest} from '../interface/catalog.js';
 import {type CheckpointHook} from '../supervisor/contracts.js';
+import {configuredBoundary,resourceFence} from '../resources/configured.js';
 
 // This route speaks only the configured synthetic draft application contract.
 // A future real-site adapter must supply its own observer/verifier and evidence.
@@ -18,6 +19,7 @@ export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:
   const started=performance.now(),url=config.fixtureUrl,project=config.project;
   let context:BrowserContext|undefined,lease:Lease|undefined,timer:ReturnType<typeof setTimeout>|undefined;
   try {
+    const resourceBoundary=await configuredBoundary(config);
     requireCondition(remainingMs>0,'DEADLINE_EXCEEDED');
     const target=`owned-page:${randomUUID()}`;let backoff=25;
     while(!lease){
@@ -41,6 +43,7 @@ export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:
       return {targetRef,targetExists:state!==null,ownerTaskId:taskId,projectId:project.id,profileRef:project.profileRef,accountRef:state?.account??'unknown',origin:state?.origin??'unknown',generation:ownedLease.generation,observedMonoMs:performance.now(),visibility:state?.visibility==='visible'?'visible':state?.visibility==='hidden'?'hidden':'unknown',environment:'owned_headless'};
     };
     const adapter:RuntimeAdapter={observe,async execute(){
+      resourceFence(resourceBoundary);
       await page.locator('#edit').click();await page.locator('#name').fill(request.input.name);await page.locator('#note').fill(request.input.note);
       if(checkpoint)await checkpoint('before_save');
       // Filling can yield: recheck config, deadline, cancellation and fence at commit.
@@ -48,6 +51,7 @@ export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:
       requireCondition(performance.now()-started<remainingMs,'DEADLINE_EXCEEDED');
       guard(store,{taskId,callerRef:project.callerRef,lease:ownedLease,capability:FIXTURE_DRAFT,observation:await observe(),maxObservationAgeMs:3000},performance.now(),true);
       requireCondition(!store.task(taskId).cancel_requested,'CANCELLED_BEFORE_SAVE');
+      resourceFence(resourceBoundary);
       await page.locator('#save').click();
       await page.waitForFunction(()=>['true','error'].includes(document.querySelector('#state')?.getAttribute('data-ready')??''));
       requireCondition(await page.locator('#state').getAttribute('data-ready')==='true','SAVE_RESPONSE_UNKNOWN');

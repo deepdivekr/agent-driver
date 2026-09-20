@@ -63,6 +63,8 @@ Phase19 구현 보완: 중단 복구의 입력 자료는 마지막 출력 한 �
 
 ## 구현 순서와 종료 기준
 
+Phase21 설계 보완: [자원 경계](resource-boundaries.md)는 하나의 host위임 domain에서 worker/browser·CLI/broker·독립 verifier의 CPU/memory/PID를 합산한다. 실제 user systemd/cgroupv2 설정과 프로세스 membership을 읽고 dispatch 전에 검사한다. main 사망·OOM 후 자손이 남지 않도록 transient service의 control-group 종료를 사용한다. 예산 없는 legacy 구성은 unconfigured/unverified이며 Windows·I/O/디스크·gateway 전체 예산·foreground timeline·soak 보장을 대신하지 않는다.
+
 Phase20 설계 보완: 코딩 실행의 실제 효과는 [파일 broker·독립 검증](terminal-file-effects.md)으로 결속한다. 기본 CLI 파일/shell 도구를 열지 않고, host가 위임한 정확한 파일과 현재 공식 tool-use/turn/generation만 허용한다. 파일 hash readback과 격리된 Node 입출력 oracle을 분리하며, 모델의 성공 문구·테스트 자기 보고를 프로젝트 완료로 올리지 않는다. 이전 Phase18/19의 “파일 도구 미검증”은 당시 상태이며, Phase20의 개별 실측 증거로만 범위를 갱신한다. 독점 사본 전제·범용 프로젝트 runner·Windows·cgroup/VM·원래 전체 RQ는 별도 유지한다.
 
 1. Phase15: durable core/guard/route/CLI/owned fixture + crash/negative tests. 공개 PR로 검토.

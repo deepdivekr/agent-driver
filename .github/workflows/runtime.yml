@@ -19,6 +19,12 @@ jobs:
       - run: npm audit --omit=dev --audit-level=low
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap util-linux apparmor
       - run: bwrap --version && /usr/bin/prlimit --version
+      - name: Start the disposable runner's user resource manager
+        run: |
+          apd_uid=$(id -u)
+          sudo systemctl start "user@${apd_uid}.service"
+          XDG_RUNTIME_DIR="/run/user/${apd_uid}" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${apd_uid}/bus" systemctl --user is-active default.target
+          systemd-run --version
       - name: Configure the CI sandbox executable's user namespace permission
         run: |
           if test -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns; then

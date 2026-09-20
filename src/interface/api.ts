@@ -11,6 +11,7 @@ import {requireCondition} from '../core/contracts.js';
 import {loadHostConfig,type HostConfig} from './config.js';
 import {draftManifest,terminalManifest,startRequest,tools} from './catalog.js';
 import {intake} from './intake.js';
+import {resourceHealth} from '../resources/configured.js';
 
 export class RuntimeApi{
   readonly store:TerminalStore;
@@ -29,7 +30,10 @@ export class RuntimeApi{
       if(!tool.readOnly)requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
     }
     switch(name){
-      case 'runtime_health':return {health:this.config.environment==='fixture'&&process.platform==='linux'?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null,autonomous_planning_enabled:false};
+      case 'runtime_health':{
+        const resource_boundary=await resourceHealth(this.config);
+        return {health:this.config.environment==='fixture'&&process.platform==='linux'&&resource_boundary.status!=='unavailable_or_changed'?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null,autonomous_planning_enabled:false,resource_boundary};
+      }
       case 'runtime_capabilities_list':return {capabilities:[draftManifest,terminalManifest].filter(m=>this.config.project.capabilities.includes(m.id))};
       case 'runtime_capability_describe':requireCondition(this.config.project.capabilities.includes(String(input.capability)),'CAPABILITY_NOT_DELEGATED');return input.capability==='coding.session'?terminalManifest:draftManifest;
       case 'runtime_terminal_start':{

@@ -1,4 +1,3 @@
-import {spawn} from 'node:child_process';
 import {createConnection} from 'node:net';
 import {fileURLToPath} from 'node:url';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -8,6 +7,7 @@ import {liveness, type ProcessIdentity} from '../supervisor/identity.js';
 import {TerminalStore} from './store.js';
 import {cliEnvironment} from './claude.js';
 import {type TerminalHostRecord} from './contracts.js';
+import {configuredBoundary,launchConfigured} from '../resources/configured.js';
 
 export async function pingTerminalHost(row: TerminalHostRecord) {
   return new Promise<boolean>(resolve => {
@@ -35,11 +35,12 @@ export async function ensureTerminalHost(config: HostConfig) {
       requireCondition(state !== 'unknown', 'TERMINAL_HOST_IDENTITY_UNKNOWN');
       if (state === 'alive') {
         requireCondition(old.active === 1 && !old.stop_requested && old.config_hash === config.fingerprint, 'TERMINAL_HOST_CONFIG_OR_STOP_CHANGED');
+        await configuredBoundary(config,(JSON.parse(old.identity_json) as ProcessIdentity).pid);
         requireCondition(await pingTerminalHost(old), 'TERMINAL_HOST_IPC_UNAVAILABLE'); return old;
       }
     }
-    const child = spawn(process.execPath, [fileURLToPath(new URL('./entry.js', import.meta.url)), config.path], {detached: true, windowsHide: true, shell: false, stdio: 'ignore', env: cliEnvironment()});
-    await new Promise<void>((resolve, reject) => {child.once('error', reject); child.once('spawn', () => {child.unref(); resolve();});});
+    const child = await launchConfigured(config,process.execPath, [fileURLToPath(new URL('./entry.js', import.meta.url)), config.path], {detached: true, windowsHide: true, shell: false, stdio: 'ignore', env: cliEnvironment()});
+    await new Promise<void>((resolve, reject) => {child.once('error', reject);if(child.pid){child.unref();resolve();}else child.once('spawn', () => {child.unref(); resolve();});});
     const deadline = performance.now() + 10000;
     while (performance.now() < deadline) {
       const row = store.terminalHost(config.project.id);

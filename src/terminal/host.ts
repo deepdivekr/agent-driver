@@ -11,6 +11,8 @@ import {TerminalStore} from './store.js';
 import {launchClaude, verifyClaude, classifyResult, type CliLauncher, type CliTransport} from './claude.js';
 import {redact, type CliEvent, type TerminalSession} from './contracts.js';
 import {brokerTools, fileRead, fileWrite, wirePrompt} from './file-contracts.js';
+import {configuredBoundary,resourceFence} from '../resources/configured.js';
+import {type BudgetHandle} from '../resources/budget.js';
 
 interface Managed {session: TerminalSession; transport: CliTransport | null; failed: boolean; exited: boolean; starting: boolean; pending: CliEvent[]}
 export class TerminalHost {
@@ -20,13 +22,15 @@ export class TerminalHost {
   private socketDirectory: string | null = null;
   private managed = new Map<string, Managed>();
   private stopping = false;
+  private resourceBoundary:BudgetHandle|null=null;
   constructor(readonly config: HostConfig, private readonly launch: CliLauncher = launchClaude, private readonly preflight: (config: HostConfig) => Promise<void> = verifyClaude) {
     requireCondition(process.platform === 'linux', 'TERMINAL_PLATFORM_UNVERIFIED');
     requireCondition(config.terminal, 'TERMINAL_DISABLED');
     this.store = new TerminalStore(config.dbPath); this.store.registerProject(config.project);
   }
-  private fresh() {const current = loadHostConfig(this.config.path); requireCondition(current.fingerprint === this.config.fingerprint, 'CONFIG_CHANGED'); return current;}
+  private fresh() {resourceFence(this.resourceBoundary);const current = loadHostConfig(this.config.path); requireCondition(current.fingerprint === this.config.fingerprint, 'CONFIG_CHANGED'); return current;}
   async start() {
+    this.resourceBoundary=await configuredBoundary(this.config);
     this.fresh(); await this.preflight(this.config);
     const identity = await processIdentity(process.pid); requireCondition(typeof identity !== 'string', 'HOST_IDENTITY_UNAVAILABLE');
     const old = this.store.terminalHost(this.config.project.id);
@@ -147,6 +151,7 @@ export class TerminalHost {
       });
       requireCondition(managed.transport.child.pid, 'CLI_PID_UNAVAILABLE');
       const identity = await processIdentity(managed.transport.child.pid);
+      resourceFence(this.resourceBoundary,managed.transport.child.pid);
       requireCondition(typeof identity !== 'string', 'CLI_IDENTITY_UNAVAILABLE');
       this.store.bindProcess(session.id, this.instance!, claimed.session.generation, identity);
       managed.starting = false;
@@ -178,6 +183,7 @@ export class TerminalHost {
         const identity = await processIdentity(transport.child.pid!);
         requireCondition(typeof identity !== 'string' && JSON.stringify(identity) === session.process_identity_json, 'CLI_IDENTITY_CHANGED');
         this.fresh();
+        resourceFence(this.resourceBoundary,transport.child.pid!);
         const dispatched = this.store.dispatch(session.id, this.instance, managed.session.generation, this.config);
         try {transport.send(dispatched.id, dispatched.prompt);} catch {this.fail(session.id, 'CLI_STDIN_UNCERTAIN');}
       } else if (turn.deadline_uptime_ms !== null && bootClock().uptimeMs >= turn.deadline_uptime_ms) this.fail(session.id, 'TURN_DEADLINE');
