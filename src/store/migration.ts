@@ -83,3 +83,12 @@ CREATE TABLE terminal_file_intent(
 CREATE TABLE terminal_verification(id TEXT PRIMARY KEY,session_id TEXT NOT NULL REFERENCES terminal_session(id),turn_id TEXT NOT NULL REFERENCES terminal_turn(id),generation INTEGER NOT NULL,request_id TEXT NOT NULL,config_hash TEXT NOT NULL,manifest_json TEXT NOT NULL,owner_identity_json TEXT NOT NULL,result_json TEXT,created_at TEXT NOT NULL,UNIQUE(session_id,request_id));
 UPDATE schema_version SET version=5;
 `;
+
+export const MIGRATION_6 = `
+CREATE TABLE storage_policy(singleton INTEGER PRIMARY KEY CHECK(singleton=1),policy_hash TEXT NOT NULL,root_identity TEXT NOT NULL);
+CREATE TABLE storage_reservation(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES project(id),kind TEXT NOT NULL,bytes INTEGER NOT NULL,owner_identity_json TEXT NOT NULL,created_at TEXT NOT NULL,active INTEGER NOT NULL);
+CREATE TABLE terminal_spool_segment(session_id TEXT NOT NULL REFERENCES terminal_session(id),start_offset INTEGER NOT NULL,bytes INTEGER NOT NULL,filename TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'open',PRIMARY KEY(session_id,start_offset));
+INSERT INTO terminal_spool_segment SELECT id,0,spool_bytes,id||'.jsonl','open' FROM terminal_session WHERE spool_bytes>0;
+CREATE TABLE storage_artifact(id TEXT PRIMARY KEY,project_id TEXT NOT NULL REFERENCES project(id),session_id TEXT NOT NULL REFERENCES terminal_session(id),generation INTEGER NOT NULL,kind TEXT NOT NULL,manifest_json TEXT NOT NULL,created_at TEXT NOT NULL,state TEXT NOT NULL DEFAULT 'retained',pruned_at TEXT);
+UPDATE schema_version SET version=6;
+`;

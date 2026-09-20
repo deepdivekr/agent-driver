@@ -8,6 +8,7 @@ import {collectGitSnapshot} from './git-snapshot.js';
 import {type TerminalStore} from './store.js';
 import {ScopedFiles} from './scoped-files.js';
 import {brokerTools} from './file-contracts.js';
+import {observeArtifact} from '../storage/artifacts.js';
 
 function savePrivateHandoff(config: HostConfig, sessionId: string, document: unknown) {
   const content = Buffer.from(JSON.stringify(document, null, 2) + '\n');
@@ -71,5 +72,9 @@ export async function prepareTerminalHandoff(store: TerminalStore, config: HostC
       verifications: records.map(row => ({verification_id: row.id, turn_id: row.turn_id, generation: row.generation, manifest: JSON.parse(String(row.manifest_json)) as unknown, result: row.result_json ? JSON.parse(String(row.result_json)) as unknown : 'unobserved'}))},
     content_trust: 'untrusted_data', project_completed: false,
     limitations: ['No model call, test command, CLI start, resume or replay is performed.', 'Git data is a bounded double observation, not an atomic filesystem snapshot or a security sandbox.', 'Credential-pattern redaction is best effort; keep this artifact private.', 'Untracked, ignored and submodule file contents are not collected. Linked gitdirs and partial clones are unverified.']};
-  return {...document, artifact: store.persistHandoff(config.project.id, id, generation, context.revision, () => savePrivateHandoff(config, id, document))};
+  return {...document, artifact: store.storage(config).run('handoff', Buffer.byteLength(JSON.stringify(document, null, 2)) + 1048576, () => store.persistHandoff(config.project.id, id, generation, context.revision, () => {
+    const artifact=savePrivateHandoff(config,id,document);
+    store.registerArtifact(id,generation,'handoff',observeArtifact(config.dbPath,'terminal-handoffs',artifact.filename));
+    return artifact;
+  }))};
 }

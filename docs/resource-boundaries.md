@@ -44,7 +44,7 @@ Linux cgroupv2와 동작 중인 사용자 systemd manager가 필요하다. Node�
 
 시험은 제한 readback 후 **유한한** 작업만 실행한다. 두 동시 실행의 합산 CPU throttling, 유한 PID 생성 거절, throttle와 hard OOM 분리, 설정 불일치/실행 중 변경, 메인 SIGKILL·caller 사망·자손 회수, 별도 sentinel 유지, 실제 Chromium 저장·합성 CLI 계약·격리 verifier를 검사한다. 실제 Claude 검증은 별도 opt-in private 실행이며 공개 CI의 합성 CLI가 이를 대신하지 않는다.
 
-남은 조건: native Windows Job Objects/ACL/ConPTY·foreground 이벤트, 디스크/로그/스냅샷 예산·ENOSPC/rotation, I/O bandwidth, caller gateway/설치 전체 예산, 자원 경쟁 중 장시간 UI 반응성·soak, guest/VM·악성 same-UID/커널/DoS 경계. 현재 범위를 “사용자에게 절대 영향0”이라고 광고하지 않는다.
+Phase22의 [저장 경계](storage-boundaries.md)가 runtime data admission·로그 분할·소유 사본 정리·실제 ENOSPC 시험을 추가한다. 이는 OS hard quota와 구분한다. 남은 조건: native Windows Job Objects/ACL/ConPTY·foreground 이벤트, 전체 디스크/I/O 상한·snapshot/staging 회수, caller gateway/설치 전체 예산, 자원 경쟁 중 장시간 UI 반응성·soak, guest/VM·악성 same-UID/커널/DoS 경계. 현재 범위를 “사용자에게 절대 영향0”이라고 광고하지 않는다.
 
 ## 근거
 

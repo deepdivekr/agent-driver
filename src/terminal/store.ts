@@ -5,9 +5,22 @@ import {bootClock, processIdentitySync, type ProcessIdentity} from '../superviso
 import {loadHostConfig, type HostConfig} from '../interface/config.js';
 import {type FileAuthority, type FileIntent, type FileWrite, brokerTools} from './file-contracts.js';
 import {sha256, type FileObservation} from './scoped-files.js';
+import {writeSpoolSegment,type SpoolSegment} from './spool.js';
+import {observeArtifact,type ArtifactManifest} from '../storage/artifacts.js';
+import {StorageRetention} from '../storage/retention.js';
 import {redact, type TerminalList, type TerminalHistory, type TerminalOutput, type TerminalHostRecord, type TerminalSession, type TerminalSubmit, type TerminalTurn, type TurnResult} from './contracts.js';
 
 export class TerminalStore extends RecoveryStore {
+  retention(config:HostConfig){return new StorageRetention(this.connection,fn=>this.transaction(fn),this,config);}
+  noteStorage(id:string,kind:string,data:Record<string,unknown>){this.event(this.session(id).task_id,kind,data);}
+  registerArtifact(id:string,generation:number,kind:'spool'|'handoff',manifest:ArtifactManifest) {
+    const session=this.session(id),key=createHash('sha256').update(`${id}:${manifest.directory}:${manifest.filename}`).digest('hex');
+    const old=this.connection.prepare('SELECT state,manifest_json FROM storage_artifact WHERE id=?').get(key);
+    requireCondition(!old||old.state==='retained','STORAGE_ARTIFACT_EXPIRED');
+    if(old){const before=JSON.parse(String(old.manifest_json)) as ArtifactManifest;requireCondition(before.file_identity===manifest.file_identity&&before.root_identity===manifest.root_identity&&before.directory_identity===manifest.directory_identity,'STORAGE_ARTIFACT_REPLACED');}
+    this.connection.prepare("INSERT INTO storage_artifact(id,project_id,session_id,generation,kind,manifest_json,created_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET generation=excluded.generation,manifest_json=excluded.manifest_json,created_at=excluded.created_at").run(key,session.project_id,id,generation,kind,JSON.stringify(manifest),new Date().toISOString());
+    return key;
+  }
   session(id: string): TerminalSession {
     const row = this.connection.prepare('SELECT * FROM terminal_session WHERE id=?').get(id);
     requireCondition(row, 'SESSION_NOT_FOUND');
@@ -168,9 +181,41 @@ export class TerminalStore extends RecoveryStore {
   noteSpool(id: string, instance: string, generation: number, bytes: number, kind: string, sha256?: string) {
     this.transaction(() => {
       const session = this.bound(id, instance, generation);
+      const segment=this.spoolSegments(id).at(-1);
+      requireCondition(!segment||segment.start_offset===0&&segment.state==='open','CLI_SPOOL_LEGACY_SEGMENT_MISMATCH');
+      this.connection.prepare("INSERT INTO terminal_spool_segment VALUES (?,0,?,?,'open') ON CONFLICT(session_id,start_offset) DO UPDATE SET bytes=excluded.bytes").run(id,session.spool_bytes+bytes,`${id}.jsonl`);
       this.connection.prepare('UPDATE terminal_session SET spool_bytes=spool_bytes+? WHERE id=?').run(bytes, id);
       this.event(session.task_id, 'terminal.output', {session_ref: id, generation, bytes, spool_offset: session.spool_bytes + bytes, event_type: kind, ...(sha256 ? {sha256} : {})});
     });
+  }
+  spoolSegments(id:string) {return this.connection.prepare('SELECT * FROM terminal_spool_segment WHERE session_id=? ORDER BY start_offset').all(id) as unknown as SpoolSegment[];}
+  appendSpool(config:HostConfig,id:string,instance:string,generation:number,line:Buffer,kind:string) {
+    return this.storage(config).run('spool_frame',line.length*2+131072,()=>this.transaction(()=>{
+      const session=this.bound(id,instance,generation);
+      requireCondition(session.spool_bytes+line.length<=config.terminal!.spool_bytes,'CLI_SPOOL_QUOTA');
+      const limit=config.storage?.segment_bytes??262144;
+      // A frame is never split across segments. Its existing protocol bound still applies.
+      const previous=this.spoolSegments(id).at(-1);let segment=previous,created=false;
+      requireCondition(!previous||previous.state==='open'&&previous.start_offset+previous.bytes===session.spool_bytes,'CLI_SPOOL_SEGMENT_GAP');
+      const previousArtifact=previous?this.connection.prepare("SELECT manifest_json FROM storage_artifact WHERE session_id=? AND kind='spool' AND json_extract(manifest_json,'$.filename')=?").get(id,previous.filename):undefined;
+      if(previous){
+        const observed=observeArtifact(config.dbPath,'terminal-spool',previous.filename);
+        requireCondition(observed.bytes===previous.bytes,'CLI_SPOOL_DURABILITY_GAP');
+        if(previousArtifact)requireCondition(previousArtifact.manifest_json===JSON.stringify(observed),'CLI_SPOOL_HASH_MISMATCH');
+      }
+      if(!previous||previous.bytes>0&&previous.bytes+line.length>limit){
+        if(previous)this.connection.prepare("UPDATE terminal_spool_segment SET state='sealed' WHERE session_id=? AND start_offset=?").run(id,previous.start_offset);
+        segment={session_id:id,start_offset:session.spool_bytes,bytes:0,filename:session.spool_bytes?`${id}-${session.spool_bytes}.jsonl`:`${id}.jsonl`,state:'open'};created=true;
+        this.connection.prepare("INSERT INTO terminal_spool_segment VALUES (?,?,0,?,'open')").run(id,segment.start_offset,segment.filename);
+      }
+      requireCondition(segment,'CLI_SPOOL_SEGMENT_MISSING');
+      writeSpoolSegment(config.dbPath,segment,line,created);
+      // A migrated, previously unregistered segment is readable but not retroactively owned for deletion.
+      if(created||previousArtifact)this.registerArtifact(id,generation,'spool',observeArtifact(config.dbPath,'terminal-spool',segment.filename));
+      this.connection.prepare('UPDATE terminal_spool_segment SET bytes=bytes+? WHERE session_id=? AND start_offset=?').run(line.length,id,segment.start_offset);
+      this.connection.prepare('UPDATE terminal_session SET spool_bytes=spool_bytes+? WHERE id=?').run(line.length,id);
+      this.event(session.task_id,'terminal.output',{session_ref:id,generation,bytes:line.length,spool_offset:session.spool_bytes+line.length,event_type:kind,sha256:sha256(line)});
+    }));
   }
   failed(id: string, instance: string, generation: number, reason: string, hostFailure = false) {
     this.transaction(() => {
@@ -207,6 +252,7 @@ export class TerminalStore extends RecoveryStore {
     return this.transaction(() => {
       const session = this.session(id); requireCondition(session.generation === generation, 'STALE_SESSION_GENERATION');
       requireCondition(session.config_hash === config.fingerprint && session.project_id === config.project.id, 'CONFIG_CHANGED');
+      requireCondition(!this.connection.prepare("SELECT id FROM storage_artifact WHERE session_id=? AND state!='retained'").get(id),'SESSION_RETENTION_EXPIRED');
       requireCondition(session.state === 'process_exited' && session.last_turn_id && !session.active_turn_id && !session.manual_control && !this.task(session.task_id).cancel_requested, 'RESUME_REQUIRES_FINISHED_TRANSCRIPT');
       requireCondition(!this.connection.prepare("SELECT id FROM terminal_turn WHERE session_id=? AND status IN ('dispatched','acknowledged','uncertain')").get(id), 'UNCERTAIN_TURN_NO_RESUME');
       requireCondition(this.sessions(config.project.id).filter(s => s.id !== id && (!['session_closed', 'process_exited'].includes(s.state) || s.resume_requested)).length < 4, 'TERMINAL_SESSION_LIMIT');

@@ -1,8 +1,10 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync,chmodSync } from 'node:fs';
+import { mkdirSync,chmodSync,lstatSync,realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5 } from './migration.js';
+import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6 } from './migration.js';
+import {StorageLedger} from '../storage/budget.js';
+import {type HostConfig} from '../interface/config.js';
 import {bootClock} from '../supervisor/identity.js';
 import { requireCondition, type ProjectBinding, type TaskRecord, type TaskStatus, type Lease, type Effect, type Verification } from '../core/contracts.js';
 
@@ -10,25 +12,35 @@ const terminal = new Set<TaskStatus>(['succeeded','failed','cancelled']);
 const timestamp = () => new Date().toISOString();
 export class RuntimeStore {
   readonly #db: DatabaseSync;
+  readonly databasePath: string;
   protected get connection(){return this.#db;}
   constructor(path: string) {
     requireCondition(path!==':memory:', 'DURABLE_DATABASE_REQUIRED');
+    this.databasePath = resolve(path);
     mkdirSync(dirname(resolve(path)), {recursive:true,mode:0o700});
+    requireCondition(realpathSync(dirname(this.databasePath)) === dirname(this.databasePath), 'STORAGE_ROOT_REDIRECTED');
+    try {const stat=lstatSync(path);requireCondition(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1,'STORAGE_DATABASE_REDIRECTED');}
+    catch(e){if((e as NodeJS.ErrnoException).code!=='ENOENT')throw e;}
     this.#db=new DatabaseSync(path,{enableForeignKeyConstraints:true,allowExtension:false,timeout:2000});
     chmodSync(path,0o600);
-    this.#db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
-    this.transaction(()=>{
+    if (this.#db.prepare('PRAGMA journal_mode').get()?.journal_mode !== 'wal') this.#db.exec('PRAGMA journal_mode=WAL;');
+    this.#db.exec('PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
+    const exists = this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'").get();
+    const current = exists ? this.#db.prepare('SELECT version FROM schema_version').all() : [];
+    if (!(current.length === 1 && current[0]?.version === 6)) this.transaction(()=>{
       this.#db.exec(MIGRATION_1);
       const versions=this.#db.prepare('SELECT version FROM schema_version').all();
-      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4,5].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
+      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4,5,6].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
       if(!versions.length)this.#db.prepare('INSERT INTO schema_version VALUES (1)').run();
       if(!versions.length||versions[0]?.version===1)this.#db.exec(MIGRATION_2);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===2)this.#db.exec(MIGRATION_3);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===3)this.#db.exec(MIGRATION_4);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===4)this.#db.exec(MIGRATION_5);
+      if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===5)this.#db.exec(MIGRATION_6);
     });
   }
   close() { this.#db.close(); }
+  storage(config: HostConfig) {requireCondition(resolve(config.dbPath) === this.databasePath, 'STORAGE_DATABASE_MISMATCH'); return new StorageLedger(this.#db, fn => this.transaction(fn), config);}
   enqueue(projectId:string,requestId:string,capability:string,payload:unknown,configHash:string) {
     const encoded=JSON.stringify(payload),digest=createHash('sha256').update(encoded).digest('hex');
     requireCondition(this.project(projectId).capabilities.includes(capability),'CAPABILITY_NOT_DELEGATED');
@@ -65,7 +77,7 @@ export class RuntimeStore {
   transaction<T>(fn:()=>T):T {
     this.#db.exec('BEGIN IMMEDIATE');
     try { const result=fn(); this.#db.exec('COMMIT'); return result; }
-    catch(error) { this.#db.exec('ROLLBACK'); throw error; }
+    catch(error) { try {this.#db.exec('ROLLBACK');} catch {/* SQLITE_FULL may already have rolled back. Preserve the original failure. */} throw error; }
   }
   durability() { return {journal_mode:this.#db.prepare('PRAGMA journal_mode').get()?.journal_mode,synchronous:this.#db.prepare('PRAGMA synchronous').get()?.synchronous}; }
   registerProject(binding:ProjectBinding) {

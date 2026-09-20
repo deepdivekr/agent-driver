@@ -5,6 +5,7 @@ import {z} from 'zod';
 import {requireCondition, type ProjectBinding} from '../core/contracts.js';
 import {fileDelegation} from '../terminal/file-contracts.js';
 import {resourceBudgetSchema,type ResourceBudget} from '../resources/budget.js';
+import {storagePolicySchema,type StoragePolicy} from '../storage/budget.js';
 
 const identifier=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const TerminalConfigSchema=z.object({
@@ -24,6 +25,7 @@ export const HostConfigSchema=z.object({
   recovery_policy:z.enum(['auto_resume','prepare_only']).default('auto_resume'),
   terminal:TerminalConfigSchema.optional(),
   resources:resourceBudgetSchema.optional(),
+  storage:storagePolicySchema.optional(),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
@@ -31,6 +33,7 @@ export interface HostConfig {
   recoveryPolicy:'auto_resume'|'prepare_only';
   terminal:TerminalConfig|null;
   resources:ResourceBudget|null;
+  storage:StoragePolicy|null;
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
@@ -64,6 +67,6 @@ export function loadHostConfig(path:string):HostConfig {
     terminal={...raw.terminal,executable};executableStamp={executable,size:stat.size,mtime:stat.mtimeMs};
   }
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:origin?[origin]:[],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[])]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,
+  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,
     fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
 }

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, linkSync, statSync, existsSync} from 'node:fs';
+import {mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, symlinkSync, linkSync, statSync, existsSync,openSync,ftruncateSync,closeSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
@@ -19,11 +19,12 @@ import {prepareTerminalHandoff} from '../dist/terminal/handoff.js';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
 
-function fixture(t, overrides = {}, brokerBinding = true) {
+function fixture(t, overrides = {}, brokerBinding = true, storage = null) {
   const root = mkdtempSync(join(tmpdir(), 'apd-file-test-')), worktree = join(root, 'owned'), path = join(root, 'host.json');
   mkdirSync(worktree); mkdirSync(join(worktree, 'src'));
   writeFileSync(join(worktree, 'src/app.mjs'), "process.stdout.write('broken')");
   const raw = {schema_version: 1, project_id: 'files', caller_ref: 'test', account_ref: 'synthetic', worktree, data_dir: join(root, 'data'), terminal: {executable: process.execPath, version: '2.1.126', files: {ownership: 'exclusive_runtime', read: ['src/app.mjs', 'README.md'], write: ['src/app.mjs', 'README.md'], verifier: {kind: 'node_stdio_cases', entry: 'src/app.mjs', cases: [{id: 'answer', stdout: '정답🐈'}]}, ...overrides}}};
+  if(storage)raw.storage=storage;
   writeFileSync(path, JSON.stringify(raw)); const config = loadHostConfig(path), store = new TerminalStore(config.dbPath); store.registerProject(config.project);
   // Synthetic host/CLI/broker identities are intentionally one process. Tests below
   // are contract tests unless they independently test filesystem/namespace behavior.
@@ -69,6 +70,15 @@ test('runtime contract file broker writes Unicode with intent/readback and dedup
   assert.equal(statSync(join(x.worktree, input.path)).ino, inode); assert.equal(x.store.fileIntents(x.session).length, 1);
   const conflict = await tool(x, 'write_file', {...input, content: 'changed'}); assert.equal(conflict.error, 'REQUEST_ID_CONFLICT');
   finish(x); assert.equal(x.store.terminalStatus(x.session).project_completed, false);
+});
+test('runtime fixture configured storage admits scoped Unicode writes and rechecks budget immediately before replacement',async t=>{
+  const x=fixture(t,{},true,{max_bytes:33554432,min_free_bytes:16777216,journal_margin_bytes:1048576});
+  const first={turn_id:x.turn,path:'README.md',request_id:'admitted',expected_sha256:null,content:'한국어🐈'};
+  assert.equal((await tool(x,'write_file',first)).sha256,sha256(first.content));
+  const original=x.files.read('src/app.mjs'),input={turn_id:x.turn,path:'src/app.mjs',request_id:'blocked-after-intent',expected_sha256:original.sha256,content:'never replace'};
+  const result=await tool(x,'write_file',input,point=>{if(point==='before_replace'){const fd=openSync(join(x.root,'data','owned-sparse-pressure'),'wx');try{ftruncateSync(fd,33554432);}finally{closeSync(fd);}}});
+  assert.equal(result.error,'STORAGE_BUDGET_EXCEEDED');assert.equal(x.files.read(input.path).sha256,original.sha256);assert.equal(x.store.fileIntents(x.session).at(-1).status,'uncertain');
+  assert.equal(x.store.storage(x.config).status().reserved_bytes,0);
 });
 test('runtime contract file broker fences undelegated paths, wrong hash, stale turns, cancellation and missing official calls', async t => {
   const x = fixture(t), input = {turn_id: x.turn, path: 'src/app.mjs', request_id: 'write', expected_sha256: null, content: 'wrong'};

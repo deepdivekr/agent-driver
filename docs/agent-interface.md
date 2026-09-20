@@ -1,12 +1,12 @@
-# Agent interface — Phase 19
+# Agent interface — Phase 22
 
 ## 실제 지원과 남은 범위
 
-CLI와 stdio MCP는 같은 RuntimeApi를 사용한다. 원문19개와 `runtime_task_intake`, Phase19의 `runtime_terminal_sessions_list`/`runtime_terminal_history`/`runtime_terminal_output_read`/`runtime_terminal_handoff`로 총24개 이름을 제공한다. 조회/인계의 페이지·검증·private artifact 계약은 [별도 안내](terminal-handoff.md)를 따른다. 원문의 “15종” 문구 대신 명명된 전체 목록을 기준으로 했다.
+CLI와 stdio MCP는 같은 RuntimeApi를 사용하며 현재 총30개 이름을 제공한다. 원문19개와 intake, Phase19 조회/인계4개, Phase20 검증/파일조정2개, Phase22 저장관리4개다. 조회/인계 계약은 [별도 안내](terminal-handoff.md), 저장 상태·계획·정리·죽은 owner 예약 회수는 [저장 경계](storage-boundaries.md)를 따른다. 원문의 “15종” 문구 대신 명명된 전체 목록을 기준으로 했다.
 
 사용 가능: health, capabilities list/describe, task start/status/cancel/resume, recovery status/prepare, artifacts list(미지원/빈 목록 명시), events read/ack, intake. resume/prepare는 안전하게 준비된 미전송 작업에만 적용한다.
 
-terminal start/status/submit_prompt/resume/interrupt는 명시적으로 설정된 Linux Claude 구조화 세션에서 동작한다. 파일 도구는 아직 차단되어 세션 통신만 시험할 수 있다. [CLI adapter 근거표](cli-adapter-matrix.md)를 먼저 확인한다. 명시적 `NOT_IMPLEMENTED`: browser session open/status. `verify`, `soak`, `ops` CLI 역시 미구현이며 help에 표시한다. 이 목록을 MCP 완전 구현이나 공식 릴리즈 완료라고 부르지 않는다.
+terminal start/status/submit_prompt/resume/interrupt는 명시적으로 설정된 Linux Claude 구조화 세션에서 동작한다. 기본 CLI 내장 파일/shell 도구는 차단하며 `terminal.files`가 명시된 host에서만 runtime broker를 사용할 수 있다. [CLI adapter 근거표](cli-adapter-matrix.md)를 먼저 확인한다. 명시적 `NOT_IMPLEMENTED`: browser session open/status. 최상위 `verify`, `soak`, `ops` CLI 역시 미구현이며 help에 표시한다(`terminal verify`와 구분). 이 목록을 MCP 완전 구현이나 공식 릴리즈 완료라고 부르지 않는다.
 
 실제 외부 write capability는 `fixture.draft.save` 한 개이며 **host 설정에 environment=fixture가 있어야** 보인다. production 기본값에는 실행 capability가 없다. terminal 설정 시 `coding.session` 실험적 통신 capability가 추가된다. Linux 프로세스 복구와 Windows/재부팅 복구를 구분한다.
 
@@ -55,6 +55,8 @@ node dist/cli.js mcp --config .runtime/lab-01/host.json
 - 합성 앱의 업무 데이터는 메모리에 있으므로 lab 프로세스를 종료하면 사라진다. 실행 DB와 dedicated profile은 보존한다. API 키·로그인 쿠키·실사용 자료를 이 테스트 팩에 넣지 않는다.
 
 ## 검증
+
+Phase22는 기존 v1~v5 DB를 v6로 migration한다. 저장 예약·자료 소유권·분할 로그 메타데이터를 추가하며 기존 intent/event는 보존한다. 현재 v6 DB 재오픈은 migration 쓰기를 생략해 실제 공간 부족에서도 읽기 경로를 유지한다. 구버전 실행 파일로 v6 DB를 열지 않는다. 백업/복원·설정 migration은 아직 출시 gate다.
 
 Phase20은 기존 DB v1~v4의 기록을 보존하며 v5로 올린다. v5는 file broker identity, 공식 tool call, file intent, independent verification을 추가한다. 파일 기능은 `terminal.files`가 있는 host에만 켜지며 정확한 범위와 명령은 [파일 작업 안내](terminal-file-effects.md)를 따른다. `runtime_terminal_verify`와 `runtime_terminal_reconcile_files` 2개 도구가 추가되었다. CLI는 `terminal verify|reconcile-files --config PATH --request-file PATH`다. 과거 v4 설명은 당시 migration 단계이며 구버전 실행 파일로 v5를 열지 않는다.
 

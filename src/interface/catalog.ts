@@ -8,6 +8,10 @@ const task=z.object({task_id:id}).strict(),empty=z.object({}).strict();
 const notImplemented={implemented:false,readOnly:false};
 export const tools={
   runtime_health:{schema:empty,implemented:true,readOnly:true},
+  runtime_storage_status:{schema:empty,implemented:true,readOnly:true},
+  runtime_storage_plan:{schema:empty,implemented:true,readOnly:true},
+  runtime_storage_prune:{schema:z.object({plan_sha256:z.string().regex(/^[a-f0-9]{64}$/)}).strict(),implemented:true,readOnly:false},
+  runtime_storage_recover_reservations:{schema:empty,implemented:true,readOnly:false},
   runtime_capabilities_list:{schema:empty,implemented:true,readOnly:true},
   runtime_capability_describe:{schema:z.object({capability:id}).strict(),implemented:true,readOnly:true},
   runtime_task_start:{schema:startRequest,implemented:true,readOnly:false},

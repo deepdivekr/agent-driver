@@ -59,13 +59,14 @@ npm run runtime -- demo --wrong-account true
 |정확한 경로 위임·파일 broker·쓰기 intent/readback|Linux 전용, 독점 작업 사본만 지원; 기본 CLI 도구/shell은 닫음|
 |독립 Node 입출력/종료 계약 검증|bubblewrap 격리 snapshot과 고정 oracle; 일반 프로젝트 테스트 runner 아님|
 |합산 CPU·메모리·PID 경계|명시적 host 설정·Linux user systemd/cgroupv2; kernel readback과 자손 회수 검증. 예산 미설정은 unverified|
+|저장 예산·분할 로그·보존 만료 사본 정리|host 정책·프로세스별 예약·실제 ENOSPC·정리 중단 복구 시험; 애플리케이션 admission이며 hard disk quota 아님|
 |과거 턴·정규화 출력 조회·실제 Git 인계|세션 범위·변경/변조 확인; 프로젝트 테스트 실행·완료 판정은 하지 않음|
 |다중 executor 자동 takeover|후속 구현|
 |Windows foreground 비간섭·guest 설치·soak|미검증/후속 구현|
 
 상세 설계는 [v0.7](docs/control-plane-design-v0.7.md), 평가 근거는 [평가 요약](docs/evaluation-summary.md), 공개 범위는 [PUBLICATION.md](PUBLICATION.md)를 참고하세요. 프로세스 내부의 신뢰된 adapter 코드는 보안 샌드박스가 아니며, 동일 OS 사용자 권한으로 DB를 바꿀 수 있는 공격자를 막는다는 보장은 없습니다.
 
-에이전트 연결과 합성 앱 실습은 [Agent interface](docs/agent-interface.md), 브라우저 복구는 [감독자 안내](docs/supervisor-recovery.md), CLI는 [adapter 안내](docs/cli-adapter-matrix.md), 기록 수집은 [조회·인계](docs/terminal-handoff.md), 파일 위임과 테스트는 [파일 작업 계약](docs/terminal-file-effects.md)에 있습니다. MCP 이름26개를 노출하며 browser session 계열은 아직 미구현입니다. production 기본값에서 테스트 쓰기와 CLI 경로는 비활성화되며 CLI·파일 위임은 별도 host 설정이 필요합니다.
+에이전트 연결과 합성 앱 실습은 [Agent interface](docs/agent-interface.md), 브라우저 복구는 [감독자 안내](docs/supervisor-recovery.md), CLI는 [adapter 안내](docs/cli-adapter-matrix.md), 기록 수집은 [조회·인계](docs/terminal-handoff.md), 파일 위임과 테스트는 [파일 작업 계약](docs/terminal-file-effects.md), 저장 관리는 [예산·보존 안내](docs/storage-boundaries.md)에 있습니다. MCP 이름30개를 노출하며 browser session 계열은 아직 미구현입니다. production 기본값에서 테스트 쓰기와 CLI 경로는 비활성화되며 CLI·파일 위임은 별도 host 설정이 필요합니다.
 
 ## 검사와 프로젝트 관리
 
@@ -85,5 +86,6 @@ npm test
 - [CLI host #5](https://github.com/deepdivekr/agent-driver/issues/5)
 - [출시 조건 #6](https://github.com/deepdivekr/agent-driver/issues/6)
 - [자원 경계 #14](https://github.com/deepdivekr/agent-driver/issues/14)
+- [저장 경계 #16](https://github.com/deepdivekr/agent-driver/issues/16)
 
 코드 변경은 검증 근거가 있는 PR로 관리합니다. 공개 저장소이지만 배포 라이선스는 아직 결정하지 않았습니다.

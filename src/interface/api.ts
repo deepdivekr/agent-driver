@@ -12,6 +12,7 @@ import {loadHostConfig,type HostConfig} from './config.js';
 import {draftManifest,terminalManifest,startRequest,tools} from './catalog.js';
 import {intake} from './intake.js';
 import {resourceHealth} from '../resources/configured.js';
+import {storageError} from '../storage/budget.js';
 
 export class RuntimeApi{
   readonly store:TerminalStore;
@@ -22,6 +23,7 @@ export class RuntimeApi{
     if(name==='runtime_task_intake')return intake(args);
     requireCondition(Object.hasOwn(tools,name),'UNKNOWN_TOOL');
     const tool=tools[name as keyof typeof tools],input=tool.schema.parse(args) as Record<string,unknown>;
+    if(name.startsWith('runtime_storage_')&&!tool.readOnly)requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
     requireCondition(tool.implemented,'NOT_IMPLEMENTED');
     if('task_id'in input)this.scoped(String(input.task_id));
     if(name.startsWith('runtime_terminal_')){
@@ -29,10 +31,18 @@ export class RuntimeApi{
       if('session_ref'in input)requireCondition(this.store.session(String(input.session_ref)).project_id===this.config.project.id,'SESSION_SCOPE_MISMATCH');
       if(!tool.readOnly)requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
     }
-    switch(name){
+    const writes = ['runtime_terminal_start','runtime_terminal_submit_prompt','runtime_terminal_resume','runtime_task_start','runtime_task_resume'];
+    const ledger = this.store.storage(this.config), reservation = writes.includes(name) ? ledger.reserve('request_admission', 1048576) : null;
+    let failed = false;
+    try {switch(name){
+      case 'runtime_storage_status':return ledger.status();
+      case 'runtime_storage_plan':return this.store.retention(this.config).plan();
+      case 'runtime_storage_prune':return this.store.retention(this.config).execute(String(input.plan_sha256));
+      case 'runtime_storage_recover_reservations':return ledger.reapDeadOwners();
       case 'runtime_health':{
         const resource_boundary=await resourceHealth(this.config);
-        return {health:this.config.environment==='fixture'&&process.platform==='linux'&&resource_boundary.status!=='unavailable_or_changed'?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null,autonomous_planning_enabled:false,resource_boundary};
+        const storage_boundary=ledger.status();
+        return {health:this.config.environment==='fixture'&&process.platform==='linux'&&resource_boundary.status!=='unavailable_or_changed'&&!['blocked','unavailable'].includes(storage_boundary.status)?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null,autonomous_planning_enabled:false,resource_boundary,storage_boundary};
       }
       case 'runtime_capabilities_list':return {capabilities:[draftManifest,terminalManifest].filter(m=>this.config.project.capabilities.includes(m.id))};
       case 'runtime_capability_describe':requireCondition(this.config.project.capabilities.includes(String(input.capability)),'CAPABILITY_NOT_DELEGATED');return input.capability==='coding.session'?terminalManifest:draftManifest;
@@ -75,6 +85,7 @@ export class RuntimeApi{
       case 'runtime_events_read':return {events:this.store.events(this.config.project.id,String(input.consumer_id),Number(input.limit))};
       case 'runtime_events_ack':this.store.ack(this.config.project.id,String(input.consumer_id),Number(input.event_id));return {acknowledged:true};
       default:throw Error('NOT_IMPLEMENTED');
-    }
+    }} catch (e) {failed = true; if(storageError(e)==='STORAGE_FULL')throw Error('STORAGE_FULL',{cause:e});throw e;}
+    finally {try {ledger.release(reservation);} catch (e) {if (!failed) throw e;}}
   }
 }

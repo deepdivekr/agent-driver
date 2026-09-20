@@ -11,9 +11,10 @@ import {ScopedFiles} from './scoped-files.js';
 import {fileRead, fileWrite, type FileAuthority, type FileWrite} from './file-contracts.js';
 import {configuredBoundary,resourceFence} from '../resources/configured.js';
 import {type BudgetHandle} from '../resources/budget.js';
+import {storageError} from '../storage/budget.js';
 
 const result = (value: unknown, failed = false): CallToolResult => ({...(failed ? {isError: true} : {}), content: [{type: 'text', text: JSON.stringify(value)}]});
-const safeError = (error: unknown) => error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'FILE_OPERATION_REJECTED';
+const safeError = (error: unknown) => storageError(error) === 'STORAGE_FULL' ? 'STORAGE_FULL' : error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'FILE_OPERATION_REJECTED';
 export type FileCutPoint = (point: 'intent_committed' | 'before_replace' | 'after_replace') => void;
 export class FileBroker {
   readonly files: ScopedFiles;
@@ -43,7 +44,7 @@ export class FileBroker {
         const observation = this.files.read(input.path);
         return result({path: observation.path, sha256: observation.sha256, content: observation.content, turn_id: input.turn_id});
       });
-      else answer = this.write(input as FileWrite);
+      else answer = this.store.storage(this.config).run('file_effect', Buffer.byteLength((input as FileWrite).content) * 3 + 1048576, () => this.write(input as FileWrite));
     } catch (error) {answer = result({error: safeError(error), automatic_retry: false}, true);}
     this.store.transaction(() => this.store.answerTool(tool, this.authority.session, answer));
     return answer;
@@ -59,7 +60,7 @@ export class FileBroker {
         resourceFence(this.resourceBoundary);
         this.store.fileFence(this.config, this.authority, input.turn_id);
         const observed = this.files.replace(input.path, before, input.content, intent.id, () => {
-          this.cut?.('before_replace');resourceFence(this.resourceBoundary); this.store.fileFence(this.config, this.authority, input.turn_id);
+          this.cut?.('before_replace');resourceFence(this.resourceBoundary); this.store.storage(this.config).assertAvailable(); this.store.fileFence(this.config, this.authority, input.turn_id);
         }, () => this.cut?.('after_replace'));
         const value = {intent_id: intent.id, turn_id: input.turn_id, path: input.path, sha256: observed.sha256, effect: 'readback_verified', tests: 'NOT_RUN', project_completed: false};
         this.store.finishFile(intent, 'verified', value);

@@ -4,6 +4,7 @@ import {createHash} from 'node:crypto';
 import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {delegatedPath} from './file-contracts.js';
+import {assertVolumeCapacity} from '../storage/budget.js';
 
 export const sha256 = (data: string | Buffer) => createHash('sha256').update(data).digest('hex');
 export interface FileObservation {path: string; sha256: string | null; content: string | null; identity: string | null; mode: number | null}
@@ -60,6 +61,7 @@ export class ScopedFiles {
     requireCondition(this.config.terminal!.files!.write.includes(path), 'FILE_WRITE_NOT_DELEGATED');
     requireCondition(Buffer.byteLength(content) <= this.config.terminal!.files!.max_bytes, 'FILE_SIZE_LIMIT');
     return this.parent(path, (anchored, dir) => {
+      assertVolumeCapacity(this.config, dir, Buffer.byteLength(content));
       const stage = `${anchored}.${intent}.apd-stage`;
       const fd = openSync(stage, constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600);
       try {if (before.mode !== null) fchmodSync(fd, before.mode); writeAll(fd, Buffer.from(content));} finally {closeSync(fd);}

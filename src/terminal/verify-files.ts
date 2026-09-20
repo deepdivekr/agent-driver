@@ -47,6 +47,7 @@ export async function verifyFiles(store: TerminalStore, config: HostConfig, sess
   const delegation = config.terminal?.files, verifier = delegation?.verifier;
   requireCondition(verifier && process.platform === 'linux', 'FILE_VERIFIER_NOT_DELEGATED');
   const scoped = new ScopedFiles(config), files = scoped.snapshot(), manifest = manifestOf(files);
+  return store.storage(config).runAsync('verification', files.reduce((n, f) => n + Buffer.byteLength(f.content ?? '') + 8192, 2097152), async () => {
   const reservation = store.beginVerification(config, session, generation, turn, request, manifest), id = String(reservation.record.id);
   if (!reservation.created) return {verification_id: id, deduplicated: true, manifest: JSON.parse(String(reservation.record.manifest_json)) as unknown, result: reservation.record.result_json ? JSON.parse(String(reservation.record.result_json)) as unknown : null, status: reservation.record.result_json ? 'recorded' : 'in_progress_or_interrupted_no_replay'};
   const cancelled = () => {const s = store.session(session); return loadHostConfig(config.path).fingerprint !== config.fingerprint || s.generation !== generation || s.last_turn_id !== turn || !!s.active_turn_id || !!s.interrupt_requested || !!s.manual_control || !!store.task(s.task_id).cancel_requested;};
@@ -80,4 +81,5 @@ export async function verifyFiles(store: TerminalStore, config: HostConfig, sess
   } catch (error) {observation = {status: 'NOT_RUN', reason: error instanceof Error && /^[A-Z_]+$/.test(error.message) ? error.message : 'VERIFICATION_FAILED_UNOBSERVED', project_completed: false};}
   store.finishVerification(id, session, observation);
   return {verification_id: id, turn_id: turn, generation, manifest, result: observation, deduplicated: false};
+  });
 }

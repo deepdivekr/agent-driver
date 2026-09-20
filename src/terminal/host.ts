@@ -1,7 +1,7 @@
 import {createServer, type Server} from 'node:net';
-import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
-import {mkdirSync, mkdtempSync, openSync, writeSync, fsyncSync, closeSync, chmodSync, unlinkSync, rmdirSync, fstatSync, constants} from 'node:fs';
-import {dirname, join} from 'node:path';
+import {randomBytes, timingSafeEqual} from 'node:crypto';
+import {mkdtempSync, chmodSync, unlinkSync, rmdirSync} from 'node:fs';
+import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {setTimeout as delay} from 'node:timers/promises';
 import {loadHostConfig, type HostConfig} from '../interface/config.js';
@@ -62,18 +62,7 @@ export class TerminalHost {
       session_id: session.cli_session_id, model: event.type === 'system' && typeof event.model === 'string' ? redact(event.model.slice(0, 200)) : undefined,
       result: event.type === 'result' && typeof event.result === 'string' ? redact(event.result.slice(0, 65536)) : undefined};
     const line = Buffer.from(JSON.stringify(safe) + '\n');
-    requireCondition(session.spool_bytes + line.length <= this.config.terminal!.spool_bytes, 'CLI_SPOOL_QUOTA');
-    const directory = join(dirname(this.config.dbPath), 'terminal-spool'); mkdirSync(directory, {recursive: true, mode: 0o700});
-    const dir = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
-    try {
-      const fd = openSync(`/proc/self/fd/${dir}/${id}.jsonl`, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
-      try {
-        const stat = fstatSync(fd); requireCondition(stat.isFile() && stat.nlink === 1 && stat.size === session.spool_bytes, 'CLI_SPOOL_DURABILITY_GAP');
-        let written = 0; while (written < line.length) {const count = writeSync(fd, line, written); requireCondition(count > 0, 'CLI_SPOOL_WRITE_FAILED'); written += count;}
-        fsyncSync(fd);
-      } finally {closeSync(fd);}
-    } finally {closeSync(dir);}
-    this.store.noteSpool(id, this.instance!, managed.session.generation, line.length, event.type, createHash('sha256').update(line).digest('hex'));
+    this.store.appendSpool(this.config,id,this.instance!,managed.session.generation,line,event.type);
   }
   private event(id: string, event: CliEvent) {
     const managed = this.managed.get(id)!;
@@ -135,6 +124,7 @@ export class TerminalHost {
   }
   private async launchSession(session: TerminalSession) {
     this.fresh();
+    this.store.storage(this.config).assertAvailable(1048576);
     if (session.resume_requested) requireCondition(session.process_identity_json && await liveness(JSON.parse(session.process_identity_json) as ProcessIdentity) === 'dead', 'CLI_STILL_ALIVE_OR_UNKNOWN');
     const claimed = this.store.claimSession(session.id, this.instance!, this.config);
     const managed: Managed = {session: claimed.session, transport: null, failed: false, exited: false, starting: true, pending: []};
@@ -184,8 +174,10 @@ export class TerminalHost {
         requireCondition(typeof identity !== 'string' && JSON.stringify(identity) === session.process_identity_json, 'CLI_IDENTITY_CHANGED');
         this.fresh();
         resourceFence(this.resourceBoundary,transport.child.pid!);
-        const dispatched = this.store.dispatch(session.id, this.instance, managed.session.generation, this.config);
-        try {transport.send(dispatched.id, dispatched.prompt);} catch {this.fail(session.id, 'CLI_STDIN_UNCERTAIN');}
+        this.store.storage(this.config).run('prompt_dispatch', 1048576, () => {
+          const dispatched = this.store.dispatch(session.id, this.instance!, managed.session.generation, this.config);
+          try {transport.send(dispatched.id, dispatched.prompt);} catch {this.fail(session.id, 'CLI_STDIN_UNCERTAIN');}
+        });
       } else if (turn.deadline_uptime_ms !== null && bootClock().uptimeMs >= turn.deadline_uptime_ms) this.fail(session.id, 'TURN_DEADLINE');
     }
   }

@@ -17,8 +17,10 @@ import {configuredBoundary,resourceFence} from '../resources/configured.js';
 export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:string,request:StartRequest,remainingMs:number,checkpoint?:CheckpointHook){
   requireCondition(config.environment==='fixture'&&config.fixtureUrl,'FIXTURE_DISABLED');
   const started=performance.now(),url=config.fixtureUrl,project=config.project;
+  const storage = store.storage(config);let reservation:string|null=null;
   let context:BrowserContext|undefined,lease:Lease|undefined,timer:ReturnType<typeof setTimeout>|undefined;
   try {
+    reservation=storage.reserve('browser_workload', 16777216);
     const resourceBoundary=await configuredBoundary(config);
     requireCondition(remainingMs>0,'DEADLINE_EXCEEDED');
     const target=`owned-page:${randomUUID()}`;let backoff=25;
@@ -44,6 +46,7 @@ export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:
     };
     const adapter:RuntimeAdapter={observe,async execute(){
       resourceFence(resourceBoundary);
+      storage.assertAvailable();
       await page.locator('#edit').click();await page.locator('#name').fill(request.input.name);await page.locator('#note').fill(request.input.note);
       if(checkpoint)await checkpoint('before_save');
       // Filling can yield: recheck config, deadline, cancellation and fence at commit.
@@ -52,6 +55,7 @@ export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:
       guard(store,{taskId,callerRef:project.callerRef,lease:ownedLease,capability:FIXTURE_DRAFT,observation:await observe(),maxObservationAgeMs:3000},performance.now(),true);
       requireCondition(!store.task(taskId).cancel_requested,'CANCELLED_BEFORE_SAVE');
       resourceFence(resourceBoundary);
+      storage.assertAvailable();
       await page.locator('#save').click();
       await page.waitForFunction(()=>['true','error'].includes(document.querySelector('#state')?.getAttribute('data-ready')??''));
       requireCondition(await page.locator('#state').getAttribute('data-ready')==='true','SAVE_RESPONSE_UNKNOWN');
@@ -74,5 +78,6 @@ export async function runBoundDraft(store:RuntimeStore,config:HostConfig,taskId:
     if(timer)clearTimeout(timer);await context?.close();
     // Do not hand a shared profile to another worker until this context is closed.
     if(lease&&['succeeded','cancelled','paused_dependency'].includes(store.task(taskId).status))store.release(lease);
+    storage.release(reservation);
   }
 }
