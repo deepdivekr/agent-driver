@@ -29,9 +29,9 @@ function child(x,mode,...args){
   message.catch(()=>{});const record={handle,exited,message};x.children.push(record);return record;
 }
 async function kill(record){if(record.handle.exitCode===null&&record.handle.signalCode===null)record.handle.kill('SIGKILL');await record.exited;}
-async function setup(t,policy='auto_resume'){
+async function setup(t,policy='auto_resume',overrides={}){
   const root=await mkdtemp(join(tmpdir(),'driver-supervisor-')),fixture=await startFixture(),spec=makeCase('supervision','S02',101,'normal');
-  const path=join(root,'host.json'),raw={schema_version:1,project_id:'supervised',caller_ref:'agent',account_ref:'account-a',worktree:root,data_dir:join(root,'data'),environment:'fixture',fixture_url:fixture.create(spec),recovery_policy:policy};
+  const path=join(root,'host.json'),raw={schema_version:1,project_id:'supervised',caller_ref:'agent',account_ref:'account-a',worktree:root,data_dir:join(root,'data'),environment:'fixture',fixture_url:fixture.create(spec),recovery_policy:policy,...overrides};
   await writeFile(path,JSON.stringify(raw));const config=loadHostConfig(path),api=new RuntimeApi(config);
   const x={root,path,raw,config,api,fixture,spec,children:[],supervisors:[]};
   t.after(async()=>{
@@ -141,6 +141,14 @@ test('runtime native prepare_only requires a new exact approval after a second s
   const final=await finish(x,s,id);
   assert.equal(final.status,'succeeded');assert.equal(launches,3);assert.equal(s.store.submission(id).attempt_count,3);assert.equal(effects(x),1);
   assert.ok(diagnostics(x,s,id).some(e=>e.kind==='recovery.observed'&&e.data.trigger==='launch_dead'&&e.data.from==='reserved'));
+});
+test('runtime native supervisor reaps only the dead worker storage reservation before retrying a killed browser worker',{timeout:60000},async t=>{
+  const storage={max_bytes:64*1024*1024,min_free_bytes:16*1024*1024,journal_margin_bytes:1024*1024};
+  const x=await setup(t,'auto_resume',{storage}),cut=cutLauncher(x,'browser_ready'),s=await supervise(x,cut.launch),id=enqueue(x);
+  await s.step();await cut.first().message;assert.equal(s.store.storage(x.config).status().reserved_bytes,16*1024*1024);
+  await kill(cut.first());const final=await finish(x,s,id);
+  assert.equal(final.status,'succeeded');assert.equal(effects(x),1);
+  assert.equal(s.store.storage(x.config).status().reserved_bytes,0);
 });
 test('runtime native repeated pre-claim process deaths stop after three launches with bounded backoff',{timeout:60000},async t=>{
   const x=await setup(t);let launches=0;const s=await supervise(x,async()=>{launches++;const process=child(x,'profile');await process.message;await kill(process);return 'dead';}),id=enqueue(x);

@@ -51,11 +51,18 @@ export class Supervisor{
         if(await liveness(row.worker_identity_json?JSON.parse(row.worker_identity_json) as ProcessIdentity:null)!=='dead')continue;
         if(await profileOccupancy(this.config.project.profileRef)!=='clear')continue;
         this.store.recoverDead(row,nonce,this.config.recoveryPolicy,this.config.fingerprint,'worker_dead');
+        // A SIGKILL can bypass a worker's normal storage-reservation finally
+        // block. We have independently established that this worker identity
+        // is dead and its profile is clear, so reclaim only exact dead-owner
+        // reservations before allowing bounded recovery to consume quota again.
+        this.store.storage(this.config).reapDeadOwners();
       }
       const current=this.store.submission(row.task_id);
       if(current.recovery_state==='reconcile'){
         if(await liveness(current.worker_identity_json?JSON.parse(current.worker_identity_json) as ProcessIdentity:null)!=='dead')continue;
         if(await profileOccupancy(this.config.project.profileRef)!=='clear')continue;
+        // This may be the first recovery observation after a supervisor restart.
+        this.store.storage(this.config).reapDeadOwners();
         this.store.reconcile(current,nonce,await readDraftResult(this.config,this.store,current));
       }
     }

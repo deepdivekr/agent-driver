@@ -9,6 +9,7 @@ Phase 17은 **Linux의 같은 부팅 세션 + 합성 draft Task Pack**을 다룬
 3. claim된 worker는 PID뿐 아니라 부팅 ID와 kernel 시작 tick으로 확인한다. 살아 있거나 확인 불가능하면 인계하지 않는다. 죽었어도 dedicated profile이 점유 중이거나 관측 불가하면 넘기지 않는다. 다른 프로세스를 kill하지 않는다.
 4. intent가 없고 원래 deadline·config·재시작 한도가 유효할 때만 새 worker를 실행한다. 최대 3번의 시작 시도와 재개 전 400/800ms backoff를 사용한다. 시작 예약은 원래 deadline을 넘지 않는 최대 15초 뒤 무효화할 수 있지만 **claim된 worker의 사망을 15초 경과로 추정하지 않는다**. 이는 CPU 제한 아래에서 건강한 child가 첫 claim 전에 예약 철회되는 것을 막기 위한 유한 창이다.
 5. intent가 하나라도 있으면 POST/save를 재전송하지 않는다. 앱의 account/run identity, record, identity를 독립 GET으로 대조한다. MATCH는 원하는 상태의 확인이며 외부 exactly-once 증명이 아니다. NOT_MATCH/UNKNOWN은 `reconciliation_required`로 유지하고 해당 profile의 다음 writer를 막는다.
+6. worker가 SIGKILL로 종료되어 storage reservation의 normal cleanup을 건너뛰면, supervisor는 worker identity의 사망과 profile 해제를 각각 확인한 뒤 그 프로젝트의 **정확히 죽은 owner** reservation만 회수한다. alive/unknown owner는 회수하지 않는다. 이 내부 quota 정리는 외부 effect 재시도 승인이 아니다.
 
 `profileOccupancy`는 Linux `/proc`의 정확한 `--user-data-dir` 값과 비교한다. 읽지 못하는 process가 있으면 보수적으로 UNKNOWN이다. 커널 격리나 악성 동일-사용자 프로세스에 대한 보안 경계가 아니다. headless는 사용자의 기존 Chrome과 연결되지 않지만 CPU/메모리 간섭까지 없다고 보장하지 않는다.
 
