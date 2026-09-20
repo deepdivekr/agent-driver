@@ -29,7 +29,7 @@ async function setup(t,overrides={}){
     // Only this test's random domain; no external launcher can know this private fixture ID.
     await exec('/usr/bin/systemctl',['--user','stop',handle.unit],{env:managerEnvironment(),timeout:5000});
   });
-  const launch=async(mode)=>{
+  const launch=async(mode,{start=true}={})=>{
     const scope=await launchResourceUnit(limits,process.execPath,[fixture,mode],{},mode==='memory'?30000:10000);scopes.push(scope);
     let stdout='',stderr='';scope.child.stdout.on('data',b=>stdout+=b);scope.child.stderr.on('data',b=>stderr+=b);
     scope.child.stdin.on('error',()=>{});
@@ -37,7 +37,7 @@ async function setup(t,overrides={}){
     await until(()=>stdout.includes('\n')||scope.child.exitCode!==null);
     assert.ok(stdout.includes('\n'),'scope must start inside a verified resource domain: '+stderr);
     const info=JSON.parse(stdout.split('\n')[0]);assertBudgetMembership(handle,info.pid,scope.unit);
-    scope.child.stdin.write('run\n');
+    if(start)scope.child.stdin.write('run\n');
     return {...scope,done,info,output:()=>stdout};
   };
   return {limits,handle,scopes,launch};
@@ -69,13 +69,16 @@ test('runtime native aggregate CPU quota throttles two concurrent scopes while u
   const sentinel=spawn('/usr/bin/sleep',['20'],{stdio:'ignore'});t.after(()=>sentinel.kill());
   await new Promise((r,j)=>{sentinel.once('spawn',r);sentinel.once('error',j);});
   const sentinelMembership=readFileSync('/proc/'+sentinel.pid+'/cgroup','utf8');
+  // Both targets must be ready before either consumes the shared CPU quota.
+  // Starting the first load during the second bootstrap made readiness a race.
+  const [a,b]=await Promise.all([launch('cpu',{start:false}),launch('cpu',{start:false})]);
   const before=readBudget(handle),started=performance.now();
-  const [a,b]=await Promise.all([launch('cpu'),launch('cpu')]);
+  a.child.stdin.write('run\n');b.child.stdin.write('run\n');
   const results=await Promise.all([a.done,b.done]),elapsed=performance.now()-started,after=readBudget(handle);
   for(const result of results)assert.equal(result.code,0,result.stderr);
   assert.ok(after.cpu.nr_throttled>before.cpu.nr_throttled);
   const usedMs=(after.cpu.usage_usec-before.cpu.usage_usec)/1000;
-  // Includes trusted bootstraps; kernel quota plus one 100 ms period and measurement margin.
+  // Includes concurrent bootstrap monitoring; one quota period plus measurement margin.
   assert.ok(usedMs<=elapsed*0.20+200,`cpu ${usedMs}ms exceeds aggregate window ${elapsed}ms`);
   assert.equal(sentinel.exitCode,null);
   assert.equal(readFileSync('/proc/'+sentinel.pid+'/cgroup','utf8'),sentinelMembership);
@@ -91,9 +94,11 @@ test('runtime native resource PID limit rejects finite child attempts and counts
   assert.equal(result.code,0,result.stderr);
   const counts=JSON.parse(result.stdout.trim().split('\n').at(-1));
   assert.ok(counts.denied>0);assert.ok(counts.started<64);
-  // Linux 6.6 records failures at the forking leaf, not necessarily the limiting ancestor.
-  assert.ok(observed.scope_metrics.pid_events.max>0);
   const after=readBudget(handle);
+  // pids_localevents/older kernels attribute denial to the forking leaf; newer
+  // kernels count the cgroup whose limit was hit. Both are real kernel evidence.
+  assert.ok(observed.scope_metrics.pid_events.max>0 || after.pid_events.max>before.pid_events.max,
+    JSON.stringify({counts,leaf:observed.scope_metrics.pid_events,before:before.pid_events,after:after.pid_events}));
   assert.equal(after.events.populated,0);
 });
 

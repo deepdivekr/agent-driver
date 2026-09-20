@@ -38,7 +38,7 @@ Linux cgroupv2와 동작 중인 사용자 systemd manager가 필요하다. Node�
 
 ## 관측·실패·검증 범위
 
-관측은 현재/peak 메모리·task수·cpu.stat·memory.events·pids.events·cgroup.events다. 없는 counter는 unobserved이며0으로 채우지 않는다. Linux6.6의 PID 거절은 제한을 둔 ancestor가 아니라 fork한 leaf의 pids.events에 기록될 수 있으므로 실행 단위 counter도 확인한다. 일반 pids.current==0 또는 exit0만으로 업무 완료를 판정하지 않는다.
+관측은 현재/peak 메모리·task수·cpu.stat·memory.events·pids.events·cgroup.events다. 없는 counter는 unobserved이며0으로 채우지 않는다. 커널 버전과 pids_localevents 설정에 따라 PID 거절은 제한을 둔 ancestor 또는 fork한 leaf의 pids.events에 기록될 수 있으므로 두 위치를 함께 확인한다. CI에서도 실제 EAGAIN과 시작 수 제한, ancestor/leaf 중 관측된 커널 거절 증가를 함께 요구한다. 일반 pids.current==0 또는 exit0만으로 업무 완료를 판정하지 않는다.
 
 서비스의 resource kill은 기존 durable intent/CLI state 규칙으로 처리한다. 이미 발송된 파일/외부 쓰기는 취소된 것으로 꾸미거나 다른 실행기로 재발송하지 않는다. 독립 verifier는 실제 프로그램 출력/exit와 resource 관측을 함께 기록하며 제한 종료를 성공으로 처리하지 않는다.
 

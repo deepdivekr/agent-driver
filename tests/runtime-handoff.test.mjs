@@ -6,6 +6,8 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
+import childProcess from 'node:child_process';
+import {syncBuiltinESMExports} from 'node:module';
 import {setTimeout as delay} from 'node:timers/promises';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -224,11 +226,28 @@ test('runtime native Git unborn, binary changes and output bounds do not fabrica
   const large = await collectGitSnapshot(root, true); assert.equal(large.status, 'unavailable'); assert.equal(large.reason, 'GIT_OUTPUT_LIMIT'); assert.equal(large.commit, null);
 });
 test('runtime native Git concurrent dirty file changes are reported unavailable, not a coherent snapshot', async t => {
-  const root = await repository(t); let i = 0, active = true;
-  const writer = (async () => {while (active) {await writeFile(join(root, 'code.txt'), `${i++}\n`); await delay(1);}})();
+  const root = await repository(t); await writeFile(join(root, 'code.txt'), 'first dirty state\n');
+  // Keep every Git command real, but insert one real file change after the first
+  // unstaged diff completed and before its callback permits the second observation.
+  // A timer loop did not guarantee that a write overlapped collection on fast CI.
+  const original = childProcess.execFile; let changed = false;
+  const gated = (...args) => original(...args);
+  gated[promisify.custom] = (file, args, options) => new Promise((resolve, reject) => {
+    original(file, args, options, (error, stdout, stderr) => {
+      if (error) {reject(error); return;}
+      const finish = () => resolve({stdout, stderr});
+      if (!changed && file === '/usr/bin/git' && args.includes('diff') && !args.includes('--cached')) {
+        changed = true; writeFile(join(root, 'code.txt'), 'second dirty state\n').then(finish, reject);
+      } else finish();
+    });
+  });
+  childProcess.execFile = gated; syncBuiltinESMExports();
   let result;
-  try {result = await collectGitSnapshot(root, true);} finally {active = false; await writer;}
+  try {
+    const isolated = await import('../dist/terminal/git-snapshot.js?native-change-barrier');
+    result = await isolated.collectGitSnapshot(root, true);
+  } finally {childProcess.execFile = original; syncBuiltinESMExports();}
+  assert.equal(changed, true, 'the controlled concurrent change must actually execute');
   assert.equal(result.status, 'unavailable');
-  // Git can itself refuse a file truncated during a read, before the second observation.
-  assert.ok(['GIT_CHANGED_DURING_READ', 'GIT_READ_FAILED'].includes(result.reason), result.reason);
+  assert.equal(result.reason, 'GIT_CHANGED_DURING_READ');
 });
