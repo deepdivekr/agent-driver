@@ -3,7 +3,7 @@ import {RecoveryStore} from '../supervisor/store.js';
 import {requireCondition} from '../core/contracts.js';
 import {bootClock, type ProcessIdentity} from '../supervisor/identity.js';
 import {type HostConfig} from '../interface/config.js';
-import {type TerminalHostRecord, type TerminalSession, type TerminalSubmit, type TerminalTurn, type TurnResult} from './contracts.js';
+import {redact, type TerminalList, type TerminalHistory, type TerminalOutput, type TerminalHostRecord, type TerminalSession, type TerminalSubmit, type TerminalTurn, type TurnResult} from './contracts.js';
 
 export class TerminalStore extends RecoveryStore {
   session(id: string): TerminalSession {
@@ -162,11 +162,11 @@ export class TerminalStore extends RecoveryStore {
       if (recent.length === 3 && recent.every(row => row.result_json === JSON.stringify(result))) this.event(session.task_id, 'orchestrator.replan_required', {reason: 'REPEATED_RESULT_REQUIRES_PROGRESS_CHECK', progress: 'unobserved', automatically_submitted: false});
     });
   }
-  noteSpool(id: string, instance: string, generation: number, bytes: number, kind: string) {
+  noteSpool(id: string, instance: string, generation: number, bytes: number, kind: string, sha256?: string) {
     this.transaction(() => {
       const session = this.bound(id, instance, generation);
       this.connection.prepare('UPDATE terminal_session SET spool_bytes=spool_bytes+? WHERE id=?').run(bytes, id);
-      this.event(session.task_id, 'terminal.output', {session_ref: id, generation, bytes, spool_offset: session.spool_bytes + bytes, event_type: kind});
+      this.event(session.task_id, 'terminal.output', {session_ref: id, generation, bytes, spool_offset: session.spool_bytes + bytes, event_type: kind, ...(sha256 ? {sha256} : {})});
     });
   }
   failed(id: string, instance: string, generation: number, reason: string, hostFailure = false) {
@@ -228,5 +228,87 @@ export class TerminalStore extends RecoveryStore {
     return {...this.outcome(session.task_id), session_ref: id, session_generation: session.generation, cli_session_id: session.cli_session_id, host_instance_id: session.host_instance_id, process_identity: session.process_identity_json ? JSON.parse(session.process_identity_json) as unknown : null,
       terminal_state: session.state, previous_turn_id: session.last_turn_id, active_turn_id: session.active_turn_id, turn_status: turn?.status ?? null, result: turn?.result_json ? JSON.parse(turn.result_json) as unknown : null,
       mode: 'structured', project_completed: false, verified_for_environment: false, error_code: session.error_code, spool_bytes: session.spool_bytes};
+  }
+  // A cursor is a read position, never an authority. Every page rechecks project/session/generation.
+  readSession(project: string, id: string, generation: number) {
+    const session = this.session(id);
+    requireCondition(session.project_id === project, 'SESSION_SCOPE_MISMATCH');
+    requireCondition(session.generation === generation, 'STALE_SESSION_GENERATION');
+    return session;
+  }
+  revision(id: string) {
+    return Number(this.connection.prepare('SELECT COALESCE(MAX(id),0) AS revision FROM event WHERE task_id=?').get(this.session(id).task_id)!.revision);
+  }
+  sessionPage(project: string, request: TerminalList) {
+    return this.transaction(() => {
+      this.project(project);
+      const revision = Number(this.connection.prepare('SELECT COALESCE(MAX(id),0) AS revision FROM event WHERE project_id=?').get(project)!.revision);
+      requireCondition(!request.cursor || request.cursor.revision === revision, 'HISTORY_CHANGED_RESTART_PAGE');
+      let sequence = 0;
+      if (request.cursor) {
+        const after = this.session(request.cursor.after_session_id); requireCondition(after.project_id === project, 'CURSOR_SCOPE_MISMATCH');
+        const event = this.connection.prepare("SELECT id FROM event WHERE task_id=? AND kind='terminal.accepted'").get(after.task_id);
+        requireCondition(event, 'CURSOR_SCOPE_MISMATCH'); sequence = Number(event.id);
+      }
+      const rows = this.connection.prepare("SELECT s.* FROM terminal_session s JOIN event e ON e.task_id=s.task_id AND e.kind='terminal.accepted' WHERE s.project_id=? AND e.id>? ORDER BY e.id LIMIT ?").all(project, sequence, request.limit + 1) as unknown as TerminalSession[];
+      const sessions = rows.slice(0, request.limit).map(session => ({session_ref: session.id, task_id: session.task_id, cli_session_id: session.cli_session_id,
+        generation: session.generation, terminal_state: session.state, host_instance_id: session.host_instance_id, process_identity: session.process_identity_json ? JSON.parse(session.process_identity_json) as unknown : null,
+        active_turn_id: session.active_turn_id, previous_turn_id: session.last_turn_id, error_code: session.error_code, created_at: session.created_at, process_liveness: 'not_checked'}));
+      return {project_id: project, revision, sessions, next_cursor: rows.length > sessions.length ? {revision, after_session_id: sessions.at(-1)!.session_ref} : null};
+    });
+  }
+  history(project: string, request: TerminalHistory) {
+    return this.transaction(() => {
+      const session = this.readSession(project, request.session_ref, request.expected_generation), revision = this.revision(session.id);
+      requireCondition(!request.cursor || request.cursor.revision === revision, 'HISTORY_CHANGED_RESTART_PAGE');
+      const rows = this.turnRows(session, request.cursor?.after_turn_id, request.limit + 1);
+      const turns: Array<Record<string, unknown>> = []; let bytes = 0;
+      for (const row of rows.slice(0, request.limit)) {
+        const transitions = this.connection.prepare("SELECT id,kind,created_at FROM event WHERE task_id=? AND kind IN ('terminal.prompt_accepted','terminal.prompt_started','terminal.prompt_received','terminal.turn_completed') AND json_extract(data_json,'$.turn_id')=? ORDER BY id").all(session.task_id, row.id);
+        const result = row.result_json ? JSON.parse(row.result_json) as TurnResult : null;
+        const item = {turn_id: row.id, request_id: row.request_id, generation: row.generation, status: row.status, prompt: redact(row.prompt), result: result ? {...result, text: result.text === null ? null : redact(result.text)} : null, created_at: row.created_at, transitions};
+        const size = Buffer.byteLength(JSON.stringify(item)); if (turns.length && bytes + size > 524288) break;
+        requireCondition(size <= 524288, 'HISTORY_RECORD_TOO_LARGE'); turns.push(item); bytes += size;
+      }
+      return {session_ref: session.id, session_generation: session.generation, revision, terminal_state: session.state, turns,
+        next_cursor: rows.length > turns.length ? {revision, after_turn_id: String(turns.at(-1)!.turn_id)} : null,
+        content_trust: 'untrusted_data', project_completed: false, history_kind: 'durable_requests_and_official_results', assistant_stream_complete: false};
+    });
+  }
+  outputPage(project: string, request: TerminalOutput) {
+    return this.transaction(() => {
+      const session = this.readSession(project, request.session_ref, request.expected_generation), revision = this.revision(session.id);
+      requireCondition(!request.cursor || request.cursor.revision === revision, 'HISTORY_CHANGED_RESTART_PAGE');
+      const after = request.cursor?.after_event_id ?? 0;
+      if (after) requireCondition(this.connection.prepare("SELECT id FROM event WHERE id=? AND task_id=? AND kind='terminal.output'").get(after, session.task_id), 'CURSOR_SCOPE_MISMATCH');
+      const rows = this.connection.prepare("SELECT id,data_json FROM event WHERE task_id=? AND kind='terminal.output' AND id>? ORDER BY id LIMIT ?").all(session.task_id, after, request.limit + 1);
+      return {session, revision, rows: rows.map(row => ({id: Number(row.id), data: JSON.parse(String(row.data_json)) as {bytes: number; spool_offset: number; event_type: string; sha256?: string}}))};
+    });
+  }
+  handoffContext(project: string, id: string, generation: number) {
+    return this.transaction(() => {
+      const session = this.readSession(project, id, generation);
+      const turns = this.turnRows(session, undefined, 101);
+      requireCondition(turns.length <= 100, 'HANDOFF_HISTORY_LIMIT');
+      return {session, revision: this.revision(id), turns, task: this.task(session.task_id)};
+    });
+  }
+  persistHandoff<T>(project: string, id: string, generation: number, revision: number, save: () => T): T {
+    // Serialize artifact quota/idempotency across gateways sharing this database.
+    return this.transaction(() => {
+      this.readSession(project, id, generation);
+      requireCondition(this.revision(id) === revision, 'HISTORY_CHANGED_RESTART_PAGE');
+      return save();
+    });
+  }
+  private turnRows(session: TerminalSession, after: string | undefined, limit: number) {
+    let sequence = 0;
+    if (after) {
+      requireCondition(this.turn(after).session_id === session.id, 'CURSOR_SCOPE_MISMATCH');
+      const row = this.connection.prepare("SELECT id FROM event WHERE task_id=? AND kind='terminal.prompt_accepted' AND json_extract(data_json,'$.turn_id')=?").get(session.task_id, after);
+      requireCondition(row, 'CURSOR_SCOPE_MISMATCH'); sequence = Number(row.id);
+    }
+    // Event sequence, not timestamps or random UUID order, is the durable acceptance order.
+    return this.connection.prepare("SELECT t.* FROM terminal_turn t JOIN event e ON e.task_id=? AND e.kind='terminal.prompt_accepted' AND json_extract(e.data_json,'$.turn_id')=t.id WHERE t.session_id=? AND e.id>? ORDER BY e.id LIMIT ?").all(session.task_id, session.id, sequence, limit) as unknown as TerminalTurn[];
   }
 }

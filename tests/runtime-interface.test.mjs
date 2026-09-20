@@ -67,7 +67,7 @@ test('runtime native C01 CLI and SDK stdio share capability semantics with indep
   const m=await client(x),second=await call(m.client,'runtime_task_start',request('mcp-second'));
   assert.notEqual(first.task_id,second.task_id);const final=await complete(x,second.task_id);assert.equal(final.status,'succeeded');assert.equal(final.verification.result,'MATCH');
   assert.equal(x.fixture.snapshot(x.spec.runId).effects.filter(e=>e.kind==='save').length,2);
-  const catalog=await m.client.listTools();assert.equal(catalog.tools.length,20);assert.deepEqual(catalog.tools.map(t=>t.name).sort(),[...Object.keys(tools),'runtime_task_intake'].sort());
+  const catalog=await m.client.listTools();assert.equal(catalog.tools.length,24);assert.deepEqual(catalog.tools.map(t=>t.name).sort(),[...Object.keys(tools),'runtime_task_intake'].sort());
   assert.equal(catalog.tools.some(t=>/approve|grant|shell|eval/.test(t.name)),false);
   const unsupported=await m.client.callTool({name:'runtime_terminal_status',arguments:{session_ref:'missing'}});assert.equal(unsupported.isError,true);assert.match(unsupported.content[0].text,/TERMINAL_DISABLED/);
   const malformed=await m.client.callTool({name:'runtime_task_start',arguments:{...request('invalid'),approved:true}});assert.equal(malformed.isError,true);

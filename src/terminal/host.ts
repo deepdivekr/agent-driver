@@ -1,5 +1,5 @@
 import {createServer, type Server} from 'node:net';
-import {randomBytes, timingSafeEqual} from 'node:crypto';
+import {createHash, randomBytes, timingSafeEqual} from 'node:crypto';
 import {mkdirSync, mkdtempSync, openSync, writeSync, fsyncSync, closeSync, chmodSync, unlinkSync, rmdirSync, fstatSync, constants} from 'node:fs';
 import {dirname, join} from 'node:path';
 import {tmpdir} from 'node:os';
@@ -53,19 +53,22 @@ export class TerminalHost {
   private record(id: string, event: CliEvent) {
     const managed = this.managed.get(id)!;
     const session = this.store.session(id);
-    const safe = {type: event.type, subtype: typeof event.subtype === 'string' ? event.subtype : null, uuid: typeof event.uuid === 'string' ? event.uuid : null,
+    const safe = {type: event.type, subtype: typeof event.subtype === 'string' ? redact(event.subtype.slice(0, 256)) : null, uuid: typeof event.uuid === 'string' ? redact(event.uuid.slice(0, 256)) : null,
       session_id: session.cli_session_id, model: event.type === 'system' && typeof event.model === 'string' ? redact(event.model.slice(0, 200)) : undefined,
       result: event.type === 'result' && typeof event.result === 'string' ? redact(event.result.slice(0, 65536)) : undefined};
     const line = Buffer.from(JSON.stringify(safe) + '\n');
     requireCondition(session.spool_bytes + line.length <= this.config.terminal!.spool_bytes, 'CLI_SPOOL_QUOTA');
     const directory = join(dirname(this.config.dbPath), 'terminal-spool'); mkdirSync(directory, {recursive: true, mode: 0o700});
-    const fd = openSync(join(directory, `${id}.jsonl`), constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW, 0o600);
+    const dir = openSync(directory, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
     try {
-      const stat = fstatSync(fd); requireCondition(stat.isFile() && stat.size === session.spool_bytes, 'CLI_SPOOL_DURABILITY_GAP');
-      let written = 0; while (written < line.length) {const count = writeSync(fd, line, written); requireCondition(count > 0, 'CLI_SPOOL_WRITE_FAILED'); written += count;}
-      fsyncSync(fd);
-    } finally {closeSync(fd);}
-    this.store.noteSpool(id, this.instance!, managed.session.generation, line.length, event.type);
+      const fd = openSync(`/proc/self/fd/${dir}/${id}.jsonl`, constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW | constants.O_NONBLOCK, 0o600);
+      try {
+        const stat = fstatSync(fd); requireCondition(stat.isFile() && stat.nlink === 1 && stat.size === session.spool_bytes, 'CLI_SPOOL_DURABILITY_GAP');
+        let written = 0; while (written < line.length) {const count = writeSync(fd, line, written); requireCondition(count > 0, 'CLI_SPOOL_WRITE_FAILED'); written += count;}
+        fsyncSync(fd);
+      } finally {closeSync(fd);}
+    } finally {closeSync(dir);}
+    this.store.noteSpool(id, this.instance!, managed.session.generation, line.length, event.type, createHash('sha256').update(line).digest('hex'));
   }
   private event(id: string, event: CliEvent) {
     const managed = this.managed.get(id)!;

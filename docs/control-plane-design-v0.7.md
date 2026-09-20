@@ -57,6 +57,8 @@ Phase 18 구현 보완: CLI도 gateway와 독립된 host가 소유하고, v4 ses
 
 기본 정책은 host foreground 전환·OS 입력·사용자 탭·클립보드·파일 대화상자 금지다. 첫 브라우저 경로는 runtime이 새로 소유한 headless persistent context에서만 실행한다. 타인의 Chrome에 attach하지 않는다.
 
+Phase19 구현 보완: 중단 복구의 입력 자료는 마지막 출력 한 개가 아니라 수락 순서의 전체 턴·불명확/취소 상태·해시 결속 출력과 실제 worktree 관측이다. [조회·인계](terminal-handoff.md)는 페이지 revision과 generation을 검사하며 모델의 완료 주장과 Git 관측/테스트 검증을 분리한다. 인계 자료 생성은 resume나 재전송이 아니다. 읽기 전용 Git 작업도 외부 diff/textconv뿐 아니라 clean/process 필터까지 차단한다. linked worktree·Windows 수집과 실제 파일 도구는 아직 미검증이다.
+
 이 정책과 headless 실행 자체가 Windows 이벤트 기반 비간섭 인증을 대체하지 않는다. 무료 guest/전용 세션 배포는 후속 설계이며 VMware/Broadcom 계정을 설치 전제조건으로 넣지 않는다. 작업환경 분리와 악성 페이지 보안 경계는 별개다. 신뢰된 plugin이 같은 OS 권한으로 실행되는 상태를 샌드박스로 부르지 않는다.
 
 ## 구현 순서와 종료 기준

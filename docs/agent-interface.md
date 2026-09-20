@@ -1,8 +1,8 @@
-# Agent interface — Phase 18
+# Agent interface — Phase 19
 
 ## 실제 지원과 남은 범위
 
-CLI와 stdio MCP는 같은 RuntimeApi를 사용한다. 원문에 열거된 19개 도구와 추가 `runtime_task_intake`를 제공한다. 원문의 “15종” 문구 대신 명명된 전체 목록을 기준으로 했다.
+CLI와 stdio MCP는 같은 RuntimeApi를 사용한다. 원문19개와 `runtime_task_intake`, Phase19의 `runtime_terminal_sessions_list`/`runtime_terminal_history`/`runtime_terminal_output_read`/`runtime_terminal_handoff`로 총24개 이름을 제공한다. 조회/인계의 페이지·검증·private artifact 계약은 [별도 안내](terminal-handoff.md)를 따른다. 원문의 “15종” 문구 대신 명명된 전체 목록을 기준으로 했다.
 
 사용 가능: health, capabilities list/describe, task start/status/cancel/resume, recovery status/prepare, artifacts list(미지원/빈 목록 명시), events read/ack, intake. resume/prepare는 안전하게 준비된 미전송 작업에만 적용한다.
 

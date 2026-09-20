@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {FIXTURE_DRAFT} from '../browser/fixture-driver.js';
-import {terminalStart,terminalSubmit,terminalBound} from '../terminal/contracts.js';
+import {terminalStart,terminalSubmit,terminalBound,terminalList,terminalHistory,terminalOutput,terminalHandoff} from '../terminal/contracts.js';
 export const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const draftInput=z.object({name:z.string().min(1).max(200),note:z.string().min(1).max(4000)}).strict();
 export const startRequest=z.object({request_id:id,capability:z.literal('fixture.draft.save'),account_ref:id,input:draftInput,deadline_ms:z.number().int().min(1000).max(120000).default(30000)}).strict();
@@ -21,6 +21,10 @@ export const tools={
   runtime_events_ack:{schema:z.object({consumer_id:id,event_id:z.number().int().positive()}).strict(),implemented:true,readOnly:false},
   runtime_terminal_start:{schema:terminalStart,implemented:true,readOnly:false},
   runtime_terminal_status:{schema:z.object({session_ref:id}).strict(),implemented:true,readOnly:true},
+  runtime_terminal_sessions_list:{schema:terminalList,implemented:true,readOnly:true},
+  runtime_terminal_history:{schema:terminalHistory,implemented:true,readOnly:true},
+  runtime_terminal_output_read:{schema:terminalOutput,implemented:true,readOnly:true},
+  runtime_terminal_handoff:{schema:terminalHandoff,implemented:true,readOnly:false},
   runtime_terminal_submit_prompt:{schema:terminalSubmit,implemented:true,readOnly:false},
   runtime_terminal_resume:{schema:terminalBound,implemented:true,readOnly:false},
   runtime_terminal_interrupt:{schema:terminalBound,implemented:true,readOnly:false},

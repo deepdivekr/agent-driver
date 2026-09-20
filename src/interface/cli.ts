@@ -27,6 +27,8 @@ Host-configured agent interface (JSON output):
   fixture serve --data-dir NEW_DIRECTORY (synthetic lab only)
   terminal start|submit|resume|interrupt --config PATH --request-file PATH
   terminal status SESSION_ID --config PATH
+  terminal history|output-read|handoff --config PATH --request-file PATH
+  terminal list --config PATH --request-file PATH (use {} for the first page)
   terminal stop-host --config PATH (stops only this runtime's owned CLI children)
   verify --suite fixture|windows (not implemented; use npm test)
   soak start --config-file PATH (not implemented)
@@ -84,9 +86,9 @@ export async function runInterfaceCli(args:string[]):Promise<boolean>{
     }else if(command==='events'){
       requireCondition(o.get('--consumer'),'CONSUMER_REQUIRED');tool=`runtime_events_${sub}`;body=sub==='ack'?{consumer_id:o.get('--consumer'),event_id:Number(o.get('--event'))}:{consumer_id:o.get('--consumer')};
     }else if(command==='terminal'){
-      requireCondition(['start','status','submit','resume','interrupt','stop-host'].includes(sub??''),'UNKNOWN_COMMAND');
+      requireCondition(['start','status','submit','resume','interrupt','list','history','output-read','handoff','stop-host'].includes(sub??''),'UNKNOWN_COMMAND');
       if(sub==='stop-host'){requireCondition(parsed.positional.length===0,'UNEXPECTED_ARGUMENT');console.log(JSON.stringify(await stopTerminalHost(api.config)));return true;}
-      tool=`runtime_terminal_${sub==='submit'?'submit_prompt':sub}`;body=sub==='status'?{session_ref:target()}:requestFile();
+      tool=`runtime_terminal_${sub==='submit'?'submit_prompt':sub==='output-read'?'output_read':sub==='list'?'sessions_list':sub}`;body=sub==='status'?{session_ref:target()}:requestFile();
     }
     else if(command==='intake'){tool='runtime_task_intake';requireCondition(!(o.has('--prompt')&&o.has('--request-file')),'AMBIGUOUS_INPUT');body=o.has('--prompt')?{prompt:o.get('--prompt')}:requestFile();}
     else {requireCondition(command==='call'&&o.get('--tool'),'TOOL_REQUIRED');tool=o.get('--tool')!;body=requestFile();}

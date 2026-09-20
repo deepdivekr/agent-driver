@@ -6,6 +6,14 @@ export const terminalStart=z.object({request_id:identifier}).strict();
 export const terminalSubmit=z.object({request_id:identifier,session_ref:identifier,expected_generation:z.number().int().positive(),expected_previous_turn_id:identifier.nullable(),prompt:z.string().min(1).max(8000)}).strict();
 export type TerminalSubmit=z.infer<typeof terminalSubmit>;
 export const terminalBound=z.object({session_ref:identifier,expected_generation:z.number().int().positive()}).strict();
+const revision=z.number().int().safe().nonnegative();
+export const terminalList=z.object({limit:z.number().int().min(1).max(20).default(10),cursor:z.object({revision,after_session_id:identifier}).strict().optional()}).strict();
+export type TerminalList=z.infer<typeof terminalList>;
+export const terminalHistory=terminalBound.extend({limit:z.number().int().min(1).max(20).default(10),cursor:z.object({revision,after_turn_id:identifier}).strict().optional()}).strict();
+export type TerminalHistory=z.infer<typeof terminalHistory>;
+export const terminalOutput=terminalBound.extend({limit:z.number().int().min(1).max(50).default(20),cursor:z.object({revision,after_event_id:revision}).strict().optional()}).strict();
+export type TerminalOutput=z.infer<typeof terminalOutput>;
+export const terminalHandoff=terminalBound.extend({include_diff:z.boolean().default(false)}).strict();
 export interface TerminalSession{
   id:string;project_id:string;task_id:string;request_id:string;cli_session_id:string;
   worktree:string;executable:string;version:string;config_hash:string;host_instance_id:string|null;

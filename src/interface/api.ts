@@ -1,6 +1,8 @@
 import {TerminalStore} from '../terminal/store.js';
 import {ensureTerminalHost} from '../terminal/manager.js';
-import {terminalSubmit} from '../terminal/contracts.js';
+import {terminalSubmit,terminalList,terminalHistory,terminalOutput} from '../terminal/contracts.js';
+import {readTerminalOutput} from '../terminal/output.js';
+import {prepareTerminalHandoff} from '../terminal/handoff.js';
 import {liveness,type ProcessIdentity} from '../supervisor/identity.js';
 import {ensureSupervisor} from '../supervisor/manager.js';
 import {requireCondition} from '../core/contracts.js';
@@ -33,6 +35,10 @@ export class RuntimeApi{
         return {...this.store.terminalStatus(result.session.id),deduplicated:!result.created};
       }
       case 'runtime_terminal_status':return this.store.terminalStatus(String(input.session_ref));
+      case 'runtime_terminal_sessions_list':return this.store.sessionPage(this.config.project.id,terminalList.parse(input));
+      case 'runtime_terminal_history':return this.store.history(this.config.project.id,terminalHistory.parse(input));
+      case 'runtime_terminal_output_read':return readTerminalOutput(this.store,this.config,terminalOutput.parse(input));
+      case 'runtime_terminal_handoff':return prepareTerminalHandoff(this.store,this.config,String(input.session_ref),Number(input.expected_generation),Boolean(input.include_diff));
       case 'runtime_terminal_submit_prompt':{
         requireCondition(!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(String(input.prompt)),'CREDENTIAL_LIKE_INPUT');
         await ensureTerminalHost(this.config);const result=this.store.submit(this.config,terminalSubmit.parse(input));

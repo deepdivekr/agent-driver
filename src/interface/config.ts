@@ -31,7 +31,7 @@ export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
   const raw=HostConfigSchema.parse(JSON.parse(readFileSync(actual,'utf8')));
   const worktree=realpathSync(isAbsolute(raw.worktree)?raw.worktree:resolve(dirname(actual),raw.worktree));
-  requireCondition(statSync(worktree).isDirectory(),'INVALID_WORKTREE');
+  const worktreeStat=statSync(worktree);requireCondition(worktreeStat.isDirectory(),'INVALID_WORKTREE');
   const data=resolve(dirname(actual),raw.data_dir);
   requireCondition(raw.environment==='fixture'||raw.fixture_url===undefined,'FIXTURE_DISABLED');
   let origin:string|undefined;
@@ -51,5 +51,5 @@ export function loadHostConfig(path:string):HostConfig {
   }
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:origin?[origin]:[],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[])]};
   return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,
-    fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,...(terminal?{executableStamp}:{})})).digest('hex')};
+    fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
 }
