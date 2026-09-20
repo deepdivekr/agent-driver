@@ -6,9 +6,13 @@
 
 초기 독립 lane에서 intent 직후 worker를 끊고 NOT_MATCH/불확실 정지를 확인한다. 이 DB/profile을 끝까지 보존하고 새 효과가 없음을 계속 검사한다. 이후 같은 auto/prepare lane에서 normal, claim 후 중단, prepare_only의 명시 재개, save 후 중단을 반복한다. 저장값·계정 sentinel·server effect counter를 실행 응답과 독립 대조한다. 정상 요청을 같은 ID로 중복 제출해 단일 효과를 확인한다.
 
-16-cycle 일정은 source의 schedule에 고정한다. CLI는 정상 여러 턴, 명시 resume, receipt 직후 SIGKILL, 완료 후 host SIGKILL, gateway 재접속, 유한 출력 부하/취소를 포함한다. fixture receipt UUID count와 실제 result/turn state를 함께 확인한다. 알려진 불확실 턴은 자동 재전송하지 않는다. supervisor 교체와 명시 재개는 시험 오케스트레이터의 계획된 동작이며 제품 OS watchdog의 자동 복구나 사람이 필요 없다는 증거가 아니다.
+16-cycle 일정은 source의 schedule에 고정한다. CLI는 정상 여러 턴, 명시 resume, receipt 직후 SIGKILL, 완료 후 host SIGKILL, gateway 재접속, 유한 출력 부하/취소를 포함한다. fixture receipt UUID count와 실제 result/turn state를 함께 확인한다. 알려진 불확실 턴은 자동 재전송하지 않는다. Browser fault hook은 checkpoint에 도달하기 전 startup timeout이 나면 다시 armed 상태로 남지만, 정확한 세대의 kill이 전달된 뒤에는 제품의 정상 복구를 방해하지 않는다. `fault_path`는 checkpoint kill과 checkpoint 전 prepare-only startup timeout을 구분해 남긴다. 후자는 외부 효과 없이 `ready_to_resume`으로 끝나야 하며 명시 prepare/resume 뒤의 독립 readback까지 확인한다. receipt 뒤 kill과 출력 취소는 세션 용량을 의도적으로 소비하므로 한 run에서 각각 한 번만 주입하고, 이후 일정에서는 해당 불확실 상태와 재개 거절을 다시 관측한다. 이것은 신규 장애를 주입했다고 세지 않는다. supervisor 교체와 명시 재개는 시험 오케스트레이터의 계획된 동작이며 제품 OS watchdog의 자동 복구나 사람이 필요 없다는 증거가 아니다.
 
-첫 예상 밖 상태·효과 수·타깃/계정 오류·재전달 불일치·제어 응답 실패·자원 거절·저장 상한·입력 변경·관측 deadline 실패에서 새 업무를 중지한다. 성공 기준이나 기존 worker startup5초/시도3회/request deadline60초를 완화하지 않는다.
+특히 receipt 이후 CLI가 죽으면 `process_exited` 같은 정상 재개 상태로 바꾸지 않는다. 턴은 `uncertain`, 세션은 `reconciliation_required`로 남고 같은 세션 재개 요청은 거절되어야 한다. 이는 실패를 숨기지 않는 oracle이며, 다음 업무는 새 명시 세션에서만 시작할 수 있다.
+
+유한 출력 부하도 receipt 뒤에는 명시적으로 취소한다. 이 역시 `uncertain`/`reconciliation_required`이며, cancel을 정상 완료나 자동 재개로 바꾸지 않는다. 제어 ping과 receipt 1회가 맞더라도 이 상태는 별도 보관한다.
+
+첫 예상 밖 상태·효과 수·타깃/계정 오류·재전달 불일치·제어 응답 실패·자원 거절·저장 상한·입력 변경·관측 deadline 실패에서 새 업무를 중지한다. 성공 기준이나 worker startup 최대15초(원래 request deadline 이내)/시도3회/request deadline60초를 완화하지 않는다.
 
 7개 운영 지표를 각각 낸다: 전체 제출 완료율과 실행 가능 사례 성공률; 간섭/대상 오류; 거짓 성공/중복; 자동복구/명시재개/올바른 정지; 의존성이 다시 준비된 뒤 복구 p50/p95; technical/auth/시험 개입 구분; 자원 표본. Windows 간섭·실인증·out-of-band 기술 개입은 미관측/N/A이며 0으로 채우지 않는다. 정상 대기를 성공률 분모에서 숨기지 않는다. 메모리/CPU/PID는 실제 aggregate cgroup 상한, 디스크는 앱 수준 관측/중단이며 OS hard quota가 아니다.
 
@@ -27,7 +31,7 @@ node dist/cli.js soak status --run .runtime/soak-two-hour
 node dist/cli.js soak stop --run .runtime/soak-two-hour
 ```
 
-시작은 새 소유 디렉터리만 허용한다. 기존 run을 덮어쓰거나 자동 재시작하지 않는다. Linux user systemd/cgroup v2가 필요하며 검증되지 않은 무제한 fallback은 없다. 별도 transient service에서 실행되므로 시작 CLI/Codex의 종료가 시험을 끝내지 않는다. 상태는 kernel process identity/liveness, heartbeat freshness, 업무 진행, 최종 결과를 구분한다. 자기 heartbeat만으로 crash 복구를 주장하지 않는다.
+시작은 새 소유 디렉터리만 허용한다. 기존 run을 덮어쓰거나 자동 재시작하지 않는다. 기본 `.runtime` 부모는 자동 생성하지만, 다른 `output_dir` 부모는 소유한 일반 디렉터리로 먼저 만들어야 하며 symlink는 거절된다. Linux user systemd/cgroup v2가 필요하며 검증되지 않은 무제한 fallback은 없다. 별도 transient service에서 실행되므로 시작 CLI/Codex의 종료가 시험을 끝내지 않는다. 상태는 kernel process identity/liveness, heartbeat freshness, 업무 진행, 최종 결과를 구분한다. 자기 heartbeat만으로 crash 복구를 주장하지 않는다.
 
 manifest/input hashes, launch unit, heartbeat, append-only journal, progress, 최종 report를 run 디렉터리에 보존한다. 로그에는 합성값만 있지만 경로·PID·DB/profile은 private 운영 자료로 취급해 공개 커밋하지 않는다. stop은 이 run의 정확한 무작위 resource domain만 확인 후 중지하며 이미 생긴 효과를 되돌리지 않는다. 완료된 run의 stop은 비어 있는 소유 domain을 정리한다. 파일은 자동 삭제하지 않는다.
 

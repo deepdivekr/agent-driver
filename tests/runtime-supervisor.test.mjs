@@ -14,7 +14,7 @@ import {loadHostConfig} from '../dist/interface/config.js';
 import {RuntimeApi} from '../dist/interface/api.js';
 import {runWorker} from '../dist/interface/worker.js';
 import {Supervisor,launchWorker} from '../dist/supervisor/supervisor.js';
-import {RecoveryStore,remainingBudget} from '../dist/supervisor/store.js';
+import {RecoveryStore,remainingBudget,STARTUP_RESERVATION_TIMEOUT_MS} from '../dist/supervisor/store.js';
 import {processIdentity,liveness,profileOccupancy} from '../dist/supervisor/identity.js';
 import {MIGRATION_1,MIGRATION_2} from '../dist/store/migration.js';
 import {failureCode,workerStages} from '../dist/supervisor/diagnostics.js';
@@ -123,6 +123,25 @@ test('runtime native prepare_only requires the exact recovery generation before 
   t.diagnostic('recovery-observation:'+JSON.stringify({status:final.status,attempts:evidence.attempts,effect_count:evidence.effect_count,diagnostics:evidence.diagnostics.map(e=>({kind:e.kind,data:e.data}))}));
   assert.equal(final.status,'succeeded',JSON.stringify(evidence));assert.equal(effects(x),1);
 });
+test('runtime native prepare_only requires a new exact approval after a second safe pre-intent failure',{timeout:60000},async t=>{
+  const x=await setup(t,'prepare_only');let launches=0,first;
+  const launch=async(config,row)=>{
+    launches++;
+    if(launches===1){first=child(x,'worker',row.task_id,row.launch_nonce,String(row.dispatch_generation),'claimed');await first.message;return processIdentity(first.handle.pid);}
+    if(launches===2)return 'dead';
+    return launchWorker(config,row);
+  };
+  const s=await supervise(x,launch),id=enqueue(x);await s.step();await kill(first);
+  const initial=await finish(x,s,id);assert.equal(initial.status,'ready_to_resume');assert.equal(effects(x),0);
+  await x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:initial.recovery_generation});
+  const reentered=await finish(x,s,id);assert.equal(reentered.status,'ready_to_resume');assert.equal(effects(x),0);
+  await assert.rejects(x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:initial.recovery_generation}),/STALE_RECOVERY/);
+  const ready=await x.api.call('runtime_recovery_prepare',{task_id:id,expected_recovery_generation:reentered.recovery_generation});assert.equal(ready.automatic_execution,false);
+  await x.api.call('runtime_task_resume',{task_id:id,expected_recovery_generation:reentered.recovery_generation});
+  const final=await finish(x,s,id);
+  assert.equal(final.status,'succeeded');assert.equal(launches,3);assert.equal(s.store.submission(id).attempt_count,3);assert.equal(effects(x),1);
+  assert.ok(diagnostics(x,s,id).some(e=>e.kind==='recovery.observed'&&e.data.trigger==='launch_dead'&&e.data.from==='reserved'));
+});
 test('runtime native repeated pre-claim process deaths stop after three launches with bounded backoff',{timeout:60000},async t=>{
   const x=await setup(t);let launches=0;const s=await supervise(x,async()=>{launches++;const process=child(x,'profile');await process.message;await kill(process);return 'dead';}),id=enqueue(x);
   const result=await finish(x,s,id);assert.equal(launches,3);assert.equal(result.recovery_reason,'RESTART_BUDGET_EXHAUSTED');assert.equal(effects(x),0);
@@ -176,11 +195,11 @@ test('runtime native cancellation and expired pending deadlines launch no worker
   const x=await setup(t),s=await supervise(x),cancel=enqueue(x,'cancel'),expired=enqueue(x,'expired',{deadline_ms:1000});x.api.store.cancel(cancel);await delay(1100);await s.step();
   assert.equal(s.store.submission(cancel).attempt_count,0);assert.equal(s.store.submission(expired).attempt_count,0);assert.equal(s.store.outcome(expired).recovery_reason,'DEADLINE_OR_BOOT_CHANGED');assert.equal(effects(x),0);
 });
-test('runtime native unclaimed startup timeout revokes an alive process ticket before any effect',{timeout:60000},async t=>{
+test('runtime native unclaimed startup timeout waits for the bounded conservative reservation window before revoking an alive ticket',{timeout:60000},async t=>{
   const x=await setup(t);let row,first;
   const s=await supervise(x,async(config,reserved)=>{
     if(first)return launchWorker(config,reserved);row=reserved;first=child(x,'profile');await first.message;return processIdentity(first.handle.pid);
-  }),id=enqueue(x);await s.step();await delay(5100);await s.step();
+  }),id=enqueue(x);await s.step();await delay(STARTUP_RESERVATION_TIMEOUT_MS+100);await s.step();
   assert.ok(diagnostics(x,s,id).some(e=>e.kind==='recovery.observed'&&e.data.trigger==='startup_timeout'&&e.data.from==='reserved'));
   await assert.rejects(runWorker(x.path,id,row.launch_nonce,row.dispatch_generation),/WORKER_FAILED/);assert.equal((await finish(x,s,id)).status,'succeeded');assert.equal(effects(x),1);
 });

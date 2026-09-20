@@ -63,13 +63,12 @@ export async function runSoak(input){
  };
  const browser=async(lane,scenario,number)=>{
   const request_id='soak-'+number+'.'+scenario,input={name:'task '+number,note:'owned fixture '+number};
-  const record={kind:'case',cycle:number,scenario,workload:'browser',expected_outcome:scenario==='uncertain'?'reconciliation_required':'succeeded',status:'NOT_RUN',effect_count:'unobserved',record_matches:'unobserved',observed_status:'unobserved',account_sentinel_ok:'unobserved',harness_actions:0,fault_path:['claimed','prepare','after_save','uncertain'].includes(scenario)?'checkpoint_pending':'not_applicable'};
+  const record={kind:'case',cycle:number,scenario,workload:'browser',expected_outcome:scenario==='uncertain'?'reconciliation_required':'succeeded',status:'NOT_RUN',effect_count:'unobserved',record_matches:'unobserved',observed_status:'unobserved',account_sentinel_ok:'unobserved',harness_actions:0,fault_path:['claimed','prepare','after_save','uncertain'].includes(scenario)?'checkpoint_pending':'not_applicable',fault_paths:['claimed','prepare','after_save','uncertain'].includes(scenario)?['checkpoint_pending']:['not_applicable'],explicit_resume_count:0,prepare_reentry_triggers:[]};
   const before=fixture.snapshot(lane.spec.runId).effects.filter(e=>e.kind==='save').length,at=performance.now();let task;
   try{
    const args={request_id,capability:'fixture.draft.save',account_ref:'account-a',input,deadline_ms:60000};
    const accepted=await lane.api.call('runtime_task_start',args);task=accepted.task_id;
    check((await lane.api.call('runtime_task_start',args)).task_id===task,'SOAK_DUPLICATE_TASK');
-   let preparedBeforeCheckpoint=false;
    if(['claimed','prepare','after_save','uncertain'].includes(scenario)){
     const observed=await until(()=>{
       const checkpoint=lane.actor.events.find(e=>e.kind==='checkpoint'&&e.task===task);
@@ -90,21 +89,32 @@ export async function runSoak(input){
       // on the order in which an informational exit event arrives.
       await until(()=>lane.actor.events.find(e=>e.kind==='kill_delivered'&&e.task===task&&e.generation===checkpoint.generation));
       await until(async()=>await profileOccupancy(lane.config.project.profileRef)==='clear');
-      record.fault_path='checkpoint_kill';record.recovery_kind=scenario==='prepare'?'explicit':'automatic';record.recovery_ready_at_ms=elapsed();
+      record.fault_path='checkpoint_kill';record.fault_paths=['checkpoint_kill'];record.recovery_kind=scenario==='prepare'?'explicit':'automatic';record.recovery_ready_at_ms=elapsed();
     }else{
       check(observed.outcome.status==='ready_to_resume','SOAK_PREPARE_PRECHECKPOINT_STATE');
-      const ready=await lane.api.call('runtime_recovery_prepare',{task_id:task,expected_recovery_generation:observed.outcome.recovery_generation});
-      check(ready.automatic_execution===false,'SOAK_PREPARE_PRECHECKPOINT_EXECUTED');
-      await lane.api.call('runtime_task_resume',{task_id:task,expected_recovery_generation:observed.outcome.recovery_generation});
-      preparedBeforeCheckpoint=true;record.fault_path='startup_timeout_pre_checkpoint';record.recovery_kind='explicit';record.recovery_ready_at_ms=elapsed();record.harness_actions++;
+      record.fault_path='startup_timeout_pre_checkpoint';record.fault_paths=['startup_timeout_pre_checkpoint'];record.recovery_kind='explicit';record.recovery_ready_at_ms=elapsed();
     }
    }
-   const result=await until(()=>{const row=lane.api.store.submission(task);return ['done','blocked','prepared'].includes(row.recovery_state)?lane.api.store.outcome(task):false;});
-   if(scenario==='prepare'&&!preparedBeforeCheckpoint){
-    check(result.status==='ready_to_resume','SOAK_PREPARE_MISMATCH');
-    const ready=await lane.api.call('runtime_recovery_prepare',{task_id:task,expected_recovery_generation:result.recovery_generation});check(ready.automatic_execution===false,'SOAK_PREPARE_EXECUTED');
-    await lane.api.call('runtime_task_resume',{task_id:task,expected_recovery_generation:result.recovery_generation});record.harness_actions++;
-    await until(()=>['done','blocked','prepared'].includes(lane.api.store.submission(task).recovery_state));
+   let result=await until(()=>{const row=lane.api.store.submission(task);return ['done','blocked','prepared'].includes(row.recovery_state)?lane.api.store.outcome(task):false;});
+   // `prepare_only` is a hard user-approval boundary on *every* safe
+   // pre-intent failure.  A constrained but healthy replacement may itself
+   // time out before claim, so keep asking the explicit test operator for the
+   // current generation until the task reaches a terminal outcome.  This is
+   // not automatic product recovery: each loop performs the public
+   // prepare/resume calls bound to the newly observed generation.
+   while(scenario==='prepare'&&result.status==='ready_to_resume'){
+    const generation=result.recovery_generation;
+    if(record.explicit_resume_count>0){
+      const events=lane.api.store.events(lane.config.project.id,'soak-prepare-diagnostic',1000).filter(e=>e.task_id===task&&e.kind==='recovery.observed');
+      const trigger=events.at(-1)?.data?.trigger;
+      record.prepare_reentry_triggers.push(typeof trigger==='string'?trigger:'unobserved');
+      record.fault_paths.push(typeof trigger==='string'?'prepare_reentry_'+trigger:'prepare_reentry_unobserved');
+    }
+    const ready=await lane.api.call('runtime_recovery_prepare',{task_id:task,expected_recovery_generation:generation});
+    check(ready.automatic_execution===false,'SOAK_PREPARE_EXECUTED');
+    await lane.api.call('runtime_task_resume',{task_id:task,expected_recovery_generation:generation});
+    record.explicit_resume_count++;record.harness_actions++;
+    result=await until(()=>{const row=lane.api.store.submission(task);return ['done','blocked','prepared'].includes(row.recovery_state)?lane.api.store.outcome(task):false;});
    }
    record.observed_status=lane.api.store.outcome(task).status;
    const snapshot=fixture.snapshot(lane.spec.runId);record.effect_count=snapshot.effects.filter(e=>e.kind==='save').length-before;

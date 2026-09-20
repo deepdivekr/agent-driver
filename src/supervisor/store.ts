@@ -6,6 +6,12 @@ import {type SupervisorRecord,type SubmissionRecord} from './contracts.js';
 import {workerStages,failureCodes,recoveryTriggers,type WorkerDiagnostic,type RecoveryTrigger} from './diagnostics.js';
 
 const terminal=new Set(['succeeded','failed','cancelled']);
+// A reservation has no external effect until its worker atomically claims the
+// ticket.  Five seconds was too short under the deliberately CPU-capped soak
+// cgroup: a healthy Node child could be scheduled late and be revoked before
+// its first claim.  Keep the window finite and never let it outlive the
+// caller's original deadline.
+export const STARTUP_RESERVATION_TIMEOUT_MS=15_000;
 export function remainingBudget(row:SubmissionRecord):number{
   const clock=bootClock(),payload=JSON.parse(row.payload_json) as {deadline_ms:number};
   if(clock.bootId==='unknown'||clock.bootId!==row.accepted_boot_id||row.accepted_uptime_ms===null)return 0;
@@ -33,7 +39,8 @@ export class RecoveryStore extends RuntimeStore{
       requireCondition(!this.submissions(project).some(s=>['reserved','running','reconcile'].includes(s.recovery_state)),'WORKER_ACTIVE');
       requireCondition(row.attempt_count<3&&remainingBudget(row)>0&&row.retry_after_ms<=bootClock().uptimeMs,'RETRY_NOT_ALLOWED');
       const ticket=randomUUID();
-      this.connection.prepare("UPDATE submission SET recovery_state='reserved',launch_nonce=?,launch_owner=?,dispatch_generation=dispatch_generation+1,attempt_count=attempt_count+1,last_error=NULL,retry_after_ms=? WHERE task_id=?").run(ticket,nonce,bootClock().uptimeMs+5000,task);
+      const startupTimeout=Math.min(STARTUP_RESERVATION_TIMEOUT_MS,remainingBudget(row));
+      this.connection.prepare("UPDATE submission SET recovery_state='reserved',launch_nonce=?,launch_owner=?,dispatch_generation=dispatch_generation+1,attempt_count=attempt_count+1,last_error=NULL,retry_after_ms=? WHERE task_id=?").run(ticket,nonce,bootClock().uptimeMs+startupTimeout,task);
       this.event(task,'worker.reserved',{dispatch_generation:row.dispatch_generation+1,attempt:row.attempt_count+1});return this.submission(task);
     });
   }
