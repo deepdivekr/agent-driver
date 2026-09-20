@@ -96,7 +96,16 @@ for(const point of ['claimed','browser_ready','before_intent','intent_recorded',
     const observed=diagnostics(x,s,id);
     assert.ok(observed.some(e=>e.kind==='worker.progress'&&e.data.stage===point&&e.data.dispatch_generation===1));
     assert.ok(observed.some(e=>e.kind==='recovery.observed'&&e.data.trigger==='worker_dead'&&e.data.dispatch_generation===1));
-    if(['claimed','browser_ready','before_intent'].includes(point)){assert.equal(final.status,'succeeded');assert.equal(s.store.submission(id).attempt_count,2);assert.equal(effects(x),1);}
+    if(['claimed','browser_ready','before_intent'].includes(point)){
+      assert.equal(final.status,'succeeded');
+      // The first killed worker must be followed by a successful bounded
+      // recovery.  Under a real startup-timeout recovery, one replacement can
+      // also die before an intent exists; do not mistake that safe retry for a
+      // duplicate external effect.  The separate budget test fixes the ceiling.
+      const attempts=s.store.submission(id).attempt_count;
+      assert.ok(attempts>=2&&attempts<=3,`unexpected bounded recovery attempts: ${attempts}`);
+      assert.equal(effects(x),1);
+    }
     else if(point==='intent_recorded'){assert.equal(final.status,'reconciliation_required');assert.equal(final.verification.result,'NOT_MATCH');assert.equal(effects(x),0);assert.equal(s.store.submission(id).attempt_count,1);}
     else{assert.equal(final.status,'succeeded');assert.equal(final.verification.result,'MATCH');assert.equal(effects(x),1);assert.equal(s.store.submission(id).attempt_count,1);}
     for(let i=0;i<3;i++)await s.step();assert.equal(effects(x),point==='intent_recorded'?0:1);

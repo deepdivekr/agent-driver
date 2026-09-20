@@ -21,6 +21,9 @@ export async function runSoak(input){
  assertBudgetMembership(handle);const identity=await processIdentity(process.pid);check(typeof identity==='object','SOAK_IDENTITY_UNOBSERVED');
  const start=performance.now(),cases=[],samples=[],actors=[],lanes=[];
  let state='running',error='unobserved',cycles=0,activeStart=null,activeEnd=null,heartbeat,lastProgress=0,terminal,fixture,sessionId,sessionSerial=0,cleanup='unobserved';
+ // Unexpected acknowledged-turn loss and streaming cancellation deliberately consume
+ // session capacity. Inject each once, then re-observe the same unresolved boundary.
+ const retainedHazards={cli_crash:null,output_load:null};
  const elapsed=()=>performance.now()-start;
  const stopped=()=>existsSync(join(root,'stop.json'));
  const checkStop=()=>check(!stopped(),'SOAK_STOPPED');
@@ -60,21 +63,44 @@ export async function runSoak(input){
  };
  const browser=async(lane,scenario,number)=>{
   const request_id='soak-'+number+'.'+scenario,input={name:'task '+number,note:'owned fixture '+number};
-  const record={kind:'case',cycle:number,scenario,workload:'browser',expected_outcome:scenario==='uncertain'?'reconciliation_required':'succeeded',status:'NOT_RUN',effect_count:'unobserved',record_matches:'unobserved',observed_status:'unobserved',account_sentinel_ok:'unobserved',harness_actions:0};
+  const record={kind:'case',cycle:number,scenario,workload:'browser',expected_outcome:scenario==='uncertain'?'reconciliation_required':'succeeded',status:'NOT_RUN',effect_count:'unobserved',record_matches:'unobserved',observed_status:'unobserved',account_sentinel_ok:'unobserved',harness_actions:0,fault_path:['claimed','prepare','after_save','uncertain'].includes(scenario)?'checkpoint_pending':'not_applicable'};
   const before=fixture.snapshot(lane.spec.runId).effects.filter(e=>e.kind==='save').length,at=performance.now();let task;
   try{
    const args={request_id,capability:'fixture.draft.save',account_ref:'account-a',input,deadline_ms:60000};
    const accepted=await lane.api.call('runtime_task_start',args);task=accepted.task_id;
    check((await lane.api.call('runtime_task_start',args)).task_id===task,'SOAK_DUPLICATE_TASK');
+   let preparedBeforeCheckpoint=false;
    if(['claimed','prepare','after_save','uncertain'].includes(scenario)){
-    await until(()=>lane.actor.events.find(e=>e.kind==='checkpoint'&&e.task===task));
-    lane.actor.child.send({kind:'kill',task});record.harness_actions++;
-    await until(()=>lane.actor.events.find(e=>e.kind==='worker_exit'&&e.task===task));
-    await until(async()=>await profileOccupancy(lane.config.project.profileRef)==='clear');
-    record.recovery_kind=scenario==='prepare'?'explicit':'automatic';record.recovery_ready_at_ms=elapsed();
+    const observed=await until(()=>{
+      const checkpoint=lane.actor.events.find(e=>e.kind==='checkpoint'&&e.task===task);
+      if(checkpoint)return {kind:'checkpoint',checkpoint};
+      // prepare_only intentionally ends a pre-claim startup timeout in a
+      // non-executable ready state.  That is a valid safety boundary, not an
+      // excuse to wait for a checkpoint that can no longer exist.
+      const row=lane.api.store.submission(task);
+      if(scenario==='prepare'&&['done','blocked','prepared'].includes(row.recovery_state))return {kind:'prepared',outcome:lane.api.store.outcome(task)};
+      return false;
+    });
+    if(observed.kind==='checkpoint'){
+      const {checkpoint}=observed;
+      lane.actor.child.send({kind:'kill',task,generation:checkpoint.generation});record.harness_actions++;
+      // IPC exit delivery races with the supervisor's recovery loop.  Bind the
+      // injector acknowledgement to this generation, then prove the profile is
+      // released before asking the product to recover; do not make a pass depend
+      // on the order in which an informational exit event arrives.
+      await until(()=>lane.actor.events.find(e=>e.kind==='kill_delivered'&&e.task===task&&e.generation===checkpoint.generation));
+      await until(async()=>await profileOccupancy(lane.config.project.profileRef)==='clear');
+      record.fault_path='checkpoint_kill';record.recovery_kind=scenario==='prepare'?'explicit':'automatic';record.recovery_ready_at_ms=elapsed();
+    }else{
+      check(observed.outcome.status==='ready_to_resume','SOAK_PREPARE_PRECHECKPOINT_STATE');
+      const ready=await lane.api.call('runtime_recovery_prepare',{task_id:task,expected_recovery_generation:observed.outcome.recovery_generation});
+      check(ready.automatic_execution===false,'SOAK_PREPARE_PRECHECKPOINT_EXECUTED');
+      await lane.api.call('runtime_task_resume',{task_id:task,expected_recovery_generation:observed.outcome.recovery_generation});
+      preparedBeforeCheckpoint=true;record.fault_path='startup_timeout_pre_checkpoint';record.recovery_kind='explicit';record.recovery_ready_at_ms=elapsed();record.harness_actions++;
+    }
    }
    const result=await until(()=>{const row=lane.api.store.submission(task);return ['done','blocked','prepared'].includes(row.recovery_state)?lane.api.store.outcome(task):false;});
-   if(scenario==='prepare'){
+   if(scenario==='prepare'&&!preparedBeforeCheckpoint){
     check(result.status==='ready_to_resume','SOAK_PREPARE_MISMATCH');
     const ready=await lane.api.call('runtime_recovery_prepare',{task_id:task,expected_recovery_generation:result.recovery_generation});check(ready.automatic_execution===false,'SOAK_PREPARE_EXECUTED');
     await lane.api.call('runtime_task_resume',{task_id:task,expected_recovery_generation:result.recovery_generation});record.harness_actions++;
@@ -118,10 +144,22 @@ export async function runSoak(input){
   await until(()=>terminal.api.store.session(id).state==='process_exited',10000);
  };
  const cli=async(scenario,number)=>{
-  if(!sessionId)await startSession();
-  let s=terminal.api.store.session(sessionId);if(s.turn_count>=80){await interrupt(sessionId);await startSession();s=terminal.api.store.session(sessionId);}
   const record={kind:'case',cycle:number,scenario,workload:'synthetic_cli',status:'NOT_RUN',receipt_count:'unobserved',harness_actions:0};
   let turn;const at=performance.now(),prompt='fixture turn '+number;
+  if(scenario==='cli_crash'&&retainedHazards.cli_crash){
+   const prior=retainedHazards.cli_crash;
+   try{
+    const crashed=terminal.api.store.session(prior.session),priorTurn=terminal.api.store.turn(prior.turn);
+    check(crashed.state==='reconciliation_required'&&crashed.error_code==='PROCESS_EXITED'&&crashed.active_turn_id===null&&priorTurn.status==='uncertain','SOAK_RETAINED_CLI_CRASH_CHANGED');
+    let resumeRejected=false;try{await terminal.api.call('runtime_terminal_resume',{session_ref:prior.session,expected_generation:crashed.generation});}catch{resumeRejected=true;}
+    check(resumeRejected,'SOAK_RETAINED_CLI_CRASH_RESUME_ALLOWED');
+    record.observed_status=priorTurn.status;record.receipt_count=receiptCount(prior.turn);record.fault_injected=false;record.status=record.receipt_count===1?'PASS':'FAIL';
+   }catch(e){record.status='FAIL';record.error=/^[A-Z_]+$/.test(e.message)?e.message:'SOAK_CLI_STATE_CHECK_FAILED';throw e;}
+   finally{record.duration_ms=performance.now()-at;cases.push(record);emit(record);}
+   check(record.status==='PASS','SOAK_CLI_ORACLE_FAILED');return;
+  }
+  if(!sessionId)await startSession();
+  let s=terminal.api.store.session(sessionId);if(s.turn_count>=80){await interrupt(sessionId);await startSession();s=terminal.api.store.session(sessionId);}
   try{
    if(scenario==='cli_crash')writeFileSync(join(root,'terminal','mode.txt'),'after-ack');
    const request={request_id:'prompt-'+number,session_ref:sessionId,expected_generation:s.generation,expected_previous_turn_id:s.last_turn_id,prompt};
@@ -130,8 +168,15 @@ export async function runSoak(input){
    if(scenario==='cli_crash'){
     await until(()=>terminal.api.store.turn(turn).status==='acknowledged');
     await ownedKill(JSON.parse(terminal.api.store.session(sessionId).process_identity_json));record.harness_actions++;
-    await until(()=>terminal.api.store.session(sessionId).state==='process_exited');
-    record.observed_status=terminal.api.store.turn(turn).status;record.status=record.observed_status==='uncertain'?'PASS':'FAIL';
+    // A killed acknowledged turn is deliberately uncertain, not a cleanly resumable
+    // process exit. Wait for the durable safety transition and prove resume is refused.
+    await until(()=>{const row=terminal.api.store.session(sessionId);return terminal.api.store.turn(turn).status==='uncertain'&&row.active_turn_id===null;});
+    const crashed=terminal.api.store.session(sessionId);
+    check(crashed.state==='reconciliation_required'&&crashed.error_code==='PROCESS_EXITED','SOAK_CLI_CRASH_STATE');
+    let resumeRejected=false;try{await terminal.api.call('runtime_terminal_resume',{session_ref:sessionId,expected_generation:crashed.generation});}catch{resumeRejected=true;}
+    check(resumeRejected,'SOAK_CLI_CRASH_RESUME_ALLOWED');
+    record.observed_status=terminal.api.store.turn(turn).status;record.fault_injected=true;record.status=record.observed_status==='uncertain'?'PASS':'FAIL';
+    retainedHazards.cli_crash={session:sessionId,turn};
     writeFileSync(join(root,'terminal','mode.txt'),'normal');sessionId=null;
    }else{
     await until(()=>terminal.api.store.session(sessionId).state==='input_ready');
@@ -184,7 +229,7 @@ export async function runSoak(input){
    }
    await browser(scenario==='prepare'?prepare:auto,['claimed','prepare','after_save'].includes(scenario)?scenario:'normal',cycles);
    let load;
-   if(scenario==='output_load'){
+   if(scenario==='output_load'&&!retainedHazards.output_load){
     const a=await terminal.api.call('runtime_terminal_start',{request_id:'load-'+cycles});load=a.session_ref;
     await until(()=>terminal.api.store.session(load).state==='input_ready');
     const s=terminal.api.store.session(load);
@@ -196,8 +241,22 @@ export async function runSoak(input){
    if(load){
     const at=performance.now(),ok=await pingTerminalHost(terminal.api.store.terminalHost(terminal.config.project.id));
     check(ok&&performance.now()-at<1000,'SOAK_CONTROL_UNRESPONSIVE');
-    await interrupt(load.id);check(receiptCount(load.turn)===1&&terminal.api.store.turn(load.turn).status==='uncertain','SOAK_LOAD_REPLAY_OR_FALSE_SUCCESS');
-    emit({kind:'load',cycle:cycles,receipt_count:1,expected_stop:'uncertain'});
+    const loadSession=terminal.api.store.session(load.id);
+    await terminal.api.call('runtime_terminal_interrupt',{session_ref:load.id,expected_generation:loadSession.generation});
+    await until(()=>{const row=terminal.api.store.session(load.id);return terminal.api.store.turn(load.turn).status==='uncertain'&&row.active_turn_id===null;});
+    const stoppedLoad=terminal.api.store.session(load.id);
+    check(stoppedLoad.state==='reconciliation_required'&&stoppedLoad.error_code==='INTERRUPTED'&&receiptCount(load.turn)===1,'SOAK_LOAD_REPLAY_OR_FALSE_SUCCESS');
+    retainedHazards.output_load={session:load.id,turn:load.turn};
+    emit({kind:'load',cycle:cycles,receipt_count:1,expected_stop:'uncertain',fault_injected:true});
+   }else if(scenario==='output_load'){
+    const prior=retainedHazards.output_load,loadState={kind:'case',cycle:cycles,scenario,workload:'synthetic_cli_state_check',status:'NOT_RUN',fault_injected:false,receipt_count:'unobserved'};
+    try{
+     check(prior,'SOAK_RETAINED_LOAD_MISSING');const row=terminal.api.store.session(prior.session),turn=terminal.api.store.turn(prior.turn);
+     check(row.state==='reconciliation_required'&&row.error_code==='INTERRUPTED'&&row.active_turn_id===null&&turn.status==='uncertain','SOAK_RETAINED_LOAD_CHANGED');
+     loadState.receipt_count=receiptCount(prior.turn);loadState.status=loadState.receipt_count===1?'PASS':'FAIL';
+    }catch(e){loadState.status='FAIL';loadState.error=/^[A-Z_]+$/.test(e.message)?e.message:'SOAK_LOAD_STATE_CHECK_FAILED';throw e;}
+    finally{cases.push(loadState);emit(loadState);}
+    check(loadState.status==='PASS','SOAK_LOAD_REPLAY_OR_FALSE_SUCCESS');
    }
    check(uncertain.api.store.outcome(uncertainTask).status==='reconciliation_required'&&fixture.snapshot(uncertain.spec.runId).effects.length===0,'SOAK_UNCERTAIN_REPLAY');
    const events=auto.api.store.events(auto.config.project.id,'soak-delivery',1000);

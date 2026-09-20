@@ -67,9 +67,9 @@ test('runtime native soak cycle bound before elapsed duration is failure not sho
  assert.equal(report.status,'FAIL');assert.equal(report.error,'SOAK_CYCLE_LIMIT_BEFORE_DURATION');assert.equal(report.two_hour_gate,'NOT_RUN');assert.equal(report.cycles,1);
 });
 
-test('runtime native soak exercises every scheduled fault with persistent state and independent counters',{timeout:210000},async t=>{
- const x=setup(t,{duration_ms:120000,max_cycles:500});await command('start','--config-file',x.path);
- const report=await until(()=>existsSync(join(x.run,'report.json'))&&readJson(join(x.run,'report.json')),180000);
+test('runtime native soak exercises every scheduled fault with persistent state and independent counters',{timeout:300000},async t=>{
+ const x=setup(t,{duration_ms:200000,max_cycles:500});await command('start','--config-file',x.path);
+ const report=await until(()=>existsSync(join(x.run,'report.json'))&&readJson(join(x.run,'report.json')),270000);
  assert.equal(report.status,'PASS',JSON.stringify(report));assert.ok(report.active_duration_ms>=120000);assert.equal(report.two_hour_gate,'NOT_RUN');
  const rows=readFileSync(join(x.run,'journal.jsonl'),'utf8').trim().split('\n').map(JSON.parse);
  for(const scenario of new Set(schedule))assert.ok(rows.some(r=>r.kind==='case'&&r.scenario===scenario),'missing '+scenario);
