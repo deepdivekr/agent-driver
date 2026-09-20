@@ -3,13 +3,16 @@ import { resolve, dirname } from 'node:path';
 import { RuntimeStore } from './store/runtime-store.js';
 import { runFixtureDemo } from './browser/fixture-driver.js';
 import { requireCondition } from './core/contracts.js';
+import {runInterfaceCli,interfaceHelp} from './interface/cli.js';
 const args=process.argv.slice(2),command=args[0]??'help',options=new Map<string,string>();
 try {
+  if(await runInterfaceCli(args)) { /* Shared API owns its lifecycle. */ }
+  else {
   for(let i=1;i<args.length;i+=2){const key=args[i],value=args[i+1];requireCondition(typeof key==='string'&&key.startsWith('--')&&typeof value==='string'&&value.length>0&&!value.startsWith('--')&&!options.has(key),'INVALID_OPTIONS');options.set(key,value);}
   const allowed=['--db','--task','--project','--consumer','--event','--fault','--wrong-account'];for(const key of options.keys())requireCondition(allowed.includes(key),'UNKNOWN_OPTION');
   const db=resolve(options.get('--db')??'.runtime/runtime.sqlite');
   const required=(name:string)=>{const value=options.get(name);requireCondition(value,`MISSING_${name.slice(2).toUpperCase()}`);return value;};
-  if(command==='help'||command==='--help')console.log('agent-driver (experimental)\n  demo [--db PATH] [--fault none|before|after] [--wrong-account true|false]\n  status --task ID [--db PATH]\n  tasks --project ID [--db PATH]\n  events --project ID --consumer NAME [--db PATH]\n  ack --project ID --consumer NAME --event ID [--db PATH]\n  cancel --task ID [--db PATH]\n  recover --task ID [--db PATH]\nOnly demo executes an owned local fixture. No real-site/CLI session or model automation yet.');
+  if(command==='help'||command==='--help')console.log('agent-driver (experimental)\n  demo [--db PATH] [--fault none|before|after] [--wrong-account true|false]\n  status --task ID [--db PATH]\n  tasks --project ID --db PATH\n  events --project ID --consumer NAME --db PATH\n  ack --project ID --consumer NAME --event ID --db PATH\n  cancel --task ID --db PATH\n  recover --task ID --db PATH\n'+interfaceHelp);
   else if(command==='demo'){
     const fault=options.get('--fault')??'none';requireCondition(['none','before','after'].includes(fault),'INVALID_FAULT');requireCondition(['true','false'].includes(options.get('--wrong-account')??'false'),'INVALID_BOOLEAN');
     const result=await runFixtureDemo(db,dirname(db),{fault:fault as 'none'|'before'|'after',wrongAccount:options.get('--wrong-account')==='true'});console.log(JSON.stringify(result,null,2));if(result.status!=='succeeded')process.exitCode=2;
@@ -25,4 +28,5 @@ try {
       console.log(JSON.stringify(result,null,2));
     } finally {store.close();}
   }
-} catch(error){console.error(JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'RUNTIME_ERROR'}));process.exitCode=1;}
+  }
+} catch(error){console.error(JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'INVALID_REQUEST'}));process.exitCode=1;}

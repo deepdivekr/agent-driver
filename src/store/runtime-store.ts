@@ -1,8 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync,chmodSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { MIGRATION_1 } from './migration.js';
+import { MIGRATION_1, MIGRATION_2 } from './migration.js';
 import { requireCondition, type ProjectBinding, type TaskRecord, type TaskStatus, type Lease, type Effect, type Verification } from '../core/contracts.js';
 
 const terminal = new Set<TaskStatus>(['succeeded','failed','cancelled']);
@@ -13,15 +13,47 @@ export class RuntimeStore {
     requireCondition(path!==':memory:', 'DURABLE_DATABASE_REQUIRED');
     mkdirSync(dirname(resolve(path)), {recursive:true,mode:0o700});
     this.#db=new DatabaseSync(path,{enableForeignKeyConstraints:true,allowExtension:false,timeout:2000});
+    chmodSync(path,0o600);
     this.#db.exec('PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     this.transaction(()=>{
       this.#db.exec(MIGRATION_1);
       const versions=this.#db.prepare('SELECT version FROM schema_version').all();
-      requireCondition(versions.length===0 || (versions.length===1&&versions[0]?.version===1),'UNSUPPORTED_SCHEMA');
+      requireCondition(versions.length===0 || (versions.length===1&&[1,2].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
       if(!versions.length)this.#db.prepare('INSERT INTO schema_version VALUES (1)').run();
+      if(!versions.length||versions[0]?.version===1)this.#db.exec(MIGRATION_2);
     });
   }
   close() { this.#db.close(); }
+  enqueue(projectId:string,requestId:string,capability:string,payload:unknown,configHash:string) {
+    const encoded=JSON.stringify(payload),digest=createHash('sha256').update(encoded).digest('hex');
+    requireCondition(this.project(projectId).capabilities.includes(capability),'CAPABILITY_NOT_DELEGATED');
+    return this.transaction(()=>{
+      const old=this.#db.prepare('SELECT * FROM submission WHERE project_id=? AND request_id=?').get(projectId,requestId);
+      if(old){requireCondition(old.request_hash===digest&&old.config_hash===configHash,'REQUEST_ID_CONFLICT');return {task:this.task(String(old.task_id)),created:false};}
+      const active=this.#db.prepare("SELECT COUNT(*) AS count FROM task WHERE project_id=? AND status IN ('queued','running','verifying')").get(projectId);
+      requireCondition(Number(active?.count)<16,'PROJECT_QUEUE_FULL');
+      const taskId=randomUUID(),at=timestamp();
+      this.#db.prepare("INSERT INTO task(id,project_id,capability,status,next_action,created_at,updated_at) VALUES (?,?,?,'queued','worker_start',?,?)").run(taskId,projectId,capability,at,at);
+      this.#db.prepare('INSERT INTO submission(project_id,request_id,task_id,request_hash,payload_json,config_hash,accepted_at) VALUES (?,?,?,?,?,?,?)').run(projectId,requestId,taskId,digest,encoded,configHash,at);
+      this.event(taskId,'task.accepted',{request_id:requestId,input_hash:digest});
+      return {task:this.task(taskId),created:true};
+    });
+  }
+  claimSubmission(taskId:string,configHash:string,nonce:string) {
+    return this.transaction(()=>{
+      const row=this.#db.prepare('SELECT * FROM submission WHERE task_id=?').get(taskId);requireCondition(row,'SUBMISSION_NOT_FOUND');
+      requireCondition(row.config_hash===configHash,'CONFIG_CHANGED');requireCondition(!row.worker_nonce,'WORKER_ALREADY_CLAIMED');
+      requireCondition(this.task(taskId).status==='queued','TASK_NOT_DISPATCHABLE');
+      this.#db.prepare('UPDATE submission SET worker_nonce=?,worker_pid=?,worker_started_at=? WHERE task_id=?').run(nonce,process.pid,timestamp(),taskId);
+      this.event(taskId,'worker.claimed',{worker_nonce:nonce,pid:process.pid});
+      return {payload:JSON.parse(String(row.payload_json)) as unknown,acceptedAt:String(row.accepted_at)};
+    });
+  }
+  outcome(taskId:string) {
+    const task=this.task(taskId),intent=this.#db.prepare('SELECT verification_json FROM command_intent WHERE task_id=? ORDER BY created_at DESC LIMIT 1').get(taskId);
+    return {task_id:task.id,project_id:task.project_id,status:task.status,selected_route:task.selected_route,session_ref:task.target_ref,effect_state:task.effect_state,
+      verification:intent?.verification_json?JSON.parse(String(intent.verification_json)) as unknown:{result:'UNKNOWN',source:'unobserved'},artifacts:[],next_action:task.next_action};
+  }
   transaction<T>(fn:()=>T):T {
     this.#db.exec('BEGIN IMMEDIATE');
     try { const result=fn(); this.#db.exec('COMMIT'); return result; }
@@ -105,7 +137,7 @@ export class RuntimeStore {
     });
   }
   cancel(taskId:string) {
-    return this.transaction(()=>{const task=this.task(taskId);if(terminal.has(task.status))return task;this.#db.prepare('UPDATE task SET cancel_requested=1 WHERE id=?').run(taskId);const pending=this.#db.prepare('SELECT id FROM command_intent WHERE task_id=? AND status!=\'verified\'').get(taskId);if(!pending){this.state(taskId,'cancelled','none');this.#db.prepare('UPDATE lease SET active=0 WHERE task_id=? AND inflight_intent IS NULL').run(taskId);}else this.event(taskId,'task.cancel_requested',{effect_not_rolled_back:true});return this.task(taskId);});
+    return this.transaction(()=>{const task=this.task(taskId);if(terminal.has(task.status))return task;this.#db.prepare('UPDATE task SET cancel_requested=1 WHERE id=?').run(taskId);const pending=this.#db.prepare('SELECT id FROM command_intent WHERE task_id=? AND status!=\'verified\'').get(taskId);if(!pending){this.state(taskId,'cancelled','none');this.#db.prepare('UPDATE lease SET active=0 WHERE task_id=? AND inflight_intent IS NULL AND NOT EXISTS (SELECT 1 FROM submission WHERE task_id=? AND worker_nonce IS NOT NULL)').run(taskId,taskId);}else this.event(taskId,'task.cancel_requested',{effect_not_rolled_back:true});return this.task(taskId);});
   }
   pauseBeforeDispatch(taskId:string,reason:string) {
     return this.transaction(()=>{const pending=this.#db.prepare('SELECT id FROM command_intent WHERE task_id=?').get(taskId);requireCondition(!pending,'INTENT_ALREADY_EXISTS');this.state(taskId,'paused_dependency',reason);return this.task(taskId);});

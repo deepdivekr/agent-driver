@@ -27,3 +27,13 @@ CREATE TABLE IF NOT EXISTS consumer_cursor(
  cursor INTEGER NOT NULL DEFAULT 0, delivered INTEGER NOT NULL DEFAULT 0,
  PRIMARY KEY(project_id,consumer_id));
 `;
+
+export const MIGRATION_2 = `
+CREATE TABLE submission(
+ project_id TEXT NOT NULL REFERENCES project(id), request_id TEXT NOT NULL,
+ task_id TEXT NOT NULL UNIQUE REFERENCES task(id), request_hash TEXT NOT NULL,
+ payload_json TEXT NOT NULL, config_hash TEXT NOT NULL, accepted_at TEXT NOT NULL,
+ worker_nonce TEXT, worker_pid INTEGER, worker_started_at TEXT,
+ PRIMARY KEY(project_id,request_id));
+UPDATE schema_version SET version=2;
+`;
