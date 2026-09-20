@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {FIXTURE_DRAFT} from '../browser/fixture-driver.js';
+import {FIXTURE_DRAFT} from '../browser/fixture-capability.js';
 import {terminalStart,terminalSubmit,terminalBound,terminalList,terminalHistory,terminalOutput,terminalHandoff,terminalVerify} from '../terminal/contracts.js';
 export const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const draftInput=z.object({name:z.string().min(1).max(200),note:z.string().min(1).max(4000)}).strict();

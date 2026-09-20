@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "output_dir": ".runtime/soak-two-hour",
+  "duration_ms": 7200000,
+  "interval_ms": 15000,
+  "max_cycles": 1000,
+  "max_bytes": 536870912,
+  "cpu_percent": 100,
+  "memory_mb": 768,
+  "tasks_max": 256
+}

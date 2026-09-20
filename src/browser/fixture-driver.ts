@@ -9,9 +9,10 @@ import { RuntimeStore } from '../store/runtime-store.js';
 import { Runtime } from '../core/runtime.js';
 import { browserResource } from '../policy/dispatch-guard.js';
 import { chooseRoute } from '../policy/routes.js';
-import { type Observation, type Capability, type RuntimeAdapter, requireCondition } from '../core/contracts.js';
+import { type Observation, type RuntimeAdapter, requireCondition } from '../core/contracts.js';
+import {FIXTURE_DRAFT} from './fixture-capability.js';
+export {FIXTURE_DRAFT} from './fixture-capability.js';
 
-export const FIXTURE_DRAFT:Capability={id:'fixture.draft.save',effect:'write_external',route:'playwright.fixture.draft.v1',environments:['owned_headless'],hiddenVerified:false,requiresForeground:false,requiresOsInput:false,usesUserTarget:false,requiresClipboard:false,requiresFileDialog:false,verification:'independent_readback'};
 export async function runFixtureDemo(dbPath:string,dataRoot:string,options:{fault?:'before'|'after'|'none';wrongAccount?:boolean}={}) {
   await mkdir(dataRoot,{recursive:true,mode:0o700});
   const store=new RuntimeStore(dbPath);let fixture:Awaited<ReturnType<typeof startFixture>>|undefined,context:BrowserContext|undefined,page:Page|undefined;

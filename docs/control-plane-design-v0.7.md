@@ -63,6 +63,8 @@ Phase19 구현 보완: 중단 복구의 입력 자료는 마지막 출력 한 �
 
 ## 구현 순서와 종료 기준
 
+Phase26 설계 보완: [독립 soak](soak.md)는 호출자 수명·실행기 생존·업무 진전·효과 oracle·종료를 별도로 기록한다. CPU/메모리/PID 상한이 있는 별도 실행에서 같은 DB/profile을 유지하고, 자동 복구·명시 재개·올바른 중단의 분모와 시간을 구분한다. 실행기 사망 뒤 report 누락은 interrupted이며 완료로 추정하지 않는다. 짧은 회귀·2시간 smoke·72시간 이상 관측은 서로 대체하지 않는다. 합성 프로토콜 CLI를 실제 모델/업무 성공으로 표시하지 않으며, 시험기의 계획된 재시작을 제품 OS watchdog의 보장으로 올리지 않는다.
+
 Phase24 설계 보완: [백업·격리 복원](backup-restore.md)은 WAL read snapshot과 artifact 길이/hash를 결속하며 새 디렉터리만 사용한다. source snapshot 이후의 외부 효과는 unknown이므로 백업·복원 DB에 intrinsic quarantine/새 identity를 남기고 일반 runtime의 시작·dispatch를 차단한다. 운영자 검사와 MCP 실행권한을 구분한다. 이것은 정상 업무 재개 전 안전 경계이며 전체 운영 복구·업데이트 rollback 완료가 아니다.
 
 Phase25 설계 보완: 복구 진입 자체도 관측 계약이다. [세대별 진단](supervisor-recovery.md)은 단계·유한 실패 코드·예약 만료/실행 사망 관측을 보존한다. 오류 원문은 저장하지 않고 미관측은 unknown으로 유지한다. 진단과 효과 oracle은 분리하며 재개 승인·deadline·재시도·불확실 쓰기 정책은 바꾸지 않는다. 최초 간헐 실패 #22는 미해결 출시 gate다.

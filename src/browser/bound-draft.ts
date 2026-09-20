@@ -6,7 +6,7 @@ import {Runtime} from '../core/runtime.js';
 import {RuntimeStore} from '../store/runtime-store.js';
 import {requireCondition, type Lease, type Observation, type RuntimeAdapter} from '../core/contracts.js';
 import {browserResource,guard} from '../policy/dispatch-guard.js';
-import {FIXTURE_DRAFT} from './fixture-driver.js';
+import {FIXTURE_DRAFT} from './fixture-capability.js';
 import {loadHostConfig,type HostConfig} from '../interface/config.js';
 import {type StartRequest} from '../interface/catalog.js';
 import {type CheckpointHook} from '../supervisor/contracts.js';
