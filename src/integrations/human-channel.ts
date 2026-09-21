@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {TypeSafeJevDecisionLayer,type JevSystemOneTransport} from '../taskpack/typesafe-jev.js';
+import {type DecisionPlane} from '../decision-plane/index.js';
 
 export const interventionSchema=z.object({
   kind:z.enum(['clarification','choice','authentication','approval']),
@@ -24,13 +25,13 @@ export type HumanChannelRoute=
  * approval is deliberately excluded from the model's choices and is handled
  * only by the snapshot-bound MCP elicitation path.
  */
-export async function routeHumanChannelMessage(raw:unknown,transport?:JevSystemOneTransport){
+export async function routeHumanChannelMessage(raw:unknown,transport?:JevSystemOneTransport,plane?:DecisionPlane){
   const input=humanChannelRouteInput.parse(raw),message=input.message.trim();
   if(input.pending?.kind==='approval')return result('approval_requires_trusted_elicitation','code_policy',input.pending.intervention_id);
   if(/^\/task(?:\s|$)/u.test(message))return result('task_request','explicit_command');
   if(/^\/(?:status|help|stop)(?:\s|$)/u.test(message))return result('non_actionable','explicit_command');
   if(!transport)return result('unknown','jev_unavailable',input.pending?.intervention_id);
-  const decider=new TypeSafeJevDecisionLayer(transport);
+  const decider=new TypeSafeJevDecisionLayer(transport,1_500,plane);
   const routes=input.pending===null?[
     {id:'task_request',description:'A new request asking the agent to browse, operate a computer, collect information, monitor something, or perform work.'},
     {id:'non_actionable',description:'Conversation, status question, greeting, acknowledgement, or text that does not request a new computer task.'},

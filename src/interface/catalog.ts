@@ -11,6 +11,7 @@ const notImplemented={implemented:false,readOnly:false};
 export const tools={
   ...packTools,
   runtime_channel_route:{schema:humanChannelRouteInput,implemented:true,readOnly:true},
+  runtime_decision_status:{schema:empty,implemented:true,readOnly:true},
   runtime_health:{schema:empty,implemented:true,readOnly:true},
   runtime_storage_status:{schema:empty,implemented:true,readOnly:true},
   runtime_storage_plan:{schema:empty,implemented:true,readOnly:true},

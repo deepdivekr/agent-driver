@@ -13,7 +13,7 @@ test('runtime contract generic base Pack catalog is user-neutral and keeps write
   assert.equal(basePackFamilyById('form.draft-submit')?.approval,'before_external_effect');
   assert.equal(basePackFamilyById('portal.collect')?.effect,'local_file_write');
   assert.equal(basePackFamilyById('choose.stage')?.approval,'before_external_effect');
-  assert.equal(JSON.stringify(BASE_PACK_CATALOG).toLowerCase().includes('stacknsky'),false);
+  assert.equal(JSON.stringify(BASE_PACK_CATALOG).toLowerCase().includes('sampleportal'),false);
   assert.throws(()=>normalizeFormDraftSubmit({...FORM_DRAFT_SUBMIT_DEMO_INPUT,follow_up_at:FORM_DRAFT_SUBMIT_DEMO_INPUT.effective_at}),/FOLLOW_UP_MUST_FOLLOW_EFFECTIVE_TIME/);
 });
 

@@ -2,6 +2,7 @@ import {createHash} from 'node:crypto';
 import {choice,noul,TypeSafeClient,type SystemOneRequest} from '@typesafe-ai/sdk';
 import {requireCondition} from '../core/contracts.js';
 import {canonicalJson} from './contracts.js';
+import {DecisionPlane,provisionalProfile,type DecisionBinding,type DecisionCatalog} from '../decision-plane/index.js';
 
 const unsupported='UNSUPPORTED',clarify='CLARIFY',notStated='NOT_STATED',notInCandidates='NOT_IN_CANDIDATES';
 const safeId=/^[a-z][a-z0-9_]{0,63}$/u;
@@ -28,6 +29,7 @@ export interface JevSystemOneTransport {
 export interface JevDecisionTrace {
   provider:'typesafe';model:string;input_sha256:string;elapsed_ms:number;
   input_tokens:number|'unobserved';output_tokens:number|'unobserved';status:'accepted'|'rejected'|'unavailable';
+  decision_event_id?:string;
 }
 export type OneLineJevDecision=
  | {status:'PROPOSED';route_id:string;fields:Record<string,string>;trace:JevDecisionTrace}
@@ -62,6 +64,13 @@ export type TargetedLlmExtraction=
 interface CompiledOneLineJevRequest {
   request:SystemOneRequest;routeOptions:ReadonlySet<string>;fieldOptions:ReadonlyMap<string,ReadonlySet<string>>;
 }
+export const ONE_LINE_DECISION_CATALOG:DecisionCatalog={format:1,id:'task.intake',version:'2',judgments:[
+  {id:'task.intake.route',primitive:'choice',risk:'reversible',question_version:'2',no_match_values:[unsupported,clarify],fallback:'llm'},
+  {id:'task.intake.field',primitive:'choice',risk:'reversible',question_version:'2',no_match_values:[notStated,notInCandidates],fallback:'llm'},
+  {id:'task.intake.supplied',primitive:'noul',risk:'informational',question_version:'1',no_match_values:[],fallback:'continue_code'},
+]};
+export function oneLineDecisionProfile(policy:JevAcceptancePolicy=conservativeJevAcceptancePolicy){return provisionalProfile(ONE_LINE_DECISION_CATALOG,'jev-latest',{'task.intake.route':{min_confidence:policy.min_route_confidence,min_selected_probability:policy.min_route_confidence},'task.intake.field':{min_confidence:policy.min_field_confidence,min_selected_probability:policy.min_field_confidence},'task.intake.supplied':{noul_review_low:1-policy.min_supplied_probability,noul_review_high:policy.min_supplied_probability}});}
+function oneLineBindings(compiled:CompiledOneLineJevRequest):DecisionBinding[]{return Object.keys(compiled.request.questions).map(questionId=>({question_id:questionId,decision_id:questionId==='route'?'task.intake.route':questionId.endsWith('.candidate')?'task.intake.field':'task.intake.supplied'}));}
 function finiteProbability(value:unknown){return typeof value==='number'&&Number.isFinite(value)&&value>=0&&value<=1;}
 function assertInput(input:OneLineJevInput){
   requireCondition(typeof input.request==='string'&&input.request.trim().length>0&&input.request.length<=8_000&&!/[\r\n]/u.test(input.request),'INVALID_ONE_LINE_REQUEST');
@@ -135,10 +144,10 @@ function noulAnswer(raw:unknown){
   requireCondition(typeof raw==='object'&&raw!==null&&!Array.isArray(raw),'JEV_RESPONSE_INVALID');
   const answer=raw as {type?:unknown;noul?:unknown};requireCondition(answer.type==='noul'&&finiteProbability(answer.noul),'JEV_RESPONSE_INVALID');return answer.noul as number;
 }
-function trace(input:CompiledOneLineJevRequest,started:number,status:JevDecisionTrace['status'],raw?:unknown):JevDecisionTrace {
+function trace(input:CompiledOneLineJevRequest,started:number,status:JevDecisionTrace['status'],raw?:unknown,eventId?:string):JevDecisionTrace {
   const record=raw!==null&&typeof raw==='object'&&!Array.isArray(raw)?raw as {model?:unknown;usage?:unknown}:{};
   const usage=record.usage!==null&&typeof record.usage==='object'&&!Array.isArray(record.usage)?record.usage as {input_tokens?:unknown;output_tokens?:unknown}:{};
-  return {provider:'typesafe',model:typeof record.model==='string'?record.model:'unobserved',input_sha256:createHash('sha256').update(canonicalJson(input.request)).digest('hex'),elapsed_ms:Math.round(performance.now()-started),input_tokens:typeof usage.input_tokens==='number'&&Number.isFinite(usage.input_tokens)?usage.input_tokens:'unobserved',output_tokens:typeof usage.output_tokens==='number'&&Number.isFinite(usage.output_tokens)?usage.output_tokens:'unobserved',status};
+  return {provider:'typesafe',model:typeof record.model==='string'?record.model:'unobserved',input_sha256:createHash('sha256').update(canonicalJson(input.request)).digest('hex'),elapsed_ms:Math.round(performance.now()-started),input_tokens:typeof usage.input_tokens==='number'&&Number.isFinite(usage.input_tokens)?usage.input_tokens:'unobserved',output_tokens:typeof usage.output_tokens==='number'&&Number.isFinite(usage.output_tokens)?usage.output_tokens:'unobserved',status,...(eventId?{decision_event_id:eventId}:{})};
 }
 
 /**
@@ -147,21 +156,22 @@ function trace(input:CompiledOneLineJevRequest,started:number,status:JevDecision
  * this layer.  Provider failures intentionally reveal no transport details.
  */
 export class TypeSafeJevDecisionLayer {
-  constructor(private readonly transport:JevSystemOneTransport,private readonly timeoutMs=1_500){requireCondition(Number.isInteger(timeoutMs)&&timeoutMs>=100&&timeoutMs<=30_000,'INVALID_JEV_TIMEOUT');}
+  constructor(private readonly transport:JevSystemOneTransport,private readonly timeoutMs=1_500,private readonly sharedPlane?:DecisionPlane){requireCondition(Number.isInteger(timeoutMs)&&timeoutMs>=100&&timeoutMs<=30_000,'INVALID_JEV_TIMEOUT');}
   async decide(input:OneLineJevInput,policy:JevAcceptancePolicy=conservativeJevAcceptancePolicy):Promise<OneLineJevDecision>{
-    assertPolicy(policy);const compiled=compileOneLineJevRequest(input),started=performance.now();let raw:unknown;
-    try {raw=await this.transport.systemOne(compiled.request,{timeout:this.timeoutMs,retry:{maxRetries:0}});}
+    assertPolicy(policy);const compiled=compileOneLineJevRequest(input),started=performance.now();let raw:unknown,eventId:string|undefined,judgments=new Map<string,{status:string}>();
+    try {const plane=this.sharedPlane??new DecisionPlane({catalog:ONE_LINE_DECISION_CATALOG,profile:oneLineDecisionProfile(policy),primary:{id:'typesafe-jev',systemOne:(request,settings)=>this.transport.systemOne(request,settings)},timeout_ms:this.timeoutMs}),evaluated=await plane.evaluate(compiled.request,{context_id:createHash('sha256').update(canonicalJson({policy:input.policy_version,request:input.request})).digest('hex'),bindings:oneLineBindings(compiled)});raw=evaluated.raw;eventId=evaluated.event.event_id;judgments=new Map(evaluated.judgments.map(item=>[item.question_id,item]));if(evaluated.event.primary.status!=='accepted')throw Error('JEV_UNAVAILABLE');}
     catch{return {status:'JEV_UNAVAILABLE',trace:trace(compiled,started,'unavailable')};}
     try {
-      const answers=answerRecord(raw),route=choiceAnswer(answers.route,new Set([...compiled.routeOptions,unsupported,clarify])),decisionTrace=trace(compiled,started,'accepted',raw);
+      const answers=answerRecord(raw),route=choiceAnswer(answers.route,new Set([...compiled.routeOptions,unsupported,clarify])),decisionTrace=trace(compiled,started,'accepted',raw,eventId),routeStatus=judgments.get('route')?.status??'unavailable';
       if(route.choice===unsupported)return {status:'UNSUPPORTED',trace:decisionTrace};
       if(route.choice===clarify)return {status:'NEEDS_CLARIFICATION',field_ids:[],reason:'MODEL_CLARIFY',trace:decisionTrace};
-      if(route.confidence<policy.min_route_confidence)return {status:'NEEDS_CLARIFICATION',route_id:route.choice,field_ids:[],reason:'LOW_ROUTE_CONFIDENCE',trace:decisionTrace};
+      if(routeStatus!=='accepted'||route.confidence<policy.min_route_confidence)return {status:'NEEDS_CLARIFICATION',route_id:route.choice,field_ids:[],reason:'LOW_ROUTE_CONFIDENCE',trace:decisionTrace};
       const fields=input.fields.filter(field=>field.route_id===route.choice),selected:Record<string,string>={},extract:string[]=[],missing:string[]=[],lowConfidence:string[]=[];
       for(const field of fields){
         const selectedCandidate=choiceAnswer(answers[`field.${field.id}.candidate`],compiled.fieldOptions.get(field.id)!);
         const supplied=noulAnswer(answers[`field.${field.id}.supplied`]);
-        if(selectedCandidate.confidence<policy.min_field_confidence){lowConfidence.push(field.id);continue;}
+        const candidateStatus=judgments.get(`field.${field.id}.candidate`)?.status??'unavailable',suppliedStatus=judgments.get(`field.${field.id}.supplied`)?.status??'unavailable';
+        if(!['accepted','no_match'].includes(candidateStatus)||suppliedStatus!=='accepted'||selectedCandidate.confidence<policy.min_field_confidence){lowConfidence.push(field.id);continue;}
         if(selectedCandidate.choice===notInCandidates||(selectedCandidate.choice===notStated&&supplied>=policy.min_supplied_probability)){extract.push(field.id);continue;}
         if(selectedCandidate.choice===notStated){if(field.required)missing.push(field.id);continue;}
         selected[field.id]=selectedCandidate.choice;

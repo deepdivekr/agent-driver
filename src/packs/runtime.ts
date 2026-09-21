@@ -10,9 +10,10 @@ import {packTools,recipeSchema,type Recipe,type MutationRecipe,type Row} from '.
 import {PackStore,type PackRun} from './store.js';
 import {collect} from './sources.js';
 import {applyFilters,deduplicate,sortRows,exportRows} from './data.js';
-import {judgeRow} from './judgment.js';
+import {judgeRow,ROW_DECISION_CATALOG,rowDecisionProfile} from './judgment.js';
 import {writeProtocol} from './browser-write.js';
 import {type PreparedApproval} from '../taskpack/protocol.js';
+import {DecisionPlane,DecisionProfileRegistry,FileDecisionJournal,structuredModelShadowProvider} from '../decision-plane/index.js';
 
 const isMutation=(r:Recipe):r is MutationRecipe=>'target' in r;
 function safeError(error:unknown){return error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'PACK_EXECUTION_FAILED';}
@@ -27,7 +28,7 @@ export class FamilyRuntime {
   private ticking:Promise<unknown>|null=null;
   private operations=new Set<Promise<unknown>>();
   private stopped=false;
-  constructor(readonly store:PackStore,readonly config:HostConfig,readonly providers:{jev?:JevSystemOneTransport;llm?:StructuredModel;approval?:PackApprovalDispatcher}={}){}
+  constructor(readonly store:PackStore,readonly config:HostConfig,readonly providers:{jev?:JevSystemOneTransport;shadowJev?:JevSystemOneTransport;llm?:StructuredModel;approval?:PackApprovalDispatcher}={}){}
   close(){this.stopped=true;this.providers.approval?.close?.();}
   async drain(){this.close();await Promise.allSettled([...this.operations,...(this.ticking?[this.ticking]:[])]);}
   private fresh(){requireCondition(!this.stopped,'PACK_RUNTIME_CLOSED');requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');requireCondition(this.config.packs,'PACKS_NOT_CONNECTED');}
@@ -38,14 +39,17 @@ export class FamilyRuntime {
   }
   private publicRun(run:PackRun){const status=this.effectiveStatus(run);return {run_id:run.id,family:run.recipe.family,status,result:run.result,task_id:run.task_id,
     ...(run.task_id?{write_status:this.store.task(run.task_id).status}:{}),next_action:run.status==='running'?'inspect_interrupted_run_do_not_replay':status==='waiting_approval'?'trusted_human_channel_must_approve':status==='approved'?'runtime_pack_execute_approved':'inspect_result'};}
-  private decisionProviders(){
+  private async decisionProviders(){
     const policy=this.config.packs!;let jev=this.providers.jev,llm=this.providers.llm;
     if(policy.models!=='off'){
       requireCondition(policy.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
       if(!jev)try{jev=typeSafeTransportFromHostEnvironment();}catch{}
       if(policy.models==='jev_llm'&&!llm)try{llm=adaptiveLlmFromHostEnvironment();}catch{}
     }else{jev=undefined;llm=undefined;}
-    return {jev,llm,policy};
+    const shadow=this.providers.shadowJev?{id:'shadow-system-one',systemOne:(request:Parameters<JevSystemOneTransport['systemOne']>[0],settings:Parameters<JevSystemOneTransport['systemOne']>[1])=>this.providers.shadowJev!.systemOne(request,settings)}:policy.decision_shadow.provider==='llm'&&llm?structuredModelShadowProvider(llm):undefined;
+    const fallback=rowDecisionProfile(policy.confidence),registry=new DecisionProfileRegistry(join(dirname(this.config.dbPath),'decisions','registry')),profile=jev?(await registry.resolve(ROW_DECISION_CATALOG,this.config.environment==='fixture'?'fixture':'production',fallback)).profile:fallback;
+    const plane=jev?new DecisionPlane({catalog:ROW_DECISION_CATALOG,profile,primary:{id:'typesafe-jev',systemOne:(request,settings)=>jev!.systemOne(request,settings)},...(shadow?{shadow}:{}),journal:new FileDecisionJournal(join(dirname(this.config.dbPath),'decisions','family.jsonl')),shadow_sample_rate:shadow?(this.providers.shadowJev?.systemOne?0.1:policy.decision_shadow.sample_rate):0}):undefined;
+    return {jev,llm,policy,plane};
   }
   async call(name:string,args:unknown):Promise<unknown>{
     const tool=packTools[name as keyof typeof packTools];requireCondition(tool,'UNKNOWN_TOOL');const input=tool.schema.parse(args) as Record<string,unknown>;
@@ -90,10 +94,10 @@ export class FamilyRuntime {
           rows=rows.filter(row=>tokens.every(token=>recipe.search_fields.some(field=>String(row[field]??'').toLocaleLowerCase().includes(token))));
           const unknown:Row[]=[];
           if(recipe.relevance){
-            requireCondition(rows.length<=100,'SEARCH_JUDGMENT_BATCH_TOO_LARGE');const {jev,llm,policy}=this.decisionProviders(),accepted:Row[]=[];
-            for(const row of rows){this.fresh();const decision=await judgeRow(row,recipe.relevance.question,recipe.relevance.labels,policy.confidence,jev,llm);
+            requireCondition(rows.length<=100,'SEARCH_JUDGMENT_BATCH_TOO_LARGE');const {jev,llm,policy,plane}=await this.decisionProviders(),accepted:Row[]=[],decisionTrace=[];
+            for(const row of rows){this.fresh();const decision=await judgeRow(row,recipe.relevance.question,recipe.relevance.labels,policy.confidence,jev,llm,plane,`${run.id}:${snapshotHash(row)}`);decisionTrace.push({event_id:decision.decision_event_id,decider:decision.decider,label:decision.label,shadow_disagreements:decision.shadow_disagreements});
               if(decision.label==='unknown')unknown.push(row);else if(recipe.relevance.accept_labels.includes(decision.label))accepted.push(row);}
-            rows=accepted;if(unknown.length)status='needs_review';
+            rows=accepted;result.decision_trace=decisionTrace;if(unknown.length)status='needs_review';
           }
           rows=sortRows(rows,recipe.sort).slice(0,recipe.limit);result={...result,rows,unknown_rows:unknown,matched_rows:rows.length,coverage:'observed_configured_sources_only',global_minimum_verified:false};break;
         }
@@ -108,9 +112,9 @@ export class FamilyRuntime {
           requireCondition(rows.length<=50,'TRIAGE_BATCH_TOO_LARGE');const policy=this.config.packs!;
           requireCondition(Object.keys(recipe.judgment.labels).length>0&&Object.keys(recipe.judgment.labels).length<=20&&!Object.hasOwn(recipe.judgment.labels,'unknown'),'INVALID_TRIAGE_LABELS');
           requireCondition(Object.keys(recipe.draft_by_label).every(k=>Object.hasOwn(recipe.judgment.labels,k)),'DRAFT_LABEL_UNKNOWN');
-          const {jev,llm}=this.decisionProviders();
+          const {jev,llm,plane}=await this.decisionProviders();
           const items=[];
-          for(const row of rows){this.fresh();const decision=await judgeRow(row,recipe.judgment.question,recipe.judgment.labels,policy.confidence,jev,llm);
+          for(const row of rows){this.fresh();const decision=await judgeRow(row,recipe.judgment.question,recipe.judgment.labels,policy.confidence,jev,llm,plane,`${run.id}:${snapshotHash(row)}`);
             items.push({record:row,...decision,draft:decision.label==='unknown'?null:recipe.draft_by_label[decision.label]??null,sent:false});}
           const unknown=items.filter(item=>item.label==='unknown').length;result={...result,items,unknown_count:unknown,external_messages_sent:0};if(unknown)status='needs_review';break;
         }

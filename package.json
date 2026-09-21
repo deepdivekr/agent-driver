@@ -1,6 +1,6 @@
 {
   "name": "agent-driver",
-  "version": "0.1.0-alpha.14",
+  "version": "0.1.0-alpha.15",
   "private": true,
   "description": "Evidence-led local execution control plane (experimental)",
   "type": "module",
@@ -20,10 +20,10 @@
   "dependencies": {
     "@lydell/node-pty": "1.2.0-beta.15",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "@typesafe-ai/sdk": "0.6.0",
+    "zod": "4.4.3",
     "playwright": "1.63.0",
-    "yaml": "2.9.1",
-    "zod": "4.4.3"
+    "@typesafe-ai/sdk": "0.6.0",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@types/node": "22.20.3",

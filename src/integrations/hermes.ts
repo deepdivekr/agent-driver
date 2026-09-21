@@ -10,7 +10,7 @@ import {type PackStore} from '../packs/store.js';
 import {type PreparedApproval} from '../taskpack/protocol.js';
 
 export const HERMES_AGENT_DRIVER_TOOLS=Object.freeze([
-  'runtime_health','runtime_capabilities_list','runtime_capability_describe',
+  'runtime_health','runtime_decision_status','runtime_capabilities_list','runtime_capability_describe',
   'runtime_pack_catalog','runtime_pack_plan','runtime_pack_run','runtime_pack_status',
   'runtime_pack_execute_approved','runtime_pack_watch_tick','runtime_pack_watch_pause','runtime_pack_events',
   'runtime_channel_route','runtime_task_status','runtime_task_cancel','runtime_artifacts_list',

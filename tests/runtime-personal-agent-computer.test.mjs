@@ -25,7 +25,7 @@ test('runtime contract personal Agent Computer refuses host sharing, unimplement
 });
 
 test('runtime contract existing Ubuntu browser VM is a personal browser computer, not a claim of host or desktop-app access',()=>{
-  const computer=personalAgentComputerFromUbuntuBrowserVm({id:'sample-browser'});
+  const computer=personalAgentComputerFromUbuntuBrowserVm({id:'sampleportal-browser'});
   assert.equal(computer.guest_os,'linux');assert.deepEqual(computer.available_surfaces,['browser']);assert.equal(computer.host_desktop_access,'none');
   assert.throws(()=>bindTaskToPersonalAgentComputer(computer,'task-a',['desktop']),/AGENT_COMPUTER_SURFACE_UNAVAILABLE/);
 });

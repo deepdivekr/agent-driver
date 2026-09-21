@@ -137,7 +137,7 @@ test('runtime fixture adaptive first design then Jev loop corrects a false DONE 
   const first=await runAdaptivePack({task:boundTask,browser:adapter,jev,llm:model,cacheDir:join(root,'cache'),outputDir:join(root,'first'),verify});
   if(first.status!=='succeeded')t.diagnostic(JSON.stringify({reason:first.reason,steps:first.steps,model_calls:first.llm_calls}));
   assert.equal(first.status,'succeeded');assert.equal(first.cache_hit,false);assert.ok(first.steps.some(step=>step.operation==='DONE'&&step.result==='NOT_MATCH'));assert.ok(first.steps.some(step=>step.decider==='llm'));assert.equal(await page.evaluate(()=>window.searchCount),1);assert.equal(await page.evaluate(()=>Boolean(window.paid)),false);
-  assert.equal(first.llm_calls.filter(call=>call.purpose==='design').length,1);
+  assert.equal(first.llm_calls.filter(call=>call.purpose==='design').length,1);assert.ok((await readFile(join(root,'decisions','adaptive.jsonl'),'utf8')).trim().split('\n').length>=first.steps.length);
   await page.goto(boundTask.start_url);
   const second=await runAdaptivePack({task:boundTask,browser:adapter,jev,llm:model,cacheDir:join(root,'cache'),outputDir:join(root,'second'),verify});
   assert.equal(second.status,'succeeded');assert.equal(second.cache_hit,true);assert.equal(second.llm_calls.length,0);assert.ok(second.steps.some(step=>step.operation==='FILL'));assert.ok(second.steps.some(step=>step.operation==='SELECT'));

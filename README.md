@@ -4,7 +4,7 @@
 
 Agent Driver sits between an orchestrating agent (Codex, Claude Code, Hermes, or any MCP client) and the computer it is allowed to use. A user starts with one natural-language request; the runtime turns a successful workflow into a reusable Task Pack, selects deterministic code, TypeSafe/Jev, or an LLM at each decision point, and keeps execution, approval, recovery, and evidence in one place.
 
-> Status: experimental public alpha. The runtime, MCP surface, eight Pack families, durable recovery, owned-browser fixtures, and Linux CLI paths are implemented and tested. Arbitrary-site auto-adaptation, native Windows UIA execution, OS-level always-on service setup, and live-account coverage are not complete.
+> Status: experimental public alpha. The runtime, MCP surface, eight Pack families, durable recovery, common Jev Decision Plane, owned-browser fixtures, and Linux CLI paths are implemented and tested. Production-calibrated decision profiles, arbitrary-site auto-adaptation, native Windows UIA execution, OS-level always-on setup, and broad live-account coverage are not complete.
 
 ## Why
 
@@ -78,11 +78,15 @@ Models propose plans and judgments; they do not grant authority. The runtime rev
 
 See [Pack catalog](docs/pack-catalog.md), [runtime flow](docs/pack-family-runtime.md), [Hermes + Telegram runtime](docs/hermes-telegram-runtime.md), and [first-run UX](docs/first-run.md).
 
-## TypeSafe/Jev in the architecture
+## TypeSafe/Jev Decision Plane
 
-Jev is not restricted to checking whether a page loaded. A Task Pack can use a single typed request to choose the current state, operation, target, and text/value from a fresh element table. The initial LLM-authored specification defines valid choices and completion conditions; the runtime rejects stale or missing candidates and escalates low-confidence or novel states to re-observation or an LLM.
+Jev is not restricted to checking whether a page loaded. A Task Pack can use one typed request to choose current state, operation, target, and text/value from a fresh element table. The initial LLM-authored specification defines valid choices and completion conditions; the runtime rejects stale or missing candidates and escalates low-confidence or novel states to re-observation or an LLM.
+
+Every Pack uses the same per-judgment calibration and shadow-evaluation contract. Exact readback labels, disjoint train/holdout splits, a Wilson precision lower bound, immutable content-addressed profiles, operator-only promotion, and rollback prevent a small perfect-looking sample from silently becoming production policy. MCP exposes read-only aggregate status; neither Jev nor an LLM can promote a profile or approve an external effect.
 
 Selectors, Playwright locators, and coordinates are execution references, not competitors to AI. A verified deterministic step can be fastest; Jev is useful for repeated variable judgments; an LLM handles first-run exploration, replanning, and free-form generation.
+
+The real-provider canary used 106 TypeSafe calls. Median provider latency was 233–252ms depending on the catalog, and one adaptive `stuck` judgment was wrong. All resulting profiles remain fixture `shadow_only`; no production profile has been promoted. See [Decision Plane](docs/decision-plane.md) and [alpha.15 readiness](docs/release-readiness-alpha-15.md).
 
 ## Safety model
 

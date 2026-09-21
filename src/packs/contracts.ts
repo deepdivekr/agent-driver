@@ -33,7 +33,10 @@ export const packPolicySchema=z.object({
   models:z.enum(['off','jev','jev_llm']).default('off'),
   confidence:z.number().min(.5).max(1).default(.9),
   model_data_approved:z.boolean().default(false),
-}).strict();
+  decision_shadow:z.object({provider:z.enum(['off','llm']).default('off'),sample_rate:z.number().min(0).max(1).default(.1)}).strict().default({provider:'off',sample_rate:.1}),
+}).strict().superRefine((value,context)=>{
+  if(value.decision_shadow.provider==='llm'&&value.models!=='jev_llm')context.addIssue({code:'custom',message:'LLM shadow requires jev_llm'});
+});
 export type PackPolicy=z.infer<typeof packPolicySchema>;
 export type Source=z.infer<typeof sourceSchema>;
 export type Target=z.infer<typeof targetSchema>;

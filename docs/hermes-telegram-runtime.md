@@ -20,7 +20,7 @@ Hermes는 공식 Telegram gateway와 MCP client를 이미 제공하므로 Agent 
 Agent Driver를 빌드하고 로컬 연결을 승인한 뒤 실행한다.
 
 ```bash
-cd /path/to/agent-driver
+cd agent-driver
 npm ci
 npm run build
 node dist/cli.js connect

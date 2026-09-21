@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {TypeSafeJevDecisionLayer,compileOneLineJevRequest,openAiTargetedLlmExtractorFromHostEnvironment,openAiTargetedLlmRequest,resolveTargetedLlmExtraction,typeSafeTransportFromHostEnvironment} from '../dist/taskpack/typesafe-jev.js';
 
 const input={
-  request:'이름 김민수와 메모 오후에 다시 연락으로 초안 저장해줘',policy_version:'sample_form_v1',
+  request:'이름 김민수와 메모 오후에 다시 연락으로 초안 저장해줘',policy_version:'sampleportal_v1',
   routes:[{id:'draft_save',description:'Save a contact draft.'},{id:'report_export',description:'Export a report.'}],
   fields:[
     {id:'name',route_id:'draft_save',description:'Contact name.',required:true,candidates:[{id:'name_candidate',description:'Exact user text candidate for 김민수.'}]},

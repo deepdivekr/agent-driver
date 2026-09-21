@@ -13,7 +13,7 @@ async function setup(t){
   t.after(async()=>{await rm(root,{recursive:true,force:true});});
   return {root,base,sha:createHash('sha256').update(await readFile(base)).digest('hex')};
 }
-function spec(x,overrides={}){return {id:'sample-browser',storage_root:join(x.root,'vms'),base_image:x.base,base_image_sha256:x.sha,memory_mib:2048,cpus:2,disk_gib:20,ssh_port:2222,devtools_port:9222,vnc_port:5901,guest_user:'agentdriver',...overrides};}
+function spec(x,overrides={}){return {id:'sampleportal-browser',storage_root:join(x.root,'vms'),base_image:x.base,base_image_sha256:x.sha,memory_mib:2048,cpus:2,disk_gib:20,ssh_port:2222,devtools_port:9222,vnc_port:5901,guest_user:'agentdriver',...overrides};}
 function fakeRunner(calls){return {async run(command,args){
   calls.push({command,args:[...args]});
   if(command==='qemu-img'&&args[0]==='create')await writeFile(args.at(-2),'overlay');
@@ -54,11 +54,11 @@ test('runtime contract VM image download publishes a default only after its pinn
   await assert.rejects(downloadVerifiedVmImage(x.root,{...image,filename:'bad.img',sha256:'0'.repeat(64)},{async fetch(){return new Response(bytes);}}),/VM_BASE_IMAGE_HASH_MISMATCH/);
 });
 test('runtime contract VM Playwright bridge permits only an explicit loopback-forwarded endpoint',()=>{
-  const bridge=new OwnedVmCdpPage('sample-browser',9222,join(tmpdir(),'agent-driver-captures'));
-  assert.equal(bridge.endpoint,'http://127.0.0.1:9222');assert.throws(()=>new OwnedVmCdpPage('bad/id',9222,'/tmp/captures'),/INVALID_VM_ID/);assert.throws(()=>new OwnedVmCdpPage('sample-browser',80,'/tmp/captures'),/INVALID_VM_DEVTOOLS_PORT/);
+  const bridge=new OwnedVmCdpPage('sampleportal-browser',9222,join(tmpdir(),'agent-driver-captures'));
+  assert.equal(bridge.endpoint,'http://127.0.0.1:9222');assert.throws(()=>new OwnedVmCdpPage('bad/id',9222,'/tmp/captures'),/INVALID_VM_ID/);assert.throws(()=>new OwnedVmCdpPage('sampleportal-browser',80,'/tmp/captures'),/INVALID_VM_DEVTOOLS_PORT/);
 });
 test('runtime contract VM signal inspection validates its bounded read-only surface before connecting',async()=>{
-  const bridge=new OwnedVmCdpPage('sample-browser',9222,join(tmpdir(),'agent-driver-captures'));
+  const bridge=new OwnedVmCdpPage('sampleportal-browser',9222,join(tmpdir(),'agent-driver-captures'));
   await assert.rejects(bridge.ownedPageSignalSnapshot('https://example.test','/main',[{id:'Bad-id',selector:'#login'}]),/INVALID_VM_SIGNAL_ID/);
   await assert.rejects(bridge.ownedPageSignalSnapshot('https://example.test','/main',[]),/INVALID_VM_SIGNAL_COUNT/);
   await assert.rejects(bridge.ownedPageSignalSnapshot('https://example.test','/main',[{id:'login',selector:'\n'}]),/INVALID_VM_SIGNAL_SELECTOR/);

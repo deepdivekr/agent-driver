@@ -34,6 +34,8 @@ Jev는 선택 사항이며 **상태 확인 전용으로 제한하지 않는다**
 
 각 Jev 지점의 설계에는 `입력 state → 질문/출력 타입 → 후보 생성 근거 → 결과 사용 방법 → 실행 후 검증 → 실패 시 재관측/LLM 전환 → 평가 데이터`를 남긴다. 관측 시점이 바뀌면 오래된 대상 선택을 그대로 실행하지 않는다. 정확한 숫자·날짜·출처 값은 가능한 한 코드로 복사·정규화한다. 확률 임계값은 역할과 데이터에 맞춰 평가하며 보편 임계값 하나로 모든 단계를 중단하지 않는다. 후보 누락·증거 누락·모델 오답·실행기 오류를 구분한다.
 
+이 계약은 이제 Pack별 임의 구현이 아니라 공통 [Decision Plane](decision-plane.md)에서 강제한다. 최초 profile은 `provisional`이고, 판단 ID별 train/holdout 라벨이 충분한 항목만 `validated` live 규칙으로 승격한다. LLM이나 다른 System One provider의 비교 결과는 shadow journal에만 남으며 live 선택을 덮어쓰지 않는다.
+
 이 표는 Pack 설계 기준이다. 현재 공통 family runtime은 호출 에이전트의 LLM이 만든 recipe를 검증·실행·성공 후 재사용한다. `inbox.triage`와 선택적 검색 관련성 판단은 Jev 우선·LLM 보정·unknown 경로를 쓸 수 있다. 자유 UI의 state/action/target 판단은 별도의 adaptive browser loop가 제공된다. 두 경로를 하나의 임의 사이트 자동 연결기로 합쳤다는 뜻은 아니다. typed 응답과 높은 확률도 실행 권한·제출 승인·실제 성공을 대신하지 않는다.
 
 ### 브라우저 손 선택

@@ -17,7 +17,13 @@ import {resourceHealth} from '../resources/configured.js';
 import {storageError} from '../storage/budget.js';
 import {routeHumanChannelMessage} from '../integrations/human-channel.js';
 import {type JevSystemOneTransport,typeSafeTransportFromHostEnvironment} from '../taskpack/typesafe-jev.js';
+import {ONE_LINE_DECISION_CATALOG,oneLineDecisionProfile} from '../taskpack/typesafe-jev.js';
 import {type PackApprovalDispatcher} from '../packs/runtime.js';
+import {dirname,join} from 'node:path';
+import {DecisionPlane,DecisionProfileRegistry,FileDecisionJournal} from '../decision-plane/index.js';
+import {auditDecisionJournal,decisionOperationsReport} from '../decision-plane/index.js';
+import {ROW_DECISION_CATALOG} from '../packs/judgment.js';
+import {ADAPTIVE_DECISION_CATALOG} from '../taskpack/adaptive-decision.js';
 
 export interface RuntimeApiOptions {channelTransport?:JevSystemOneTransport;approval?:PackApprovalDispatcher;}
 
@@ -33,7 +39,9 @@ export class RuntimeApi{
     if(name==='runtime_channel_route'){
       let transport=this.options.channelTransport;
       if(!transport&&this.config.packs?.models!=='off'&&this.config.packs?.model_data_approved)try{transport=typeSafeTransportFromHostEnvironment();}catch{}
-      return routeHumanChannelMessage(args,transport);
+      if(!transport)return routeHumanChannelMessage(args);
+      const registry=new DecisionProfileRegistry(join(dirname(this.config.dbPath),'decisions','registry')),profile=(await registry.resolve(ONE_LINE_DECISION_CATALOG,this.config.environment==='fixture'?'fixture':'production',oneLineDecisionProfile())).profile,plane=new DecisionPlane({catalog:ONE_LINE_DECISION_CATALOG,profile,primary:{id:'typesafe-jev',systemOne:(request,settings)=>transport!.systemOne(request,settings)},journal:new FileDecisionJournal(join(dirname(this.config.dbPath),'decisions','intake.jsonl')),timeout_ms:1_500});
+      return routeHumanChannelMessage(args,transport,plane);
     }
     if(name.startsWith('runtime_pack_')){
       const ledger=this.store.storage(this.config),writes=['runtime_pack_run','runtime_pack_execute_approved','runtime_pack_watch_tick'].includes(name),reservation=writes?ledger.reserve('pack_execution',16_777_216):null;
@@ -55,6 +63,11 @@ export class RuntimeApi{
     let failed = false;
     try {switch(name){
       case 'runtime_storage_status':return ledger.status();
+      case 'runtime_decision_status':{
+        const root=join(dirname(this.config.dbPath),'decisions'),registry=new DecisionProfileRegistry(join(root,'registry')),scope=this.config.environment==='fixture'?'fixture' as const:'production' as const,entries=[{catalog:ROW_DECISION_CATALOG,journal:'family.jsonl'},{catalog:ONE_LINE_DECISION_CATALOG,journal:'intake.jsonl'},{catalog:ADAPTIVE_DECISION_CATALOG,journal:'adaptive.jsonl'}],decisions=[];
+        for(const entry of entries)try{const profile=await registry.status(entry.catalog,scope),audit=await auditDecisionJournal(join(root,entry.journal)),report=decisionOperationsReport(entry.catalog,'jev-latest',audit);decisions.push({catalog_id:entry.catalog.id,profile,events:report.events,judgments:report.judgments,labeled:report.labels.valid,journal_errors:report.journal_errors.length,provider:report.provider,by_decision:report.by_decision});}catch(error){decisions.push({catalog_id:entry.catalog.id,profile:{status:'invalid'},error:error instanceof Error&&/^DECISION_[A-Z_]+$/u.test(error.message)?error.message:'DECISION_STATUS_UNAVAILABLE'});}
+        return {scope,decisions,mutation_allowed:false,profile_promotion_exposed:false};
+      }
       case 'runtime_storage_plan':return this.store.retention(this.config).plan();
       case 'runtime_storage_prune':return this.store.retention(this.config).execute(String(input.plan_sha256));
       case 'runtime_storage_recover_reservations':return ledger.reapDeadOwners();

@@ -11,8 +11,8 @@ const sha256=value=>createHash('sha256').update(value).digest('hex');
 async function fixture(t){
   const root=await mkdtemp(join(tmpdir(),'agent-driver-explicit-transfer-'));
   const sourceRoot=join(root,'outputs'),destinationRoot=join(root,'windows-downloads');
-  const sourceRelativePath='received-data/sample-measurements.xlsx';
-  const destinationFilename='sample-measurements-monthly.xlsx';
+  const sourceRelativePath='received-data/sampleportal-nox-o2-tm1.xlsx';
+  const destinationFilename='sampleportal-nox-o2-tm1-monthly.xlsx';
   const bytes=Buffer.from('private workbook fixture');
   await mkdir(join(sourceRoot,'received-data'),{recursive:true});
   await writeFile(join(sourceRoot,sourceRelativePath),bytes,{mode:0o600});
@@ -22,7 +22,7 @@ async function fixture(t){
 
 test('explicit Windows file transfer copies only hash-bound files below fixed roots and is idempotent',async t=>{
   const x=await fixture(t),executor=new ExplicitWindowsFileTransferExecutor({source_root:x.sourceRoot,destination_root:x.destinationRoot,max_file_bytes:1024});
-  const request={task_id:'sample-download-2026-09-21',files:[{source_relative_path:x.sourceRelativePath,destination_filename:x.destinationFilename,sha256:x.hash}]};
+  const request={task_id:'sampleportal-download-2026-09-21',files:[{source_relative_path:x.sourceRelativePath,destination_filename:x.destinationFilename,sha256:x.hash}]};
   const first=await executor.transfer(request);
   assert.equal(first.files[0]?.state,'transferred');
   assert.deepEqual(await readFile(join(x.destinationRoot,x.destinationFilename)),x.bytes);
