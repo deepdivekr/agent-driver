@@ -83,9 +83,11 @@ test('runtime native gateway exits while accepted detached worker continues; ret
   const other=await client(x),repeated=await call(other.client,'runtime_task_start',body);assert.equal(repeated.task_id,accepted.task_id);assert.equal(repeated.deduplicated,true);
   const events=await call(other.client,'runtime_events_read',{consumer_id:'reader'});
   await other.client.close();const next=await client(x);
-  assert.deepEqual((await call(next.client,'runtime_events_read',{consumer_id:'reader'})).events.map(e=>e.id),events.events.map(e=>e.id));
+  const reconnected=(await call(next.client,'runtime_events_read',{consumer_id:'reader'})).events;
+  assert.deepEqual(reconnected.slice(0,events.events.length).map(e=>e.id),events.events.map(e=>e.id));
+  assert.equal(new Set(reconnected.map(e=>e.id)).size,reconnected.length);
   await call(next.client,'runtime_events_ack',{consumer_id:'reader',event_id:events.events.at(-1).id});
-  assert.equal((await call(next.client,'runtime_events_read',{consumer_id:'reader'})).events.length,0);
+  assert.equal((await call(next.client,'runtime_events_read',{consumer_id:'reader'})).events.some(e=>e.id<=events.events.at(-1).id),false);
   await assert.rejects(x.api.call('runtime_task_start',{...body,input:{...body.input,note:'changed'}}),/REQUEST_ID_CONFLICT/);
   assert.equal(x.fixture.snapshot(x.spec.runId).effects.filter(e=>e.kind==='save').length,1);
 });

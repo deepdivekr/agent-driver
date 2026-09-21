@@ -243,7 +243,7 @@ export async function runSoak(input){
     const a=await terminal.api.call('runtime_terminal_start',{request_id:'load-'+cycles});load=a.session_ref;
     await until(()=>terminal.api.store.session(load).state==='input_ready');
     const s=terminal.api.store.session(load);
-    const t=await terminal.api.call('runtime_terminal_submit_prompt',{request_id:'stream-'+cycles,session_ref:load,expected_generation:s.generation,expected_previous_turn_id:null,prompt:'owned-load-stream'});
+    const t=await terminal.api.call('runtime_terminal_submit_prompt',{request_id:'stream-'+cycles,session_ref:load,expected_generation:s.generation,expected_previous_turn_id:null,prompt:'owned-soak-load-stream'});
     await until(()=>terminal.api.store.turn(t.turn_id).status==='acknowledged');
     load={id:load,turn:t.turn_id};
    }

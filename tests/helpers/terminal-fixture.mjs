@@ -14,9 +14,12 @@ lines.on('line', line => {void (async () => {
   if (mode === 'before-ack') {while (!existsSync(join(root, 'release'))) await wait(10);}
   if (mode === 'no-ack') {emit({type: 'result', subtype: 'success', is_error: false, permission_denials: [], result: 'unbound'}); return;}
   emit({...input, type: 'user', session_id: mode === 'wrong-session' ? 'foreign-session' : session});
-  if (input.message.content === 'owned-load-stream') {
+  if (input.message.content === 'owned-load-stream' || input.message.content === 'owned-soak-load-stream') {
     // Finite producer, honors the OS pipe. No API/model or unbounded write queue.
-    for (let i = 0; i < 50000; i++) {
+    // The dedicated load test retains 50k frames. The mixed soak uses a smaller
+    // overlapping stream so it tests fairness without duplicating that stress case.
+    const frames = input.message.content === 'owned-load-stream' ? 50000 : 12000;
+    for (let i = 0; i < frames; i++) {
       if (!emit({type: 'assistant', uuid: `${i}`.padEnd(150, 'x')})) await once(process.stdout, 'drain');
     }
     return;
