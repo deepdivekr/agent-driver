@@ -4,7 +4,7 @@
 
 사용자는 에이전트에게 자연어로 일을 요청합니다. Agent Driver는 화면을 관측하고, 적절한 실행기와 판단기를 고르고, 사람의 승인이 필요한 지점에서 멈추고, 작업 뒤 결과를 다시 읽어 확인합니다. 성공한 흐름은 같은 종류의 다음 작업에서 재사용할 수 있는 Task Pack recipe가 됩니다.
 
-> **현재 상태:** `v0.1.0-alpha.15` 공개 alpha입니다. Linux/WSL의 로컬 MCP·CLI, 8개 Pack family, durable recovery, 공통 Jev Decision Plane, agent-owned browser와 Ubuntu browser VM 경로를 구현·검증했습니다. 모든 사이트 자동 적응, production-calibrated 판단 profile, native Windows/macOS 데스크톱 제어, OS 상주 설치는 아직 완성된 기능이 아닙니다.
+> **현재 상태:** `v0.1.0-alpha.16` 공개 alpha입니다. Linux/WSL의 로컬 MCP·CLI, 8개 Pack family, durable recovery, 공통 Jev Decision Plane, LLM Supervisor Swarm Mode, agent-owned browser와 Ubuntu browser VM 경로를 구현·검증했습니다. 모든 사이트 자동 적응, production-calibrated 판단 profile, native Windows/macOS 데스크톱 제어, OS 상주 설치는 아직 완성된 기능이 아닙니다.
 
 ## 한눈에 보기
 
@@ -13,9 +13,10 @@
 | MCP인가요? | **예.** MCP 클라이언트가 로컬 stdio 명령 `agent-driver mcp`를 실행해 연결합니다. |
 | 플러그인인가요? | **아니요.** 특정 에이전트에 종속된 플러그인이 아닙니다. MCP를 지원하는 클라이언트가 같은 서버를 사용합니다. |
 | 별도 앱인가요? | 로컬 Node.js runtime과 CLI입니다. 연결 승인에는 loopback 전용 로컬 화면을 씁니다. |
-| 클라우드 서비스인가요? | **아니요.** 실행 상태·SQLite DB·브라우저 profile은 기본적으로 이 컴퓨터에 남습니다. Jev를 켠 판단만 TypeSafe API를 호출합니다. |
+| 클라우드 서비스인가요? | **아니요.** 실행 상태·SQLite DB·브라우저 profile은 기본적으로 이 컴퓨터에 남습니다. 사용자가 연결한 Jev 판단과 LLM 계획만 각 provider API를 호출합니다. |
 | Hermes가 필수인가요? | **아니요.** 권장 상위 runtime입니다. Telegram 대화·계획·기억은 Hermes가, 실제 실행·승인·복구·검증은 Agent Driver가 맡습니다. 다른 MCP 클라이언트도 직접 연결할 수 있습니다. |
 | Jev가 필수인가요? | **아니요.** 처음 설치할 때 필요하지 않습니다. 반복되는 짧은 판단에 이득이 있을 때 연결합니다. |
+| Swarm Mode는 뭔가요? | 큰 목표를 LLM이 2개 이상의 논리 worker DAG로 나누고 MCP client가 worker별 sub-agent를 소환하는 선택 모드입니다. |
 
 ## 어떻게 돌아가나요?
 
@@ -36,6 +37,24 @@
 - **executor**는 agent-owned browser, 격리된 CLI, bounded file pipeline 또는 선택형 personal VM입니다.
 
 모델의 답은 제안이지 권한이 아닙니다. 실제 클릭·입력·제출 전에 runtime이 origin, candidate, freshness, effect boundary와 approval을 다시 검사합니다.
+
+## Swarm Mode
+
+Swarm Mode에서는 LLM Supervisor의 작업 분해가 필수입니다. 단일 worker 계획이나 LLM planner가 없는 환경은 일반 Pack으로 조용히 강등하지 않고 거부합니다.
+
+```text
+목표 → LLM이 2~300개 논리 worker DAG 제안 → 코드 검증
+     → next worker 임대 → MCP client가 sub-agent 소환
+     → artifact + 독립 readback 보고 → 품질·다음 단계 판단
+```
+
+- 300은 논리 worker 상한이고 실제 동시 실행 기본값은 8, 최대값은 32입니다.
+- `dispatch.next_actor`, `artifact.quality`, `workflow.next_step`은 공통 Decision Plane을 씁니다.
+- Jev가 없거나 판단이 calibration gate를 못 넘으면 LLM structured fallback이 맡습니다.
+- 외부 효과·되돌릴 수 없는 작업, 만료된 worker, 낮은 품질은 사람 예외 큐로 갑니다.
+- 모든 worker의 독립 readback 전에는 LLM/Jev가 완료라고 해도 완료되지 않습니다.
+
+MCP 도구 흐름은 `runtime_swarm_plan → runtime_swarm_run → runtime_swarm_tick → runtime_swarm_report → runtime_swarm_status`입니다. `tick`이 반환한 작업마다 Hermes·Codex 같은 상위 MCP client가 실제 sub-agent를 소환합니다. 자세한 계약은 [Swarm Mode](docs/swarm-mode.md)에 있습니다.
 
 ## 어떻게 서빙되나요?
 
@@ -86,7 +105,7 @@ Jev는 브라우저를 직접 클릭하는 별도 executor가 아닙니다. 현�
 - 저신뢰 `review/no_match`, LLM·사람 fallback
 - operator만 가능한 profile promote/rollback
 
-실제 TypeSafe provider canary에서는 106회 호출, catalog별 p50 233–252ms, adaptive `stuck` 오답 1건을 기록했습니다. 현재 생성된 profile은 모두 fixture `shadow_only`이며 **production profile 승격은 0건**입니다. 자세한 근거는 [Decision Plane](docs/decision-plane.md)과 [alpha.15 readiness](docs/release-readiness-alpha-15.md)에 있습니다.
+실제 TypeSafe provider canary에서는 106회 호출, catalog별 p50 233–252ms, adaptive `stuck` 오답 1건을 기록했습니다. 현재 생성된 profile은 모두 fixture `shadow_only`이며 **production profile 승격은 0건**입니다. Swarm 판단군 역시 production calibration 전에는 같은 보수적 gate를 따릅니다. 자세한 근거는 [Decision Plane](docs/decision-plane.md)과 [alpha.15 readiness](docs/release-readiness-alpha-15.md)에 있습니다.
 
 ## 필요한 환경
 

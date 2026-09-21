@@ -7,6 +7,7 @@ import {fileDelegation} from '../terminal/file-contracts.js';
 import {resourceBudgetSchema,type ResourceBudget} from '../resources/budget.js';
 import {storagePolicySchema,type StoragePolicy} from '../storage/budget.js';
 import {packPolicySchema,type PackPolicy} from '../packs/contracts.js';
+import {swarmPolicySchema,type SwarmPolicy} from '../swarm/contracts.js';
 
 const identifier=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const TerminalConfigSchema=z.object({
@@ -28,6 +29,7 @@ export const HostConfigSchema=z.object({
   resources:resourceBudgetSchema.optional(),
   storage:storagePolicySchema.optional(),
   packs:packPolicySchema.optional(),
+  swarm:swarmPolicySchema.optional(),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
@@ -37,6 +39,7 @@ export interface HostConfig {
   resources:ResourceBudget|null;
   storage:StoragePolicy|null;
   packs:PackPolicy|null;
+  swarm:SwarmPolicy|null;
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
@@ -82,6 +85,6 @@ export function loadHostConfig(path:string):HostConfig {
     requireCondition(packs.models==='off'||packs.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
   }
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,
+  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,
     fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
 }

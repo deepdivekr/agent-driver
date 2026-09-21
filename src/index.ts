@@ -14,3 +14,4 @@ export * from "./onboarding/index.js";
 export * from "./demo/index.js";
 export * from "./packs/index.js";
 export * from "./decision-plane/index.js";
+export * from "./swarm/index.js";

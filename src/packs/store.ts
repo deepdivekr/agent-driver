@@ -11,6 +11,8 @@ export class PackStore extends TerminalStore {
     CREATE TABLE IF NOT EXISTS family_spec(project_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,binding TEXT NOT NULL,recipe TEXT NOT NULL,PRIMARY KEY(project_id,prompt_hash));
     CREATE TABLE IF NOT EXISTS family_watch(run_id TEXT PRIMARY KEY,next_ms INTEGER NOT NULL,paused INTEGER NOT NULL DEFAULT 0,baseline TEXT NOT NULL,cycle INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS family_event(id INTEGER PRIMARY KEY AUTOINCREMENT,project_id TEXT NOT NULL,run_id TEXT NOT NULL,kind TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS swarm_plan(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,binding TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS swarm_run(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,request_id TEXT NOT NULL,binding TEXT NOT NULL,plan_id TEXT NOT NULL,revision INTEGER NOT NULL,snapshot TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(project_id,request_id));
   `);}
   packRun(project:string,id:string):PackRun{
     const row=this.connection.prepare('SELECT * FROM family_run WHERE project_id=? AND id=?').get(project,id);requireCondition(row,'PACK_RUN_NOT_FOUND');
@@ -54,4 +56,28 @@ export class PackStore extends TerminalStore {
     });
   }
   packEvents(project:string,after:number,limit:number){return this.connection.prepare('SELECT * FROM family_event WHERE project_id=? AND id>? ORDER BY id LIMIT ?').all(project,after,limit).map(row=>({...row,body:JSON.parse(String(row.body)) as unknown}));}
+  saveSwarmPlan(project:string,plan:{plan_id:string},fingerprint:string){
+    const binding=snapshotHash({plan,fingerprint}),now=new Date().toISOString();
+    this.connection.prepare('INSERT INTO swarm_plan VALUES (?,?,?,?,?)').run(plan.plan_id,project,binding,JSON.stringify(plan),now);
+  }
+  swarmPlan(project:string,id:string){
+    const row=this.connection.prepare('SELECT binding,body FROM swarm_plan WHERE project_id=? AND id=?').get(project,id);requireCondition(row,'SWARM_PLAN_NOT_FOUND');return {plan:JSON.parse(String(row.body)) as unknown,binding:String(row.binding)};
+  }
+  beginSwarmRun(project:string,requestId:string,planId:string,snapshot:{run_id:string;plan:unknown;revision:number;created_at:string;updated_at:string},fingerprint:string){
+    const binding=snapshotHash({plan:snapshot.plan,fingerprint});
+    return this.transaction(()=>{
+      const old=this.connection.prepare('SELECT id,binding,snapshot FROM swarm_run WHERE project_id=? AND request_id=?').get(project,requestId);
+      if(old){requireCondition(old.binding===binding,'SWARM_REQUEST_ID_CONFLICT');return {snapshot:JSON.parse(String(old.snapshot)) as unknown,binding:String(old.binding)};}
+      this.connection.prepare('INSERT INTO swarm_run VALUES (?,?,?,?,?,?,?,?,?)').run(snapshot.run_id,project,requestId,binding,planId,snapshot.revision,JSON.stringify(snapshot),snapshot.created_at,snapshot.updated_at);
+      return {snapshot,binding};
+    });
+  }
+  swarmRun(project:string,id:string){
+    const row=this.connection.prepare('SELECT binding,snapshot FROM swarm_run WHERE project_id=? AND id=?').get(project,id);requireCondition(row,'SWARM_RUN_NOT_FOUND');return {snapshot:JSON.parse(String(row.snapshot)) as unknown,binding:String(row.binding)};
+  }
+  updateSwarmRun(project:string,id:string,expectedRevision:number,snapshot:{revision:number;updated_at:string}){
+    requireCondition(snapshot.revision===expectedRevision+1,'SWARM_REVISION_INVALID');
+    const result=this.connection.prepare('UPDATE swarm_run SET revision=?,snapshot=?,updated_at=? WHERE project_id=? AND id=? AND revision=?').run(snapshot.revision,JSON.stringify(snapshot),snapshot.updated_at,project,id,expectedRevision);
+    requireCondition(result.changes===1,'SWARM_REVISION_CONFLICT');
+  }
 }
