@@ -1,11 +1,13 @@
 node_modules/
 dist/
 .runtime/
+.secrets/
 .env
 .env.*
 *.log
 *.sqlite*
 tests/report.json
 tests/evidence/
+artifacts/
 *:Zone.Identifier
 .public-export*

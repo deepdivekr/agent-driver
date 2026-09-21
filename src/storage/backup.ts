@@ -5,7 +5,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {requireCondition} from '../core/contracts.js';
 import {inspectSnapshot} from './snapshot.js';
-import {MIGRATION_7} from '../store/migration.js';
+import {MIGRATION_7,MIGRATION_8} from '../store/migration.js';
 import {withArtifactDirectory,type ArtifactManifest,fileIdentity} from './artifacts.js';
 
 const MiB=1048576,defaultBudget=128*MiB,maxBudget=512*MiB,flags=constants.O_RDONLY|constants.O_DIRECTORY|constants.O_NOFOLLOW;
@@ -13,7 +13,7 @@ const hash=(b:Buffer|string)=>createHash('sha256').update(b).digest('hex');
 const sha=z.string().regex(/^[a-f0-9]{64}$/);
 const entrySchema=z.object({path:z.string().max(240),bytes:z.number().int().nonnegative().max(maxBudget),sha256:sha}).strict();
 const summarySchema=z.object({
- schema_version:z.union([z.literal(6),z.literal(7)]),schema_sha256:sha,instance_id:z.string().max(100),mode:z.string().max(40),
+ schema_version:z.union([z.literal(6),z.literal(7),z.literal(8)]),schema_sha256:sha,instance_id:z.string().max(100),mode:z.string().max(40),
  projects:z.number().int().nonnegative(),tasks:z.number().int().nonnegative(),events:z.number().int().nonnegative(),max_event_id:z.number().int().nonnegative(),
  turns:z.number().int().nonnegative(),intents:z.number().int().nonnegative(),file_intents:z.number().int().nonnegative(),cursors:z.number().int().nonnegative(),
  task_states:z.array(z.object({status:z.string().max(100),count:z.number().int().nonnegative()}).strict()).max(100),
@@ -142,6 +142,7 @@ export async function createBackup(database:string,destination:string,options:{m
    requireCondition(JSON.stringify(inspectSnapshot(snapshot))===JSON.stringify(initial),'BACKUP_SNAPSHOT_MISMATCH');artifacts=sourceArtifacts(snapshot);
    snapshot.exec('PRAGMA journal_mode=DELETE; PRAGMA synchronous=FULL; BEGIN IMMEDIATE;');
    if(initial.schema_version===6)snapshot.exec(MIGRATION_7);
+   if(initial.schema_version<=7)snapshot.exec(MIGRATION_8);
    snapshot.prepare("UPDATE runtime_identity SET instance_id=?,mode='quarantined',provenance_json=? WHERE singleton=1").run(randomUUID(),JSON.stringify({backup_id:id,source_instance:initial.instance_id,post_snapshot_effects:'unknown'}));
    snapshot.exec('COMMIT;');observed=inspectSnapshot(snapshot);
   }finally{snapshot.close();}
@@ -212,7 +213,8 @@ export async function restoreBackup(directory:string,destination:string,options:
   try{
    db.exec('PRAGMA synchronous=FULL; BEGIN IMMEDIATE;');
    try{
-    requireCondition(old.snapshot.schema_version===7&&old.snapshot.mode==='quarantined','RESTORE_QUARANTINE_MISSING');
+    requireCondition((old.snapshot.schema_version===7||old.snapshot.schema_version===8)&&old.snapshot.mode==='quarantined','RESTORE_QUARANTINE_MISSING');
+    if(old.snapshot.schema_version===7)db.exec(MIGRATION_8);
     db.prepare("UPDATE runtime_identity SET instance_id=?,mode='quarantined',provenance_json=? WHERE singleton=1").run(randomUUID(),JSON.stringify({backup_id:old.id,backup_sha256:verified.sha256,source_instance:old.source_snapshot.instance_id,max_event_id:old.snapshot.max_event_id,post_snapshot_effects:'unknown'}));
     db.exec('COMMIT');
    }catch(error){try{db.exec('ROLLBACK');}catch{}throw error;}

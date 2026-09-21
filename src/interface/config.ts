@@ -6,6 +6,7 @@ import {requireCondition, type ProjectBinding} from '../core/contracts.js';
 import {fileDelegation} from '../terminal/file-contracts.js';
 import {resourceBudgetSchema,type ResourceBudget} from '../resources/budget.js';
 import {storagePolicySchema,type StoragePolicy} from '../storage/budget.js';
+import {packPolicySchema,type PackPolicy} from '../packs/contracts.js';
 
 const identifier=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const TerminalConfigSchema=z.object({
@@ -26,6 +27,7 @@ export const HostConfigSchema=z.object({
   terminal:TerminalConfigSchema.optional(),
   resources:resourceBudgetSchema.optional(),
   storage:storagePolicySchema.optional(),
+  packs:packPolicySchema.optional(),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
@@ -34,6 +36,7 @@ export interface HostConfig {
   terminal:TerminalConfig|null;
   resources:ResourceBudget|null;
   storage:StoragePolicy|null;
+  packs:PackPolicy|null;
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
@@ -66,7 +69,19 @@ export function loadHostConfig(path:string):HostConfig {
     }
     terminal={...raw.terminal,executable};executableStamp={executable,size:stat.size,mtime:stat.mtimeMs};
   }
-  const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:origin?[origin]:[],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[])]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,
+  const packs=raw.packs??null;
+  if(packs){
+    for(const items of [packs.sources,packs.targets])requireCondition(new Set(items.map(s=>s.id)).size===items.length,'DUPLICATE_PACK_CONNECTION');
+    for(const source of packs.sources)if(source.kind==='file'){
+      source.path=resolve(worktree,source.path);
+      requireCondition(!/(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|\.secrets|\.ssh|\.aws|credentials(?:\.json)?)(?:[\\/]|$)/iu.test(source.path),'PACK_SECRET_SOURCE_FORBIDDEN');
+    }
+    const urls=[...packs.sources.flatMap(s=>s.kind==='file'?[]:[s.url]),...packs.targets.flatMap(t=>[t.url,t.readback_url])];
+    for(const value of urls){const url=new URL(value);requireCondition((url.protocol==='https:'||raw.environment==='fixture'&&url.protocol==='http:'&&url.hostname==='127.0.0.1')&&!url.username&&!url.password&&!url.hash,'PACK_URL_NOT_ALLOWED');requireCondition(![...url.searchParams.keys()].some(k=>/token|password|api.?key|secret/iu.test(k)),'PACK_URL_CONTAINS_SECRET');}
+    for(const target of packs.targets)requireCondition(new URL(target.url).origin===new URL(target.readback_url).origin,'PACK_READBACK_ORIGIN_MISMATCH');
+    requireCondition(packs.models==='off'||packs.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
+  }
+  const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
+  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,
     fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
 }

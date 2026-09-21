@@ -98,3 +98,26 @@ CREATE TABLE runtime_identity(singleton INTEGER PRIMARY KEY CHECK(singleton=1),i
 INSERT INTO runtime_identity VALUES (1,lower(hex(randomblob(16))),'active',NULL);
 UPDATE schema_version SET version=7;
 `;
+
+// Approval material deliberately lives beside the task and command-intent journals.
+// The clear-text capability is returned only to a trusted delivery adapter and is
+// never persisted; a model/MCP caller cannot mint or accept an approval itself.
+export const MIGRATION_8 = `
+CREATE TABLE task_proposal(
+ task_id TEXT PRIMARY KEY REFERENCES task(id),
+ pack_id TEXT NOT NULL, pack_version INTEGER NOT NULL, adapter_id TEXT NOT NULL,
+ caller_ref TEXT NOT NULL, normalized_json TEXT NOT NULL, normalized_hash TEXT NOT NULL,
+ snapshot_json TEXT, snapshot_hash TEXT,
+ state TEXT NOT NULL CHECK(state IN ('draft','waiting_approval','approved','consumed','cancelled','expired','invalidated')),
+ approval_token_hash TEXT, approval_channel TEXT, approval_receipt_hash TEXT,
+ expires_at_ms INTEGER, approved_at TEXT, consumed_at TEXT, created_at TEXT NOT NULL
+);
+CREATE TABLE task_stage_timing(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, task_id TEXT NOT NULL REFERENCES task(id),
+ stage TEXT NOT NULL, executor TEXT NOT NULL, elapsed_ms REAL NOT NULL,
+ detail_json TEXT NOT NULL, created_at TEXT NOT NULL
+);
+CREATE INDEX task_proposal_state_idx ON task_proposal(state,expires_at_ms);
+CREATE INDEX task_stage_timing_task_idx ON task_stage_timing(task_id,id);
+UPDATE schema_version SET version=8;
+`;

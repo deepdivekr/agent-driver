@@ -67,7 +67,7 @@ test('runtime native terminal schema v3 migration preserves historical records',
   old.exec(MIGRATION_1); old.exec('INSERT INTO schema_version VALUES (1)'); old.exec(MIGRATION_2); old.exec(MIGRATION_3);
   old.prepare('INSERT INTO project VALUES (?,?)').run('old', '{"id":"old","capabilities":[]}'); old.close();
   const store = new TerminalStore(path); assert.equal(store.project('old').id, 'old'); store.close();
-  const db = new DatabaseSync(path); assert.equal(db.prepare('SELECT version FROM schema_version').get().version, 7); db.close();
+  const db = new DatabaseSync(path); assert.equal(db.prepare('SELECT version FROM schema_version').get().version, 8); db.close();
 });
 test('runtime contract terminal explicit session, no shell/most-recent/bypass flags and file tools fail closed', async t => {
   const x = await setup(t), id = await session(x), s = x.api.store.session(id);

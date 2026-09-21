@@ -83,7 +83,7 @@ test('runtime native PASSIVE checkpoint reports reader-held WAL without deletion
 });
 test('runtime native schema six backup upgrades only quarantined copy and preserves source version and records',async t=>{
  const x=setup(t),path=join(x.root,'v6.sqlite'),old=new DatabaseSync(path);old.exec(MIGRATION_1);old.exec('INSERT INTO schema_version VALUES(1)');for(const m of [MIGRATION_2,MIGRATION_3,MIGRATION_4,MIGRATION_5,MIGRATION_6])old.exec(m);old.prepare('INSERT INTO project VALUES (?,?)').run('legacy','{"id":"legacy"}');old.close();
- await createBackup(path,x.backup);assert.equal(manifest(x.backup).source_snapshot.schema_version,6);assert.equal(manifest(x.backup).snapshot.schema_version,7);
+ await createBackup(path,x.backup);assert.equal(manifest(x.backup).source_snapshot.schema_version,6);assert.equal(manifest(x.backup).snapshot.schema_version,8);
  const source=new DatabaseSync(path);assert.equal(source.prepare('SELECT version FROM schema_version').get().version,6);source.close();await restoreBackup(x.backup,x.restored);assert.equal(inspectBundle(x.restored).snapshot.projects,1);
 });
 for(const point of ['before_database','database_progress','database_copied','artifacts_copied','before_publish','published'])test('runtime native backup SIGKILL cut '+point+' leaves no executable snapshot',async t=>{

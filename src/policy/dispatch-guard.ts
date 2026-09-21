@@ -1,10 +1,16 @@
 import { requireCondition, type DispatchContext, type ProjectBinding } from '../core/contracts.js';
 import { RuntimeStore } from '../store/runtime-store.js';
 export const browserResource=(project:ProjectBinding)=>JSON.stringify(['browser',project.profileRef,project.accountRef]);
-export function guard(store:RuntimeStore,context:DispatchContext,now=performance.now(),verificationOnly=false) {
+/**
+ * Most browser work leases the project profile/account pair. A Personal Agent
+ * Computer supplies a stricter, persistent VM resource instead. The caller
+ * must pass that resource explicitly; this is not an ambient host fallback.
+ */
+export function guard(store:RuntimeStore,context:DispatchContext,now=performance.now(),verificationOnly=false,expectedResource?:string) {
   const task=store.task(context.taskId),project=store.project(task.project_id),o=context.observation,c=context.capability;
+  const resource=expectedResource??browserResource(project);
   requireCondition(context.callerRef===project.callerRef,'CALLER_NOT_DELEGATED');
-  requireCondition(context.lease.taskId===task.id&&context.lease.projectId===project.id&&context.lease.resource===browserResource(project),'LEASE_SCOPE_MISMATCH');
+  requireCondition(context.lease.taskId===task.id&&context.lease.projectId===project.id&&context.lease.resource===resource,'LEASE_SCOPE_MISMATCH');
   store.assertLease(context.lease);
   requireCondition(verificationOnly?['running','verifying','reconciliation_required'].includes(task.status):task.status==='running'&&!task.cancel_requested,'TASK_NOT_DISPATCHABLE');
   requireCondition(task.capability===c.id&&project.capabilities.includes(c.id),'CAPABILITY_NOT_DELEGATED');

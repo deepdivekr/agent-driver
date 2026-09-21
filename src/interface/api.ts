@@ -1,4 +1,6 @@
-import {TerminalStore} from '../terminal/store.js';
+import {PackStore} from '../packs/store.js';
+import {FamilyRuntime} from '../packs/runtime.js';
+import {LocalApprovalDispatcher} from '../packs/local-approval.js';
 import {ensureTerminalHost} from '../terminal/manager.js';
 import {terminalSubmit,terminalList,terminalHistory,terminalOutput} from '../terminal/contracts.js';
 import {readTerminalOutput} from '../terminal/output.js';
@@ -15,12 +17,19 @@ import {resourceHealth} from '../resources/configured.js';
 import {storageError} from '../storage/budget.js';
 
 export class RuntimeApi{
-  readonly store:TerminalStore;
-  constructor(readonly config:HostConfig){this.store=new TerminalStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}}
-  close(){this.store.close();}
+  readonly store:PackStore;
+  readonly packs:FamilyRuntime;
+  constructor(readonly config:HostConfig){this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}this.packs=new FamilyRuntime(this.store,config,{approval:new LocalApprovalDispatcher(this.store)});}
+  close(){this.packs.close();this.store.close();}
+  async drain(){await this.packs.drain();}
   private scoped(taskId:string){const task=this.store.task(taskId);requireCondition(task.project_id===this.config.project.id,'TASK_SCOPE_MISMATCH');return task;}
   async call(name:string,args:unknown):Promise<unknown>{
     if(name==='runtime_task_intake')return intake(args);
+    if(name.startsWith('runtime_pack_')){
+      const ledger=this.store.storage(this.config),writes=['runtime_pack_run','runtime_pack_execute_approved','runtime_pack_watch_tick'].includes(name),reservation=writes?ledger.reserve('pack_execution',16_777_216):null;
+      let failed=false;try{return await this.packs.call(name,args);}catch(e){failed=true;if(storageError(e)==='STORAGE_FULL')throw Error('STORAGE_FULL',{cause:e});throw e;}
+      finally{try{ledger.release(reservation);}catch(e){if(!failed)throw e;}}
+    }
     requireCondition(Object.hasOwn(tools,name),'UNKNOWN_TOOL');
     const tool=tools[name as keyof typeof tools],input=tool.schema.parse(args) as Record<string,unknown>;
     if(name.startsWith('runtime_storage_')&&!tool.readOnly)requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
@@ -42,7 +51,8 @@ export class RuntimeApi{
       case 'runtime_health':{
         const resource_boundary=await resourceHealth(this.config);
         const storage_boundary=ledger.status();
-        return {health:this.config.environment==='fixture'&&process.platform==='linux'&&resource_boundary.status!=='unavailable_or_changed'&&!['blocked','unavailable'].includes(storage_boundary.status)?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null,autonomous_planning_enabled:false,resource_boundary,storage_boundary};
+        return {health:this.config.environment==='fixture'&&process.platform==='linux'&&resource_boundary.status!=='unavailable_or_changed'&&!['blocked','unavailable'].includes(storage_boundary.status)?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.packs?'configured_pack_sources_and_targets':this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null||(this.config.packs!==null&&this.config.packs.models!=='off'),autonomous_planning_enabled:false,
+          pack_boundary:this.config.packs?{status:'connected',sources:this.config.packs.sources.length,targets:this.config.packs.targets.length,models:this.config.packs.models,model_data_approved:this.config.packs.model_data_approved}:{status:'not_connected'},resource_boundary,storage_boundary};
       }
       case 'runtime_capabilities_list':return {capabilities:[draftManifest,terminalManifest].filter(m=>this.config.project.capabilities.includes(m.id))};
       case 'runtime_capability_describe':requireCondition(this.config.project.capabilities.includes(String(input.capability)),'CAPABILITY_NOT_DELEGATED');return input.capability==='coding.session'?terminalManifest:draftManifest;

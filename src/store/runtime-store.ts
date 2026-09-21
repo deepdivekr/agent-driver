@@ -1,8 +1,8 @@
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync,chmodSync,lstatSync,realpathSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
-import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7 } from './migration.js';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
+import { MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8 } from './migration.js';
 import {StorageLedger} from '../storage/budget.js';
 import {type HostConfig} from '../interface/config.js';
 import {bootClock} from '../supervisor/identity.js';
@@ -10,6 +10,29 @@ import { requireCondition, type ProjectBinding, type TaskRecord, type TaskStatus
 
 const terminal = new Set<TaskStatus>(['succeeded','failed','cancelled']);
 const timestamp = () => new Date().toISOString();
+const canonicalJson=(value:unknown):string=>{
+  const visit=(input:unknown):unknown=>{
+    if(input===null||typeof input==='string'||typeof input==='boolean')return input;
+    if(typeof input==='number'){requireCondition(Number.isFinite(input),'NONFINITE_PROPOSAL_VALUE');return input;}
+    if(Array.isArray(input))return input.map(visit);
+    requireCondition(typeof input==='object'&&input!==null,'INVALID_PROPOSAL_VALUE');
+    return Object.fromEntries(Object.entries(input as Record<string,unknown>).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,visit(item)]));
+  };
+  return JSON.stringify(visit(value));
+};
+const proposalHash=(value:unknown)=>createHash('sha256').update(canonicalJson(value)).digest('hex');
+const secretHash=(value:string)=>createHash('sha256').update(value).digest('hex');
+const equalSecret=(a:string,b:string)=>{
+  const left=Buffer.from(a),right=Buffer.from(b);
+  return left.length===right.length&&timingSafeEqual(left,right);
+};
+export interface TaskProposalRecord {
+  task_id:string; pack_id:string; pack_version:number; adapter_id:string; caller_ref:string;
+  normalized:unknown; normalized_hash:string; snapshot:unknown|null; snapshot_hash:string|null;
+  state:'draft'|'waiting_approval'|'approved'|'consumed'|'cancelled'|'expired'|'invalidated';
+  approval_channel:string|null; approval_receipt_hash:string|null; expires_at_ms:number|null;
+  approved_at:string|null; consumed_at:string|null; created_at:string;
+}
 export class RuntimeStore {
   readonly #db: DatabaseSync;
   #instanceId: string | null = null;
@@ -35,10 +58,10 @@ export class RuntimeStore {
     this.#db.exec('PRAGMA synchronous=FULL; PRAGMA foreign_keys=ON;');
     const exists = this.#db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'").get();
     const current = exists ? this.#db.prepare('SELECT version FROM schema_version').all() : [];
-    if (!(current.length === 1 && current[0]?.version === 7)) this.transaction(()=>{
+    if (!(current.length === 1 && current[0]?.version === 8)) this.transaction(()=>{
       this.#db.exec(MIGRATION_1);
       const versions=this.#db.prepare('SELECT version FROM schema_version').all();
-      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4,5,6,7].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
+      requireCondition(versions.length===0 || (versions.length===1&&[1,2,3,4,5,6,7,8].includes(Number(versions[0]?.version))),'UNSUPPORTED_SCHEMA');
       if(!versions.length)this.#db.prepare('INSERT INTO schema_version VALUES (1)').run();
       if(!versions.length||versions[0]?.version===1)this.#db.exec(MIGRATION_2);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===2)this.#db.exec(MIGRATION_3);
@@ -46,6 +69,7 @@ export class RuntimeStore {
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===4)this.#db.exec(MIGRATION_5);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===5)this.#db.exec(MIGRATION_6);
       if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===6)this.#db.exec(MIGRATION_7);
+      if(Number(this.#db.prepare('SELECT version FROM schema_version').get()?.version)===7)this.#db.exec(MIGRATION_8);
     });
     const identity=this.#db.prepare('SELECT instance_id,mode FROM runtime_identity WHERE singleton=1').get();
     requireCondition(identity?.mode==='active'&&typeof identity.instance_id==='string','RUNTIME_IDENTITY_INVALID');this.#instanceId=identity.instance_id;
@@ -113,6 +137,124 @@ export class RuntimeStore {
     const project=this.project(projectId);requireCondition(project.capabilities.includes(capability),'CAPABILITY_NOT_DELEGATED');
     return this.transaction(()=>{const id=randomUUID(),at=timestamp();this.#db.prepare('INSERT INTO task(id,project_id,capability,status,next_action,created_at,updated_at) VALUES (?,?,?,\'queued\',\'bind_owned_target\',?,?)').run(id,projectId,capability,at,at);this.event(id,'task.created',{});return this.task(id);});
   }
+  /**
+   * Create a task whose only authority is to prepare a proposal.  This is not a
+   * command intent and cannot dispatch an external write.  The normalized input
+   * is immutable: changing it means cancelling and proposing a new task.
+   */
+  createTaskProposal(projectId:string,capability:string,proposal:{packId:string;packVersion:number;adapterId:string;callerRef:string;normalized:unknown}) {
+    const project=this.project(projectId);
+    requireCondition(project.capabilities.includes(capability),'CAPABILITY_NOT_DELEGATED');
+    requireCondition(project.callerRef===proposal.callerRef,'CALLER_NOT_DELEGATED');
+    requireCondition(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(proposal.packId),'INVALID_PACK_ID');
+    requireCondition(Number.isInteger(proposal.packVersion)&&proposal.packVersion>0,'INVALID_PACK_VERSION');
+    requireCondition(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(proposal.adapterId),'INVALID_ADAPTER_ID');
+    const normalized=canonicalJson(proposal.normalized),normalizedHash=proposalHash(proposal.normalized);
+    return this.transaction(()=>{
+      const id=randomUUID(),at=timestamp();
+      this.#db.prepare("INSERT INTO task(id,project_id,capability,status,next_action,created_at,updated_at) VALUES (?,?,?,'queued','prepare_owned_browser',?,?)").run(id,projectId,capability,at,at);
+      this.#db.prepare("INSERT INTO task_proposal(task_id,pack_id,pack_version,adapter_id,caller_ref,normalized_json,normalized_hash,state,created_at) VALUES (?,?,?,?,?,?,?,'draft',?)").run(id,proposal.packId,proposal.packVersion,proposal.adapterId,proposal.callerRef,normalized,normalizedHash,at);
+      this.event(id,'proposal.created',{pack_id:proposal.packId,pack_version:proposal.packVersion,adapter_id:proposal.adapterId,normalized_hash:normalizedHash});
+      return {task:this.task(id),proposal:this.proposal(id)};
+    });
+  }
+  proposal(taskId:string):TaskProposalRecord {
+    const row=this.#db.prepare('SELECT * FROM task_proposal WHERE task_id=?').get(taskId);requireCondition(row,'PROPOSAL_NOT_FOUND');
+    const state=String(row.state) as TaskProposalRecord['state'];
+    return {task_id:String(row.task_id),pack_id:String(row.pack_id),pack_version:Number(row.pack_version),adapter_id:String(row.adapter_id),caller_ref:String(row.caller_ref),normalized:JSON.parse(String(row.normalized_json)),normalized_hash:String(row.normalized_hash),snapshot:row.snapshot_json?JSON.parse(String(row.snapshot_json)):null,snapshot_hash:row.snapshot_hash?String(row.snapshot_hash):null,state,approval_channel:row.approval_channel?String(row.approval_channel):null,approval_receipt_hash:row.approval_receipt_hash?String(row.approval_receipt_hash):null,expires_at_ms:row.expires_at_ms===null||row.expires_at_ms===undefined?null:Number(row.expires_at_ms),approved_at:row.approved_at?String(row.approved_at):null,consumed_at:row.consumed_at?String(row.consumed_at):null,created_at:String(row.created_at)};
+  }
+  /** Mark a form snapshot as ready and return a one-time capability for a trusted channel adapter. */
+  requestProposalApproval(taskId:string,snapshot:unknown,expiresAtMs:number) {
+    requireCondition(Number.isSafeInteger(expiresAtMs)&&expiresAtMs>Date.now(),'INVALID_APPROVAL_EXPIRY');
+    const encoded=canonicalJson(snapshot),digest=proposalHash(snapshot),token=`apv_${randomUUID().replaceAll('-','')}${randomUUID().replaceAll('-','')}`;
+    return this.transaction(()=>{
+      const task=this.task(taskId),proposal=this.proposal(taskId);
+      requireCondition(proposal.state==='draft','PROPOSAL_NOT_PREPARABLE');
+      requireCondition(task.status==='running'||task.status==='queued','TASK_NOT_PREPARABLE');
+      this.#db.prepare("UPDATE task_proposal SET snapshot_json=?,snapshot_hash=?,state='waiting_approval',approval_token_hash=?,expires_at_ms=? WHERE task_id=?").run(encoded,digest,secretHash(token),expiresAtMs,taskId);
+      this.state(taskId,'waiting_approval','await_bound_external_approval');
+      this.event(taskId,'proposal.approval_requested',{snapshot_hash:digest,expires_at_ms:expiresAtMs});
+      return {task_id:taskId,proposal_hash:digest,expires_at_ms:expiresAtMs,approval_token:token};
+    });
+  }
+  /** This entrypoint is intended for a trusted approval-channel adapter, not MCP. */
+  acceptProposalApproval(taskId:string,approvalToken:string,channel:string,receipt:unknown) {
+    requireCondition(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(channel),'INVALID_APPROVAL_CHANNEL');
+    requireCondition(typeof approvalToken==='string'&&approvalToken.length>=32,'INVALID_APPROVAL_TOKEN');
+    const receiptHash=proposalHash(receipt);
+    return this.transaction(()=>{
+      const proposal=this.proposal(taskId),task=this.task(taskId);
+      requireCondition(proposal.state==='waiting_approval','APPROVAL_NOT_PENDING');
+      requireCondition(proposal.expires_at_ms!==null&&proposal.expires_at_ms>Date.now(),'APPROVAL_EXPIRED');
+      const row=this.#db.prepare('SELECT approval_token_hash FROM task_proposal WHERE task_id=?').get(taskId);
+      requireCondition(typeof row?.approval_token_hash==='string'&&equalSecret(String(row.approval_token_hash),secretHash(approvalToken)),'APPROVAL_TOKEN_MISMATCH');
+      requireCondition(task.status==='waiting_approval','TASK_NOT_WAITING_APPROVAL');
+      this.#db.prepare("UPDATE task_proposal SET state='approved',approval_channel=?,approval_receipt_hash=?,approved_at=? WHERE task_id=?").run(channel,receiptHash,timestamp(),taskId);
+      this.state(taskId,'ready_to_resume','approval_bound_write_ready');
+      this.event(taskId,'proposal.approved',{snapshot_hash:proposal.snapshot_hash,channel,receipt_hash:receiptHash});
+      return this.proposal(taskId);
+    });
+  }
+  /**
+   * Consuming precedes the dispatch intent.  If the process dies afterwards the
+   * approval is intentionally unavailable for replay; reconciliation/new approval
+   * is required instead of a second click.
+   */
+  consumeProposalApproval(taskId:string,expectedSnapshotHash:string) {
+    return this.transaction(()=>{
+      const proposal=this.proposal(taskId),task=this.task(taskId);
+      requireCondition(proposal.state==='approved','APPROVAL_NOT_CONSUMABLE');
+      requireCondition(proposal.expires_at_ms!==null&&proposal.expires_at_ms>Date.now(),'APPROVAL_EXPIRED');
+      requireCondition(proposal.snapshot_hash===expectedSnapshotHash,'APPROVAL_SNAPSHOT_MISMATCH');
+      // Binding an owned browser changes the task to running before the final
+      // form snapshot can be checked.  No command intent exists at this point.
+      requireCondition(task.status==='ready_to_resume'||task.status==='running','TASK_NOT_APPROVED_FOR_WRITE');
+      requireCondition(!this.#db.prepare('SELECT id FROM command_intent WHERE task_id=?').get(taskId),'APPROVAL_AFTER_INTENT_FORBIDDEN');
+      this.#db.prepare("UPDATE task_proposal SET state='consumed',consumed_at=? WHERE task_id=?").run(timestamp(),taskId);
+      this.event(taskId,'proposal.consumed',{snapshot_hash:expectedSnapshotHash});
+      return this.proposal(taskId);
+    });
+  }
+  invalidateProposal(taskId:string,reason:string) {
+    return this.transaction(()=>{
+      const proposal=this.proposal(taskId),task=this.task(taskId);
+      requireCondition(['draft','waiting_approval','approved','consumed'].includes(proposal.state),'PROPOSAL_NOT_INVALIDATABLE');
+      requireCondition(!terminal.has(task.status),'TASK_TERMINAL');
+      this.#db.prepare("UPDATE task_proposal SET state='invalidated' WHERE task_id=?").run(taskId);
+      this.state(taskId,'paused_dependency',reason);
+      this.event(taskId,'proposal.invalidated',{reason,snapshot_hash:proposal.snapshot_hash});
+      return this.proposal(taskId);
+    });
+  }
+  holdTaskProposal(taskId:string,status:'waiting_auth'|'waiting_orchestrator',reason:string) {
+    return this.transaction(()=>{
+      const proposal=this.proposal(taskId),task=this.task(taskId);
+      requireCondition(proposal.state==='draft','PROPOSAL_NOT_HOLDABLE');
+      requireCondition(task.status==='running'||task.status==='queued','TASK_NOT_HOLDABLE');
+      this.state(taskId,status,reason);
+      this.event(taskId,'proposal.hold',{status,reason});
+      return this.task(taskId);
+    });
+  }
+  expireProposal(taskId:string) {
+    return this.transaction(()=>{
+      const proposal=this.proposal(taskId),task=this.task(taskId);
+      requireCondition(proposal.state==='waiting_approval'||proposal.state==='approved','PROPOSAL_NOT_EXPIRABLE');
+      requireCondition(proposal.expires_at_ms!==null&&proposal.expires_at_ms<=Date.now(),'APPROVAL_NOT_EXPIRED');
+      requireCondition(!terminal.has(task.status),'TASK_TERMINAL');
+      this.#db.prepare("UPDATE task_proposal SET state='expired' WHERE task_id=?").run(taskId);
+      this.state(taskId,'paused_dependency','approval_expired_reproposal_required');
+      this.event(taskId,'proposal.expired',{snapshot_hash:proposal.snapshot_hash});
+      return this.proposal(taskId);
+    });
+  }
+  recordTaskStage(taskId:string,stage:string,executor:string,elapsedMs:number,detail:Record<string,unknown>={}) {
+    requireCondition(/^[a-z][a-z0-9._-]{0,79}$/.test(stage),'INVALID_STAGE');
+    requireCondition(/^[a-z][a-z0-9._-]{0,79}$/.test(executor),'INVALID_EXECUTOR');
+    requireCondition(Number.isFinite(elapsedMs)&&elapsedMs>=0,'INVALID_STAGE_DURATION');
+    const encoded=canonicalJson(detail);this.transaction(()=>{this.task(taskId);this.#db.prepare('INSERT INTO task_stage_timing(task_id,stage,executor,elapsed_ms,detail_json,created_at) VALUES (?,?,?,?,?,?)').run(taskId,stage,executor,elapsedMs,encoded,timestamp());this.event(taskId,'task.stage',{stage,executor,elapsed_ms:elapsedMs,detail});});
+  }
+  taskStages(taskId:string) {this.task(taskId);return this.#db.prepare('SELECT stage,executor,elapsed_ms,detail_json,created_at FROM task_stage_timing WHERE task_id=? ORDER BY id').all(taskId).map(row=>({stage:String(row.stage),executor:String(row.executor),elapsed_ms:Number(row.elapsed_ms),detail:JSON.parse(String(row.detail_json)),created_at:String(row.created_at)}));}
   task(id:string):TaskRecord {
     const row=this.#db.prepare('SELECT * FROM task WHERE id=?').get(id);requireCondition(row,'TASK_NOT_FOUND');return row as unknown as TaskRecord;
   }

@@ -7,6 +7,7 @@ import {serveFixtureLab} from './fixture-lab.js';
 import {ensureSupervisor,stopSupervisor,supervisorStatus} from '../supervisor/manager.js';
 import {Supervisor} from '../supervisor/supervisor.js';
 import {stopTerminalHost} from '../terminal/manager.js';
+import {approvedMcpConfigPath} from '../onboarding/connection.js';
 export const interfaceHelp=`
 Host-configured agent interface (JSON output):
   doctor --config PATH --json
@@ -23,7 +24,7 @@ Host-configured agent interface (JSON output):
   intake --config PATH --prompt TEXT
   intake --config PATH --request-file PATH
   call --config PATH --tool NAME --request-file PATH
-  mcp --config PATH
+  mcp [--config PATH]
   fixture serve --data-dir NEW_DIRECTORY (synthetic lab only)
   terminal start|submit|resume|interrupt --config PATH --request-file PATH
   terminal status SESSION_ID --config PATH
@@ -34,7 +35,7 @@ Host-configured agent interface (JSON output):
   verify --suite fixture|windows (not implemented; use npm test)
   soak start --config-file PATH (not implemented)
   ops status --config PATH (not implemented)
-No real-site automation yet. CLI built-in tools remain disabled. Explicit host file delegation enables the runtime file broker and isolated Node stdin/stdout/exit checks on Linux.
+Pack families use runtime_pack_plan/run/status via MCP or call --tool. Host-connected sources and reviewed browser targets only; no universal website coverage. CLI built-in tools remain disabled. Explicit host file delegation enables the runtime file broker and isolated Node stdin/stdout/exit checks on Linux.
 `;
 function options(args:string[]){
   const values=new Map<string,string>();const positional:string[]=[];
@@ -62,7 +63,7 @@ export async function runInterfaceCli(args:string[]):Promise<boolean>{
   const allowed=new Set(['--config',...(command==='mcp'?[]:['--json']),...extras,...((command==='task'&&sub==='resume')||(command==='recovery'&&sub==='prepare')?['--generation']:[])]);
   for(const key of o.keys())requireCondition(allowed.has(key),'UNKNOWN_OPTION');
   requireCondition(!(o.has('--config')&&o.has('--config-file')),'AMBIGUOUS_CONFIG');
-  const configPath=o.get('--config')??(command==='project'?o.get('--config-file'):undefined);requireCondition(configPath,'CONFIG_REQUIRED');
+  const configPath=o.get('--config')??(command==='project'?o.get('--config-file'):command==='mcp'?approvedMcpConfigPath():undefined);requireCondition(configPath,'CONFIG_REQUIRED');
   const api=new RuntimeApi(loadHostConfig(configPath));
   if(command==='mcp'){requireCondition(parsed.positional.length===0&&[...o.keys()].every(k=>k==='--config'),'INVALID_OPTIONS');await serveMcp(api);return true;}
   try{
