@@ -104,7 +104,7 @@ Jev는 브라우저를 직접 클릭하는 별도 executor가 아닙니다. 현�
 
 기능에 따라 선택적으로 필요합니다.
 
-- browser 작업: Playwright Chromium (`npx playwright install chromium`)
+- browser 작업: Playwright Chromium (Ubuntu/WSL: `npx playwright install --with-deps chromium`)
 - 전용 Ubuntu browser VM: Linux host의 KVM, `qemu-system-x86_64`, `qemu-img`, `cloud-localds`
 - Telegram·장기 기억·대화 orchestration: Hermes
 - 빠른 typed 판단: TypeSafe/Jev API key
@@ -121,6 +121,7 @@ git clone https://github.com/deepdivekr/agent-driver.git
 cd agent-driver
 npm ci
 npm run build
+npx playwright install --with-deps chromium
 npm test
 npm link
 agent-driver connect
