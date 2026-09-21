@@ -19,7 +19,7 @@ export interface LocalConnectionPaths {root:string;state:string;runtimeConfig:st
 export interface LocalConnectionScreenModel {
   title:'내 컴퓨터 연결';description:string;
   modes:readonly {id:string;label:string;detail:string;available:boolean;default?:boolean}[];
-  status:Readonly<Record<'Browser'|'Codex'|'Claude'|'Jev',string>>;
+  status:Readonly<Record<'Browser'|'Hermes'|'Telegram'|'Codex'|'Claude'|'Jev',string>>;
 }
 
 /** The screen deliberately exposes one safe, shipped surface. Unsupported surfaces are explanatory only, never consent choices. */
@@ -30,7 +30,7 @@ export const localConnectionScreen:LocalConnectionScreenModel=Object.freeze({
     Object.freeze({id:'agent_desktop',label:'에이전트 전용 데스크톱',detail:'준비 중 · 현재 제공되는 전용 surface는 브라우저입니다.',available:false}),
     Object.freeze({id:'shared_screen',label:'공유 화면 허용',detail:'제공하지 않음 · 사용자 desktop·foreground 제어는 Agent Driver의 권한 범위 밖입니다.',available:false}),
   ]),
-  status:Object.freeze({Browser:'첫 브라우저 작업 때 전용 환경을 준비합니다',Codex:'MCP 명령 준비됨',Claude:'MCP 명령 준비됨',Jev:'선택사항 — 모호한 판단이 필요할 때 연결'}),
+  status:Object.freeze({Browser:'첫 브라우저 작업 때 전용 환경을 준비합니다',Hermes:'기본 Agent runtime · MCP로 연결',Telegram:'Hermes gateway를 통한 작업 요청·사람 개입 채널',Codex:'MCP 명령 준비됨',Claude:'MCP 명령 준비됨',Jev:'선택사항 — 빠른 typed 판단이 필요할 때 연결'}),
 });
 
 function safeRoot(value:string){

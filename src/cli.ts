@@ -8,16 +8,17 @@ import {runMaintenanceCli,maintenanceHelp} from './storage/cli.js';
 import {runSoakCli,soakHelp} from './soak/cli.js';
 import {runVmCli,vmHelp} from './isolation/cli.js';
 import {runOnboardingCli,onboardingHelp} from './onboarding/cli.js';
+import {runHermesCli,hermesHelp} from './integrations/cli.js';
 const args=process.argv.slice(2),command=args[0]??'help',options=new Map<string,string>();
 try {
-  if(await runOnboardingCli(args)||await runVmCli(args)||await runSoakCli(args)||await runMaintenanceCli(args)||await runInterfaceCli(args)) { /* Shared API owns its lifecycle. */ }
+  if(await runHermesCli(args)||await runOnboardingCli(args)||await runVmCli(args)||await runSoakCli(args)||await runMaintenanceCli(args)||await runInterfaceCli(args)) { /* Shared API owns its lifecycle. */ }
   else {
   for(let i=1;i<args.length;i+=2){const key=args[i],value=args[i+1];requireCondition(typeof key==='string'&&key.startsWith('--')&&typeof value==='string'&&value.length>0&&!value.startsWith('--')&&!options.has(key),'INVALID_OPTIONS');options.set(key,value);}
   const allowed=['--db','--task','--project','--consumer','--event','--fault','--wrong-account'];for(const key of options.keys())requireCondition(allowed.includes(key),'UNKNOWN_OPTION');
   const db=resolve(options.get('--db')??'.runtime/runtime.sqlite');
   const required=(name:string)=>{const value=options.get(name);requireCondition(value,`MISSING_${name.slice(2).toUpperCase()}`);return value;};
   if(command==='help'||command==='--help')console.log('No real-site or user-browser effects are performed by demo mode.');
-  if(command==='help'||command==='--help')console.log('agent-driver (experimental)\n  demo [--db PATH] [--fault none|before|after] [--wrong-account true|false]\n  status --task ID [--db PATH]\n  tasks --project ID --db PATH\n  events --project ID --consumer NAME --event ID --db PATH\n  ack --project ID --consumer NAME --event ID --db PATH\n  cancel --task ID --db PATH\n  recover --task ID --db PATH\n'+onboardingHelp+interfaceHelp+maintenanceHelp+soakHelp+vmHelp);
+  if(command==='help'||command==='--help')console.log('agent-driver (experimental)\n  demo [--db PATH] [--fault none|before|after] [--wrong-account true|false]\n  status --task ID [--db PATH]\n  tasks --project ID --db PATH\n  events --project ID --consumer NAME --event ID --db PATH\n  ack --project ID --consumer NAME --event ID --db PATH\n  cancel --task ID --db PATH\n  recover --task ID --db PATH\n'+onboardingHelp+hermesHelp+interfaceHelp+maintenanceHelp+soakHelp+vmHelp);
   else if(command==='demo'){
     const fault=options.get('--fault')??'none';requireCondition(['none','before','after'].includes(fault),'INVALID_FAULT');requireCondition(['true','false'].includes(options.get('--wrong-account')??'false'),'INVALID_BOOLEAN');
     const result=await runFixtureDemo(db,dirname(db),{fault:fault as 'none'|'before'|'after',wrongAccount:options.get('--wrong-account')==='true'});console.log(JSON.stringify(result,null,2));if(result.status!=='succeeded')process.exitCode=2;

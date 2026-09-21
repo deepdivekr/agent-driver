@@ -38,7 +38,7 @@ export class LocalApprovalDispatcher implements PackApprovalDispatcher {
       if(supplied.length!==csrf.length||!timingSafeEqual(Buffer.from(supplied),Buffer.from(csrf))){send(response,403,'Invalid local request');return;}
       try{
         if(request.url===`/approve/${nonce}`)this.store.acceptProposalApproval(delivery.task_id,delivery.approval_token,'local-review-screen',{format:'reviewed_snapshot_hash',proposal_hash:delivery.proposal_hash});
-        else this.store.cancel(delivery.task_id);
+        else {this.store.invalidateProposal(delivery.task_id,'human_declined');this.store.cancel(delivery.task_id);}
         settled=true;clearTimeout(timer);send(response,200,request.url?.startsWith('/approve')===true?'<h1>승인했습니다</h1><p>Agent Driver가 검증 후 한 번 실행합니다. 이 창을 닫아도 됩니다.</p>':'<h1>취소했습니다</h1><p>외부 작업은 실행되지 않습니다.</p>');setImmediate(close);
       }catch{send(response,409,'작업 상태가 변경되었거나 승인이 만료되었습니다.');}
     })().catch(()=>send(response,400,'Invalid local request'));});

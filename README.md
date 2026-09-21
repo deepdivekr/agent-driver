@@ -1,6 +1,6 @@
 # Agent Driver
 
-**A local control plane that lets AI agents use a dedicated browser and coding tools without taking over your foreground desktop.**
+**A local control plane that lets Hermes and other AI agents use a dedicated browser and coding tools without taking over your foreground desktop.**
 
 Agent Driver sits between an orchestrating agent (Codex, Claude Code, Hermes, or any MCP client) and the computer it is allowed to use. A user starts with one natural-language request; the runtime turns a successful workflow into a reusable Task Pack, selects deterministic code, TypeSafe/Jev, or an LLM at each decision point, and keeps execution, approval, recovery, and evidence in one place.
 
@@ -37,6 +37,16 @@ agent-driver connect
 agent-driver mcp
 ```
 
+Hermes is the default upper runtime: it owns Telegram conversation, planning, memory, and follow-up questions, while Agent Driver owns execution, approval, recovery, and verification. If Hermes is installed:
+
+```bash
+agent-driver hermes configure
+agent-driver hermes doctor
+hermes mcp test agent-driver
+```
+
+Connect Telegram only through the official `hermes gateway setup` flow. Agent Driver never stores the bot token. Configure an explicit Telegram user allowlist; do not enable allow-all. External writes use a snapshot-bound MCP elicitation that the human answers directly in Telegram or another Hermes approval surface. A Telegram message, Jev result, or model response is never approval authority.
+
 Jev is optional at installation time. Connect it only when a workflow benefits from typed state, action, target, relevance, or recovery judgments.
 
 ## How it works
@@ -66,7 +76,7 @@ Models propose plans and judgments; they do not grant authority. The runtime rev
 | `monitor.watch` | repeat a read and emit deduplicated changes | local events; no external push transport |
 | `file.pipeline` | filter, transform, and merge JSON/CSV | new output file; source preserved |
 
-See [Pack catalog](docs/pack-catalog.md), [runtime flow](docs/pack-family-runtime.md), and [first-run UX](docs/first-run.md).
+See [Pack catalog](docs/pack-catalog.md), [runtime flow](docs/pack-family-runtime.md), [Hermes + Telegram runtime](docs/hermes-telegram-runtime.md), and [first-run UX](docs/first-run.md).
 
 ## TypeSafe/Jev in the architecture
 

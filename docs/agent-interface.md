@@ -2,7 +2,7 @@
 
 ## 실제 지원과 남은 범위
 
-CLI와 stdio MCP는 같은 RuntimeApi를 사용하며 현재 총30개 이름을 제공한다. 원문19개와 intake, Phase19 조회/인계4개, Phase20 검증/파일조정2개, Phase22 저장관리4개다. 조회/인계 계약은 [별도 안내](terminal-handoff.md), 저장 상태·계획·정리·죽은 owner 예약 회수는 [저장 경계](storage-boundaries.md)를 따른다. 원문의 “15종” 문구 대신 명명된 전체 목록을 기준으로 했다.
+CLI와 stdio MCP는 같은 RuntimeApi를 사용한다. 이후 Pack family와 `runtime_channel_route`가 추가되어 고정 개수 대신 MCP `tools/list`의 실제 목록을 기준으로 한다. 조회/인계 계약은 [별도 안내](terminal-handoff.md), 저장 상태·계획·정리·죽은 owner 예약 회수는 [저장 경계](storage-boundaries.md), Hermes/Telegram 경계는 [Hermes + Telegram runtime](hermes-telegram-runtime.md)을 따른다.
 
 사용 가능: health, capabilities list/describe, task start/status/cancel/resume, recovery status/prepare, artifacts list(미지원/빈 목록 명시), events read/ack, intake. resume/prepare는 안전하게 준비된 미전송 작업에만 적용한다.
 
@@ -32,7 +32,7 @@ node dist/cli.js intake --config .runtime/lab-01/host.json --prompt '이름 봄,
 node dist/cli.js mcp --config .runtime/lab-01/host.json
 ```
 
-마지막 명령은 MCP 클라이언트가 시작할 프로세스다. 일반 대화형 프롬프트를 읽지 않으며 JSON-RPC만 처리한다. 사용 중인 agent의 MCP 설정에 실제 Node executable, 저장소의 절대 `dist/cli.js` 경로, `mcp --config` 및 절대 host.json 경로를 지정한다. 제품별 설정 키를 추정해 제시하지 않는다. 이번 증거는 공식 SDK client 연결이며 OpenClaw/Hermes 실제품 설정 검증을 대체하지 않는다.
+마지막 명령은 MCP 클라이언트가 시작할 프로세스다. 일반 대화형 프롬프트를 읽지 않으며 JSON-RPC만 처리한다. Hermes는 `agent-driver hermes configure`가 현재 Node executable과 절대 `dist/cli.js` 경로를 보존적으로 등록한다. Phase 36에서 공식 Hermes CLI의 실제 stdio 연결·도구 발견을 검증했으며, Telegram end-to-end 실행은 유효한 secret과 model auth를 갖춘 별도 user-environment 검증이다.
 
 원문 한 줄만 전달하면 `NEEDS_EXTRACTION`과 좁은 인수 질문을 돌려준다. 호출 agent가 자신의 모델로 추출한 `name`, `note` 값과 UTF-16 `[start,end)` 원문 범위를 proposal로 전달하면 범위를 검증한다. 결과는 항상 `dispatch_allowed=false`; 범위 일치는 사용자 의도의 의미적 정답을 보장하지 않는다. 창작/다중 작업/모호한 지시/빠진 값은 호출 agent가 확인하며 지원 부분만 임의 실행하지 않는다. 사용자는 state/question을 작성하지 않는다. Jev/Luna API 연결·모델 sampling은 현재 제품 경로에 없다.
 

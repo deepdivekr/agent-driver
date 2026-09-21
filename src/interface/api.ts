@@ -15,16 +15,26 @@ import {draftManifest,terminalManifest,startRequest,tools} from './catalog.js';
 import {intake} from './intake.js';
 import {resourceHealth} from '../resources/configured.js';
 import {storageError} from '../storage/budget.js';
+import {routeHumanChannelMessage} from '../integrations/human-channel.js';
+import {type JevSystemOneTransport,typeSafeTransportFromHostEnvironment} from '../taskpack/typesafe-jev.js';
+import {type PackApprovalDispatcher} from '../packs/runtime.js';
+
+export interface RuntimeApiOptions {channelTransport?:JevSystemOneTransport;approval?:PackApprovalDispatcher;}
 
 export class RuntimeApi{
   readonly store:PackStore;
   readonly packs:FamilyRuntime;
-  constructor(readonly config:HostConfig){this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}this.packs=new FamilyRuntime(this.store,config,{approval:new LocalApprovalDispatcher(this.store)});}
+  constructor(readonly config:HostConfig,readonly options:RuntimeApiOptions={}){this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}this.packs=new FamilyRuntime(this.store,config,{approval:options.approval??new LocalApprovalDispatcher(this.store)});}
   close(){this.packs.close();this.store.close();}
   async drain(){await this.packs.drain();}
   private scoped(taskId:string){const task=this.store.task(taskId);requireCondition(task.project_id===this.config.project.id,'TASK_SCOPE_MISMATCH');return task;}
   async call(name:string,args:unknown):Promise<unknown>{
     if(name==='runtime_task_intake')return intake(args);
+    if(name==='runtime_channel_route'){
+      let transport=this.options.channelTransport;
+      if(!transport&&this.config.packs?.models!=='off'&&this.config.packs?.model_data_approved)try{transport=typeSafeTransportFromHostEnvironment();}catch{}
+      return routeHumanChannelMessage(args,transport);
+    }
     if(name.startsWith('runtime_pack_')){
       const ledger=this.store.storage(this.config),writes=['runtime_pack_run','runtime_pack_execute_approved','runtime_pack_watch_tick'].includes(name),reservation=writes?ledger.reserve('pack_execution',16_777_216):null;
       let failed=false;try{return await this.packs.call(name,args);}catch(e){failed=true;if(storageError(e)==='STORAGE_FULL')throw Error('STORAGE_FULL',{cause:e});throw e;}
