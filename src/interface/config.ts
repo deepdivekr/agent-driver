@@ -89,9 +89,9 @@ export function loadHostConfig(path:string):HostConfig {
       source.path=resolve(worktree,source.path);
       requireCondition(!/(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|\.secrets|\.ssh|\.aws|credentials(?:\.json)?)(?:[\\/]|$)/iu.test(source.path),'PACK_SECRET_SOURCE_FORBIDDEN');
     }
-    const urls=[...packs.sources.flatMap(s=>s.kind==='file'?[]:[s.url]),...packs.targets.flatMap(t=>[t.url,t.readback_url])];
+    const urls=[...packs.sources.flatMap(s=>s.kind==='file'?[]:[s.url]),...packs.targets.flatMap(t=>t.readback_url?[t.url,t.readback_url]:[t.url])];
     for(const value of urls){const url=new URL(value);requireCondition((url.protocol==='https:'||raw.environment==='fixture'&&url.protocol==='http:'&&url.hostname==='127.0.0.1')&&!url.username&&!url.password&&!url.hash,'PACK_URL_NOT_ALLOWED');requireCondition(![...url.searchParams.keys()].some(k=>/token|password|api.?key|secret/iu.test(k)),'PACK_URL_CONTAINS_SECRET');}
-    for(const target of packs.targets)requireCondition(new URL(target.url).origin===new URL(target.readback_url).origin,'PACK_READBACK_ORIGIN_MISMATCH');
+    for(const target of packs.targets)if(target.readback_url)requireCondition(new URL(target.url).origin===new URL(target.readback_url).origin,'PACK_READBACK_ORIGIN_MISMATCH');
     requireCondition(packs.models==='off'||packs.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
   }
   const observability=raw.observability??null;

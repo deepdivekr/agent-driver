@@ -32,6 +32,8 @@ export interface OwnedVmSavedPasswordLoginPlan {
 }
 /** Optional recording is for owned, local fixture demonstrations only. */
 export interface OwnedPersistentPageOptions {
+  /** Host-reviewed fill-only run: reject form submissions and non-read HTTP requests. */
+  draftOnly?:boolean;
   recordVideoDir?:string;
   recordVideoSize?:{width:number;height:number};
 }
@@ -127,7 +129,16 @@ export class OwnedPersistentPage {
     await mkdir(this.profileDir,{recursive:true,mode:0o700});await mkdir(this.captureRoot,{recursive:true,mode:0o700});
     if(this.options.recordVideoDir!==undefined)await mkdir(this.options.recordVideoDir,{recursive:true,mode:0o700});
     const recording=this.options.recordVideoDir===undefined?{}:{recordVideo:{dir:this.options.recordVideoDir,...(this.options.recordVideoSize===undefined?{}:{size:this.options.recordVideoSize})}};
-    this.#context=await chromium.launchPersistentContext(this.profileDir,{headless:this.headless,...recording});
+    this.#context=await chromium.launchPersistentContext(this.profileDir,{headless:this.headless,...recording,...(this.options.draftOnly?{serviceWorkers:'block' as const}:{})});
+    if(this.options.draftOnly){
+      await this.#context.route('**/*',route=>['GET','HEAD','OPTIONS'].includes(route.request().method())?route.continue():route.abort('blockedbyclient'));
+      await this.#context.routeWebSocket('**/*',socket=>socket.close());
+      await this.#context.addInitScript(()=>{
+        document.addEventListener('submit',event=>{event.preventDefault();event.stopImmediatePropagation();},true);
+        HTMLFormElement.prototype.submit=function(){throw new Error('DRAFT_ONLY_SUBMISSION_BLOCKED');};
+        HTMLFormElement.prototype.requestSubmit=function(){throw new Error('DRAFT_ONLY_SUBMISSION_BLOCKED');};
+      });
+    }
     this.#page=this.#context.pages()[0]??await this.#context.newPage();this.#page.setDefaultTimeout(5_000);
     const attached=performance.now(),navigationStarted=performance.now();
     await this.#page.goto(plan.url,{waitUntil:'domcontentloaded',timeout:plan.navigation_timeout_ms??5_000});

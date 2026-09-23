@@ -67,12 +67,36 @@ test('disabled visual execution is explicit and never invokes an injected adapte
   await assert.rejects(api.call('runtime_swarm_browser',{run_id:lease.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,command:{action:'observe'}}),/SWARM_VISUAL_NOT_ENABLED/);
 });
 
-test('an allocation failure pauses the run without returning executable or fake-ready dispatches',async t=>{
+test('an allocation failure returns only the five successfully assigned existing leases and preserves their surfaces',async t=>{
   const visual=fakeVisual({fail:'source-2'}),{api}=await setup(t,{visual}),run=await start(api);
-  assert.equal(run.status,'needs_human');assert.equal(run.dispatch,null);assert.deepEqual(run.dispatches,[]);
+  assert.equal(run.status,'needs_human');assert.equal(run.dispatch.worker_id,'source-1');assert.equal(run.dispatches.length,5);
+  assert.ok(run.dispatches.every(item=>item.worker_id!=='source-2'&&item.visual_status==='assigned'&&item.surface_id));
   assert.deepEqual(run.visual_failures,[{worker_id:'source-2',error_code:'SWARM_VISUAL_CONTEXT_LIMIT'}]);
   const status=await api.call('runtime_swarm_status',{run_id:run.run.run_id});
-  assert.equal(status.workers.find(item=>item.id==='source-2').status,'needs_human');assert.ok(visual.released.some(item=>item.workerId==='source-1'));
+  assert.equal(status.workers.find(item=>item.id==='source-2').status,'needs_human');assert.ok(visual.released.some(item=>item.workerId==='source-2'));
+  assert.ok(run.dispatches.every(item=>!visual.released.some(released=>released.workerId===item.worker_id)));
+  const lease=run.dispatches[0],accepted=await api.call('runtime_swarm_report',{run_id:lease.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,report:result(lease.worker_id)});
+  assert.equal(accepted.workers.find(item=>item.id===lease.worker_id).status,'succeeded');assert.ok(visual.released.some(item=>item.workerId===lease.worker_id));
+  assert.ok(run.dispatches.slice(1).every(item=>!visual.released.some(released=>released.workerId===item.worker_id)));
+});
+
+test('API review hold preserves a leased sibling screen and read operation, fences human handoff, then releases its settled screen',async t=>{
+  const visual=fakeVisual(),active=new Set(),assign=visual.assign.bind(visual),perform=visual.perform.bind(visual),release=visual.release.bind(visual);
+  visual.assign=async(...args)=>{const surface=await assign(...args);active.add(args[1]);return surface;};
+  visual.perform=async(...args)=>{assert.ok(active.has(args[1]),'API must not release a still-leased sibling before its read');return perform(...args);};
+  visual.release=async(...args)=>{active.delete(args[1]);return release(...args);};
+  const {api,config}=await setup(t,{maxContexts:2,visual}),run=await start(api),[a,b]=run.dispatches;
+  api.swarm.providers.llm_fallback.workflow=async()=> 'HUMAN_REVIEW';
+  const held=await api.call('runtime_swarm_report',{run_id:a.run_id,worker_id:a.worker_id,lease_token:a.lease_token,report:result(a.worker_id)});
+  assert.equal(held.status,'needs_human');assert.equal(held.workers.find(item=>item.id===b.worker_id).status,'leased');
+  assert.equal(active.has(a.worker_id),false);assert.equal(active.has(b.worker_id),true);assert.equal(visual.released.some(item=>item.workerId===b.worker_id),false);
+  assert.throws(()=>api.store.claimBrowserHandoff(config.project.id,config.project.profileRef,'example.test'),/AUTH_WAIT_FOR_ACTIVE_WORKERS/);
+  const observed=await api.call('runtime_swarm_browser',{run_id:b.run_id,worker_id:b.worker_id,lease_token:b.lease_token,command:{action:'observe'}});
+  assert.equal(observed.surface_id,b.surface_id);assert.equal(visual.commands.at(-1).workerId,b.worker_id);
+  const settled=await api.call('runtime_swarm_report',{run_id:b.run_id,worker_id:b.worker_id,lease_token:b.lease_token,report:result(b.worker_id)});
+  assert.equal(settled.workers.find(item=>item.id===b.worker_id).status,'succeeded');assert.equal(active.has(b.worker_id),false);assert.ok(visual.released.some(item=>item.workerId===b.worker_id));
+  assert.equal(active.size,0);api.store.claimBrowserHandoff(config.project.id,config.project.profileRef,'example.test');
+  assert.equal(api.store.browserAuthEntries(config.project.id,config.project.profileRef)[0].handoff,1);
 });
 
 test('concurrent reports and ticks serialize per run while quality judgment awaits',async t=>{

@@ -83,9 +83,11 @@ export class ApprovedBrowserProtocol<T> {
     this.store.recordTaskStage(prepared.task_id,'intake_llm_extraction','llm',correction.trace.elapsed_ms,{provider:correction.trace.provider,model:correction.trace.model,input_sha256:correction.trace.input_sha256,provider_status:correction.trace.status,route_id:correction.route_id,field_ids:Object.keys(correction.values).sort()});
     return {status:'prepared',prepared};
   }
-  async prepare(projectId:string,callerRef:string,input:T,approvalTtlMs=10*60_000):Promise<PreparedApproval|{task_id:string;status:'waiting_auth'|'waiting_orchestrator';timing:readonly {stage:string;executor:string;elapsed_ms:number}[]}> {
+  async prepare(projectId:string,callerRef:string,input:T,approvalTtlMs=10*60_000,onTaskCreated?:(taskId:string)=>void):Promise<PreparedApproval|{task_id:string;status:'waiting_auth'|'waiting_orchestrator';timing:readonly {stage:string;executor:string;elapsed_ms:number}[]}> {
     requireCondition(Number.isSafeInteger(approvalTtlMs)&&approvalTtlMs>=60_000&&approvalTtlMs<=60*60_000,'INVALID_APPROVAL_TTL');
     const created=this.store.createTaskProposal(projectId,this.capability.id,{packId:this.manifest.id,packVersion:this.manifest.version,adapterId:this.adapter.adapterId,callerRef,normalized:input});
+    // Persist the owning workflow link before the first browser operation.
+    onTaskCreated?.(created.task.id);
     const task=created.task,targetRef=`owned-page:${randomUUID()}`,lease=this.store.acquire(task.id,this.resourceFor(this.store.project(projectId)),targetRef);
     const timing:{stage:string;executor:string;elapsed_ms:number}[]=[];
     try {

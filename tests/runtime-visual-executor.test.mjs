@@ -12,7 +12,7 @@ import {SwarmVisualExecutor} from '../dist/swarm/visual-executor.js';
 import {captureManagedSurface} from '../dist/observability/surfaces.js';
 
 async function setup(t){
-  const server=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end(`<html><head><title>${req.url}</title></head><body style="background:${req.url==='/one'?'lightblue':'pink'};height:1600px"><h1>${req.url}</h1><p id="state"></p><a href="/next">Read more</a><script>${req.url==='/one'?"localStorage.setItem('worker','one');document.cookie='worker=one'":""};document.getElementById('state').textContent='stored:'+(localStorage.getItem('worker')||'empty')+' cookies:'+document.cookie;</script></body></html>`);});
+  const server=createServer((req,res)=>{res.setHeader('Content-Type','text/html');res.end(`<html><head><title>${req.url}</title></head><body style="background:${req.url==='/one'?'lightblue':'pink'};height:1600px"><h1>${req.url}</h1><p id="state"></p><a href="/next">Read more</a>${req.url==='/one'?'<a href="/fragment?mode=read#section">Fragment example</a>':''}<script>${req.url==='/one'?"localStorage.setItem('worker','one');document.cookie='worker=one'":""};document.getElementById('state').textContent='stored:'+(localStorage.getItem('worker')||'empty')+' cookies:'+document.cookie;</script></body></html>`);});
   server.listen(0,'127.0.0.1');await once(server,'listening');const origin=`http://127.0.0.1:${server.address().port}`,root=await mkdtemp(join(tmpdir(),'driver-native-visual-')),path=join(root,'host.json');
   await writeFile(path,JSON.stringify({schema_version:1,project_id:'visual-project',caller_ref:'agent',account_ref:'account-a',worktree:root,data_dir:'data',environment:'fixture',fixture_url:`${origin}/fixture/account-a/`,swarm:{enabled:true,model_data_approved:true,max_logical_workers:8,max_concurrency:2,lease_ms:60_000}}));
   const calls=[],model={calls,async call(purpose,instructions,input){calls.push({purpose,model:'fixture-planner',elapsed_ms:1,input_sha256:'a'.repeat(64),status:'accepted'});return {summary:'Native browser isolation test, not research evidence.',workers:['one','two'].map(id=>({id,role:id,objective:'Read the assigned fixture independently',stage:'source_read',source_urls:[`${origin}/${id}`],executor:'browser',depends_on:[],required_capabilities:[],effect:'read_only',completion_evidence:['Read visible page'],max_steps:20,timeout_ms:60_000}))};}};
@@ -43,6 +43,25 @@ test('runtime native visual pool enforces capacity without creating extra contex
   const x=await setup(t),pool=new SwarmVisualExecutor(x.api.store,x.config,{max_contexts:1,fixture_origins:[x.origin]});t.after(()=>pool.close());const [a,b]=x.workers;
   await pool.assign(x.run,a.worker_id,a.lease_token);await assert.rejects(pool.assign(x.run,b.worker_id,b.lease_token),/CAPACITY_EXCEEDED/);
   assert.equal(x.api.store.controlSurfaces(x.config.project.id).length,1);await pool.release(x.run,a.worker_id);await pool.assign(x.run,b.worker_id,b.lease_token);await pool.close();
+});
+
+test('observed fragment links can be revisited but changed queries and unobserved resources stay denied',async t=>{
+  const x=await setup(t),w=x.workers[0];
+  await x.pool.perform(x.run,w.worker_id,w.lease_token,{action:'navigate',url:w.source_urls[0]});
+  const withoutHash=`${x.origin}/fragment?mode=read`,visited=await x.pool.perform(x.run,w.worker_id,w.lease_token,{action:'navigate',url:withoutHash});assert.equal(visited.url,withoutHash);
+  const reopened=await x.pool.perform(x.run,w.worker_id,w.lease_token,{action:'navigate',url:withoutHash+'#different-section'});assert.match(reopened.url,/#different-section$/);assert.ok(x.api.store.observedUrls(x.config.project.id,x.run,w.worker_id).includes(withoutHash));
+  await assert.rejects(x.pool.perform(x.run,w.worker_id,w.lease_token,{action:'navigate',url:`${x.origin}/fragment?mode=write`}),/URL_NOT_OBSERVED/);
+  await assert.rejects(x.pool.perform(x.run,w.worker_id,w.lease_token,{action:'navigate',url:`${x.origin}/fragment`}),/URL_NOT_OBSERVED/);
+});
+
+test('one worker waiting for a person does not revoke an independent already-leased read worker',async t=>{
+  const x=await setup(t),[first,second]=x.workers;await Promise.all(x.workers.map(w=>x.pool.assign(x.run,w.worker_id,w.lease_token)));
+  const held=await x.api.call('runtime_swarm_report',{run_id:x.run,worker_id:first.worker_id,lease_token:first.lease_token,report:{status:'needs_human',summary:'This source requires user authentication.',error_code:'BROWSER_AUTH_REQUIRED'}});assert.equal(held.status,'needs_human');
+  assert.throws(()=>x.api.store.claimBrowserHandoff(x.config.project.id,'test-profile','example.test'),/AUTH_WAIT_FOR_ACTIVE_WORKERS/);
+  const view=await x.pool.perform(x.run,second.worker_id,second.lease_token,{action:'navigate',url:second.source_urls[0]});assert.match(view.text,/stored:empty/);
+  const activity=await x.api.call('runtime_swarm_activity',{run_id:x.run,worker_id:second.worker_id,lease_token:second.lease_token,activity:{kind:'checkpoint',summary:'Independent source preserved.',endpoint:view.url}});assert.equal(activity.recorded,true);
+  await assert.rejects(x.pool.perform(x.run,first.worker_id,first.lease_token,{action:'observe'}),/STALE_SWARM_LEASE/);
+  assert.throws(()=>x.api.store.recordObservedUrl(x.config.project.id,x.run,second.worker_id,'stale-token',second.source_urls[0]),/STALE_SWARM_LEASE/);
 });
 
 test('managed previews reject arbitrary network endpoints before fetching',async()=>{

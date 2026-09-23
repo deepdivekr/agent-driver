@@ -29,6 +29,35 @@ async function base(t,options={}){
 const collection={sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id']};
 const recipe=(family,request='do it')=>({version:1,family,request});
 
+function auditRecipe(family){
+  const common={...recipe(family),...collection};
+  if(['form.draft-submit','record.update','choose.stage'].includes(family))return {...recipe(family),target:'audit-target',values:{id:'a'},expected_before_sha256:null};
+  if(family==='research.search')return {...common,query:'',search_fields:['id'],sort:null,limit:10};
+  if(family==='file.pipeline')return {...common,columns:['id'],numeric_columns:[],sort:null,format:'json'};
+  if(family==='inbox.triage')return {...common,judgment:{question:'Classify.',labels:{normal:'Routine'}},draft_by_label:{}};
+  if(family==='monitor.watch')return {...common,interval_seconds:60,mode:'any_change',value_field:null,comparison_fields:['id']};
+  return {...common,format:'json'};
+}
+
+test('audit all eight families preserve interrupted receipts and expose the same-request recovery entry',async t=>{
+  const x=await base(t);let api=new RuntimeApi(x.config);
+  const runs=familyIds.map((family,index)=>api.store.beginPack(x.config.project.id,`interrupted-${index}`,auditRecipe(family),'audit-binding').run);
+  api.close();api=new RuntimeApi(loadHostConfig(x.configPath));t.after(()=>api.close());
+  for(const run of runs){const status=await api.call('runtime_pack_status',{run_id:run.id});assert.equal(status.status,'running');assert.equal(status.next_action,'wait_or_resume_same_request');}
+  // Status is read-only. Native kill/restart coverage is in runtime-pack-recovery.
+});
+
+test('audit five collection families resume the same request after source restoration',async t=>{
+  const x=await base(t),api=new RuntimeApi(x.config);t.after(()=>api.close());
+  const original=await readFile(x.data);await writeFile(x.data,'invalid-json');
+  const families=familyIds.filter(f=>!['form.draft-submit','record.update','choose.stage'].includes(f));
+  const failed=[];
+  for(const [index,family] of families.entries()){const r=await api.call('runtime_pack_run',{request_id:`unavailable-${index}`,recipe:auditRecipe(family)});assert.equal(r.status,'retryable_failure');failed.push(r);}
+  await writeFile(x.data,original);
+  for(const [index,family] of families.entries()){const r=await api.call('runtime_pack_run',{request_id:`unavailable-${index}`,recipe:auditRecipe(family)});assert.equal(r.status,family==='monitor.watch'?'watching':family==='inbox.triage'?'needs_review':'succeeded');assert.equal(r.run_id,failed[index].run_id);}
+  // No configured model means inbox still truthfully requires semantic review.
+});
+
 test('runtime contract all eight Pack families share one MCP surface and natural-language plan never grants dispatch',async t=>{
   const x=await base(t),api=new RuntimeApi(x.config);t.after(()=>api.close());
   const catalog=await api.call('runtime_pack_catalog',{});assert.deepEqual(catalog.families.map(f=>f.id),familyIds);assert.equal(catalog.connected,true);
@@ -65,18 +94,18 @@ test('runtime fixture portal sources support bounded HTTP GET and owned-browser 
   const x=await base(t,{environment:'fixture',fixture_url:`${origin}/lab/account-a/`,sources}),api=new RuntimeApi(x.config);t.after(()=>api.close());
   const http=await api.call('runtime_pack_run',{request_id:'http-source',recipe:{...recipe('portal.collect'),sources:[{id:'api',parameters:{month:'09'}}],filters:[],deduplicate_by:['id'],format:'json'}});assert.equal(http.status,'succeeded');assert.equal(http.result.evidence[0].executor,'http_get');
   const browserResult=await api.call('runtime_pack_run',{request_id:'browser-source',recipe:{...recipe('research.search'),sources:[{id:'table',parameters:{}}],filters:[],deduplicate_by:['id'],query:'browser',search_fields:['id'],relevance:null,sort:null,limit:5}});assert.equal(browserResult.status,'succeeded');assert.equal(browserResult.result.rows[0].id,'browser-1');assert.equal(browserResult.result.evidence[0].executor,'playwright');
-  const gated=await api.call('runtime_pack_run',{request_id:'browser-auth',recipe:{...recipe('research.search'),sources:[{id:'gate',parameters:{}}],filters:[],deduplicate_by:[],query:'',search_fields:['id'],relevance:null,sort:null,limit:5}});assert.equal(gated.status,'failed');assert.equal(gated.result.error,'PACK_WAITING_AUTH');
+  const gated=await api.call('runtime_pack_run',{request_id:'browser-auth',recipe:{...recipe('research.search'),sources:[{id:'gate',parameters:{}}],filters:[],deduplicate_by:[],query:'',search_fields:['id'],relevance:null,sort:null,limit:5}});assert.equal(gated.status,'waiting_auth');assert.equal(gated.result.error,'PACK_WAITING_AUTH');
   const unsafe=JSON.parse(await readFile(x.configPath,'utf8'));unsafe.environment='production';delete unsafe.fixture_url;await writeFile(join(x.root,'unsafe.json'),JSON.stringify(unsafe));assert.throws(()=>loadHostConfig(join(x.root,'unsafe.json')),/PACK_URL_NOT_ALLOWED/);
 });
 
-test('runtime contract inbox.triage uses one typed Jev judgment per row, falls back to unknown and never sends',async t=>{
+test('runtime contract inbox.triage uses one typed Jev judgment per row, holds provider outages for retry and never sends',async t=>{
   const x=await base(t,{rows:[{id:'m1',subject:'server down',body:'Production is unavailable'}],models:'jev'}),store=new PackStore(x.config.dbPath);store.registerProject(x.config.project);t.after(()=>store.close());
   const fake={async systemOne(request){const keys=Object.keys(request.questions.label.criteria);assert.deepEqual(keys.sort(),['normal','unknown','urgent']);return {answers:{label:{type:'choice',choice:'urgent',confidence:.97,probabilities:{urgent:.97,normal:.01,unknown:.02}}}};}};
   const runtime=new FamilyRuntime(store,x.config,{jev:fake});t.after(()=>runtime.close());
   const triage={...recipe('inbox.triage'),...collection,judgment:{question:'Does this require urgent attention?',labels:{urgent:'An outage or safety issue',normal:'Routine request'}},draft_by_label:{urgent:'확인 중입니다.'}};
   const result=await runtime.call('runtime_pack_run',{request_id:'triage-1',recipe:triage});assert.equal(result.status,'succeeded');assert.equal(result.result.items[0].label,'urgent');assert.equal(result.result.items[0].decider,'jev');assert.equal(result.result.items[0].sent,false);assert.equal(result.result.external_messages_sent,0);
   const unavailable=new FamilyRuntime(store,x.config,{jev:{async systemOne(){throw Error('offline');}}});
-  const unknown=await unavailable.call('runtime_pack_run',{request_id:'triage-2',recipe:{...triage,request:'second'}});assert.equal(unknown.status,'needs_review');assert.equal(unknown.result.items[0].label,'unknown');assert.equal(unknown.result.items[0].draft,null);
+  const unknown=await unavailable.call('runtime_pack_run',{request_id:'triage-2',recipe:{...triage,request:'second'}});assert.equal(unknown.status,'retryable_failure');assert.equal(unknown.result.error,'PACK_MODEL_UNAVAILABLE');assert.equal(unknown.result.checkpointed_decisions,0);
 });
 
 test('runtime native monitor.watch persists across restart, emits one local change, suppresses duplicates and supports pause',async t=>{

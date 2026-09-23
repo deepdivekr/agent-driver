@@ -12,18 +12,21 @@ const remote=z.object({url:z.string().url(),parameters:z.array(key).max(20).defa
 export const sourceSchema=z.discriminatedUnion('kind',[
   z.object({id:key,kind:z.literal('file'),path:z.string().min(1),format:z.enum(['json','csv'])}).strict(),
   remote.extend({id:key,kind:z.literal('http'),format:z.enum(['json','csv'])}).strict(),
-  remote.extend({id:key,kind:z.literal('browser'),rows:selector,columns:z.record(field,selector),ready:selector,auth_gate:selector,account_selector:selector,account_text:z.string().min(1)}).strict(),
+  remote.extend({id:key,kind:z.literal('browser'),rows:selector,columns:z.record(field,selector),ready:selector,auth_gate:selector,auth_required:z.boolean().default(true),account_selector:selector,account_text:z.string().min(1)}).strict(),
 ]);
 export const targetSchema=z.object({
   id:key,family:z.enum(['form.draft-submit','record.update','choose.stage']),
   action:z.enum(['submit_form','update_record','stage_cart']),url:z.string().url(),
   draft_is_local:z.literal(true),
+  draft_only:z.boolean().default(false),auth_required:z.boolean().default(true),
   effect_boundary:z.enum(['single_form_submission','allowlisted_field_update','cart_or_draft_only']),
   ready:selector,auth_gate:selector,account_selector:selector,account_text:z.string().min(1),
-  fields,identity_field:field,submit:selector,readback_url:z.string().url(),identity_parameter:key,
+  fields,identity_field:field,submit:selector,readback_url:z.string().url().nullable().default(null),identity_parameter:key,
   // Host-reviewed benign dismissals only; unknown or security dialogs hold.
   known_popups:z.array(z.object({id:key,dialog:selector,dismiss:selector}).strict()).max(20).default([]),
 }).strict().superRefine((v,c)=>{
+  if(!v.draft_only&&!v.readback_url)c.addIssue({code:'custom',message:'submittable targets require independent readback'});
+  if(!v.auth_required&&!v.draft_only)c.addIssue({code:'custom',message:'public anonymous targets must be draft-only'});
   if(({ 'form.draft-submit':'submit_form','record.update':'update_record','choose.stage':'stage_cart' } as const)[v.family]!==v.action)c.addIssue({code:'custom',message:'family/effect mismatch'});
   if(({ 'form.draft-submit':'single_form_submission','record.update':'allowlisted_field_update','choose.stage':'cart_or_draft_only' } as const)[v.family]!==v.effect_boundary)c.addIssue({code:'custom',message:'effect boundary mismatch'});
   if(!Object.hasOwn(v.fields,v.identity_field))c.addIssue({code:'custom',message:'identity field missing'});

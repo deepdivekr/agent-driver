@@ -16,6 +16,9 @@ export interface SwarmRuntimeProviders {planner?:SwarmPlanner;llm_fallback?:Swar
 type StoredRun={snapshot:SwarmRunSnapshot;binding:string};
 const credential=/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u;
 const safe=(error:unknown)=>error instanceof Error&&/^[A-Z][A-Z0-9_]+$/u.test(error.message)?error.message:'SWARM_DECISION_UNAVAILABLE';
+// Authentication, permissions, uncertain writes and quality rejection are not
+// transient infrastructure errors. Only bounded, read-only retries are allowed.
+const retryableWorkerErrors=new Set(['CLIENT_TIMEOUT','CLIENT_MODEL_UNAVAILABLE','STRUCTURED_MODEL_UNAVAILABLE','SOURCE_WORKER_DEADLINE','SWARM_BROWSER_TIMEOUT','SWARM_BROWSER_DISCONNECTED','UNOBSERVED_EVIDENCE_SPAN','DERIVED_EVIDENCE_REFERENCE_INVALID']);
 
 export class SwarmRuntime{
   private readonly runLocks=new Map<string,Promise<void>>();
@@ -61,6 +64,20 @@ export class SwarmRuntime{
     requireCondition(snapshot.status==='needs_human'||snapshot.status==='running'||snapshot.status==='partial_evidence','SWARM_REPLAN_NOT_ALLOWED');
     return this.plan(snapshot.plan.goal,{replan_reason:reason,prior_plan_id:snapshot.plan.plan_id,prior_run_status:snapshot.status,worker_statuses:JSON.stringify(Object.values(snapshot.workers).map(worker=>({id:worker.id,status:worker.status,quality:worker.quality?.score??null})))});
   }
+  async recover(runId:string){return this.serial(runId,async()=>{
+    this.fresh();const snapshot=(this.store.swarmRun(this.config.project.id,runId) as StoredRun).snapshot,expected=snapshot.revision;
+    requireCondition(snapshot.status==='needs_human','SWARM_RECOVERY_NOT_REQUIRED');
+    requireCondition(snapshot.hard_deadline_at_ms===null||Date.now()<snapshot.hard_deadline_at_ms,'SWARM_RECOVERY_DEADLINE');
+    requireCondition(snapshot.reviews.length>0&&snapshot.reviews.every(review=>review.kind==='lease_expired'&&review.worker_id!==null),'SWARM_RECOVERY_REQUIRES_REVIEW');
+    const ids=[...new Set(snapshot.reviews.map(review=>review.worker_id!))];
+    requireCondition(ids.every(id=>snapshot.plan.workers.find(w=>w.id===id)?.effect==='read_only'&&snapshot.workers[id]?.status==='needs_human'&&snapshot.workers[id]!.attempts<2),'SWARM_RECOVERY_UNSAFE_OR_EXHAUSTED');
+    // Preserve the original review in the append-only activity journal. A new
+    // dispatch issues a new lease, so old workers cannot submit or operate.
+    for(const id of ids)this.store.recordSwarmActivity(this.config.project.id,runId,snapshot.revision,id,'worker.recovery',{reason:'read_only_lease_expired',reviews:snapshot.reviews.filter(review=>review.worker_id===id)});
+    for(const id of ids){const worker=snapshot.workers[id]!;worker.status='pending';worker.lease_token=null;worker.lease_expires_at_ms=null;}
+    snapshot.reviews=[];snapshot.status='running';this.persist(snapshot,expected);
+    return {...this.public(snapshot),recovered_workers:ids,next_action:'runtime_swarm_tick'};
+  });}
   run(requestId:string,planId:string){
     this.fresh();const storedPlan=this.store.swarmPlan(this.config.project.id,planId) as {plan:unknown;binding:string},plan=swarmPlanSchema.parse(storedPlan.plan);requireCondition(storedPlan.binding===snapshotHash({plan,fingerprint:this.config.fingerprint}),'CONFIG_CHANGED');
     requireSiteAuth(this.store,this.config,plan.workers.flatMap(worker=>worker.source_urls));
@@ -113,14 +130,15 @@ export class SwarmRuntime{
     if(active)return 'WAITING_FOR_LEASED_WORKERS';
     if(workers.every(worker=>worker.status==='succeeded'))snapshot.status='completed';
     else if(workers.every(worker=>['succeeded','skipped_deadline'].includes(worker.status))){snapshot.status='partial_evidence';this.deadlineReview(snapshot,'Synthesis finished with deadline-skipped evidence workers.');}
-    else if(workers.some(worker=>['failed','needs_human'].includes(worker.status)))this.review(snapshot,'worker_failure',null,'No runnable worker remains.');
+    else if(workers.some(worker=>worker.status==='needs_human'))this.review(snapshot,'worker_failure',null,'No runnable worker remains.');
+    else if(workers.some(worker=>worker.status==='failed'))snapshot.status='failed';
     return snapshot.status==='completed'?'ALL_WORKERS_VERIFIED':snapshot.status==='partial_evidence'?'PARTIAL_EVIDENCE':'NO_RUNNABLE_WORKER';
   }
   async tick(runId:string,now=Date.now()){return this.serial(runId,()=>this.lease(runId,now,true,true));}
   async batchTick(runId:string,now=Date.now()){return this.serial(runId,()=>this.lease(runId,now,true,false));}
   activity(runId:string,workerId:string,leaseToken:string,activity:{kind:'started'|'navigating'|'observing'|'tool_call'|'checkpoint';summary:string;endpoint:string|null;surface_id?:string|null;decision_layer?:'llm'|'jev'|'code'|null}){
     this.fresh();const snapshot=(this.store.swarmRun(this.config.project.id,runId) as StoredRun).snapshot,worker=snapshot.workers[workerId];
-    requireCondition(snapshot.status==='running','SWARM_RUN_NOT_ACTIVE');requireCondition(worker,'SWARM_WORKER_NOT_FOUND');requireCondition(worker.status==='leased'&&worker.lease_token===leaseToken&&worker.lease_expires_at_ms!==null&&worker.lease_expires_at_ms>Date.now(),'STALE_SWARM_LEASE');
+    requireCondition(['running','needs_human'].includes(snapshot.status),'SWARM_RUN_NOT_ACTIVE');requireCondition(worker,'SWARM_WORKER_NOT_FOUND');requireCondition(worker.status==='leased'&&worker.lease_token===leaseToken&&worker.lease_expires_at_ms!==null&&worker.lease_expires_at_ms>Date.now(),'STALE_SWARM_LEASE');
     requireCondition(!credential.test(activity.summary),'CREDENTIAL_LIKE_INPUT');const endpoint=activity.endpoint===null?null:sanitizeSwarmEndpoint(activity.endpoint);requireCondition(activity.endpoint===null||endpoint,'SWARM_ACTIVITY_ENDPOINT_INVALID');
     if(activity.surface_id)requireCondition(this.config.observability?.surfaces.some(surface=>surface.id===activity.surface_id)||this.store.controlSurfaces(this.config.project.id).some(surface=>surface.id===activity.surface_id&&surface.run_id===runId&&surface.worker_id===workerId&&surface.state==='active'),'CONTROL_SURFACE_UNDELEGATED');
     const event_id=this.store.recordSwarmActivity(this.config.project.id,runId,snapshot.revision,workerId,'worker.activity',{activity_kind:activity.kind,summary:redact(activity.summary),endpoint,surface_id:activity.surface_id??null,decision_layer:activity.decision_layer??null});
@@ -167,12 +185,15 @@ export class SwarmRuntime{
     return {...this.public(snapshot),dispatch,dispatches:[dispatch],next_action:'spawn_sub_agent_then_runtime_swarm_report'};
   }
   async report(runId:string,workerId:string,leaseToken:string,raw:unknown){
-    return this.serial(runId,()=>this.reportLocked(runId,workerId,leaseToken,raw));
+    const receivedAt=Date.now();
+    return this.serial(runId,()=>this.reportLocked(runId,workerId,leaseToken,raw,receivedAt));
   }
-  private async reportLocked(runId:string,workerId:string,leaseToken:string,raw:unknown){
+  private async reportLocked(runId:string,workerId:string,leaseToken:string,raw:unknown,receivedAt:number){
     this.fresh();const stored=this.store.swarmRun(this.config.project.id,runId) as StoredRun,snapshot=stored.snapshot,expected=snapshot.revision;requireCondition(['running','needs_human'].includes(snapshot.status),'SWARM_RUN_NOT_ACTIVE');
     if(this.applyDeadline(snapshot,Date.now())){this.persist(snapshot,expected);return this.public(snapshot);}
-    const worker=snapshot.workers[workerId];requireCondition(worker,'SWARM_WORKER_NOT_FOUND');requireCondition(worker.status==='leased'&&worker.lease_token===leaseToken&&worker.lease_expires_at_ms!==null&&worker.lease_expires_at_ms>Date.now(),'STALE_SWARM_LEASE');
+    // Internal verification queue time must not invalidate an on-time report.
+    // Generation fencing and the global hard deadline still apply.
+    const worker=snapshot.workers[workerId];requireCondition(worker,'SWARM_WORKER_NOT_FOUND');requireCondition(worker.status==='leased'&&worker.lease_token===leaseToken&&worker.lease_expires_at_ms!==null&&worker.lease_expires_at_ms>receivedAt,'STALE_SWARM_LEASE');
     requireCondition(!credential.test(JSON.stringify(raw)),'CREDENTIAL_LIKE_INPUT');const report=swarmWorkerReportSchema.parse(raw),definition=snapshot.plan.workers.find(item=>item.id===workerId)!;
     if(snapshot.mode==='standard'&&definition.stage==='source_read'&&report.status==='succeeded'){
       requireCondition(report.fact_cards.length>0,'SWARM_STANDARD_FACT_CARD_REQUIRED');
@@ -180,14 +201,32 @@ export class SwarmRuntime{
       requireCondition(report.fact_cards.every(card=>definition.source_urls.includes(card.source_url)||observed.has(card.source_url)),'SWARM_STANDARD_FACT_CARD_SOURCE_MISMATCH');
     }
     worker.lease_token=null;worker.lease_expires_at_ms=null;worker.result=report;
-    if(report.status!=='succeeded'){worker.status=report.status==='failed'?'failed':'needs_human';this.review(snapshot,'worker_failure',workerId,report.error_code??report.summary);this.persist(snapshot,expected);return this.public(snapshot);}
-    const qualityState={goal:snapshot.plan.goal,worker:definition,result:{summary:report.summary,artifacts:report.artifacts,evidence:report.evidence,fact_cards:report.fact_cards,readback:report.readback}},plane=await this.plane({runId,workerId});let dimensions:{relevance:number;evidence:number;usability:number}|null=null,eventId:string|null=null;
+    if(report.status!=='succeeded'){
+      const technical=report.status==='failed'&&definition.effect==='read_only'&&retryableWorkerErrors.has(report.error_code??'');
+      if(technical){
+        const canRetry=worker.attempts<2&&(snapshot.hard_deadline_at_ms===null||Date.now()+1_000<snapshot.hard_deadline_at_ms);
+        this.store.recordSwarmActivity(this.config.project.id,runId,snapshot.revision,workerId,'worker.recovery',{reason:report.error_code,attempt:worker.attempts,action:canRetry?'retry_read_only_worker':'technical_retry_exhausted',report});
+        worker.status=canRetry?'pending':'failed';
+        // The old token was cleared above. A new dispatch is a new attempt;
+        // successful siblings and the original failure journal remain intact.
+        if(!canRetry&&!Object.values(snapshot.workers).some(item=>item.status==='leased')&&this.ready(snapshot).length===0)snapshot.status='failed';
+      }else{worker.status=report.status==='failed'?'failed':'needs_human';this.review(snapshot,'worker_failure',workerId,report.error_code??report.summary);}
+      this.persist(snapshot,expected);return this.public(snapshot);
+    }
+    const ancestorIds=new Set<string>();const addAncestor=(id:string)=>{if(ancestorIds.has(id))return;ancestorIds.add(id);for(const parent of snapshot.plan.workers.find(item=>item.id===id)?.depends_on??[])addAncestor(parent);};for(const parent of definition.depends_on)addAncestor(parent);
+    const upstreamCoverage=[...ancestorIds].map(id=>{const state=snapshot.workers[id]!,task=snapshot.plan.workers.find(item=>item.id===id)!;return {worker_id:id,stage:task.stage,status:state.status,source_urls:task.source_urls,observed_urls:this.store.observedUrls(this.config.project.id,runId,id),readback_verified:state.result?.readback?.verified??null,fact_cards_count:state.result?.fact_cards.length??null};});
+    const qualityState={goal:snapshot.plan.goal,worker:definition,evaluation_scope:{current_worker_only:true,upstream_coverage_is_execution_evidence_not_automatic_quality_acceptance:true},upstream_coverage:upstreamCoverage,result:{summary:report.summary,artifacts:report.artifacts,evidence:report.evidence,fact_cards:report.fact_cards,readback:report.readback}},plane=await this.plane({runId,workerId});let dimensions:{relevance:number;evidence:number;usability:number}|null=null,eventId:string|null=null;
     if(plane)try{const evaluated=await plane.evaluate(artifactQualityRequest(qualityState),{context_id:`${snapshot.run_id}:quality:${workerId}:${snapshot.revision}`,bindings:[{question_id:'relevance',decision_id:'artifact.quality.relevance'},{question_id:'evidence',decision_id:'artifact.quality.evidence'},{question_id:'usability',decision_id:'artifact.quality.usability'}]});eventId=evaluated.event.event_id;if(evaluated.judgments.every(item=>item.status==='accepted'&&typeof item.value==='number'))dimensions={relevance:Number(evaluated.judgments[0]!.value),evidence:Number(evaluated.judgments[1]!.value),usability:Number(evaluated.judgments[2]!.value)};}catch{/* LLM fallback below. */}
     if(!dimensions){requireCondition(this.providers.llm_fallback,'SWARM_LLM_DECISION_REQUIRED');try{dimensions=await this.decisionCall(runId,workerId,'llm','LLM is reviewing artifact quality.',()=>this.providers.llm_fallback!.quality(qualityState));}catch(error){this.review(snapshot,'quality',workerId,safe(error));}}
     if(eventId)snapshot.decision_events.push(eventId);
     const normalized=dimensions?Object.fromEntries(Object.entries(dimensions).map(([key,value])=>[key,value/4])) as Record<keyof typeof ARTIFACT_QUALITY_WEIGHTS,number>:null,quality=normalized?normalized.relevance*ARTIFACT_QUALITY_WEIGHTS.relevance+normalized.evidence*ARTIFACT_QUALITY_WEIGHTS.evidence+normalized.usability*ARTIFACT_QUALITY_WEIGHTS.usability:null,hasDependent=snapshot.plan.workers.some(item=>item.depends_on.includes(workerId)),requiredScore=hasDependent?0:.75,requiredEvidence=hasDependent?0:.75,accepted=hasDependent?report.readback?.verified===true&&report.evidence.length>0:quality!==null&&quality>=requiredScore&&normalized!.evidence>=requiredEvidence;
     worker.quality={score:quality,accepted,decision_event_id:eventId,dimensions:normalized??{relevance:null,evidence:null,usability:null},required_score:requiredScore,required_evidence:requiredEvidence};
-    if(!accepted){worker.status='needs_human';this.review(snapshot,'quality',workerId,'Artifact quality or independent evidence is below the code-owned acceptance threshold.');this.persist(snapshot,expected);return this.public(snapshot);}
+    if(!accepted){
+      const canCorrect=definition.effect==='read_only'&&worker.attempts<2&&quality!==null&&report.readback?.verified===true&&report.evidence.length>0&&(snapshot.hard_deadline_at_ms===null||Date.now()+1_000<snapshot.hard_deadline_at_ms);
+      if(canCorrect){worker.status='pending';this.store.recordSwarmActivity(this.config.project.id,runId,snapshot.revision,workerId,'worker.recovery',{reason:'artifact_quality_below_threshold',action:'bounded_llm_correction',attempt:worker.attempts,quality:worker.quality,report});}
+      else{worker.status='needs_human';this.review(snapshot,'quality',workerId,'Artifact quality or independent evidence is below the code-owned acceptance threshold.');}
+      this.persist(snapshot,expected);return this.public(snapshot);
+    }
     worker.status='succeeded';
     const states=Object.values(snapshot.workers),allDone=states.every(item=>item.status==='succeeded'),allTerminal=states.every(item=>['succeeded','skipped_deadline'].includes(item.status)),workflowState={goal:snapshot.plan.goal,reported_worker:workerId,all_workers_verified:allDone,partial_evidence:allTerminal&&!allDone,workers:states.map(item=>({id:item.id,status:item.status,quality:item.quality?.score??null}))};let next:'CONTINUE'|'REOBSERVE'|'LLM_REPLAN'|'HUMAN_REVIEW'|'COMPLETE'|'HOLD'=allDone?'COMPLETE':'CONTINUE',workflowAccepted=false;
     if(plane)try{const evaluated=await plane.evaluate(workflowRequest(workflowState),{context_id:`${snapshot.run_id}:workflow:${workerId}:${snapshot.revision}`,bindings:[{question_id:'next_step',decision_id:'workflow.next_step'}]});snapshot.decision_events.push(evaluated.event.event_id);const judgment=evaluated.judgments[0];if(judgment?.status==='accepted'&&typeof judgment.value==='string'){next=judgment.value as typeof next;workflowAccepted=true;}}catch{/* LLM fallback below. */}

@@ -193,6 +193,7 @@ export function validateSwarmPlanDraft(raw:unknown,limits:{max_workers:number;ca
 }
 
 export const swarmTools={
+  runtime_swarm_recover:{schema:z.object({run_id:z.string().uuid()}).strict(),implemented:true,readOnly:false},
   runtime_swarm_start:{schema:z.object({request_id:id,goal:sentence.max(8000),context:z.record(z.string().max(120),z.union([z.string().max(4000),z.number().finite(),z.boolean(),z.null()])).default({}),mode:swarmResearchModeSchema.default('standard')}).strict(),implemented:true,readOnly:false},
   runtime_swarm_plan:{schema:z.object({goal:sentence.max(8000),context:z.record(z.string().max(120),z.union([z.string().max(4000),z.number().finite(),z.boolean(),z.null()])).default({})}).strict(),implemented:true,readOnly:true},
   runtime_swarm_replan:{schema:z.object({run_id:z.string().uuid(),reason:sentence.max(2000)}).strict(),implemented:true,readOnly:false},

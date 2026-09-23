@@ -19,12 +19,13 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
   bind(binding:{taskId:string;lease:Lease;targetRef:string}){this.binding=binding;}
   async observe():Promise<Observation>{
     requireCondition(this.binding&&this.owned,'PACK_BROWSER_NOT_BOUND');const page=this.owned.page;
-    const account=(await page.locator(this.target.account_selector).innerText()).trim();
+    const anonymousDraft=this.target.draft_only&&!this.target.auth_required;
+    const account=anonymousDraft?null:(await page.locator(this.target.account_selector).innerText()).trim();
     return {targetRef:this.binding.targetRef,targetExists:!page.isClosed(),ownerTaskId:this.binding.taskId,projectId:this.config.project.id,profileRef:this.config.project.profileRef,
-      accountRef:account===this.target.account_text?this.config.project.accountRef:'unknown',origin:new URL(page.url()).origin,generation:this.binding.lease.generation,observedMonoMs:performance.now(),visibility:'visible',environment:'owned_headless'};
+      accountRef:anonymousDraft||account===this.target.account_text?this.config.project.accountRef:'unknown',origin:new URL(page.url()).origin,generation:this.binding.lease.generation,observedMonoMs:performance.now(),visibility:'visible',environment:'owned_headless'};
   }
   private async readback(){
-    requireCondition(this.owned&&this.input,'PACK_BROWSER_NOT_PREPARED');const url=new URL(this.target.readback_url);
+    requireCondition(this.owned&&this.input,'PACK_BROWSER_NOT_PREPARED');requireCondition(this.target.readback_url,'PACK_READBACK_REQUIRED');const url=new URL(this.target.readback_url);
     url.searchParams.set(this.target.identity_parameter,String(this.input.values[this.target.identity_field]));
     const response=await this.owned.page.context().request.get(url.toString(),{timeout:10000,maxRedirects:0});
     requireCondition(response.ok()&&Number(response.headers()['content-length']??0)<=MAX_BYTES,'PACK_READBACK_UNAVAILABLE');
@@ -35,14 +36,17 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
     requireCondition(this.binding,'PACK_BROWSER_NOT_BOUND');requireCondition(input.family===this.target.family,'PACK_TARGET_FAMILY_MISMATCH');
     requireCondition(Object.keys(input.values).length>0&&Object.keys(input.values).every(k=>Object.hasOwn(this.target.fields,k)),'PACK_FIELD_NOT_DELEGATED');
     requireCondition(typeof input.values[this.target.identity_field]==='string'&&String(input.values[this.target.identity_field]).length>0,'PACK_RECORD_IDENTITY_REQUIRED');
-    this.input=input;this.owned=new OwnedPersistentPage(this.config.project.profileRef,join(this.config.project.profileRef,'pack-captures'));
+    this.input=input;this.owned=new OwnedPersistentPage(this.config.project.profileRef,join(this.config.project.profileRef,'pack-captures'),true,{draftOnly:this.target.draft_only});
     const result=await this.owned.open(this.binding.taskId,{url:this.target.url,allowed_origins:[new URL(this.target.url).origin],logged_in:this.target.ready,
-      authentication_request:this.target.auth_gate,known_popups:this.target.known_popups,unknown_dialog:'[role="dialog"],dialog[open]',navigation_timeout_ms:15000});
+      authentication_request:this.target.auth_gate,requires_logged_in:this.target.auth_required,known_popups:this.target.known_popups,unknown_dialog:'[role="dialog"],dialog[open]',navigation_timeout_ms:15000});
     if(result.gate!=='ready')return {gate:result.gate,snapshot:{gate:result.gate},capture_ref:result.capture_ref!,detail:{gate:result.gate}};
-    requireCondition((await this.owned.page.locator(this.target.account_selector).innerText()).trim()===this.target.account_text,'PACK_ACCOUNT_MISMATCH');
-    this.before=await this.readback();
-    if(input.family==='record.update')requireCondition(this.before!==null&&input.expected_before_sha256===snapshotHash(this.before),'PACK_RECORD_STALE');
-    else requireCondition(this.before===null&&input.expected_before_sha256===null,'PACK_RECORD_ALREADY_EXISTS');
+    await this.owned.page.locator(this.target.ready).waitFor({state:'visible',timeout:10000});
+    if(this.target.auth_required)requireCondition((await this.owned.page.locator(this.target.account_selector).innerText()).trim()===this.target.account_text,'PACK_ACCOUNT_MISMATCH');
+    if(!this.target.draft_only){
+      this.before=await this.readback();
+      if(input.family==='record.update')requireCondition(this.before!==null&&input.expected_before_sha256===snapshotHash(this.before),'PACK_RECORD_STALE');
+      else requireCondition(this.before===null&&input.expected_before_sha256===null,'PACK_RECORD_ALREADY_EXISTS');
+    }else requireCondition(input.expected_before_sha256===null,'DRAFT_ONLY_RECORD_STATE_UNVERIFIED');
     const actual:Row={};
     for(const [key,value]of Object.entries(input.values)){
       const spec=this.target.fields[key]!,control=this.owned.page.locator(spec.selector);requireCondition(await control.count()===1,'PACK_FIELD_AMBIGUOUS');
@@ -53,9 +57,10 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
     }
     const captured=await this.owned.capture(this.binding.taskId);
     return {gate:'ready',snapshot:{target:this.target.id,family:input.family,values:actual,before:this.before,config:this.config.fingerprint},capture_ref:captured.capture_ref,
-      detail:{fields:Object.keys(actual),before_sha256:this.before===null?null:snapshotHash(this.before),capture_sha256:captured.capture_sha256}};
+      detail:{fields:Object.keys(actual),draft_only:this.target.draft_only,authentication_verified:this.target.auth_required,submission_enabled:!this.target.draft_only,before_sha256:this.before===null?null:snapshotHash(this.before),capture_sha256:captured.capture_sha256}};
   }
   async execute(){
+    requireCondition(!this.target.draft_only,'PACK_DRAFT_ONLY');
     requireCondition(this.owned&&this.input,'PACK_BROWSER_NOT_PREPARED');
     // Re-read both record and controls at the dispatch boundary. No cached success flags.
     requireCondition(snapshotHash(await this.readback())===snapshotHash(this.before),'PACK_RECORD_STALE');
@@ -84,7 +89,7 @@ export function writeProtocol(store:PackStore,config:HostConfig,recipe:MutationR
   const adapter=new FamilyBrowserWrite(config,target),capability=targetCapability(target);
   const manifest=taskPackManifest.parse({id:`${target.family}.${target.id}`,version:1,adapter_id:adapter.adapterId,effect:'write_external',
     input_fields:Object.keys(target.fields).map(name=>({name,required:name===target.identity_field,description:`Reviewed ${name} field`})),
-    observation:{logged_in_signal:target.account_selector,independent_readback:target.readback_url},time_constraints:[],
+    observation:{logged_in_signal:target.account_selector,independent_readback:target.readback_url??'draft-only; submission disabled'},time_constraints:[],
     popup_policy:{known_dismissible:target.known_popups.map(p=>p.id),unknown_action:'hold',security_action:'hold'},
     approval:{required:'per_external_write',binds:['task','caller','pack','adapter','normalized_input','form_snapshot','generation'],token:'single_use_expiring'}});
   return new ApprovedBrowserProtocol(store,manifest,capability,adapter);

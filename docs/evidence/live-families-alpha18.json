@@ -1,0 +1,87 @@
+{
+  "status": "PASS",
+  "observed_at": "2026-09-23T05:13:54.326Z",
+  "transport": "stdio_mcp",
+  "environment": "production",
+  "elapsed_ms": 6743,
+  "source_url": "https://news.ycombinator.com/",
+  "rows": 30,
+  "search_matches": 5,
+  "csv_rows": 30,
+  "triage": [
+    {
+      "label": "ai",
+      "decider": "jev",
+      "confidence": 0.96,
+      "elapsed_ms": 648
+    }
+  ],
+  "triage_status": "succeeded",
+  "form": {
+    "url": "https://www.browserbase.com/contact",
+    "status": "draft_ready",
+    "fields": 7,
+    "submitted": false,
+    "execute_guard": "PACK_DRAFT_ONLY",
+    "capture": "contact-draft.png"
+  },
+  "watch": {
+    "persisted_across_mcp_restart": true,
+    "paused": true,
+    "change_event": "NOT_RUN"
+  },
+  "duplicates": {
+    "same_run_id": true
+  },
+  "limitations": [
+    "Read-only public source, not authenticated portal validation.",
+    "Triage result is observed model output, not accuracy calibration.",
+    "Form fill-only; no submission, record update or cart effect.",
+    "No full-workflow natural-language autonomous planning benchmark."
+  ],
+  "public_projection_recheck": {
+    "status": "PASS",
+    "observed_at": "2026-09-23T05:45:54.076Z",
+    "transport": "stdio_mcp",
+    "environment": "production",
+    "elapsed_ms": 10959,
+    "source_url": "https://news.ycombinator.com/",
+    "rows": 30,
+    "search_matches": 6,
+    "csv_rows": 30,
+    "triage": [
+      {
+        "label": "ai",
+        "decider": "jev",
+        "confidence": 0.93,
+        "elapsed_ms": 874
+      }
+    ],
+    "triage_status": "succeeded",
+    "form": {
+      "url": "https://www.browserbase.com/contact",
+      "status": "draft_ready",
+      "fields": 7,
+      "submitted": false,
+      "execute_guard": "PACK_DRAFT_ONLY",
+      "capture_sha256": "c9fb61bd5cad8fe7165d123e564a6237478445a3f6b68ccdc0761533436361a4",
+      "capture_exported": false
+    },
+    "watch": {
+      "persisted_across_mcp_restart": true,
+      "paused": true,
+      "change_event": "NOT_RUN"
+    },
+    "duplicates": {
+      "same_run_id": true
+    },
+    "limitations": [
+      "Read-only public source, not authenticated portal validation.",
+      "Triage result is observed model output, not accuracy calibration.",
+      "Form fill-only; no submission, record update or cart effect.",
+      "No full-workflow natural-language autonomous planning benchmark."
+    ],
+    "package_version": "0.1.0-alpha.18",
+    "receipts_sha256": "27ffefb1d0a4b0a8f50c4a16e456974dacc6127594ae442edf1c97b6a930f325"
+  }
+}

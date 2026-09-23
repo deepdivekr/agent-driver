@@ -1,10 +1,10 @@
 # Agent Driver
 
-AI 에이전트에 전용 브라우저·CLI·파일 작업 도구를 연결하고, 중단된 작업을 검증 가능한 상태로 이어가는 로컬 MCP 런타임.
+AI 에이전트에 전용 브라우저·CLI·파일 작업 도구와 실행 기록·승인·복구 기능을 제공하는 로컬 MCP 런타임.
 
 Claude Code, Codex, Cursor, Hermes에서 웹 검색, 폼 입력, 파일 수집 같은 작업을 맡길 수 있습니다. 브라우저 작업은 전용 환경에서 진행하고, 실행 기록과 재개 정보는 로컬에 보관합니다.
 
-현재 공개 저장소의 `main`은 개발 alpha입니다. Ubuntu 24.04와 Windows의 WSL2 Ubuntu에서 검증했습니다.
+Apache-2.0 오픈소스이며, 현재 공개 저장소의 `main`은 개발 alpha입니다. Ubuntu 24.04와 Windows의 WSL2 Ubuntu에서 개발·검증합니다. 기능별 실제 확인 범위와 남은 제약은 [출시 검증 기록](docs/release-readiness-alpha-18.md)에서 확인하세요.
 
 ## 시작하기
 
@@ -117,7 +117,13 @@ Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단
 
 [Pack 목록과 지원 범위](docs/pack-catalog.md)
 
+### 실제 실행 기록
+
+공개 뉴스 수집 → 로컬 검색·CSV → Jev 분류 → 감시 상태 재연결 → 실제 연락 양식 미제출 초안까지 stdio MCP로 실행했습니다. 원본에서 6.743초, 공개 alpha.18 사본에서 10.959초에 6종 경로를 확인했습니다. 서로 다른 시점의 개별 기록이며 속도 비교나 8종 전체의 실서비스 쓰기·자연어 자율 실행 완료를 뜻하지 않습니다. [단계별 결과와 재실행 방법](docs/evaluation-live-alpha-18.md)
+
 ## 실행 방식
+
+Swarm에서는 6개 사이트를 재관측하고, 종합 단계의 시간 초과를 복구해 3분 43.8초에 조사 메모를 완료했습니다. 기존 근거를 재검증한 실행이며 속도 비교 실험은 아닙니다. [실패와 복구, worker별 시간·토큰 기록](docs/evaluation-swarm-alpha-18.md)
 
 클라이언트가 `agent-driver mcp`를 로컬 프로세스로 시작하고 작업을 요청합니다. Agent Driver는 전용 브라우저, CLI 세션, 허용된 파일 경로에서 실행하고 결과를 다시 읽어 확인합니다. 작업 상태는 로컬 SQLite에 저장해 중단 후 복구에 사용합니다.
 
@@ -154,10 +160,17 @@ npm ci
 npm run test:runtime
 ```
 
-`test:runtime`은 빠른 기본 회귀이며 장시간 soak를 포함하지 않습니다. soak는 필요할 때 `npm run test:runtime:soak`, 전체 묶음은 `npm run test:runtime:full`로 명시 실행합니다.
+`test:runtime`은 빠른 기본 회귀이며 장시간 soak를 포함하지 않습니다. 선택 검사도 같은 Ubuntu/WSL 저장소 루트에서 명시 실행합니다.
+
+```bash
+# 장시간 soak만 실행
+npm run build && node scripts/runtime/run-tests.mjs soak
+# soak를 포함한 전체 묶음
+npm run build && node scripts/runtime/run-tests.mjs full
+```
 
 테스트는 실제 환경 검증과 테스트용 환경 검증을 구분해 기록합니다. 설계와 세부 계약은 [개발 문서](docs/control-plane-design-v0.7.md)를 참고하세요.
 
 ## 라이선스
 
-라이선스 선택 전의 소스 공개 평가판입니다. 별도 재사용 권한은 부여하지 않습니다.
+[Apache License 2.0](LICENSE). 조건에 따라 수정·재배포·상업적 사용이 가능합니다. 외부 의존성은 각자의 라이선스를 따릅니다. [라이선스 범위](docs/licensing.md) · [외부 의존성 고지](THIRD_PARTY_NOTICES.md)

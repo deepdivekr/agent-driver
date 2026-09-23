@@ -1,5 +1,7 @@
 # Agent Driver alpha.15 출시 준비 상태
 
+이 문서는 alpha.15 당시의 기록이다. 현재 라이선스와 검증 상태는 [alpha.18 기록](release-readiness-alpha-18.md)을 따른다.
+
 ## 판정
 
 `0.1.0-alpha.15`는 **Jev Decision Plane이 연결된 공개 평가용 alpha 후보**다. GA 또는 무감독 운영 인증이 아니다.

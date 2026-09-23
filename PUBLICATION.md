@@ -8,4 +8,4 @@
 - 생성되는 `tests/report.json`, `tests/evidence/`, `.runtime/`는 기본 gitignore 대상이다. CI artifact는 합성 runtime 테스트 기록만 포함한다.
 - 공개 전 scanner는 credential/private-key/계정 경로 패턴을 검사한다. 패턴 검사가 개인정보 검토를 완전히 대체하지는 않는다.
 
-공개 라이선스는 아직 결정하지 않았다. API 요청 키를 issue/PR/로그에 붙여 넣지 않는다. 운영 배포·자동 merge·실계정 데이터 업로드는 이 공개 작업에 포함하지 않았다.
+자체 소스와 문서는 Apache-2.0으로 공개한다. LICENSE 원문, NOTICE와 외부 의존성 고지를 공개 projection에 포함한다. 외부 의존성은 각자의 라이선스를 유지한다. API 요청 키를 issue/PR/로그에 붙여 넣지 않는다. 실계정 데이터 업로드는 이 공개 작업에 포함하지 않는다.

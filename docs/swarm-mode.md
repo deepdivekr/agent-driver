@@ -80,14 +80,16 @@ artifact 품질 세 질문은 같은 state로 한 번에 fan-out하지만 서로
 
 중간 worker와 최종 worker의 품질 gate도 다르다. 후속 verifier가 있는 중간 worker는 bounded evidence manifest와 독립 readback이 있으면 그 verifier에게 전달하며, Jev의 원자 품질 점수는 감사·우선순위 신호로 보존한다. 최종 worker만 총점 0.75와 evidence 0.75를 모두 만족해야 완료 근거가 된다. 중간 결과를 최종 증거처럼 심사하면 교차검증 worker가 아예 실행되지 않는 순환 문제가 생기기 때문이다.
 
-worker report는 hash만 전달하지 않는다. 최대 32개의 `{source_url, claim, observed_at, verification}` evidence manifest를 품질 state에 포함한다. journal은 원문 state 대신 Choice/Score의 전체 확률분포, selected probability, confidence, provider latency, 가능한 경우 input/output token 수를 보존한다. 이것들은 통계 검정의 p-value가 아니다.
+worker report는 hash만 전달하지 않는다. 최대 32개의 `{source_url, claim, observed_at, verification}` evidence manifest를 품질 state에 포함한다. 종합 단계에는 코드가 기록한 선행 worker의 조사 URL·관측 URL·완료 상태·readback·근거 개수도 전달한다. 조사 범위와 현재 산출물의 품질은 별도로 평가하며, 선행 작업 완료가 낮은 품질의 결과를 자동 승인하지 않는다. journal은 원문 state 대신 Choice/Score의 전체 확률분포, selected probability, confidence, provider latency, 가능한 경우 input/output token 수를 보존한다. 이것들은 통계 검정의 p-value가 아니다.
 
 ## 권한과 완료
 
 - LLM/Jev의 plan과 판단에는 항상 `execution_authority=false`, `approval_granted=false`가 기록된다.
 - `external_effect`와 `irreversible` worker는 dispatch하지 않고 사람 예외 큐로 보낸다. 기존 snapshot-bound 승인 경로와 결합되기 전에는 실행할 수 없다.
 - `succeeded` 보고에는 독립 readback hash와 방법이 필수다.
-- lease가 만료되면 자동 재시도하지 않는다. 중복 효과 가능성을 피하기 위해 사람 검토로 보낸다.
+- 읽기 전용 worker의 알려진 모델·브라우저 기술 오류는 같은 run에서 최대 두 번의 시도 안에 다시 배정한다. 검증된 근거가 있으나 최종 품질이 부족하면 같은 한도 안에서 LLM 보정을 요청하며, 통과 기준을 낮추지 않는다.
+- lease 만료는 먼저 검토 상태로 남는다. 클라이언트가 `runtime_swarm_recover(run_id)`를 호출하면 읽기 전용·만료 사유·시도 횟수·전체 기한을 재검사해 허용된 경우만 새 lease로 재개한다. 외부 변경이나 결과 불명확 상황에는 이 재시도를 적용하지 않는다.
+- 일부 worker가 검토 대기여도 이미 발급한 다른 유효 lease의 작업과 화면은 유지한다. 새 작업 배정은 검토 해소 전까지 보류하며, 활성 lease와 사용자 인증 화면의 동시 조작은 차단한다.
 - 모든 worker가 readback과 품질 gate를 통과하기 전에는 모델이 `COMPLETE`를 골라도 run을 완료하지 않는다.
 - 재계획은 `runtime_swarm_replan`으로 새 LLM plan을 만들며 기존 run과 권한을 자동 상속하지 않는다.
 
@@ -99,7 +101,7 @@ worker report는 hash만 전달하지 않는다. 최대 32개의 `{source_url, c
 4. 각 결과를 `runtime_swarm_report(run_id, worker_id, lease_token, report)`로 보고
 5. `runtime_swarm_tick(run_id)`으로 다음 dependency-ready batch를 받아 2~4번 반복
 6. `runtime_swarm_status(run_id)`로 상태와 partial evidence를 확인
-7. 필요 시 `runtime_swarm_replan(run_id, reason)`
+7. 만료된 읽기 작업은 `runtime_swarm_recover(run_id)`, 새 계획이 필요한 경우 `runtime_swarm_replan(run_id, reason)`
 
 기존 low-level `runtime_swarm_plan` → `runtime_swarm_run` 흐름은 계속 지원한다. `runtime_swarm_tick`은 batch 필드 `dispatches[]`를 추가하지만, 기존 client 호환을 위해 첫 항목을 단일 `dispatch`에도 유지한다. batch가 비었으면 `dispatch` 역시 `null`이다.
 
@@ -115,4 +117,4 @@ agent-driver dashboard --config /absolute/path/to/host.json
 
 URL은 `origin + pathname`까지만 표시한다. userinfo, query, fragment와 token·session처럼 보이는 긴 path segment는 제거한다. 작업 설명에 포함된 credential-like 문자열도 redaction한다. 관제 snapshot·SSE·frame은 읽기 전용이다. Task가 인증 필요성을 발견했을 때 나타나는 `사이트 로그인` 화면은 해당 사이트만 same-origin POST로 열기·확인·재시도하며, 작업 승인·제출·구매 권한은 주지 않는다. Agent Driver는 사이트별 약관을 판정하거나 특정 API를 강제하지 않는다. [사이트 연결](browser-connections.md)을 참고한다.
 
-현재 검증은 fixture LLM/Jev와 durable SQLite를 사용한 `fixture_integration`이다. 실제 Hermes/Codex가 여러 원격 sub-agent를 동시에 소환하는 user-environment 증거는 아직 별도로 수집해야 한다.
+검증 수준은 각 실행 기록에 구분한다. fixture 계약 통과를 실제 사이트·모델 실행으로 표시하지 않으며, 로컬 병렬 worker의 검증을 임의의 원격 클라이언트 300개에 대한 보장으로 확대하지 않는다. [현재 출시 검증 기록](release-readiness-alpha-18.md)을 참고한다.

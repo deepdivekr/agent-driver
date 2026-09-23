@@ -164,6 +164,15 @@ test('runtime Codex schema transport removes nested URI annotations without muta
   assert.equal(model.calls[0].input_sha256,hashJson({instructions,input,schema:original}));
 });
 
+test('Claude exact JSON fences are accepted, but surrounding prose and multiple blocks are rejected',async()=>{
+  for(const [result,accepted] of [['```json\n{"choice":"A"}\n```',true],['Here is JSON\n```json\n{"choice":"A"}\n```',false],['```json\n{}\n```\n```json\n{}\n```',false]]){
+    const runner={async run(request){return {code:0,stdout:JSON.stringify(request.args.join(' ')==='auth status'?{loggedIn:true,authMethod:'claude.ai'}:{is_error:false,result}),stderr:''};}};
+    const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'claude'}),runner});
+    if(accepted)assert.deepEqual(await model.call('design','Choose.',{},schema),{choice:'A'});
+    else await assert.rejects(model.call('design','Choose.',{},schema),/STRUCTURED_MODEL_UNAVAILABLE/);
+  }
+});
+
 test('runtime URI transport compatibility is Codex-only and leaves Claude structured schema unchanged',async()=>{
   const original={type:'object',properties:{url:{type:'string',format:'uri'}},additionalProperties:false,required:['url']};let transported;
   const runner={async run(request){

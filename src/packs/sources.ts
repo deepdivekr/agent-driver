@@ -22,14 +22,20 @@ export async function collectSource(source:Source,parameters:Record<string,strin
     }else{
       const owned=new OwnedPersistentPage(join(config.project.profileRef,'pack-sources',source.id),join(config.project.profileRef,'pack-captures'));
       try{
-        const opened=await owned.open(randomUUID(),{url:url.toString(),allowed_origins:[url.origin],logged_in:source.ready,authentication_request:source.auth_gate,known_popups:[],unknown_dialog:'[role="dialog"],dialog[open]',navigation_timeout_ms:15000,allow_capture_failure:true});
+        const opened=await owned.open(randomUUID(),{url:url.toString(),allowed_origins:[url.origin],logged_in:source.ready,authentication_request:source.auth_gate,requires_logged_in:source.auth_required,known_popups:[],unknown_dialog:'[role="dialog"],dialog[open]',navigation_timeout_ms:15000,allow_capture_failure:true});
         requireCondition(opened.gate==='ready',opened.gate==='waiting_auth'?'PACK_WAITING_AUTH':'PACK_UNKNOWN_DIALOG');
-        requireCondition((await owned.page.locator(source.account_selector).innerText()).trim()===source.account_text,'PACK_ACCOUNT_MISMATCH');
+        await owned.page.locator(source.ready).waitFor({state:'visible',timeout:10000});
+        if(source.auth_required)requireCondition((await owned.page.locator(source.account_selector).innerText()).trim()===source.account_text,'PACK_ACCOUNT_MISMATCH');
         const nodes=owned.page.locator(source.rows),count=await nodes.count();requireCondition(count<=MAX_ROWS,'SOURCE_TOO_MANY_ROWS');rows=[];
         for(let i=0;i<count;i++){
           const values:Row={};for(const [field,selector]of Object.entries(source.columns)){const cell=nodes.nth(i).locator(selector);requireCondition(await cell.count()===1,'SOURCE_FIELD_AMBIGUOUS');values[field]=(await cell.innerText()).trim();}rows.push(rowSchema.parse(values));
         }
         contentHash=snapshotHash(rows);
+      }catch(error){
+        // Another run can briefly own the same persistent source profile.
+        // Never remove Chromium locks or copy its cookies to another profile.
+        if(error instanceof Error&&/ProcessSingleton|SingletonLock|profile directory.*in use/iu.test(error.message))throw Error('PACK_BROWSER_PROFILE_BUSY');
+        throw error;
       }finally{await owned.close();}
     }
   }

@@ -7,6 +7,9 @@ import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {redact} from '../terminal/contracts.js';
 
 export interface PackRun {id:string;project_id:string;request_id:string;binding:string;recipe:Recipe;status:string;result:unknown;task_id:string|null;}
+export interface PackExecution {run_id:string;attempts:number;auth_waits:number;owner:string|null;lease_until_ms:number;retry_at_ms:number;checkpoint:Record<string,unknown>;}
+export const PACK_LEASE_MS=15_000;
+export const PACK_MAX_ATTEMPTS=3;
 export interface SwarmActivity {id:number;project_id:string;run_id:string;revision:number;worker_id:string|null;kind:string;body:unknown;created_at:string;}
 export type DecisionLayer='llm'|'jev'|'code';
 export interface RuntimeActivity {id:number;project_id:string;owner_kind:'pack'|'task'|'terminal';owner_id:string;actor_id:string|null;kind:string;summary:string;endpoint:string|null;surface_id:string|null;decision_layer:DecisionLayer|null;created_at:string;}
@@ -18,6 +21,7 @@ export class PackStore extends TerminalStore {
   constructor(path:string){super(path);this.connection.exec(`
     CREATE TABLE IF NOT EXISTS family_run(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,request_id TEXT NOT NULL,binding TEXT NOT NULL,recipe TEXT NOT NULL,status TEXT NOT NULL,result TEXT NOT NULL,task_id TEXT,UNIQUE(project_id,request_id));
     CREATE TABLE IF NOT EXISTS family_spec(project_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,binding TEXT NOT NULL,recipe TEXT NOT NULL,PRIMARY KEY(project_id,prompt_hash));
+    CREATE TABLE IF NOT EXISTS family_execution(run_id TEXT PRIMARY KEY REFERENCES family_run(id),attempts INTEGER NOT NULL DEFAULT 0,auth_waits INTEGER NOT NULL DEFAULT 0,owner TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,retry_at_ms INTEGER NOT NULL DEFAULT 0,checkpoint TEXT NOT NULL DEFAULT '{}');
     CREATE TABLE IF NOT EXISTS family_watch(run_id TEXT PRIMARY KEY,next_ms INTEGER NOT NULL,paused INTEGER NOT NULL DEFAULT 0,baseline TEXT NOT NULL,cycle INTEGER NOT NULL DEFAULT 0);
     CREATE TABLE IF NOT EXISTS family_event(id INTEGER PRIMARY KEY AUTOINCREMENT,project_id TEXT NOT NULL,run_id TEXT NOT NULL,kind TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS swarm_plan(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,binding TEXT NOT NULL,body TEXT NOT NULL,created_at TEXT NOT NULL);
@@ -37,6 +41,8 @@ export class PackStore extends TerminalStore {
     const columns=new Set((this.connection.prepare('PRAGMA table_info(runtime_activity)').all() as Array<{name:string}>).map(column=>column.name));
     if(!columns.has('surface_id'))this.connection.exec('ALTER TABLE runtime_activity ADD COLUMN surface_id TEXT');
     if(!columns.has('decision_layer'))this.connection.exec('ALTER TABLE runtime_activity ADD COLUMN decision_layer TEXT');
+    const executionColumns=new Set((this.connection.prepare('PRAGMA table_info(family_execution)').all() as Array<{name:string}>).map(column=>column.name));
+    if(!executionColumns.has('auth_waits'))this.connection.exec('ALTER TABLE family_execution ADD COLUMN auth_waits INTEGER NOT NULL DEFAULT 0');
   }
   packRuns(project:string,limit=30):PackRun[]{
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=100,'PACK_RUN_LIMIT_INVALID');
@@ -46,7 +52,7 @@ export class PackStore extends TerminalStore {
   setBrowserAuth(project:string,profile:string,site:string,state:string,handoff:boolean){this.connection.prepare('INSERT INTO browser_auth VALUES (?,?,?,?,?,?) ON CONFLICT(project_id,profile,site) DO UPDATE SET state=excluded.state,handoff=excluded.handoff,updated_at=excluded.updated_at').run(project,profile,site,state,Number(handoff),new Date().toISOString());}
   claimBrowserHandoff(project:string,profile:string,site:string){this.transaction(()=>{
     const runs=this.connection.prepare('SELECT snapshot FROM swarm_run WHERE project_id=?').all(project).map(row=>JSON.parse(String(row.snapshot)) as SwarmRunSnapshot);
-    requireCondition(!runs.some(run=>run.status==='running'&&run.plan.workers.some(def=>def.source_urls.length>0&&run.workers[def.id]?.status==='leased'&&(run.workers[def.id]?.lease_expires_at_ms??0)>Date.now())),'AUTH_WAIT_FOR_ACTIVE_WORKERS');
+    requireCondition(!runs.some(run=>['running','needs_human'].includes(run.status)&&run.plan.workers.some(def=>def.source_urls.length>0&&run.workers[def.id]?.status==='leased'&&(run.workers[def.id]?.lease_expires_at_ms??0)>Date.now())),'AUTH_WAIT_FOR_ACTIVE_WORKERS');
     requireCondition(!this.controlSurfaces(project).some(surface=>surface.state==='active'),'AUTH_WAIT_FOR_ACTIVE_WORKERS');
     this.setBrowserAuth(project,profile,site,'needs_login',true);
   });}
@@ -69,6 +75,55 @@ export class PackStore extends TerminalStore {
     if(before.status!==status)this.recordRuntimeActivity(project,'pack',id,null,`run.${status}`,`Pack ${status}`,null);
     return this.packRun(project,id);
   }
+  packExecution(project:string,id:string):PackExecution|null{
+    this.packRun(project,id);const row=this.connection.prepare('SELECT * FROM family_execution WHERE run_id=?').get(id);
+    return row?{...row,checkpoint:JSON.parse(String(row.checkpoint))} as unknown as PackExecution:null;
+  }
+  claimPackExecution(project:string,id:string,now=Date.now()){
+    return this.transaction(()=>{
+      this.packRun(project,id);this.connection.prepare('INSERT OR IGNORE INTO family_execution(run_id) VALUES (?)').run(id);
+      const current=this.packExecution(project,id)!;
+      if(current.owner!==null&&current.lease_until_ms>now)return {claimed:false as const,reason:'active_owner' as const,execution:current};
+      if(current.attempts-current.auth_waits>=PACK_MAX_ATTEMPTS)return {claimed:false as const,reason:'attempts_exhausted' as const,execution:current};
+      const owner=randomUUID();this.connection.prepare('UPDATE family_execution SET owner=?,lease_until_ms=?,attempts=attempts+1,retry_at_ms=0 WHERE run_id=?').run(owner,now+PACK_LEASE_MS,id);
+      this.connection.prepare("UPDATE family_run SET status='running' WHERE id=?").run(id);
+      this.recordRuntimeActivity(project,'pack',id,null,current.attempts?'run.resumed':'run.claimed',`Execution attempt ${current.attempts+1}`,null);
+      return {claimed:true as const,owner,execution:this.packExecution(project,id)!};
+    });
+  }
+  renewPackExecution(project:string,id:string,owner:string,now=Date.now()){
+    this.packRun(project,id);return this.connection.prepare('UPDATE family_execution SET lease_until_ms=? WHERE run_id=? AND owner=? AND lease_until_ms>?').run(now+PACK_LEASE_MS,id,owner,now).changes===1;
+  }
+  assertPackExecution(project:string,id:string,owner:string){
+    const state=this.packExecution(project,id);requireCondition(state?.owner===owner&&state.lease_until_ms>Date.now(),'PACK_EXECUTION_LEASE_LOST');
+  }
+  checkpointPack(project:string,id:string,owner:string,checkpoint:Record<string,unknown>){
+    this.transaction(()=>{this.assertPackExecution(project,id,owner);this.connection.prepare('UPDATE family_execution SET checkpoint=? WHERE run_id=?').run(JSON.stringify(checkpoint),id);});
+  }
+  linkPackTask(project:string,id:string,owner:string,taskId:string){
+    this.assertPackExecution(project,id,owner);requireCondition(this.task(taskId).project_id===project,'TASK_SCOPE_MISMATCH');
+    this.connection.prepare('UPDATE family_run SET task_id=? WHERE project_id=? AND id=?').run(taskId,project,id);
+  }
+  settlePackExecution(project:string,id:string,owner:string,status:string,result:unknown,taskId:string|null=null,retryAt=0){
+    return this.transaction(()=>{
+      this.assertPackExecution(project,id,owner);const run=this.finishPack(project,id,status,result,taskId);
+      this.connection.prepare('UPDATE family_execution SET owner=NULL,lease_until_ms=0,retry_at_ms=?,auth_waits=auth_waits+? WHERE run_id=?').run(retryAt,Number(status==='waiting_auth'),id);return run;
+    });
+  }
+  recoverablePacks(project:string,now:number){
+    return this.connection.prepare(`SELECT r.* FROM family_run r LEFT JOIN family_execution e ON r.id=e.run_id
+      WHERE r.project_id=? AND
+      ((r.status='retryable_failure' AND (e.attempts IS NULL OR e.attempts-e.auth_waits<?) AND e.retry_at_ms<=?) OR (r.status='running' AND (e.owner IS NULL OR e.lease_until_ms<=?)))
+      ORDER BY r.rowid LIMIT 5`).all(project,PACK_MAX_ATTEMPTS,now,now).map(row=>({...row,recipe:JSON.parse(String(row.recipe)),result:JSON.parse(String(row.result))})) as unknown as PackRun[];
+  }
+  pausePackForConfig(project:string,id:string,expectedBinding:string,now=Date.now()){
+    return this.transaction(()=>{
+      const run=this.packRun(project,id),execution=this.packExecution(project,id);
+      if(run.binding===expectedBinding||!['running','retryable_failure'].includes(run.status)||execution?.owner&&execution.lease_until_ms>now)return false;
+      this.finishPack(project,id,'paused_config',{error:'CONFIG_CHANGED',previous_status:run.status,previous_result:run.result,dispatch_allowed:false});
+      this.connection.prepare('UPDATE family_execution SET owner=NULL,lease_until_ms=0,retry_at_ms=0 WHERE run_id=?').run(id);return true;
+    });
+  }
   cachePack(project:string,recipe:Recipe,fingerprint:string){
     this.connection.prepare('INSERT INTO family_spec VALUES (?,?,?,?) ON CONFLICT(project_id,prompt_hash) DO UPDATE SET binding=excluded.binding,recipe=excluded.recipe').run(project,snapshotHash(recipe.request),fingerprint,JSON.stringify(recipe));
   }
@@ -76,7 +131,7 @@ export class PackStore extends TerminalStore {
     const row=this.connection.prepare('SELECT * FROM family_spec WHERE project_id=? AND prompt_hash=? AND binding=?').get(project,snapshotHash(prompt),fingerprint);return row?JSON.parse(String(row.recipe)) as Recipe:null;
   }
   scheduleWatch(runId:string,interval:number,baseline:unknown,now=Date.now()){
-    this.connection.prepare('INSERT INTO family_watch(run_id,next_ms,baseline) VALUES (?,?,?)').run(runId,now+interval,JSON.stringify(baseline));
+    this.connection.prepare('INSERT OR IGNORE INTO family_watch(run_id,next_ms,baseline) VALUES (?,?,?)').run(runId,now+interval,JSON.stringify(baseline));
   }
   pauseWatch(project:string,id:string,paused:boolean){
     this.packRun(project,id);const result=this.connection.prepare('UPDATE family_watch SET paused=? WHERE run_id=?').run(Number(paused),id);requireCondition(result.changes===1,'PACK_WATCH_NOT_FOUND');
@@ -131,7 +186,7 @@ export class PackStore extends TerminalStore {
   }
   bindControlSurface(project:string,runId:string,workerId:string,leaseToken:string,id:string,endpoint:string){
     const snapshot=this.swarmRun(project,runId).snapshot as SwarmRunSnapshot,worker=snapshot.workers[workerId];
-    requireCondition(snapshot.status==='running'&&worker?.status==='leased'&&worker.lease_token===leaseToken&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
+    requireCondition(['running','needs_human'].includes(snapshot.status)&&worker?.status==='leased'&&worker.lease_token===leaseToken&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
     const url=new URL(endpoint);
     requireCondition(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/u.test(id)&&url.protocol==='http:'&&url.hostname==='127.0.0.1'&&Number(url.port)>=1024&&!url.username&&!url.password&&!url.search&&!url.hash&&/^\/[a-f0-9]{48}\/frame\/[a-zA-Z0-9._-]+$/u.test(url.pathname),'CONTROL_MANAGED_ENDPOINT_INVALID');
     this.connection.prepare("INSERT INTO control_surface VALUES (?,?,?,?,?,?,'active',?) ON CONFLICT(project_id,run_id,worker_id) DO UPDATE SET id=excluded.id,preview_endpoint=excluded.preview_endpoint,state='active',updated_at=excluded.updated_at").run(id,project,runId,workerId,'browser',endpoint,new Date().toISOString());
@@ -141,7 +196,7 @@ export class PackStore extends TerminalStore {
   }
   recordObservedUrl(project:string,runId:string,workerId:string,leaseToken:string,url:string){
     const snapshot=this.swarmRun(project,runId).snapshot as SwarmRunSnapshot,worker=snapshot.workers[workerId];
-    requireCondition(snapshot.status==='running'&&worker?.status==='leased'&&worker.lease_token===leaseToken&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
+    requireCondition(['running','needs_human'].includes(snapshot.status)&&worker?.status==='leased'&&worker.lease_token===leaseToken&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
     const parsed=new URL(url);requireCondition(['http:','https:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password&&url.length<=4096,'CONTROL_OBSERVED_URL_INVALID');
     this.connection.prepare('INSERT OR IGNORE INTO swarm_observed_url VALUES (?,?,?,?,?)').run(project,runId,workerId,url,new Date().toISOString());
   }

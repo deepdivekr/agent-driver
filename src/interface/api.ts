@@ -78,7 +78,7 @@ export class RuntimeApi{
   private async releaseFinishedVisuals(runId:string){
     if(!this.visual)return;
     const status=this.swarm.status(runId);
-    await Promise.all(status.workers.filter(worker=>worker.status!=='leased'||status.status!=='running').map(worker=>this.visual!.release(runId,worker.id)));
+    await Promise.all(status.workers.filter(worker=>worker.status!=='leased'||!['running','needs_human'].includes(status.status)).map(worker=>this.visual!.release(runId,worker.id)));
   }
   private async attachVisualDispatches<T extends {dispatches:SwarmDispatch[];dispatch:SwarmDispatch|null}>(result:T,runId:string){
     if(!this.visual)return result;
@@ -99,7 +99,11 @@ export class RuntimeApi{
         await this.swarm.report(runId,dispatch.worker_id,dispatch.lease_token,{status:'needs_human',summary:'The independent visual executor could not be assigned.',error_code:failure.error_code});
       }
       await this.releaseFinishedVisuals(runId);
-      return {...result,status:this.swarm.status(runId).status,dispatches:[],dispatch:null,visual_failures:failures,next_action:'inspect_visual_executor_failure'};
+      // These leases were already admitted. A sibling's allocation failure
+      // must not hide healthy dispatches from the client or orphan their work.
+      const failedIds=new Set(failures.map(failure=>failure.worker_id));
+      const admitted=dispatches.filter(dispatch=>!failedIds.has(dispatch.worker_id));
+      return {...result,status:this.swarm.status(runId).status,dispatches:admitted,dispatch:admitted[0]??null,visual_failures:failures,next_action:'inspect_visual_executor_failure'};
     }
     return {...result,dispatches,dispatch:dispatches[0]??null};
   }
@@ -132,6 +136,7 @@ export class RuntimeApi{
         }
         case 'runtime_swarm_plan':return this.swarm.plan(String(input.goal),input.context as Record<string,string|number|boolean|null>);
         case 'runtime_swarm_replan':return this.swarm.replan(String(input.run_id),String(input.reason));
+        case 'runtime_swarm_recover':return this.swarm.recover(String(input.run_id));
         case 'runtime_swarm_run':return this.swarm.run(String(input.request_id),String(input.plan_id));
         case 'runtime_swarm_tick':return await this.attachVisualDispatches(await this.swarm.tick(String(input.run_id)),String(input.run_id));
         case 'runtime_swarm_browser':{

@@ -171,7 +171,11 @@ function claudeOutput(stdout:string){
   const envelope=JSON.parse(stdout) as {structured_output?:unknown;result?:unknown;is_error?:unknown};
   requireCondition(envelope.is_error!==true,'CLIENT_STRUCTURED_OUTPUT_INVALID');
   if(envelope.structured_output!==undefined)return envelope.structured_output;
-  requireCondition(typeof envelope.result==='string','CLIENT_STRUCTURED_OUTPUT_INVALID');return parseStrictJson(envelope.result);
+  requireCondition(typeof envelope.result==='string','CLIENT_STRUCTURED_OUTPUT_INVALID');
+  // Some CLI versions wrap the single JSON result in a Markdown fence. Strip
+  // only an exact whole-message wrapper; never extract JSON from mixed prose.
+  const text=envelope.result.trim(),fenced=/^```json\s*\n([\s\S]*?)\n```$/u.exec(text);
+  return parseStrictJson(fenced?.[1]??text);
 }
 function cursorOutput(stdout:string){
   const envelope=JSON.parse(stdout) as {type?:unknown;result?:unknown};

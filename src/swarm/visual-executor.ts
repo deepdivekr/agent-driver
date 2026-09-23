@@ -21,6 +21,8 @@ const privateAddress=(address:string)=>{
   const parts=address.split('.').map(Number),a=parts[0]!,b=parts[1]!;
   return a===0||a===10||a===127||a===169&&b===254||a===172&&b>=16&&b<=31||a===192&&b===168||a===100&&b>=64&&b<=127||a>=224||a===198&&(b===18||b===19);
 };
+// Fragments do not change the HTTP resource. Preserve query, path and origin.
+const observationKey=(value:string)=>{const url=new URL(value);url.hash='';return url.href;};
 
 /** A page + non-persistent BrowserContext per lease, not a separate security VM. */
 export class SwarmVisualExecutor {
@@ -40,7 +42,8 @@ export class SwarmVisualExecutor {
   }
   private lease(runId:string,workerId:string,token:string){
     const snapshot=this.store.swarmRun(this.config.project.id,runId).snapshot as SwarmRunSnapshot,worker=snapshot.workers[workerId];
-    requireCondition(snapshot.status==='running'&&worker?.status==='leased'&&worker.lease_token===token&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
+    requireCondition(['running','needs_human'].includes(snapshot.status)&&worker?.status==='leased'&&worker.lease_token===token&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
+    requireCondition(!this.config.swarm?.visual.owned_vm||!authSites(this.store,this.config).some(site=>site.handoff),'BROWSER_AUTH_REQUIRED');
     const definition=snapshot.plan.workers.find(item=>item.id===workerId)!;
     requireCondition(definition.effect==='read_only'&&['discovery','source_read','verification'].includes(definition.stage)&&definition.source_urls.length>0,'CONTROL_VISUAL_WORKER_UNSUPPORTED');
     return {snapshot,definition};
@@ -107,7 +110,7 @@ export class SwarmVisualExecutor {
     requireCondition(!slot.busy,'CONTROL_BROWSER_BUSY');requireCondition(slot.steps<definition.max_steps,'CONTROL_BROWSER_STEP_LIMIT');slot.busy=true;slot.steps++;
     try{
       if(command.action==='navigate'){
-        const url=await this.publicUrl(command.url);requireCondition(definition.source_urls.includes(command.url)||slot.links.has(command.url),'CONTROL_BROWSER_URL_NOT_OBSERVED');
+        const url=await this.publicUrl(command.url),key=observationKey(command.url);requireCondition(definition.source_urls.some(source=>observationKey(source)===key)||slot.links.has(key),'CONTROL_BROWSER_URL_NOT_OBSERVED');
         this.activity(slot,'navigating',`Opening ${sanitizeSwarmEndpoint(command.url)??url.hostname}`);
         await slot.page.goto(command.url,{waitUntil:'domcontentloaded',timeout:20_000});
         // Hydrated pages may be empty at DOMContentLoaded. Wait on evidence, not a fixed sleep.
@@ -121,9 +124,11 @@ export class SwarmVisualExecutor {
         if(gate){slot.frame=null;setSiteAuth(this.store,this.config,authSite(command.action==='navigate'?command.url:definition.source_urls[0]!),gate);throw Error('BROWSER_AUTH_REQUIRED');}
       }
       const links=raw.links.filter(link=>{try{const url=new URL(link.url);return !url.username&&!url.password&&link.url.length<=4096;}catch{return false;}});
-      for(const link of links)slot.links.add(link.url);
+      for(const link of links)slot.links.add(observationKey(link.url));
+      slot.links.add(observationKey(raw.url)); // Previously visited pages may be reopened for verification.
       requireCondition(slot.links.size<=2_000,'CONTROL_BROWSER_LINK_LIMIT');
       this.store.recordObservedUrl(this.config.project.id,runId,workerId,leaseToken,raw.url);
+      if(observationKey(raw.url)!==raw.url)this.store.recordObservedUrl(this.config.project.id,runId,workerId,leaseToken,observationKey(raw.url));
       this.activity(slot,'observing','Page text and observed links read');await this.capture(slot);
       return {...raw,links,surface_id:slot.id,captured_at:new Date().toISOString()};
     }finally{slot.busy=false;}

@@ -33,6 +33,10 @@ TypeSafe 패턴에 맞춰 Jev에는 현재 한 행 또는 현재 브라우저 �
 
 ## 연결 설정과 보안
 
+공개 읽기 소스는 host 설정에 `auth_required: false`를 명시할 수 있다. 로그인된 계정을 검증했다는 뜻이 아니다. 기본값은 `true`다.
+
+제출 없이 양식만 채울 때는 target에 `draft_only: true`를 지정한다. 이 경우 `readback_url`은 생략할 수 있고, 결과는 `draft_ready`다. 승인 화면을 열거나 승인 토큰을 외부에 전달하지 않으며 `runtime_pack_execute_approved`도 `PACK_DRAFT_ONLY`로 거절한다. 익명 공개 폼(`auth_required: false`)은 이 초안 모드에서만 허용된다. 초안 브라우저는 일반 form 제출, non-read HTTP와 WebSocket을 차단한다. 사이트 자체의 비정상 GET 쓰기까지 막는 보안 샌드박스는 아니다.
+
 host 설정의 `packs.sources`와 `packs.targets`는 설치/connector 화면이 만드는 내부 설정이다. 사용자용 Pack 메뉴가 아니다. 파일 소스는 읽기만 하고 `.env`, credential 디렉터리는 거절한다. HTTP 소스는 HTTPS GET, redirect 없음, 응답 8 MiB/10,000행 제한이다. fixture 외 평문 HTTP는 거절한다. 브라우저 source/target은 agent-owned persistent profile만 사용한다.
 
 외부 write는 MCP 호출자가 승인할 수 없다. runtime 내부의 loopback approval dispatcher만 비밀 token을 받고, 기본 브라우저의 로컬 화면에 pre-submit PNG와 snapshot을 보여 준다. URL·CSRF·approval token은 MCP에 반환하지 않고, MCP에는 capture/hash/만료와 대기 상태만 보인다. 승인 후에도 최신 폼·기존 레코드가 snapshot과 다르면 중단한다. 응답을 잃었을 때 readback으로 조정하며 consumed approval로 두 번 클릭하지 않는다. loopback 화면과 위조·origin·단일 사용은 fixture에서 검증했으며, 각 OS의 실제 기본 브라우저 실행은 아직 `user_environment` 증거가 없다.
@@ -44,3 +48,11 @@ host 설정의 `packs.sources`와 `packs.targets`는 설치/connector 화면이 
 - 상주 watch는 MCP 프로세스 수명에 의존한다. OS 자동시작과 외부 push 전달은 별도다.
 - Windows desktop UIA는 계약만 있고 native guest executor는 여전히 `blocked_env`다.
 - Booking 실페이지의 5성급·전체 숙박가 비교는 Phase 33의 partial 상태를 유지한다.
+
+## 중단과 재개
+
+같은 `request_id`와 변경되지 않은 recipe/config로 `runtime_pack_run`을 다시 호출하면 읽기 전용 기술 실패를 최대 3회까지 이어간다. stdio MCP의 기존 주기 tick도 만료된 실행 소유권과 재시도 가능한 작업을 확인한다. 살아 있는 소유자가 처리 중이면 두 번째 실행을 만들지 않는다.
+
+소스별 관측과 완료된 판단은 SQLite에 보존한다. 소스 관측은 5분 이내, 동일한 설정·인자·해시일 때만 재사용하며 로컬 파일은 현재 바이트도 대조한다. 재사용된 관측의 원래 시각을 유지한다. 출력 파일은 이미 저장된 내용과 기대 해시가 일치하면 다시 생성하지 않는다.
+
+`waiting_auth`는 사람이 로그인한 뒤 같은 요청으로 이어간다. 기술 오류와 의미상 `unknown`은 다르게 처리한다. 이미 실행된 쓰기는 독립 결과 확인 전 재전송하지 않으며, 소비된 승인이나 불명확한 외부 효과는 `reconciliation_required`에 남긴다. 무제한 재시도나 모든 실행기 사이의 자동 전환을 보장하지 않는다.
