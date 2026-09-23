@@ -1,0 +1,9 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createServer} from 'node:net';
+import {once} from 'node:events';
+import {captureVncSurface} from '../dist/observability/surfaces.js';
+
+test('read-only VNC preview negotiates loopback raw pixels and returns a bounded BMP',async t=>{
+  let pending=Buffer.alloc(0),stage='version';const server=createServer(socket=>{socket.write(Buffer.from('RFB 003.008\n','ascii'));socket.on('data',bytes=>{pending=Buffer.concat([pending,bytes]);while(true){if(stage==='version'&&pending.length>=12){pending=pending.subarray(12);socket.write(Buffer.from([1,1]));stage='security';continue;}if(stage==='security'&&pending.length>=1){pending=pending.subarray(1);socket.write(Buffer.alloc(4));stage='init';continue;}if(stage==='init'&&pending.length>=1){pending=pending.subarray(1);const init=Buffer.alloc(24);init.writeUInt16BE(2,0);init.writeUInt16BE(2,2);init[4]=32;init[5]=24;init[7]=1;init.writeUInt32BE(4,20);socket.write(Buffer.concat([init,Buffer.from('test')]));stage='format';continue;}if(stage==='format'&&pending.length>=28){assert.equal(pending[0],0);assert.equal(pending[20],2);pending=pending.subarray(28);stage='request';continue;}if(stage==='request'&&pending.length>=10){assert.equal(pending[0],3);pending=pending.subarray(10);const update=Buffer.alloc(4),rect=Buffer.alloc(12),pixels=Buffer.from([0,0,255,0,0,255,0,0,255,0,0,0,255,255,255,0]);update.writeUInt16BE(1,2);rect.writeUInt16BE(2,4);rect.writeUInt16BE(2,6);socket.write(Buffer.concat([update,rect,pixels]));stage='done';return;}return;}});});server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>server.close());const address=server.address();assert.equal(typeof address,'object');const frame=await captureVncSurface(address.port);assert.equal(frame.content_type,'image/bmp');assert.equal(frame.body.subarray(0,2).toString('ascii'),'BM');assert.ok(frame.body.length<1024);
+});

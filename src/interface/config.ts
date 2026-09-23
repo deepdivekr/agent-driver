@@ -19,6 +19,14 @@ const TerminalConfigSchema=z.object({
   files:fileDelegation.optional(),
 }).strict();
 export type TerminalConfig=z.infer<typeof TerminalConfigSchema>;
+const VncSurfaceSchema=z.object({id:identifier,label:z.string().trim().min(1).max(80),kind:z.literal('vnc'),port:z.number().int().min(1024).max(65535)}).strict();
+const BrowserSurfaceSchema=z.object({id:identifier,label:z.string().trim().min(1).max(80),kind:z.literal('browser'),endpoint:z.string().url().max(500)}).strict();
+const ObservabilityConfigSchema=z.object({
+  surfaces:z.array(z.discriminatedUnion('kind',[VncSurfaceSchema,BrowserSurfaceSchema])).max(32).default([]),
+  frame_interval_ms:z.number().int().min(500).max(5000).default(1000),
+}).strict();
+export type ControlSurface=z.infer<typeof VncSurfaceSchema>|z.infer<typeof BrowserSurfaceSchema>;
+export type ObservabilityConfig=z.infer<typeof ObservabilityConfigSchema>;
 export const HostConfigSchema=z.object({
   schema_version:z.literal(1), project_id:identifier, caller_ref:identifier,
   account_ref:identifier, worktree:z.string().min(1), data_dir:z.string().min(1),
@@ -30,6 +38,7 @@ export const HostConfigSchema=z.object({
   storage:storagePolicySchema.optional(),
   packs:packPolicySchema.optional(),
   swarm:swarmPolicySchema.optional(),
+  observability:ObservabilityConfigSchema.optional(),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
@@ -40,6 +49,7 @@ export interface HostConfig {
   storage:StoragePolicy|null;
   packs:PackPolicy|null;
   swarm:SwarmPolicy|null;
+  observability:ObservabilityConfig|null;
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
@@ -84,7 +94,14 @@ export function loadHostConfig(path:string):HostConfig {
     for(const target of packs.targets)requireCondition(new URL(target.url).origin===new URL(target.readback_url).origin,'PACK_READBACK_ORIGIN_MISMATCH');
     requireCondition(packs.models==='off'||packs.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
   }
+  const observability=raw.observability??null;
+  if(observability){
+    requireCondition(new Set(observability.surfaces.map(surface=>surface.id)).size===observability.surfaces.length,'DUPLICATE_CONTROL_SURFACE');
+    for(const surface of observability.surfaces)if(surface.kind==='browser'){
+      const url=new URL(surface.endpoint);requireCondition(url.protocol==='http:'&&url.hostname==='127.0.0.1'&&url.port!==''&&!url.username&&!url.password&&!url.search&&!url.hash,'CONTROL_SURFACE_LOOPBACK_REQUIRED');
+    }
+  }
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,
+  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,
     fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
 }

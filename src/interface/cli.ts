@@ -8,6 +8,7 @@ import {ensureSupervisor,stopSupervisor,supervisorStatus} from '../supervisor/ma
 import {Supervisor} from '../supervisor/supervisor.js';
 import {stopTerminalHost} from '../terminal/manager.js';
 import {approvedMcpConfigPath} from '../onboarding/connection.js';
+import {startControlCenter} from '../observability/control-center.js';
 export const interfaceHelp=`
 Host-configured agent interface (JSON output):
   doctor --config PATH --json
@@ -25,6 +26,7 @@ Host-configured agent interface (JSON output):
   intake --config PATH --request-file PATH
   call --config PATH --tool NAME --request-file PATH
   mcp [--config PATH]
+  dashboard --config PATH [--port N] (read-only loopback Control Center)
   fixture serve --data-dir NEW_DIRECTORY (synthetic lab only)
   terminal start|submit|resume|interrupt --config PATH --request-file PATH
   terminal status SESSION_ID --config PATH
@@ -55,16 +57,23 @@ export async function runInterfaceCli(args:string[]):Promise<boolean>{
     requireCondition(sub==='serve'&&args.length===4&&args[2]==='--data-dir'&&args[3],'INVALID_OPTIONS');
     await serveFixtureLab(args[3]);return true;
   }
-  if(!['doctor','capabilities','project','task','recovery','supervisor','intake','call','mcp','terminal','verify','soak','ops'].includes(command)&&!(command==='events'&&['read','ack'].includes(sub??'')))return false;
+  if(!['doctor','capabilities','project','task','recovery','supervisor','intake','call','mcp','dashboard','terminal','verify','soak','ops'].includes(command)&&!(command==='events'&&['read','ack'].includes(sub??'')))return false;
   if(['verify','soak','ops'].includes(command))throw Error('NOT_IMPLEMENTED');
   const grouped=['capabilities','project','task','recovery','supervisor','events','terminal'].includes(command);
   const parsed=options(args.slice(grouped?2:1)),o=parsed.values;
-  const extras=command==='call'?['--request-file','--tool']:command==='intake'?['--request-file','--prompt']:command==='task'&&sub==='start'?['--request-file']:command==='terminal'?['--request-file']:command==='events'?(sub==='ack'?['--consumer','--event']:['--consumer']):command==='project'?['--config-file']:[];
+  const extras=command==='call'?['--request-file','--tool']:command==='intake'?['--request-file','--prompt']:command==='task'&&sub==='start'?['--request-file']:command==='terminal'?['--request-file']:command==='events'?(sub==='ack'?['--consumer','--event']:['--consumer']):command==='project'?['--config-file']:command==='dashboard'?['--port']:[];
   const allowed=new Set(['--config',...(command==='mcp'?[]:['--json']),...extras,...((command==='task'&&sub==='resume')||(command==='recovery'&&sub==='prepare')?['--generation']:[])]);
   for(const key of o.keys())requireCondition(allowed.has(key),'UNKNOWN_OPTION');
   requireCondition(!(o.has('--config')&&o.has('--config-file')),'AMBIGUOUS_CONFIG');
   const configPath=o.get('--config')??(command==='project'?o.get('--config-file'):command==='mcp'?approvedMcpConfigPath():undefined);requireCondition(configPath,'CONFIG_REQUIRED');
-  const api=new RuntimeApi(loadHostConfig(configPath));
+  const config=loadHostConfig(configPath);
+  if(command==='dashboard'){
+    requireCondition(parsed.positional.length===0,'UNEXPECTED_ARGUMENT');const port=o.has('--port')?Number(o.get('--port')):undefined;
+    requireCondition(port===undefined||Number.isInteger(port)&&port>=0&&port<=65535,'INVALID_PORT');const dashboard=await startControlCenter(config,{...(port===undefined?{}:{port})});
+    console.log(JSON.stringify({status:'ready',url:dashboard.url,bind:'127.0.0.1',read_only:true}));
+    const stop=()=>{void dashboard.close();};process.once('SIGINT',stop);process.once('SIGTERM',stop);await dashboard.closed;return true;
+  }
+  const api=new RuntimeApi(config);
   if(command==='mcp'){requireCondition(parsed.positional.length===0&&[...o.keys()].every(k=>k==='--config'),'INVALID_OPTIONS');await serveMcp(api);return true;}
   try{
     let tool:string,body:unknown={};

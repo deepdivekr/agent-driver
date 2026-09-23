@@ -17,7 +17,7 @@ test('runtime contract configures Hermes MCP narrowly, preserves unrelated setti
   const configured=await configureHermes({home,command:'/usr/bin/node',args:['/opt/agent-driver/dist/cli.js','mcp']});assert.equal(configured.telegram_secret_touched,false);
   const configText=await readFile(join(home,'config.yaml'),'utf8'),config=parse(configText),entry=config.mcp_servers['agent-driver'];
   assert.match(configText,/keep this comment/u);assert.equal(config.model.provider,'local');assert.equal(config.mcp_servers.existing.command,'old');
-  assert.deepEqual(entry.args,['/opt/agent-driver/dist/cli.js','mcp']);assert.equal(entry.sampling.enabled,false);assert.equal(entry.elicitation.enabled,true);assert.deepEqual(entry.tools.include,HERMES_AGENT_DRIVER_TOOLS);
+  assert.deepEqual(entry.args,['/opt/agent-driver/dist/cli.js','mcp']);assert.equal(entry.sampling.enabled,true);assert.equal(entry.elicitation.enabled,true);assert.deepEqual(entry.tools.include,HERMES_AGENT_DRIVER_TOOLS);
   assert.equal(await readFile(join(home,'.env'),'utf8'),secret);assert.equal(((await stat(join(home,'config.yaml'))).mode&0o077),0);
   const doctor=hermesDoctor(home);assert.equal(doctor.agent_driver_mcp,'ready');assert.deepEqual(doctor.telegram,{token:'configured',allowed_users:'configured',allow_all:'disabled'});assert.equal(doctor.secrets_returned,false);
 });

@@ -29,7 +29,7 @@ node dist/cli.js hermes doctor
 hermes mcp test agent-driver
 ```
 
-`hermes configure`는 `~/.hermes/config.yaml`의 `mcp_servers.agent-driver` 항목만 갱신한다. 기존 서버와 설정을 보존하고 `~/.hermes/.env`는 읽어 변경하지 않는다. 등록되는 서버는 현재 Node와 Agent Driver의 절대 entrypoint를 사용한다. MCP sampling은 끄고, 필요한 도구만 Hermes에 노출하며, form elicitation은 10분으로 설정한다.
+`hermes configure`는 `~/.hermes/config.yaml`의 `mcp_servers.agent-driver` 항목만 갱신한다. 기존 서버와 설정을 보존하고 `~/.hermes/.env`는 읽어 변경하지 않는다. 등록되는 서버는 현재 Node와 Agent Driver의 절대 entrypoint를 사용한다. tool 없는 구조화 판단에만 MCP sampling을 켜 Hermes의 기존 모델 구독 인증을 재사용하고, 필요한 실행 도구만 Hermes에 노출한다. form elicitation은 10분으로 설정한다.
 
 Telegram bot 연결은 Hermes 공식 흐름을 사용한다.
 

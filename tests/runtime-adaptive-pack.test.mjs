@@ -51,6 +51,14 @@ test('runtime contract local model connection requires same origin and a single-
   const duplicate=await fetch(new URL('/connect',screen.url),{method:'POST',headers:{origin:new URL(screen.url).origin},body:data});assert.equal(duplicate.status,404);
 });
 
+test('runtime contract local model connection accepts client subscription mode with no Jev or API key',async t=>{
+  const screen=await startModelConnectionScreen(10000);t.after(()=>screen.close());
+  const page=await (await fetch(screen.url)).text(),token=page.match(/name="token" value="([a-f0-9]+)"/u)?.[1];assert.ok(token);
+  assert.match(page,/Jev API 키[^<]*<small>선택 사항/u);assert.match(page,/구독을 먼저 사용/u);
+  const response=await fetch(new URL('/connect',screen.url),{method:'POST',headers:{origin:new URL(screen.url).origin},body:new URLSearchParams({token})});
+  assert.equal(response.status,200);assert.deepEqual(await screen.connected,{});
+});
+
 test('runtime contract adaptive Jev batches operation and targets while ignoring invalid unused heads',()=>{
   const compiled=compileAdaptiveRequest(task,spec,snapshot,[]),raw=answersFor(compiled.request,{state:'search',operation:'CLICK',CLICK_target:'e1'});
   assert.ok(compiled.request.questions.FILL_target);assert.ok(compiled.request.questions.value_e2);
@@ -85,10 +93,20 @@ test('runtime contract adaptive human challenge and unavailable provider never t
   assert.throws(()=>assertReadOnlyControl({...element,label:'Next',href:'https://example.test/checkout'},'CLICK'),/ADAPTIVE_EFFECT_NOT_DELEGATED/);
 });
 
+test('runtime fixture adaptive flow skips absent Jev and goes directly from LLM judgment to code readback',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'adaptive-no-jev-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const state={...snapshot,title:'Results',text:'Requested matching results are visible.'},calls=[];
+  const llm={calls,async call(purpose){calls.push({purpose,provider:'fixture-subscription',auth:'client_subscription',model:'fixture',elapsed_ms:0,input_sha256:'fixture',status:'accepted',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return purpose==='design'?structuredClone(spec):{operation:'DONE',target_id:null,value_id:null,state:'results'};}};
+  const browser={async observe(){return state;},async execute(){throw Error('UNEXPECTED_EXECUTION');}};
+  const receipt=await runAdaptivePack({task,browser,llm,cacheDir:join(root,'cache'),outputDir:join(root,'output'),verify:async()=>({status:'MATCH',reason:'fixture',details:{}})});
+  assert.equal(receipt.status,'succeeded');assert.equal(receipt.jev.status,'skipped_not_configured');assert.equal(receipt.jev_calls.length,0);assert.equal(receipt.steps[0].decider,'llm');assert.equal(receipt.steps[0].jev_ms,0);
+  assert.deepEqual(calls.map(call=>call.purpose),['design','correct']);
+});
+
 test('runtime contract adaptive Luna adapter preserves model low effort and rejects incomplete output without leaking credentials',async()=>{
   const key='fixture-private-key-only-for-test';let request;
-  const model=adaptiveLlmFromHostEnvironment({OPENAI_API_KEY:key},async(_url,options)=>{request=JSON.parse(options.body);return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(spec)}]}]}));});
-  assert.deepEqual(await model.call('design','instructions',{},{}),spec);assert.equal(request.model,'gpt-5.6-luna');assert.equal(request.reasoning.effort,'low');assert.equal(request.store,false);assert.deepEqual(request.tools,[]);assert.equal(JSON.stringify(model.calls).includes(key),false);
+  const model=adaptiveLlmFromHostEnvironment({OPENAI_API_KEY:key},async(_url,options)=>{request=JSON.parse(options.body);return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(spec)}]}],usage:{input_tokens:123,output_tokens:45,total_tokens:168}}));});
+  assert.deepEqual(await model.call('design','instructions',{},{}),spec);assert.equal(request.model,'gpt-5.6-luna');assert.equal(request.reasoning.effort,'low');assert.equal(request.store,false);assert.deepEqual(request.tools,[]);assert.equal(model.calls[0].input_tokens,123);assert.equal(model.calls[0].total_tokens,168);assert.equal(JSON.stringify(model.calls).includes(key),false);
   const failed=adaptiveLlmFromHostEnvironment({OPENAI_API_KEY:key},async()=>new Response(JSON.stringify({status:'incomplete',output:[]})));
   await assert.rejects(failed.call('design','instructions',{},{}),/ADAPTIVE_LLM_UNAVAILABLE/);assert.equal(failed.calls[0].status,'failed');
   const message=(phase,text)=>({type:'message',phase,content:[{type:'output_text',text:JSON.stringify(text)}]});

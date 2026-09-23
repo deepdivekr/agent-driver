@@ -1,6 +1,6 @@
 {
   "name": "agent-driver",
-  "version": "0.1.0-alpha.16",
+  "version": "0.1.0-alpha.17",
   "private": true,
   "description": "Evidence-led local execution control plane (experimental)",
   "type": "module",
@@ -14,7 +14,7 @@
   "scripts": {
     "build": "node ./node_modules/typescript/bin/tsc -p tsconfig.json",
     "test": "npm run test:runtime",
-    "test:runtime": "npm run build && node --test --test-concurrency=1 --test-reporter=./scripts/runtime/test-reporter.mjs tests/runtime-*.test.mjs",
+    "test:runtime": "npm run build && node scripts/runtime/run-tests.mjs quick",
     "runtime": "node dist/cli.js"
   },
   "dependencies": {

@@ -25,7 +25,7 @@ function decode(raw:unknown,question:Record<string,unknown>,definition:DecisionC
     if(typeof raw!=='object'||raw===null||Array.isArray(raw))throw Error('answer');const answer=raw as Record<string,unknown>;
     if(definition.primitive==='noul'){
       if(answer.type!=='noul'||!finite(answer.noul))throw Error('noul');const value=answer.noul as number,status=rule.execution==='shadow_only'?'shadow_only':value>rule.noul_review_low&&value<rule.noul_review_high?'review':'accepted';
-      return {...base,status,value,confidence:null,selected_probability:value,reason:status==='review'?'NOUL_AMBIGUOUS':status==='shadow_only'?'PROFILE_SHADOW_ONLY':null};
+      return {...base,status,value,confidence:null,selected_probability:value,probabilities:{true:value,false:1-value},reason:status==='review'?'NOUL_AMBIGUOUS':status==='shadow_only'?'PROFILE_SHADOW_ONLY':null};
     }
     const keys=criteriaKeys(question),kind=definition.primitive==='choice'?'choice':'score';if(answer.type!==kind||!finite(answer.confidence))throw Error(kind);
     const probs=distribution(answer.probabilities,keys);let value:string|number,selectedProbability:number;
@@ -37,14 +37,14 @@ function decode(raw:unknown,question:Record<string,unknown>,definition:DecisionC
     }
     const confidence=answer.confidence as number,noMatch=kind==='choice'&&definition.no_match_values.includes(String(value));
     const status=noMatch?'no_match':rule.execution==='shadow_only'?'shadow_only':confidence<rule.min_confidence||selectedProbability<rule.min_selected_probability?'review':'accepted';
-    return {...base,status,value,confidence,selected_probability:selectedProbability,reason:noMatch?'EXPLICIT_NO_MATCH':status==='review'?'BELOW_CALIBRATED_THRESHOLD':status==='shadow_only'?'PROFILE_SHADOW_ONLY':null};
-  }catch{return {...base,status:'invalid',value:null,confidence:null,selected_probability:null,reason:'INVALID_TYPED_ANSWER'};}
+    return {...base,status,value,confidence,selected_probability:selectedProbability,probabilities:probs,reason:noMatch?'EXPLICIT_NO_MATCH':status==='review'?'BELOW_CALIBRATED_THRESHOLD':status==='shadow_only'?'PROFILE_SHADOW_ONLY':null};
+  }catch{return {...base,status:'invalid',value:null,confidence:null,selected_probability:null,probabilities:null,reason:'INVALID_TYPED_ANSWER'};}
 }
 function unavailable(questionId:string,definition:DecisionCatalog['judgments'][number],profile:DecisionCalibrationProfile):DecisionJudgment{
-  const rule=profile.rules[definition.id]!;return {question_id:questionId,decision_id:definition.id,primitive:definition.primitive,status:'unavailable',value:null,confidence:null,selected_probability:null,threshold:{confidence:rule.min_confidence,selected_probability:rule.min_selected_probability,noul_review_low:rule.noul_review_low,noul_review_high:rule.noul_review_high},fallback:definition.fallback,risk:definition.risk,reason:'PROVIDER_UNAVAILABLE'};
+  const rule=profile.rules[definition.id]!;return {question_id:questionId,decision_id:definition.id,primitive:definition.primitive,status:'unavailable',value:null,confidence:null,selected_probability:null,probabilities:null,threshold:{confidence:rule.min_confidence,selected_probability:rule.min_selected_probability,noul_review_low:rule.noul_review_low,noul_review_high:rule.noul_review_high},fallback:definition.fallback,risk:definition.risk,reason:'PROVIDER_UNAVAILABLE'};
 }
 function shouldSample(hash:string,rate:number){if(rate<=0)return false;if(rate>=1)return true;return Number.parseInt(hash.slice(0,8),16)/0xffffffff<rate;}
-async function call(provider:DecisionProvider,request:SystemOneRequest,inputHash:string,timeout:number){const started=performance.now();try{const raw=await provider.systemOne(request,{timeout,retry:{maxRetries:0}}),record=raw as {model?:unknown};return {raw,trace:{provider:provider.id,model:typeof record?.model==='string'?record.model:'unobserved',elapsed_ms:Math.round(performance.now()-started),input_sha256:inputHash,status:'accepted'} satisfies DecisionProviderTrace};}catch{return {raw:null,trace:{provider:provider.id,model:'unobserved',elapsed_ms:Math.round(performance.now()-started),input_sha256:inputHash,status:'unavailable'} satisfies DecisionProviderTrace};}}
+async function call(provider:DecisionProvider,request:SystemOneRequest,inputHash:string,timeout:number){const started=performance.now();try{const raw=await provider.systemOne(request,{timeout,retry:{maxRetries:0}}),record=raw as {model?:unknown;usage?:unknown},usage=record?.usage&&typeof record.usage==='object'&&!Array.isArray(record.usage)?record.usage as {input_tokens?:unknown;output_tokens?:unknown}:{};return {raw,trace:{provider:provider.id,model:typeof record?.model==='string'?record.model:'unobserved',elapsed_ms:Math.round(performance.now()-started),input_sha256:inputHash,status:'accepted',input_tokens:typeof usage.input_tokens==='number'&&Number.isFinite(usage.input_tokens)?usage.input_tokens:'unobserved',output_tokens:typeof usage.output_tokens==='number'&&Number.isFinite(usage.output_tokens)?usage.output_tokens:'unobserved'} satisfies DecisionProviderTrace};}catch{return {raw:null,trace:{provider:provider.id,model:'unobserved',elapsed_ms:Math.round(performance.now()-started),input_sha256:inputHash,status:'unavailable',input_tokens:'unobserved',output_tokens:'unobserved'} satisfies DecisionProviderTrace};}}
 
 export class DecisionPlane {
   readonly catalog:DecisionCatalog;readonly profile:DecisionCalibrationProfile;readonly catalogSha:string;readonly profileSha:string;readonly rate:number;

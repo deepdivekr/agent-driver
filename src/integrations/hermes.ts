@@ -19,7 +19,7 @@ export const HERMES_AGENT_DRIVER_TOOLS=Object.freeze([
   'runtime_terminal_submit_prompt','runtime_terminal_resume','runtime_terminal_interrupt',
 ] as const);
 
-interface HermesMcpEntry {command:string;args:string[];enabled:true;tools:{include:string[]};sampling:{enabled:false};elicitation:{enabled:true;timeout:number};}
+interface HermesMcpEntry {command:string;args:string[];enabled:true;tools:{include:string[]};sampling:{enabled:true};elicitation:{enabled:true;timeout:number};}
 export interface HermesIntegrationOptions {home?:string;command?:string;args?:string[];}
 
 function safeHome(value:string){requireCondition(isAbsolute(value),'HERMES_HOME_ABSOLUTE_REQUIRED');const path=resolve(value);requireCondition(path!==sep,'HERMES_HOME_UNSAFE');return path;}
@@ -27,7 +27,7 @@ export function hermesHome(environment:NodeJS.ProcessEnv=process.env){return saf
 export function hermesAgentDriverEntry(command:string,args:readonly string[]):HermesMcpEntry{
   requireCondition(isAbsolute(command),'AGENT_DRIVER_COMMAND_ABSOLUTE_REQUIRED');
   requireCondition(args.length>=1&&args.length<=8&&args.every(value=>typeof value==='string'&&value.length>0&&!/[\r\n\0]/u.test(value)),'AGENT_DRIVER_ARGS_INVALID');
-  return {command:resolve(command),args:[...args],enabled:true,tools:{include:[...HERMES_AGENT_DRIVER_TOOLS]},sampling:{enabled:false},elicitation:{enabled:true,timeout:600}};
+  return {command:resolve(command),args:[...args],enabled:true,tools:{include:[...HERMES_AGENT_DRIVER_TOOLS]},sampling:{enabled:true},elicitation:{enabled:true,timeout:600}};
 }
 async function writePrivate(path:string,content:string){
   await mkdir(dirname(path),{recursive:true,mode:0o700});const temp=join(dirname(path),`.${randomUUID()}.partial`);
@@ -43,7 +43,7 @@ export async function configureHermes(options:HermesIntegrationOptions={}){
   const document=parseDocument(source||'{}\n');requireCondition(document.errors.length===0,'HERMES_CONFIG_INVALID');
   document.setIn(['mcp_servers','agent-driver'],hermesAgentDriverEntry(command,args));
   await writePrivate(configPath,document.toString({lineWidth:0}));
-  return {status:'configured',config_path:configPath,server:'agent-driver',command,args,tools:HERMES_AGENT_DRIVER_TOOLS.length,sampling:false,elicitation:true,telegram_secret_touched:false,restart_required:true};
+  return {status:'configured',config_path:configPath,server:'agent-driver',command,args,tools:HERMES_AGENT_DRIVER_TOOLS.length,sampling:true,elicitation:true,telegram_secret_touched:false,restart_required:true};
 }
 
 function envKeys(path:string){
@@ -57,7 +57,7 @@ export function hermesDoctor(home=hermesHome()){
   if(existsSync(configPath)){const doc=parse(readFileSync(configPath,'utf8')) as {mcp_servers?:Record<string,unknown>}|null;entry=doc?.mcp_servers?.['agent-driver']??null;}
   const valid=entry!==null&&typeof entry==='object'&&!Array.isArray(entry);
   const typed=valid?entry as Partial<HermesMcpEntry>:{};
-  const configured=valid&&typed.enabled===true&&typed.sampling?.enabled===false&&typed.elicitation?.enabled===true&&HERMES_AGENT_DRIVER_TOOLS.every(tool=>typed.tools?.include?.includes(tool));
+  const configured=valid&&typed.enabled===true&&typed.sampling?.enabled===true&&typed.elicitation?.enabled===true&&HERMES_AGENT_DRIVER_TOOLS.every(tool=>typed.tools?.include?.includes(tool));
   return {hermes_home:root,agent_driver_mcp:configured?'ready':valid?'misconfigured':'not_configured',telegram:{token:keys.has('TELEGRAM_BOT_TOKEN')?'configured':'missing',allowed_users:keys.has('TELEGRAM_ALLOWED_USERS')?'configured':'missing',allow_all:keys.has('TELEGRAM_ALLOW_ALL_USERS')||keys.has('GATEWAY_ALLOW_ALL_USERS')?'unsafe':'disabled'},secrets_returned:false,restart_required:configured};
 }
 

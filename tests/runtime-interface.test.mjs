@@ -68,6 +68,14 @@ test('runtime native C01 CLI and SDK stdio share capability semantics with indep
   assert.notEqual(first.task_id,second.task_id);const final=await complete(x,second.task_id);assert.equal(final.status,'succeeded');assert.equal(final.verification.result,'MATCH');
   assert.equal(x.fixture.snapshot(x.spec.runId).effects.filter(e=>e.kind==='save').length,2);
   const catalog=await m.client.listTools();assert.equal(catalog.tools.length,Object.keys(tools).length+1);assert.deepEqual(catalog.tools.map(t=>t.name).sort(),[...Object.keys(tools),'runtime_task_intake'].sort());
+  const swarmStart=catalog.tools.find(t=>t.name==='runtime_swarm_start'),swarmTick=catalog.tools.find(t=>t.name==='runtime_swarm_tick'),swarmActivity=catalog.tools.find(t=>t.name==='runtime_swarm_activity');
+  assert.match(m.client.getInstructions(),/independent research, comparisons, or requests that need multiple sources, call runtime_swarm_start/);
+  assert.match(m.client.getInstructions(),/dispatches item as a separate sub-agent/);
+  assert.match(swarmStart.description,/Defaults to standard mode/);assert.match(swarmStart.description,/concurrently/);
+  assert.match(swarmTick.description,/dispatches concurrently/);assert.match(swarmTick.description,/legacy dispatch field remains/);
+  assert.deepEqual(tools.runtime_swarm_start.schema.parse({request_id:'research-001',goal:'Compare the primary sources.'}),{request_id:'research-001',goal:'Compare the primary sources.',context:{},mode:'standard'});
+  assert.equal(swarmActivity.annotations.readOnlyHint,false);assert.deepEqual(tools.runtime_swarm_activity.schema.parse({run_id:'11111111-1111-4111-8111-111111111111',worker_id:'source-1',lease_token:'22222222-2222-4222-8222-222222222222',activity:{kind:'started',summary:'Begin source review.'}}).activity,{kind:'started',summary:'Begin source review.',endpoint:null});
+  assert.throws(()=>tools.runtime_swarm_start.schema.parse({request_id:'research-001',goal:'Compare sources.',approved:true}));
   assert.deepEqual(await call(m.client,'runtime_storage_status',{}),{status:'unconfigured',verified:false,usage:'unobserved'});
   const decisions=await call(m.client,'runtime_decision_status',{});assert.equal(decisions.scope,'fixture');assert.equal(decisions.mutation_allowed,false);assert.equal(decisions.profile_promotion_exposed,false);assert.deepEqual(decisions.decisions.map(item=>item.catalog_id).sort(),['adaptive.browser','pack.row','swarm.control','task.intake']);
   assert.equal(catalog.tools.find(t=>t.name==='runtime_decision_status').annotations.readOnlyHint,true);
@@ -77,6 +85,13 @@ test('runtime native C01 CLI and SDK stdio share capability semantics with indep
   assert.equal(catalog.tools.some(t=>/grant|shell|eval/.test(t.name)||t.name==='runtime_pack_approve'),false);
   const unsupported=await m.client.callTool({name:'runtime_terminal_status',arguments:{session_ref:'missing'}});assert.equal(unsupported.isError,true);assert.match(unsupported.content[0].text,/TERMINAL_DISABLED/);
   const malformed=await m.client.callTool({name:'runtime_task_start',arguments:{...request('invalid'),approved:true}});assert.equal(malformed.isError,true);
+});
+test('runtime swarm start validates defaults and forwards one-call start to the runtime',async t=>{
+  const x=await setup(t);let received=null;
+  x.api.swarm.start=async(...args)=>{received=args;return {status:'running',run_id:'00000000-0000-4000-8000-000000000001',dispatches:[],dispatch:null,execution_authority:false,approval_granted:false};};
+  const result=await x.api.call('runtime_swarm_start',{request_id:'research-002',goal:'Research independent primary sources.'});
+  assert.deepEqual(received,['research-002','Research independent primary sources.',{},'standard']);
+  assert.equal(result.execution_authority,false);assert.equal(result.approval_granted,false);assert.deepEqual(result.dispatches,[]);assert.equal(result.dispatch,null);
 });
 test('runtime native gateway exits while accepted detached worker continues; retry and reconnect do not replay',{timeout:60000},async t=>{
   const x=await setup(t),m=await client(x),body=request('durable-id');

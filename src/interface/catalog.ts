@@ -4,6 +4,7 @@ import {terminalStart,terminalSubmit,terminalBound,terminalList,terminalHistory,
 import {packTools} from '../packs/contracts.js';
 import {humanChannelRouteInput} from '../integrations/human-channel.js';
 import {swarmTools} from '../swarm/contracts.js';
+import {observabilityTools} from '../observability/contracts.js';
 export const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const draftInput=z.object({name:z.string().min(1).max(200),note:z.string().min(1).max(4000)}).strict();
 export const startRequest=z.object({request_id:id,capability:z.literal('fixture.draft.save'),account_ref:id,input:draftInput,deadline_ms:z.number().int().min(1000).max(120000).default(30000)}).strict();
@@ -12,6 +13,7 @@ const notImplemented={implemented:false,readOnly:false};
 export const tools={
   ...packTools,
   ...swarmTools,
+  ...observabilityTools,
   runtime_channel_route:{schema:humanChannelRouteInput,implemented:true,readOnly:true},
   runtime_decision_status:{schema:empty,implemented:true,readOnly:true},
   runtime_health:{schema:empty,implemented:true,readOnly:true},

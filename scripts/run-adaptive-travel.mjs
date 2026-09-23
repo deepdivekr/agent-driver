@@ -5,7 +5,8 @@ import {OwnedPersistentPage} from '../dist/taskpack/owned-playwright.js';
 import {AdaptiveBrowser} from '../dist/taskpack/adaptive-browser.js';
 import {modelObservation} from '../dist/taskpack/adaptive-decision.js';
 import {adaptiveLlmFromHostEnvironment,hashJson} from '../dist/taskpack/adaptive-spec.js';
-import {typeSafeTransportFromHostEnvironment} from '../dist/taskpack/typesafe-jev.js';
+import {optionalTypeSafeTransportFromHostEnvironment} from '../dist/taskpack/typesafe-jev.js';
+import {subscriptionAwareModelFromHostEnvironment} from '../dist/integrations/subscription-auth.js';
 import {runAdaptivePack} from '../dist/taskpack/adaptive-runner.js';
 import {ADAPTIVE_TRAVEL_TARGETS,adaptiveTravelTask,verifyAdaptiveTravel} from '../dist/taskpacks/adaptive-travel.js';
 import {startModelConnectionScreen} from '../dist/onboarding/model-screen.js';
@@ -29,20 +30,17 @@ if(get('--openai-env-file')){
   if(!['OPENAI_API_KEY','PROMPT_API_KEY'].includes(key))throw Error('UNSUPPORTED_OPENAI_ENV_KEY');
   if(values[key])environment.OPENAI_API_KEY=values[key];
 }
-if(args.includes('--connect-models')&&!probe&&(!environment.TYPESAFE_API_KEY||!environment.OPENAI_API_KEY)){
+if(args.includes('--connect-models')&&!probe){
   const screen=await startModelConnectionScreen();
   await writeFile(join(output,'waiting.json'),JSON.stringify({status:'waiting_for_local_model_connection',pid:process.pid,started_at:new Date().toISOString(),url:screen.url,output},null,2)+'\n',{mode:0o600});
   console.log(JSON.stringify({status:'waiting_for_local_model_connection',url:screen.url,output,pid:process.pid}));
   try {Object.assign(environment,await screen.connected);}finally{await screen.close();}
 }
-const missing=['TYPESAFE_API_KEY','OPENAI_API_KEY'].filter(key=>!environment[key]);
 const receipts=[];
-if(missing.length&&!probe){
-  const receipt={status:'BLOCKED_ENV',reason:'MODEL_CREDENTIALS_UNAVAILABLE',missing,model_calls:0,browser_actions:0};
-  await writeFile(join(output,'receipt.json'),JSON.stringify(receipt,null,2)+'\n',{mode:0o600});
-  console.log(JSON.stringify({output,...receipt}));process.exitCode=2;
-} else {
-  const llm=probe?null:adaptiveLlmFromHostEnvironment(environment),jev=probe?null:typeSafeTransportFromHostEnvironment(environment);
+{
+  let apiFallback;
+  if(environment.OPENAI_API_KEY)apiFallback=adaptiveLlmFromHostEnvironment(environment);
+  const llm=probe?null:subscriptionAwareModelFromHostEnvironment(apiFallback?{fallbackModel:apiFallback,fallbackKind:'api_key'}:{},environment),jev=probe?null:optionalTypeSafeTransportFromHostEnvironment(environment).transport??undefined;
   for(const target of ADAPTIVE_TRAVEL_TARGETS.filter(target=>source==='both'||target.source===source))for(let index=0;index<repeat;index++){
     const task=adaptiveTravelTask(target),root=join(output,`${target.source}-${index+1}`);
     const owned=new OwnedPersistentPage(join(root,'profile'),join(root,'captures'),!headed,{recordVideoDir:join(root,'video'),recordVideoSize:{width:1280,height:720}});

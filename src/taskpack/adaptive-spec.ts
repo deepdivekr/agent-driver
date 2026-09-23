@@ -17,7 +17,7 @@ export const adaptiveSpecSchema=z.object({
 }).strict();
 export type AdaptiveSpec=z.infer<typeof adaptiveSpecSchema>;
 export interface AdaptiveTask {request:string;start_url:string;allowed_origins:string[];}
-export interface ModelCall {purpose:'design'|'repair'|'correct';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode';}
+export interface ModelCall {purpose:'design'|'repair'|'correct';provider?:string;auth?:'client_subscription'|'subscription'|'api_key'|'unknown';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;input_tokens:number|'unobserved';output_tokens:number|'unobserved';total_tokens:number|'unobserved';failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode';}
 export interface StructuredModel {
   call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>):Promise<unknown>;
   calls:ModelCall[];
@@ -66,16 +66,18 @@ export async function obtainAdaptiveSpec(task:AdaptiveTask,observation:unknown,m
 /** Same host credentials, Responses endpoint and Luna/low as the existing correction adapter. */
 export function adaptiveLlmFromHostEnvironment(environment:NodeJS.ProcessEnv=process.env,fetcher:typeof fetch=fetch):StructuredModel {
   const key=environment.OPENAI_API_KEY;requireCondition(typeof key==='string'&&key.trim().length>=16,'OPENAI_CREDENTIAL_UNAVAILABLE');
-  const model='gpt-5.6-luna',calls:ModelCall[]=[];
+  const model=environment.AGENT_DRIVER_API_MODEL??'gpt-5.6-luna',reasoning=environment.AGENT_DRIVER_API_REASONING??'low',calls:ModelCall[]=[];
+  requireCondition(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/u.test(model)&&['low','medium','high'].includes(reasoning),'INVALID_MODEL_SELECTION');
   return {calls,async call(purpose,instructions,input,schema){
-    const started=performance.now(),inputHash=hashJson({instructions,input,schema});let accepted=false,httpStatus:number|undefined,failureKind:ModelCall['failure_kind']='network';
+    const started=performance.now(),inputHash=hashJson({instructions,input,schema});let accepted=false,httpStatus:number|undefined,failureKind:ModelCall['failure_kind']='network',usage:{input_tokens?:number;output_tokens?:number;total_tokens?:number}={};
     try {
       const response=await fetcher('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},signal:AbortSignal.timeout(60000),body:JSON.stringify({
-        model,reasoning:{effort:'low'},store:false,stream:false,tools:[],max_output_tokens:purpose==='correct'?1500:5000,
+        model,reasoning:{effort:reasoning},store:false,stream:false,tools:[],max_output_tokens:purpose==='correct'?1500:5000,
         instructions,input:JSON.stringify(input),text:{format:{type:'json_schema',name:'adaptive_browser_spec',strict:true,schema}},
       })});
       httpStatus=response.status;failureKind='http_error';
-      requireCondition(response.ok,'ADAPTIVE_LLM_HTTP_FAILURE');failureKind='incomplete';const raw=await response.json() as {status?:string;output?:{type:string;phase?:string;content?:{type:string;text?:string}[]}[]};
+      requireCondition(response.ok,'ADAPTIVE_LLM_HTTP_FAILURE');failureKind='incomplete';const raw=await response.json() as {status?:string;output?:{type:string;phase?:string;content?:{type:string;text?:string}[]}[];usage?:{input_tokens?:number;output_tokens?:number;total_tokens?:number}};
+      if(raw.usage&&typeof raw.usage==='object')usage=raw.usage;
       requireCondition(raw.status==='completed'&&Array.isArray(raw.output),'ADAPTIVE_LLM_INCOMPLETE');
       failureKind='invalid_output';const candidates=raw.output.filter(item=>item.type==='message'),finals=candidates.filter(item=>item.phase==='final_answer');
       const selected=finals.length===1?finals:candidates.length===1?candidates:[];
@@ -85,6 +87,6 @@ export function adaptiveLlmFromHostEnvironment(environment:NodeJS.ProcessEnv=pro
       requireCondition(messages.length>0&&messages.every(item=>item.type==='output_text'&&typeof item.text==='string'),'ADAPTIVE_LLM_INVALID_OUTPUT');
       failureKind='json_decode';const decoded=JSON.parse(messages.map(item=>item.text).join(''));accepted=true;return decoded;
     } catch(error) {if(error instanceof Error&&['TimeoutError','AbortError'].includes(error.name))failureKind='timeout';throw Error('ADAPTIVE_LLM_UNAVAILABLE');}
-    finally {calls.push({purpose,model,elapsed_ms:Math.round(performance.now()-started),input_sha256:inputHash,status:accepted?'accepted':'failed',...(httpStatus===undefined?{}:{http_status:httpStatus}),...(accepted?{}:{failure_kind:failureKind})});}
+    finally {calls.push({purpose,provider:'openai_api',auth:'api_key',model,elapsed_ms:Math.round(performance.now()-started),input_sha256:inputHash,status:accepted?'accepted':'failed',...(httpStatus===undefined?{}:{http_status:httpStatus}),input_tokens:typeof usage.input_tokens==='number'&&Number.isFinite(usage.input_tokens)?usage.input_tokens:'unobserved',output_tokens:typeof usage.output_tokens==='number'&&Number.isFinite(usage.output_tokens)?usage.output_tokens:'unobserved',total_tokens:typeof usage.total_tokens==='number'&&Number.isFinite(usage.total_tokens)?usage.total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
   }};
 }

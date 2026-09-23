@@ -17,14 +17,14 @@ export type LocalConnectionState=z.infer<typeof localConnectionState>;
 
 export interface LocalConnectionPaths {root:string;state:string;runtimeConfig:string;workspace:string;data:string;}
 export interface LocalConnectionScreenModel {
-  title:'내 컴퓨터 연결';description:string;
+  title:'로컬 실행';description:string;
   modes:readonly {id:string;label:string;detail:string;available:boolean;default?:boolean}[];
   status:Readonly<Record<'Browser'|'Hermes'|'Telegram'|'Codex'|'Claude'|'Jev',string>>;
 }
 
 /** The screen deliberately exposes one safe, shipped surface. Unsupported surfaces are explanatory only, never consent choices. */
 export const localConnectionScreen:LocalConnectionScreenModel=Object.freeze({
-  title:'내 컴퓨터 연결',description:'이 기기에서 에이전트가 전용 브라우저와 개발 도구를 사용할 수 있게 합니다.',
+  title:'로컬 실행',description:'이 기기에서 에이전트가 전용 브라우저와 개발 도구를 사용할 수 있게 합니다.',
   modes:Object.freeze([
     Object.freeze({id:nonInterferingConnectionMode,label:'방해하지 않는 모드',detail:'권장 · 사용자 화면과 브라우저를 건드리지 않는 전용 Agent Computer를 사용합니다.',available:true,default:true}),
     Object.freeze({id:'agent_desktop',label:'에이전트 전용 데스크톱',detail:'준비 중 · 현재 제공되는 전용 surface는 브라우저입니다.',available:false}),
@@ -50,12 +50,19 @@ async function writePrivateJson(path:string,value:unknown){
   await writeFile(temporary,`${JSON.stringify(value,null,2)}\n`,{mode:0o600});await chmod(temporary,0o600);await rename(temporary,path);await chmod(path,0o600);
 }
 export async function approveNonInterferingConnection(root=connectionRoot(),now=new Date()):Promise<{state:LocalConnectionState;paths:LocalConnectionPaths}> {
-  const paths=localConnectionPaths(root);
+  const paths=await prepareLocalConnection(root),existing=readLocalConnection(root);
+  if(existing)return {state:existing,paths};
   await mkdir(paths.root,{recursive:true,mode:0o700});await chmod(paths.root,0o700);
   await mkdir(paths.workspace,{recursive:true,mode:0o700});await mkdir(paths.data,{recursive:true,mode:0o700});
   const state=localConnectionState.parse({format:1,connection_id:randomUUID(),connected_at:now.toISOString(),mode:nonInterferingConnectionMode,computer:{kind:'persistent_agent_computer',surface:'browser',host_desktop_access:'none',host_file_bridge:'explicit_transfer_only'},mcp:{command:'agent-driver mcp',registration:'client_managed'},jev:{status:'optional'}});
+  await writePrivateJson(paths.state,state);return {state,paths};
+}
+/** Prepare only inert host configuration. MCP default still requires separate human connection approval. */
+export async function prepareLocalConnection(root=connectionRoot()){
+  const paths=localConnectionPaths(root);await mkdir(paths.root,{recursive:true,mode:0o700});await mkdir(paths.workspace,{recursive:true,mode:0o700});await mkdir(paths.data,{recursive:true,mode:0o700});
   const runtimeConfig={schema_version:1,project_id:'agent-driver-local',caller_ref:'local-agent',account_ref:'owner',worktree:'workspace',data_dir:'data',environment:'production',recovery_policy:'auto_resume'};
-  await writePrivateJson(paths.runtimeConfig,runtimeConfig);await writePrivateJson(paths.state,state);return {state,paths};
+  try{await writeFile(paths.runtimeConfig,JSON.stringify(runtimeConfig,null,2)+'\n',{mode:0o600,flag:'wx'});}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
+  return paths;
 }
 export function readLocalConnection(root=connectionRoot()):LocalConnectionState|null {
   const path=localConnectionPaths(root).state;if(!existsSync(path))return null;

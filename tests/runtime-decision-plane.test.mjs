@@ -24,7 +24,7 @@ test('runtime decision plane keeps live and shadow independent and journals disa
   const journal=new MemoryDecisionJournal(),profile=provisionalProfile(catalog,'jev-latest',{'fixture.route':{min_confidence:.8,min_selected_probability:.8},'fixture.complete':{noul_review_low:.2,noul_review_high:.8}});
   const primary={id:'primary',async systemOne(){return answer('alpha',.95,.9);}},shadow={id:'shadow',async systemOne(){return answer('beta',.96,.1);}};
   const plane=new DecisionPlane({catalog,profile,primary,shadow,journal,shadow_sample_rate:1}),result=await plane.evaluate(request,{context_id:'fixture-1',bindings:[{question_id:'route',decision_id:'fixture.route'},{question_id:'complete',decision_id:'fixture.complete'}]});
-  assert.equal(result.judgments[0].value,'alpha');assert.equal(result.judgments[0].status,'accepted');assert.deepEqual(result.event.shadow.disagreements,['route','complete']);
+  assert.equal(result.judgments[0].value,'alpha');assert.equal(result.judgments[0].status,'accepted');assert.deepEqual(result.judgments[0].probabilities,{alpha:.95,beta:.025000000000000022,NONE:.025000000000000022});assert.deepEqual(result.judgments[1].probabilities,{true:.9,false:.09999999999999998});assert.deepEqual(result.event.shadow.disagreements,['route','complete']);
   assert.equal(result.event.execution_authority,false);assert.equal(result.event.approval_granted,false);assert.equal(journal.events.length,1);assert.equal(JSON.stringify(journal.events[0]).includes('secret_not_stored'),false);
 });
 

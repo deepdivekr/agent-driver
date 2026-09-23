@@ -12,6 +12,8 @@ Decision Plane은 모든 Pack이 Jev와 비교 모델을 같은 방식으로 호
   → 재관측과 독립 readback → outcome label
 ```
 
+Jev 연결은 선택 사항이다. 키가 없으면 `skipped_not_configured`로 남기고 첫 판단부터 MCP client 또는 로그인된 Codex·Claude Code·Cursor의 구조화 LLM으로 보낸다. 키가 있더라도 Jev unavailable·저신뢰·no-match는 같은 LLM 경로로 보정한다. 두 경로 모두 같은 code-owned 후보·schema·권한 검사와 독립 readback을 통과한다.
+
 ## 계약
 
 - `DecisionCatalog`는 판단 ID, primitive, 위험도, 질문 버전, 명시적 no-match 값과 fallback을 고정한다. 질문과 primitive가 catalog와 다르면 호출을 거부한다.
@@ -85,6 +87,7 @@ primary와 shadow는 같은 state와 typed 질문을 병렬로 받지만 shadow�
 - Telegram/intake: route·field candidate·supplied 판단이 같은 typed validation을 거친다.
 - 실제 production profile은 아직 도메인별 새 shadow label이 누적되어야 한다. 기존 v4 대규모 평가 데이터는 설계 근거이며, 질문·모델 hash가 다른 새 판단의 검증 라벨로 자동 전용하지 않는다.
 - provider가 실패해도 authority가 넓어지지 않는다. catalog에 고정된 fallback만 적용하고, 외부 효과는 기존 task-bound single-use approval과 독립 readback을 계속 요구한다.
+- provider cascade와 인증 경계는 [구독 인증 LLM bridge](subscription-auth.md)를 따른다. 구독 OAuth token이나 auth store는 Decision Plane의 입력·journal·상태 응답에 들어가지 않는다.
 
 ## 2026-09-21 실제 provider canary
 

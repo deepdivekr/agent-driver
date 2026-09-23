@@ -51,10 +51,11 @@ export type DecisionStatus='accepted'|'review'|'no_match'|'shadow_only'|'invalid
 export interface DecisionJudgment {
   question_id:string;decision_id:string;primitive:z.infer<typeof decisionPrimitive>;status:DecisionStatus;
   value:string|number|boolean|null;confidence:number|null;selected_probability:number|null;
+  probabilities?:Record<string,number>|null|undefined;
   threshold:{confidence:number;selected_probability:number;noul_review_low:number;noul_review_high:number};
   fallback:JudgmentDefinition['fallback'];risk:z.infer<typeof decisionRisk>;reason:string|null;
 }
-export interface DecisionProviderTrace {provider:string;model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'unavailable'|'invalid';}
+export interface DecisionProviderTrace {provider:string;model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'unavailable'|'invalid';input_tokens?:number|'unobserved'|undefined;output_tokens?:number|'unobserved'|undefined;}
 export interface DecisionShadowSummary {sampled:boolean;provider:string|null;trace:DecisionProviderTrace|null;disagreements:string[];judgments:DecisionJudgment[];}
 export interface DecisionEvent {
   format:1;event_id:string;occurred_at:string;catalog_id:string;catalog_version:string;catalog_sha256:string;
@@ -69,12 +70,15 @@ export const decisionJudgmentSchema:z.ZodType<DecisionJudgment>=z.object({
   status:z.enum(['accepted','review','no_match','shadow_only','invalid','unavailable']),
   value:z.union([z.string().max(512),z.number().finite(),z.boolean(),z.null()]),
   confidence:probability.nullable(),selected_probability:probability.nullable(),
+  probabilities:z.record(z.string().min(1).max(160),probability).nullable().optional(),
   threshold:z.object({confidence:probability,selected_probability:probability,noul_review_low:probability,noul_review_high:probability}).strict(),
   fallback:z.enum(['continue_code','llm','human','hold']),risk:decisionRisk,reason:z.string().max(160).nullable(),
 }).strict();
 export const decisionProviderTraceSchema:z.ZodType<DecisionProviderTrace>=z.object({
   provider:z.string().min(1).max(128),model:z.string().min(1).max(128),elapsed_ms:z.number().int().nonnegative().max(3_600_000),
   input_sha256:z.string().regex(/^[a-f0-9]{64}$/u),status:z.enum(['accepted','unavailable','invalid']),
+  input_tokens:z.union([z.number().int().nonnegative(),z.literal('unobserved')]).optional(),
+  output_tokens:z.union([z.number().int().nonnegative(),z.literal('unobserved')]).optional(),
 }).strict();
 export const decisionShadowSummarySchema:z.ZodType<DecisionShadowSummary>=z.object({
   sampled:z.boolean(),provider:z.string().min(1).max(128).nullable(),trace:decisionProviderTraceSchema.nullable(),

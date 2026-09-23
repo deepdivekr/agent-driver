@@ -7,9 +7,14 @@ import {createHash} from 'node:crypto';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {RuntimeApi} from '../dist/interface/api.js';
 import {validateSwarmPlanDraft,SWARM_DECISION_CATALOG} from '../dist/swarm/index.js';
+import {readSwarmDashboard} from '../dist/swarm/dashboard.js';
 
 const sha=value=>createHash('sha256').update(JSON.stringify(value)).digest('hex');
-const worker=(id,depends_on=[],effect='read_only')=>({id,role:`${id} role`,objective:`Complete ${id} from bounded evidence.`,executor:'sub_agent',depends_on,required_capabilities:[],effect,completion_evidence:[`Independent evidence for ${id}.`],max_steps:12,timeout_ms:60_000});
+const worker=(id,depends_on=[],effect='read_only',extra={})=>({id,role:`${id} role`,objective:`Complete ${id} from bounded evidence.`,executor:'sub_agent',depends_on,required_capabilities:[],effect,completion_evidence:[`Independent evidence for ${id}.`],max_steps:12,timeout_ms:60_000,...extra});
+const standardDraft=(sourceCount=6)=>{
+  const sources=Array.from({length:sourceCount},(_,index)=>worker(`source-${index+1}`,[],'read_only',{stage:'source_read',source_urls:[`https://example.test/source-${index+1}`]}));
+  return {summary:'Read six independent sources, reduce fact cards, then synthesize.',workers:[...sources,worker('reduce',sources.map(item=>item.id),'read_only',{stage:'reduction'}),worker('synthesize',['reduce'],'read_only',{stage:'synthesis'})]};
+};
 
 function modelFor(getDraft,{quality=4}={}){
   const calls=[];
@@ -40,17 +45,70 @@ async function setup(t,{draft,quality=4,maxWorkers=8,maxConcurrency=2,withJev=tr
   t.after(async()=>{api.close();await rm(root,{recursive:true,force:true});});return {api,config,model};
 }
 
-const report=id=>({status:'succeeded',summary:`${id} completed with direct evidence.`,artifacts:[{kind:'result',ref:`artifact://${id}`,sha256:'a'.repeat(64),summary:'bounded result'}],readback:{verified:true,method:'independent_readback',evidence_sha256:'b'.repeat(64),observed_at:new Date().toISOString()},error_code:null});
+const report=id=>({status:'succeeded',summary:`${id} completed with direct evidence.`,artifacts:[{kind:'result',ref:`artifact://${id}`,sha256:'a'.repeat(64),summary:'bounded result'}],evidence:[{source_url:`https://example.test/${id}`,claim:`Direct evidence for ${id}.`,observed_at:new Date().toISOString(),verification:'source_reopen'}],readback:{verified:true,method:'independent_readback',evidence_sha256:'b'.repeat(64),observed_at:new Date().toISOString()},error_code:null});
+const sourceReport=id=>({...report(id),fact_cards:[{claim:`Verified claim from ${id}.`,source_url:`https://example.test/${id}`,source_type:'official_documentation',observed_at:new Date().toISOString(),evidence_excerpt:`Bounded excerpt for ${id}.`,verification:'source_reopen',freshness:'current',contradiction_refs:[]}]});
+
+test('standard start defaults to an eight-worker URL plan and leases all safe source workers in one batch',async t=>{
+  const x=await setup(t,{draft:standardDraft(),maxWorkers:24,maxConcurrency:16}),started=await x.api.call('runtime_swarm_start',{request_id:'standard-start',goal:'Research six bounded sources and synthesize the verified result.',context:{}});
+  assert.equal(started.mode,'standard');assert.equal(started.plan.research_mode,'standard');assert.equal(started.plan.workers.length,8);
+  assert.equal(started.run.target_deadline_at_ms-started.run.started_at_ms,180_000);assert.equal(started.run.hard_deadline_at_ms-started.run.started_at_ms,240_000);assert.equal(started.run.synthesis_reserve_ms,35_000);
+  assert.equal(started.dispatches.length,6);assert.equal(started.dispatch.worker_id,started.dispatches[0].worker_id);assert.ok(started.dispatches.every(item=>item.stage==='source_read'&&item.source_urls.length===1&&item.timeout_ms<=75_000&&item.effect==='read_only'));
+  assert.equal(started.run.workers.filter(item=>item.status==='leased').length,0); // start returns the pre-batch run snapshot separately
+  const status=await x.api.call('runtime_swarm_status',{run_id:started.run.run_id});assert.equal(status.workers.filter(item=>item.status==='leased').length,6);
+});
+
+test('leased worker activity updates the dashboard endpoint without exposing query, userinfo or lease authority',async t=>{
+  const x=await setup(t,{draft:standardDraft(),maxWorkers:24,maxConcurrency:16}),started=await x.api.call('runtime_swarm_start',{request_id:'activity-heartbeat',goal:'Research bounded sources.',context:{}}),lease=started.dispatches[0];
+  const activity=await x.api.call('runtime_swarm_activity',{run_id:started.run.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,activity:{kind:'navigating',summary:'Opening the assigned primary source.',endpoint:'https://user:pass@example.test/source/token/abcdefghijklmnopqrstuvwxyz012345?q=private#part'}});
+  assert.equal(activity.recorded,true);assert.equal(activity.endpoint,'https://example.test/source/token/:redacted');assert.equal(activity.execution_authority,false);assert.equal(activity.approval_granted,false);
+  const view=readSwarmDashboard(x.api.store,x.config.project.id),worker=view.runs[0].workers.find(item=>item.id===lease.worker_id);assert.equal(worker.current_activity,'navigating');assert.equal(worker.current_endpoint,'https://example.test/source/token/:redacted');assert.doesNotMatch(JSON.stringify(view),/user:pass|q=private|lease_token/u);
+  await assert.rejects(x.api.call('runtime_swarm_activity',{run_id:started.run.run_id,worker_id:lease.worker_id,lease_token:'00000000-0000-4000-8000-000000000000',activity:{kind:'observing',summary:'Observe.',endpoint:null}}),/STALE_SWARM_LEASE/);
+  await assert.rejects(x.api.call('runtime_swarm_activity',{run_id:started.run.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,activity:{kind:'observing',summary:'Use sk-proj-abcdefghijklmnop.',endpoint:null}}),/CREDENTIAL_LIKE_INPUT/);
+});
+
+test('standard batch leases exactly sixteen of eighteen dependency-ready workers at the configured concurrency ceiling',async t=>{
+  const x=await setup(t,{draft:standardDraft(16),maxWorkers:24,maxConcurrency:16}),started=await x.api.call('runtime_swarm_start',{request_id:'standard-sixteen',goal:'Research sixteen independent bounded sources.',context:{}});
+  assert.equal(started.plan.workers.length,18);assert.equal(started.dispatches.length,16);assert.equal(new Set(started.dispatches.map(item=>item.worker_id)).size,16);assert.ok(started.dispatches.every(item=>item.stage==='source_read'));
+  const status=await x.api.call('runtime_swarm_status',{run_id:started.run.run_id});assert.equal(status.workers.filter(item=>item.status==='leased').length,16);assert.equal(status.workers.filter(item=>item.status==='pending').length,2);
+});
+
+test('standard start rejects a three-worker plan while the compatible generic plan API still accepts it',async t=>{
+  const draft={summary:'Legacy generic graph.',workers:[worker('one'),worker('two'),worker('three')]},x=await setup(t,{draft,maxWorkers:24,maxConcurrency:16});
+  await assert.rejects(x.api.call('runtime_swarm_start',{request_id:'too-small-standard',goal:'Research broadly.',context:{}}),/SWARM_STANDARD_MIN_WORKERS/);
+  const generic=await x.api.call('runtime_swarm_plan',{goal:'Run a generic bounded graph.',context:{}});assert.equal(generic.plan.workers.length,3);assert.equal(generic.plan.research_mode,null);
+});
+
+test('standard validation caps each source worker at two URLs',()=>{
+  const draft=standardDraft();draft.workers[0].source_urls.push('https://example.test/extra-1','https://example.test/extra-2');
+  assert.throws(()=>validateSwarmPlanDraft(draft,{max_workers:24,capabilities:[],mode:'standard',worker_timeout_ms:75_000,max_sources_per_worker:2}),/SWARM_STANDARD_SOURCE_URL_LIMIT/);
+});
+
+test('standard source reports require typed fact cards bound to one of the assigned URLs',async t=>{
+  const x=await setup(t,{draft:standardDraft(),maxWorkers:24,maxConcurrency:16}),started=await x.api.call('runtime_swarm_start',{request_id:'fact-card-contract',goal:'Research bounded sources.',context:{}}),first=started.dispatches[0];
+  await assert.rejects(x.api.call('runtime_swarm_report',{run_id:started.run.run_id,worker_id:first.worker_id,lease_token:first.lease_token,report:report(first.worker_id)}),/SWARM_STANDARD_FACT_CARD_REQUIRED/);
+  const accepted=await x.api.call('runtime_swarm_report',{run_id:started.run.run_id,worker_id:first.worker_id,lease_token:first.lease_token,report:sourceReport(first.worker_id)});assert.equal(accepted.workers.find(item=>item.id===first.worker_id).status,'succeeded');
+});
+
+test('synthesis reserve stops new source reads and a hard deadline ends as partial evidence, never completed',async t=>{
+  const x=await setup(t,{draft:standardDraft(),maxWorkers:24,maxConcurrency:16}),planned=await x.api.swarm.plan('Research within the standard deadline.',{},'standard'),run=x.api.swarm.run('deadline-standard',planned.plan.plan_id);
+  const reserve=await x.api.swarm.batchTick(run.run_id,run.hard_deadline_at_ms-30_000);assert.equal(reserve.dispatches.length,1);assert.equal(reserve.dispatch.stage,'reduction');assert.equal(reserve.workers.filter(item=>item.status==='skipped_deadline').length,6);
+  await x.api.swarm.report(run.run_id,'reduce',reserve.dispatch.lease_token,report('reduce'));
+  const synthesis=await x.api.swarm.batchTick(run.run_id);assert.equal(synthesis.dispatch.stage,'synthesis');
+  const partial=await x.api.swarm.report(run.run_id,'synthesize',synthesis.dispatch.lease_token,report('synthesize'));assert.equal(partial.status,'partial_evidence');assert.notEqual(partial.status,'completed');
+
+  const y=await setup(t,{draft:standardDraft(),maxWorkers:24,maxConcurrency:16}),started=await y.api.call('runtime_swarm_start',{request_id:'hard-deadline',goal:'Research until the hard deadline.',context:{}}),expired=await y.api.swarm.batchTick(started.run.run_id,started.run.hard_deadline_at_ms);
+  assert.equal(expired.status,'partial_evidence');assert.equal(expired.dispatches.length,0);assert.equal(expired.reason,'HARD_DEADLINE_EXCEEDED');assert.ok(expired.reviews.some(item=>item.kind==='deadline'));
+});
 
 test('swarm mode requires an LLM-created multi-worker DAG, dispatches separate sub-agent leases and completes only after readback',async t=>{
   const x=await setup(t,{draft:{summary:'Research then independently verify.',workers:[worker('research'),worker('verify',['research'])]}}),planned=await x.api.call('runtime_swarm_plan',{goal:'Find and verify the bounded answer.',context:{domain:'fixture'}});
   assert.equal(planned.plan.planner.kind,'llm');assert.equal(planned.plan.workers.length,2);assert.equal(planned.execution_started,false);assert.equal(planned.plan.execution_authority,false);
   const run=await x.api.call('runtime_swarm_run',{request_id:'swarm-one',plan_id:planned.plan.plan_id}),first=await x.api.call('runtime_swarm_tick',{run_id:run.run_id});
-  assert.equal(first.dispatch.worker_id,'research');assert.equal(first.dispatch.spawn_sub_agent_required,true);assert.equal(first.dispatch.decider,'jev');assert.equal(first.workers.find(item=>item.id==='research').lease_token,'redacted');
+  assert.equal(first.dispatch.worker_id,'research');assert.equal(first.dispatch.spawn_sub_agent_required,true);assert.equal(first.dispatch.decider,'code');assert.equal(first.workers.find(item=>item.id==='research').lease_token,'redacted');
   const afterFirst=await x.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'research',lease_token:first.dispatch.lease_token,report:report('research')});assert.equal(afterFirst.status,'running');
   const second=await x.api.call('runtime_swarm_tick',{run_id:run.run_id});assert.equal(second.dispatch.worker_id,'verify');
   const complete=await x.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'verify',lease_token:second.dispatch.lease_token,report:report('verify')});assert.equal(complete.status,'completed');assert.ok(complete.workers.every(item=>item.quality.accepted));assert.equal(complete.approval_granted,false);
-  const persisted=await x.api.call('runtime_swarm_status',{run_id:run.run_id});assert.equal(persisted.status,'completed');assert.ok(persisted.decision_events.length>=6);
+  const persisted=await x.api.call('runtime_swarm_status',{run_id:run.run_id});assert.equal(persisted.status,'completed');assert.ok(persisted.decision_events.length>=4);
 });
 
 test('swarm mode refuses silent single-agent downgrade and invalid or over-broad task graphs',async t=>{
@@ -63,15 +121,15 @@ test('swarm mode refuses silent single-agent downgrade and invalid or over-broad
 
 test('300 logical workers remain a bounded queue and never imply 300 concurrent processes',async t=>{
   const workers=Array.from({length:300},(_,index)=>worker(`w${String(index).padStart(3,'0')}`)),x=await setup(t,{draft:{summary:'Large logical task graph.',workers},maxWorkers:300,maxConcurrency:4,withJev:false}),planned=await x.api.call('runtime_swarm_plan',{goal:'Partition a large read-only corpus.',context:{}}),run=await x.api.call('runtime_swarm_run',{request_id:'large-swarm',plan_id:planned.plan.plan_id});
-  assert.equal(planned.plan.workers.length,300);const dispatched=[];for(let i=0;i<4;i++)dispatched.push((await x.api.call('runtime_swarm_tick',{run_id:run.run_id})).dispatch);
-  assert.equal(new Set(dispatched.map(item=>item.worker_id)).size,4);assert.ok(dispatched.every(item=>item.decider==='llm'));
+  assert.equal(planned.plan.workers.length,300);const first=await x.api.call('runtime_swarm_tick',{run_id:run.run_id}),dispatched=first.dispatches;
+  assert.equal(dispatched.length,4);assert.equal(first.dispatch.worker_id,dispatched[0].worker_id);assert.equal(new Set(dispatched.map(item=>item.worker_id)).size,4);assert.ok(dispatched.every(item=>item.decider==='code'));
   const limited=await x.api.call('runtime_swarm_tick',{run_id:run.run_id});assert.equal(limited.dispatch,null);assert.equal(limited.reason,'CONCURRENCY_LIMIT');assert.equal(limited.workers.filter(item=>item.status==='leased').length,4);
 });
 
 test('weak artifacts and unverified success fail closed',async t=>{
   const external=await setup(t,{draft:{summary:'Read then publish.',workers:[worker('read'),worker('publish',['read'],'external_effect')]},quality:1,withJev:false}),planned=await external.api.call('runtime_swarm_plan',{goal:'Prepare a draft and request publication approval.',context:{}}),run=await external.api.call('runtime_swarm_run',{request_id:'guarded',plan_id:planned.plan.plan_id}),first=await external.api.call('runtime_swarm_tick',{run_id:run.run_id});
   await assert.rejects(external.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'read',lease_token:first.dispatch.lease_token,report:{...report('read'),readback:null}}));
-  const weak=await external.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'read',lease_token:first.dispatch.lease_token,report:report('read')});assert.equal(weak.status,'needs_human');assert.ok(weak.reviews.some(item=>item.kind==='quality'));
+  const weak=await external.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'read',lease_token:first.dispatch.lease_token,report:{...report('read'),evidence:[]}});assert.equal(weak.status,'needs_human');assert.ok(weak.reviews.some(item=>item.kind==='quality'));
   const replanned=await external.api.call('runtime_swarm_replan',{run_id:run.run_id,reason:'Artifact evidence needs a different verification task.'});assert.equal(replanned.status,'planned');assert.notEqual(replanned.plan.plan_id,planned.plan.plan_id);assert.equal(replanned.execution_started,false);
   assert.equal(SWARM_DECISION_CATALOG.judgments.map(item=>item.id).includes('dispatch.next_actor'),true);assert.equal(SWARM_DECISION_CATALOG.judgments.map(item=>item.id).includes('workflow.next_step'),true);
 });
@@ -82,5 +140,11 @@ test('external effects enter the human exception queue and expired leases are ne
   const held=await external.api.call('runtime_swarm_tick',{run_id:run.run_id});assert.equal(held.dispatch,null);assert.equal(held.status,'needs_human');assert.ok(held.reviews.some(item=>item.kind==='external_effect'&&item.worker_id==='publish'));
 
   const stale=await setup(t,{draft:{summary:'Two independent reads.',workers:[worker('one'),worker('two')]},withJev:false}),stalePlan=await stale.api.call('runtime_swarm_plan',{goal:'Run bounded reads.',context:{}}),staleRun=await stale.api.call('runtime_swarm_run',{request_id:'stale-lease',plan_id:stalePlan.plan.plan_id}),leased=await stale.api.call('runtime_swarm_tick',{run_id:staleRun.run_id});
-  const expired=await stale.api.swarm.tick(staleRun.run_id,leased.dispatch.lease_expires_at_ms);assert.equal(expired.status,'needs_human');assert.ok(expired.reviews.some(item=>item.kind==='lease_expired'));await assert.rejects(stale.api.call('runtime_swarm_report',{run_id:staleRun.run_id,worker_id:leased.dispatch.worker_id,lease_token:leased.dispatch.lease_token,report:report('late')}),/SWARM_RUN_NOT_ACTIVE/);
+  const expired=await stale.api.swarm.tick(staleRun.run_id,leased.dispatch.lease_expires_at_ms);assert.equal(expired.status,'needs_human');assert.ok(expired.reviews.some(item=>item.kind==='lease_expired'));await assert.rejects(stale.api.call('runtime_swarm_report',{run_id:staleRun.run_id,worker_id:leased.dispatch.worker_id,lease_token:leased.dispatch.lease_token,report:report('late')}),/STALE_SWARM_LEASE/);
+});
+
+test('batchTick leases read-only work but never batches external or irreversible effects',async t=>{
+  const x=await setup(t,{draft:{summary:'Safe reads plus guarded effects.',workers:[worker('read-one'),worker('read-two'),worker('publish',[],'external_effect'),worker('commit',[],'irreversible')]},maxConcurrency:4,withJev:false}),planned=await x.api.call('runtime_swarm_plan',{goal:'Separate safe reads from guarded effects.',context:{}}),run=await x.api.call('runtime_swarm_run',{request_id:'batch-effect-guard',plan_id:planned.plan.plan_id}),batch=await x.api.swarm.batchTick(run.run_id);
+  assert.deepEqual(batch.dispatches.map(item=>item.worker_id),['read-one','read-two']);assert.ok(batch.dispatches.every(item=>item.effect==='read_only'));
+  const status=await x.api.call('runtime_swarm_status',{run_id:run.run_id});assert.equal(status.workers.find(item=>item.id==='publish').status,'pending');assert.equal(status.workers.find(item=>item.id==='commit').status,'pending');
 });

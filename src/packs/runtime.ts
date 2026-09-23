@@ -4,8 +4,9 @@ import {requireCondition} from '../core/contracts.js';
 import {loadHostConfig,type HostConfig} from '../interface/config.js';
 import {BASE_PACK_CATALOG} from '../taskpacks/base-pack-catalog.js';
 import {snapshotHash} from '../taskpack/contracts.js';
-import {typeSafeTransportFromHostEnvironment,type JevSystemOneTransport} from '../taskpack/typesafe-jev.js';
-import {adaptiveLlmFromHostEnvironment,type StructuredModel} from '../taskpack/adaptive-spec.js';
+import {optionalTypeSafeTransportFromHostEnvironment,type JevSystemOneTransport} from '../taskpack/typesafe-jev.js';
+import {type StructuredModel} from '../taskpack/adaptive-spec.js';
+import {structuredModelFromEnvironment} from '../integrations/model-provider.js';
 import {packTools,recipeSchema,type Recipe,type MutationRecipe,type Row} from './contracts.js';
 import {PackStore,type PackRun} from './store.js';
 import {collect} from './sources.js';
@@ -14,6 +15,7 @@ import {judgeRow,ROW_DECISION_CATALOG,rowDecisionProfile} from './judgment.js';
 import {writeProtocol} from './browser-write.js';
 import {type PreparedApproval} from '../taskpack/protocol.js';
 import {DecisionPlane,DecisionProfileRegistry,FileDecisionJournal,structuredModelShadowProvider} from '../decision-plane/index.js';
+import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 
 const isMutation=(r:Recipe):r is MutationRecipe=>'target' in r;
 function safeError(error:unknown){return error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'PACK_EXECUTION_FAILED';}
@@ -43,8 +45,8 @@ export class FamilyRuntime {
     const policy=this.config.packs!;let jev=this.providers.jev,llm=this.providers.llm;
     if(policy.models!=='off'){
       requireCondition(policy.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
-      if(!jev)try{jev=typeSafeTransportFromHostEnvironment();}catch{}
-      if(policy.models==='jev_llm'&&!llm)try{llm=adaptiveLlmFromHostEnvironment();}catch{}
+      if(!jev)jev=optionalTypeSafeTransportFromHostEnvironment(effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)))).transport??undefined;
+      if(policy.models==='jev_llm'&&!llm)try{llm=structuredModelFromEnvironment(effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config))));}catch{}
     }else{jev=undefined;llm=undefined;}
     const shadow=this.providers.shadowJev?{id:'shadow-system-one',systemOne:(request:Parameters<JevSystemOneTransport['systemOne']>[0],settings:Parameters<JevSystemOneTransport['systemOne']>[1])=>this.providers.shadowJev!.systemOne(request,settings)}:policy.decision_shadow.provider==='llm'&&llm?structuredModelShadowProvider(llm):undefined;
     const fallback=rowDecisionProfile(policy.confidence),registry=new DecisionProfileRegistry(join(dirname(this.config.dbPath),'decisions','registry')),profile=jev?(await registry.resolve(ROW_DECISION_CATALOG,this.config.environment==='fixture'?'fixture':'production',fallback)).profile:fallback;

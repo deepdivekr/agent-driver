@@ -1,187 +1,163 @@
 # Agent Driver
 
-**Agent Driver는 플러그인이나 클라우드 봇이 아니라, Hermes·Codex·Claude Code·Cursor 같은 에이전트가 전용 브라우저·CLI·파일 작업을 맡길 수 있도록 로컬에서 `agent-driver mcp`로 서빙되는 MCP 실행 서버(control plane)입니다.**
+AI 에이전트에 전용 브라우저·CLI·파일 작업 도구를 연결하고, 중단된 작업을 검증 가능한 상태로 이어가는 로컬 MCP 런타임.
 
-사용자는 에이전트에게 자연어로 일을 요청합니다. Agent Driver는 화면을 관측하고, 적절한 실행기와 판단기를 고르고, 사람의 승인이 필요한 지점에서 멈추고, 작업 뒤 결과를 다시 읽어 확인합니다. 성공한 흐름은 같은 종류의 다음 작업에서 재사용할 수 있는 Task Pack recipe가 됩니다.
+Claude Code, Codex, Cursor, Hermes에서 웹 검색, 폼 입력, 파일 수집 같은 작업을 맡길 수 있습니다. 브라우저 작업은 전용 환경에서 진행하고, 실행 기록과 재개 정보는 로컬에 보관합니다.
 
-> **현재 상태:** `v0.1.0-alpha.16` 공개 alpha입니다. Linux/WSL의 로컬 MCP·CLI, 8개 Pack family, durable recovery, 공통 Jev Decision Plane, LLM Supervisor Swarm Mode, agent-owned browser와 Ubuntu browser VM 경로를 구현·검증했습니다. 모든 사이트 자동 적응, production-calibrated 판단 profile, native Windows/macOS 데스크톱 제어, OS 상주 설치는 아직 완성된 기능이 아닙니다.
+현재 공개 저장소의 `main`은 개발 alpha입니다. Ubuntu 24.04와 Windows의 WSL2 Ubuntu에서 검증했습니다.
 
-## 한눈에 보기
+## 시작하기
 
-| 질문 | 답 |
-|---|---|
-| MCP인가요? | **예.** MCP 클라이언트가 로컬 stdio 명령 `agent-driver mcp`를 실행해 연결합니다. |
-| 플러그인인가요? | **아니요.** 특정 에이전트에 종속된 플러그인이 아닙니다. MCP를 지원하는 클라이언트가 같은 서버를 사용합니다. |
-| 별도 앱인가요? | 로컬 Node.js runtime과 CLI입니다. 연결 승인에는 loopback 전용 로컬 화면을 씁니다. |
-| 클라우드 서비스인가요? | **아니요.** 실행 상태·SQLite DB·브라우저 profile은 기본적으로 이 컴퓨터에 남습니다. 사용자가 연결한 Jev 판단과 LLM 계획만 각 provider API를 호출합니다. |
-| Hermes가 필수인가요? | **아니요.** 권장 상위 runtime입니다. Telegram 대화·계획·기억은 Hermes가, 실제 실행·승인·복구·검증은 Agent Driver가 맡습니다. 다른 MCP 클라이언트도 직접 연결할 수 있습니다. |
-| Jev가 필수인가요? | **아니요.** 처음 설치할 때 필요하지 않습니다. 반복되는 짧은 판단에 이득이 있을 때 연결합니다. |
-| Swarm Mode는 뭔가요? | 큰 목표를 LLM이 2개 이상의 논리 worker DAG로 나누고 MCP client가 worker별 sub-agent를 소환하는 선택 모드입니다. |
+설치를 맡길 에이전트에게 다음과 같이 요청하세요.
 
-## 어떻게 돌아가나요?
+> github.com/deepdivekr/agent-driver를 설치하고 MCP에 연결해줘. 앞으로 브라우저와 파일 작업에 Agent Driver를 사용해줘.
 
-```text
-자연어 요청
-  → Pack family와 허용된 효과 결정
-  → 현재 화면·데이터를 새로 관측
-  → 코드 / Jev / LLM 중 알맞은 판단 경로 선택
-  → 전용 브라우저·CLI·파일·연결된 source에서 실행
-  → 외부 변경 직전에는 사람에게 정확한 snapshot 승인 요청
-  → 결과를 독립적으로 다시 읽어 성공 여부 확인
-  → 검증된 recipe만 같은 환경의 다음 실행에 재사용
-```
-
-- **LLM**은 처음 보는 작업을 구조화하고, 첫 실행 명세를 만들고, 새로운 상태에서 재계획합니다.
-- **Jev**는 코드가 만든 최신 state와 제한된 후보를 받아 상태·operation·target·관련성·완료·방해요소 같은 짧은 판단을 빠르게 반환합니다.
-- **결정론적 코드**는 URL 허용 목록, 정확한 locator 실행, 날짜 계산, 파일 변환, 승인 token 검사, readback처럼 틀리면 안 되는 절차를 수행합니다.
-- **executor**는 agent-owned browser, 격리된 CLI, bounded file pipeline 또는 선택형 personal VM입니다.
-
-모델의 답은 제안이지 권한이 아닙니다. 실제 클릭·입력·제출 전에 runtime이 origin, candidate, freshness, effect boundary와 approval을 다시 검사합니다.
-
-## Swarm Mode
-
-Swarm Mode에서는 LLM Supervisor의 작업 분해가 필수입니다. 단일 worker 계획이나 LLM planner가 없는 환경은 일반 Pack으로 조용히 강등하지 않고 거부합니다.
-
-```text
-목표 → LLM이 2~300개 논리 worker DAG 제안 → 코드 검증
-     → next worker 임대 → MCP client가 sub-agent 소환
-     → artifact + 독립 readback 보고 → 품질·다음 단계 판단
-```
-
-- 300은 논리 worker 상한이고 실제 동시 실행 기본값은 8, 최대값은 32입니다.
-- `dispatch.next_actor`, `artifact.quality`, `workflow.next_step`은 공통 Decision Plane을 씁니다.
-- Jev가 없거나 판단이 calibration gate를 못 넘으면 LLM structured fallback이 맡습니다.
-- 외부 효과·되돌릴 수 없는 작업, 만료된 worker, 낮은 품질은 사람 예외 큐로 갑니다.
-- 모든 worker의 독립 readback 전에는 LLM/Jev가 완료라고 해도 완료되지 않습니다.
-
-MCP 도구 흐름은 `runtime_swarm_plan → runtime_swarm_run → runtime_swarm_tick → runtime_swarm_report → runtime_swarm_status`입니다. `tick`이 반환한 작업마다 Hermes·Codex 같은 상위 MCP client가 실제 sub-agent를 소환합니다. 자세한 계약은 [Swarm Mode](docs/swarm-mode.md)에 있습니다.
-
-## 어떻게 서빙되나요?
-
-기본 배포 형태는 이 컴퓨터에서 실행되는 **Node.js stdio MCP 서버**입니다.
-
-```text
-MCP client ──stdin/stdout──> agent-driver mcp
-                               ├─ local SQLite state
-                               ├─ owned browser / CLI / file executor
-                               ├─ Task Pack runtime
-                               └─ Decision Plane (Jev optional)
-```
-
-MCP client가 프로세스를 시작하고 표준입출력으로 도구를 호출합니다. 별도 public port나 중앙 Agent Driver cloud가 필요하지 않습니다. `agent-driver connect`만 최초 승인용 loopback 화면을 열며 외부 네트워크에 bind하지 않습니다.
-
-Hermes를 쓰면 흐름은 `Telegram → Hermes → Agent Driver MCP → agent-owned computer`가 됩니다. Telegram 메시지, LLM 답변, Jev 결과만으로 제출 권한이 생기지는 않습니다.
-
-## Pack family란?
-
-Pack family는 특정 사이트용 매크로가 아니라, 비슷한 업무가 공유하는 **입력·관측·효과·승인·검증 계약**입니다. 사용자가 Pack JSON을 먼저 만들 필요는 없습니다. 자연어 요청은 `runtime_pack_plan`에서 family와 안전 경계로 구조화되고, 검증된 실행 recipe만 재사용됩니다.
-
-| Family | 예시 | 현재 효과 경계 |
-|---|---|---|
-| `research.search` | 여러 출처 검색·비교·근거 포함 순위화 | 읽기 전용 |
-| `portal.collect` | 로그인된 포털 조회·필터·내보내기 | 읽기 + 검증된 로컬 파일 |
-| `form.draft-submit` | 양식 작성 후 제출 직전 검토 | 초안; 제출은 별도 승인 |
-| `record.update` | 기존 레코드 수정 | 현재 snapshot 승인 + readback |
-| `choose.stage` | 상품·옵션·후보 선택 후 장바구니/단계 저장 | 결제·예약·주문 확정 금지 |
-| `inbox.triage` | 메시지 분류와 답장 초안 | 발송·삭제 금지 |
-| `monitor.watch` | 가격·상태를 반복 확인하고 변경 중복 제거 | 로컬 이벤트; 외부 알림은 상위 runtime 담당 |
-| `file.pipeline` | JSON/CSV 필터·변환·병합 | 원본 보존 + 새 파일 출력 |
-
-Pack family 계약은 구현되어 있지만, 처음 보는 임의의 사이트가 한 번의 시도만으로 완전한 재사용 Pack이 되는 범용 자동 학습은 아직 실험적입니다. 자세한 내용은 [Pack catalog](docs/pack-catalog.md)와 [Pack runtime](docs/pack-family-runtime.md)을 참고하세요.
-
-## Jev는 어느 단계에 들어오나요?
-
-Jev는 브라우저를 직접 클릭하는 별도 executor가 아닙니다. 현재 페이지를 코드가 element table이나 JSON/text state로 만들고 후보를 제한한 **뒤**, 실행하기 **직전** Decision Plane에서 typed 판단을 담당합니다.
-
-예를 들어 첫 실행에서 LLM이 `로그인됨 / 인증 대기 / 비밀번호 변경 안내 / 알 수 없음` 상태와 허용 동작을 정의하면, 이후 실행에서는 Jev가 최신 state에서 상태와 target을 빠르게 고릅니다. 선택된 locator의 실제 클릭, 입력, stale 검사와 결과 확인은 코드가 수행합니다. Jev가 낮은 확률을 내거나 후보가 맞지 않으면 재관측하고 LLM 또는 사람에게 넘깁니다.
-
-이는 TypeSafe가 설명하는 System One 사용 방식—typed answer와 probability를 코드의 결정론적 검사와 결합하는 방식—을 따릅니다. [System One 개념](https://docs.typesafe.ai/concepts/system-one)과 [confidence 사용 지침](https://docs.typesafe.ai/confidence)도 참고하세요.
-
-모든 Pack은 공통 Decision Plane을 사용합니다.
-
-- 판단 ID와 위험도별 calibration profile
-- 실제 동작을 바꾸지 않는 shadow provider 비교
-- train/holdout 분리, 오답·불일치·지연 journal
-- 저신뢰 `review/no_match`, LLM·사람 fallback
-- operator만 가능한 profile promote/rollback
-
-실제 TypeSafe provider canary에서는 106회 호출, catalog별 p50 233–252ms, adaptive `stuck` 오답 1건을 기록했습니다. 현재 생성된 profile은 모두 fixture `shadow_only`이며 **production profile 승격은 0건**입니다. Swarm 판단군 역시 production calibration 전에는 같은 보수적 gate를 따릅니다. 자세한 근거는 [Decision Plane](docs/decision-plane.md)과 [alpha.15 readiness](docs/release-readiness-alpha-15.md)에 있습니다.
-
-## 필요한 환경
-
-| 환경 | 현재 지원 수준 | 비고 |
-|---|---|---|
-| Ubuntu 24.04 / Linux x86_64 | **주 검증 환경** | Node CLI, stdio MCP, Linux PTY, owned browser, QEMU/KVM browser VM 경로 검증 |
-| Windows 10/11 + WSL2 Ubuntu 24.04 | **지원·검증됨** | WSL 안에서 Agent Driver를 실행합니다. Windows host의 임의 앱을 직접 조작하는 native executor는 아직 아닙니다. |
-| Windows native | **계약만 구현, 미지원** | Windows guest/UIA protocol은 있으나 production native desktop executor가 없습니다. |
-| macOS | **미검증·미지원** | Node/stdio 호환 가능성만으로 지원을 주장하지 않습니다. native macOS desktop executor와 설치 검증이 없습니다. |
-
-기본 설치에 필요한 것은 다음 두 버전입니다.
-
-- Node.js `22.22.0`
-- npm `11.11.0`
-
-기능에 따라 선택적으로 필요합니다.
-
-- browser 작업: Playwright Chromium (Ubuntu/WSL: `npx playwright install --with-deps chromium`)
-- 전용 Ubuntu browser VM: Linux host의 KVM, `qemu-system-x86_64`, `qemu-img`, `cloud-localds`
-- Telegram·장기 기억·대화 orchestration: Hermes
-- 빠른 typed 판단: TypeSafe/Jev API key
-- coding CLI 작업: 해당 CLI의 기존 설치와 로그인 상태
-
-VM은 host의 Chrome·Windows 앱·clipboard·로그인을 그대로 공유하지 않는 별도 컴퓨터입니다. guest 안에 필요한 앱을 설치하고 로그인해야 합니다. 현재 Ubuntu VM에서 실제로 지원하는 surface는 browser이며, 이는 고보안 malware sandbox를 의미하지 않습니다. [Personal Agent Computer](docs/personal-agent-computer.md)와 [owned Ubuntu VM](docs/owned-ubuntu-browser-vm.md)에서 경계를 확인하세요.
-
-## 설치
-
-Ubuntu 24.04 또는 Windows의 WSL2 Ubuntu 터미널에서 실행합니다.
+직접 설치하려면 Ubuntu 또는 WSL2 Ubuntu 터미널에서 한 번 실행합니다.
 
 ```bash
-git clone https://github.com/deepdivekr/agent-driver.git
-cd agent-driver
-npm ci
-npm run build
-npx playwright install --with-deps chromium
-npm test
-npm link
-agent-driver connect
+curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/main/install.sh | bash
 ```
 
-로컬 화면에서 **이 컴퓨터 연결**을 승인한 뒤 MCP client에 아래 명령 하나를 등록합니다.
+설치기는 사용자 홈 아래에 저장소와 전용 실행 환경을 만들고, Node.js **22.22.0** 배포물의 checksum을 확인한 뒤 npm **11.11.0**, 의존성, 빌드, Playwright Chromium, `agent-driver` 명령을 준비합니다. 기존 비관리 폴더, 심볼릭 링크, 수정된 설치본은 덮어쓰지 않습니다. 원격 스크립트를 먼저 검토하려면 [install.sh](install.sh)를 내려받아 확인한 뒤 실행하세요.
+
+완료되면 관제센터가 자동으로 열립니다. 이후에는 관제센터 하나에서 다음 순서로 진행합니다.
+
+1. 사용할 Codex·Claude Code·OpenCode·Cursor CLI·Hermes가 없으면 공식 설치를 실행합니다.
+2. 설치된 클라이언트의 공식 로그인/Auth를 완료합니다.
+3. 해당 클라이언트에 `agent-driver mcp`를 등록합니다.
+4. 로컬 실행을 승인하고 구독 또는 API 모델, 선택적 Jev를 연결합니다.
+5. 클라이언트나 Hermes에서 자연어로 Task를 요청합니다.
+
+버튼을 누르면 하단 **SETUP TAIL**에 설치·인증·등록 단계만 표시되고 raw CLI 출력과 credential은 남기지 않습니다. 연결 정보는 기본적으로 `~/.agent-driver`에 저장됩니다. 사이트 로그인은 Task가 인증이 필요한 URL을 만났을 때만 해당 작업을 멈추고 요청합니다.
+
+설치와 등록은 사용자가 버튼을 눌렀을 때만 시작합니다. 관리 설치는 공식 HTTPS 원본만 허용하지만 공급자 script의 checksum을 고정하지는 않습니다. 원격 설치 프로그램 실행을 원하지 않으면 화면의 공식 안내를 사용하세요. 자동 등록을 사용할 수 없는 클라이언트의 수동 명령은 다음과 같습니다.
 
 ```text
 agent-driver mcp
 ```
 
-Hermes를 권장 상위 runtime으로 연결하려면:
+JSON 설정을 사용하는 클라이언트에서는 아래와 같습니다.
 
-```bash
-agent-driver hermes configure
-agent-driver hermes doctor
-hermes mcp test agent-driver
+```json
+{
+  "mcpServers": {
+    "agent-driver": {
+      "command": "agent-driver",
+      "args": ["mcp"]
+    }
+  }
+}
 ```
 
-Telegram token과 사용자 allowlist는 Hermes의 공식 `hermes gateway setup`에서만 입력합니다. Agent Driver는 bot token을 저장하지 않습니다. Jev도 첫 설치에서 강제하지 않으며, 실제 workflow가 typed 판단의 이득을 얻을 때 연결합니다. 자세한 최초 흐름은 [first-run UX](docs/first-run.md), 역할과 승인 경계는 [Hermes + Telegram runtime](docs/hermes-telegram-runtime.md)을 참고하세요.
+이 예시는 클라이언트와 서버가 같은 Ubuntu/WSL 환경에서 실행될 때 사용합니다. Windows 앱에서 연결할 때는 MCP 실행 명령을 WSL로 연결해야 합니다. 클라이언트에서 명령을 찾지 못하면 `command`에 실행 파일의 절대 경로를 지정하세요.
 
-## 안전 경계
+MCP에 연결하면 에이전트가 작업 도구를 호출할 수 있습니다. 사용할 사이트와 파일 경로의 접근 범위는 작업에 맞게 설정합니다. Jev API 키는 선택 사항입니다.
 
-- unknown, stale, low-confidence 상태를 성공으로 간주하지 않습니다.
-- 외부 write는 현재 snapshot에 결속된 1회용 사람 승인이 필요합니다.
-- 결제, 예약 확정, 주문 확정, 멤버십 가입, 이메일 발송·삭제는 현재 공개 경계 밖입니다.
-- credential, browser profile, runtime DB와 evidence는 Git에 포함하지 않습니다.
-- 사용자의 foreground Chrome이나 임의 프로세스를 종료하지 않습니다.
+[첫 연결 안내](docs/first-run.md) · [MCP 설정과 도구](docs/agent-interface.md) · [Hermes·Telegram 연결](docs/hermes-telegram-runtime.md)
 
-[Control-plane design](docs/control-plane-design-v0.7.md), [state machine](docs/state-machine.md), [evaluation summary](docs/evaluation-summary.md)에서 설계와 평가 근거를 볼 수 있습니다.
+## 첫 연결
 
-## 개발·검증
+`agent-driver connect`를 실행하면 아래 네 단계가 한 화면에 하나씩 나타납니다.
+
+### 1. 에이전트 설치·로그인·MCP
+
+사용할 클라이언트가 없으면 설치하고, 공식 로그인을 완료한 뒤 `agent-driver mcp`를 등록합니다. 기존의 다른 MCP 설정은 유지합니다.
+
+![클라이언트 설치, 로그인과 MCP 등록 화면](docs/assets/onboarding/01-agent-install-auth.png)
+
+### 2. 로컬 실행
+
+전용 작업 폴더와 로컬 실행 권한을 한 번 승인합니다. Agent Driver는 사용자 마우스와 브라우저를 조작하지 않습니다.
+
+![로컬 실행 승인 화면](docs/assets/onboarding/02-local-runtime.jpg)
+
+### 3. AI
+
+이미 로그인한 클라이언트 구독을 사용하거나 API 키를 연결합니다.
+
+![구독 연결 화면](docs/assets/onboarding/03-ai-subscription.jpg)
+
+- **구독:** MCP sampling, Codex, Claude Code, OpenCode
+- **API:** OpenAI, Anthropic, OpenRouter, OpenAI 호환 서버
+
+API 방식은 공급자·모델·키를 입력하고 연결 확인을 통과해야 저장됩니다.
+
+![API 연결 화면](docs/assets/onboarding/04-ai-api.jpg)
+
+### 4. Jev
+
+Jev는 반복되는 짧은 판단을 빠르게 처리하는 선택 기능입니다. 키가 없으면 LLM이 그대로 판단하므로 건너뛰어도 됩니다.
+
+![Jev 연결 화면](docs/assets/onboarding/05-jev-optional.jpg)
+
+사이트 로그인은 첫 설정에 포함되지 않습니다. Task가 로그인이 필요한 URL을 만났을 때 해당 worker가 멈추고 관제센터에 **사이트 로그인 필요**가 나타납니다.
+
+## Muse·Grok Bot 같은 가상 컴퓨터 제품과의 차이
+
+VM은 공통 기반일 뿐입니다. Muse와 Grok Bot은 공급자가 계속 켜 두는 클라우드 컴퓨터에 자체 채팅, 장기 기억, 알림, 승인, 다중 bot 운영을 묶은 완성형 서비스입니다. Agent Driver는 사용자가 소유한 로컬 실행 환경을 Codex·Claude·Cursor·Hermes 같은 여러 클라이언트에 공통 MCP로 연결합니다.
+
+Agent Driver가 맡는 부분은 Task Pack 실행, LLM·Jev·코드 판단 분리, 중단 후 재개, 중복 효과 방지, 승인과 결과 증거입니다. 대화 기억은 연결한 클라이언트가 소유하며, 현재 호스트가 꺼지면 로컬 작업도 중단됩니다. 선택형 cloud worker와 관제센터 자체 Task 입력·결과함은 아직 제공하지 않습니다. [공식 자료 기반 비교](docs/product-comparison-2026-09-23.md)
+
+## 어떤 작업에 쓰나요?
+
+Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단위입니다. 아래 여덟 종류의 Pack family를 바탕으로 연결된 사이트와 데이터에 맞는 작업을 구성합니다.
+
+| 작업 | 예시 | Pack family |
+|---|---|---|
+| 검색·비교 | 여러 출처를 조사하고 근거 링크와 함께 정리 | `research.search` |
+| 조회·다운로드 | 로그인된 포털에서 기간별 자료 수집 | `portal.collect` |
+| 폼 작성 | 신청서 초안을 채우고 제출 전 검토 | `form.draft-submit` |
+| 정보 수정 | 기존 레코드를 읽고 승인받은 내용 반영 | `record.update` |
+| 후보 선택 | 상품·옵션을 비교하고 장바구니에 담기 | `choose.stage` |
+| 받은 편지 정리 | 메시지 분류와 답장 초안 작성 | `inbox.triage` |
+| 변경 감시 | 가격·상태를 반복 확인하고 변경 기록 | `monitor.watch` |
+| 파일 처리 | CSV·JSON 필터링, 변환, 병합 | `file.pipeline` |
+
+각 사이트의 로그인과 실행 설정이 필요합니다. 검증된 작업 흐름은 다음 실행에서 재사용하며, 새 사이트에 대한 자동 적응은 실험 중입니다. 변경 알림의 외부 전송은 Hermes 같은 상위 에이전트가 담당합니다.
+
+[Pack 목록과 지원 범위](docs/pack-catalog.md)
+
+## 실행 방식
+
+클라이언트가 `agent-driver mcp`를 로컬 프로세스로 시작하고 작업을 요청합니다. Agent Driver는 전용 브라우저, CLI 세션, 허용된 파일 경로에서 실행하고 결과를 다시 읽어 확인합니다. 작업 상태는 로컬 SQLite에 저장해 중단 후 복구에 사용합니다.
+
+| 역할 | 담당 |
+|---|---|
+| LLM | 요청 해석, 작업 계획, 처음 보는 상황 처리 |
+| Jev — 선택 사항 | 화면 상태, 클릭 대상, 결과 품질, 다음 단계 판단 |
+| 코드 | 클릭·입력·파일 처리, 승인 검사, 실행 결과 확인 |
+
+Jev는 현재 상태와 후보를 받아 선택 결과와 확률을 반환합니다. 판단별 검증 기준을 통과한 결과를 실행에 사용하고, 불확실한 경우 LLM이 재검토합니다. 모델에 전달하는 관측 정보는 연결한 제공자의 API로 전송됩니다.
+
+**Swarm Mode**에서는 LLM이 작업을 나누고, 클라이언트가 여러 sub-agent를 병렬 실행합니다. Agent Driver가 작업 배정, 진행 상태, 결과 검증을 관리합니다. 사용하려면 sub-agent 실행을 지원하는 클라이언트가 필요합니다.
+
+[Swarm Mode](docs/swarm-mode.md) · [Jev 판단과 검증](docs/decision-plane.md) · [평가 결과](docs/evaluation-summary.md)
+
+## 실행 환경과 현재 범위
+
+- **지원 환경:** Ubuntu 24.04 / Linux x86_64, Windows + WSL2 Ubuntu. Native Windows·macOS 설치와 데스크톱 앱 제어는 미지원입니다.
+- **브라우저:** Playwright Chromium을 사용합니다. 선택형 Ubuntu VM은 KVM·QEMU가 필요하며, VM 안에서 별도로 로그인합니다.
+- **AI 연결:** MCP sampling이나 Codex·Claude Code·OpenCode 구독을 사용할 수 있습니다. API 방식은 OpenAI, Anthropic, OpenRouter 또는 구조화 출력을 지원하는 OpenAI 호환 서버를 연결할 수 있습니다.
+- **외부 변경:** 폼 제출과 레코드 수정은 변경 내용을 확인한 사람의 승인을 거칩니다.
+- **작업 한도:** 상품은 장바구니, 메시지는 초안까지입니다. 결제·예약 확정·주문·멤버십 가입·이메일 발송·삭제는 지원 범위 밖입니다.
+- **격리:** 전용 브라우저와 VM은 작업 공간을 분리합니다. 악성 코드를 위한 보안 샌드박스로는 검증하지 않았습니다.
+- **개인 계정:** 필요하면 전용 브라우저 프로필을 사용할 수 있습니다. 사이트별 이용 조건과 접근 방식은 사용자가 선택하며 Agent Driver가 특정 API를 강제하지 않습니다.
+
+[Ubuntu VM 설정](docs/owned-ubuntu-browser-vm.md) · [CLI 지원 범위](docs/cli-adapter-matrix.md) · [복구 절차](docs/supervisor-recovery.md)
+
+## 개발
+
+저장소 루트의 Ubuntu/WSL 터미널에서 실행합니다.
 
 ```bash
 npm ci
-npm run build
 npm run test:runtime
 ```
 
-테스트 보고서는 `PASS/FAIL`과 `unit/contract_fake/fixture_integration/native_integration/user_environment` 증거 수준을 분리합니다. fixture 통과를 실제 계정이나 native platform 성공으로 표시하지 않습니다.
+`test:runtime`은 빠른 기본 회귀이며 장시간 soak를 포함하지 않습니다. soak는 필요할 때 `npm run test:runtime:soak`, 전체 묶음은 `npm run test:runtime:full`로 명시 실행합니다.
+
+테스트는 실제 환경 검증과 테스트용 환경 검증을 구분해 기록합니다. 설계와 세부 계약은 [개발 문서](docs/control-plane-design-v0.7.md)를 참고하세요.
 
 ## 라이선스
 
-`main`이 최신 공개 source line입니다. 아직 오픈소스 라이선스를 선택하지 않았으므로 현재 저장소는 평가를 위한 source-visible 상태이며, 별도 재사용 권한을 부여하지 않습니다.
+라이선스 선택 전의 소스 공개 평가판입니다. 별도 재사용 권한은 부여하지 않습니다.

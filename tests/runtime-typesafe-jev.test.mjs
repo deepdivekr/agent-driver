@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {TypeSafeJevDecisionLayer,compileOneLineJevRequest,openAiTargetedLlmExtractorFromHostEnvironment,openAiTargetedLlmRequest,resolveTargetedLlmExtraction,typeSafeTransportFromHostEnvironment} from '../dist/taskpack/typesafe-jev.js';
+import {TypeSafeJevDecisionLayer,compileOneLineJevRequest,openAiTargetedLlmExtractorFromHostEnvironment,openAiTargetedLlmRequest,resolveTargetedLlmExtraction,targetedLlmExtractorFromStructuredModel,typeSafeTransportFromHostEnvironment} from '../dist/taskpack/typesafe-jev.js';
 
 const input={
   request:'이름 김민수와 메모 오후에 다시 연락으로 초안 저장해줘',policy_version:'sampleportal_v1',
@@ -58,4 +58,10 @@ test('runtime OpenAI correction adapter is one-shot, schema-bound, and host-secr
   const raw=await extractor.extract(request);assert.deepEqual(raw,{model:'gpt-5.6-luna',values:{memo:{value:'오후에 다시 연락',start,end:start+'오후에 다시 연락'.length}}});
   assert.equal(calls.length,1);assert.equal(calls[0].url,'https://api.openai.com/v1/responses');assert.equal(calls[0].options.headers.Authorization,'Bearer test-only-safe-host-secret');
   assert.equal(calls[0].options.body.includes('test-only-safe-host-secret'),false);assert.throws(()=>openAiTargetedLlmExtractorFromHostEnvironment({}),/OPENAI_CREDENTIAL_UNAVAILABLE/);
+});
+
+test('runtime Jev correction can use the same provider-neutral structured model as Pack and Swarm',async()=>{
+  const request={request:'도쿄 12월 28일',route_id:'search',fields:[{id:'date',description:'Requested date.'}]},calls=[];let received;
+  const model={calls,async call(purpose,instructions,input,schema){received={purpose,instructions,input,schema};calls.push({model:'openrouter/fixture'});return {values:{date:{value:'12월 28일',start:3,end:10}}};}};
+  const value=await targetedLlmExtractorFromStructuredModel(model).extract(request);assert.equal(value.model,'openrouter/fixture');assert.equal(received.purpose,'correct');assert.deepEqual(received.schema.required,['values']);assert.equal(received.input.request.text,request.request);
 });

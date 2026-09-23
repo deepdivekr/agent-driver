@@ -27,7 +27,7 @@ routes hold without a draft.
 
 ## Narrow LLM complement
 
-Only `NEEDS_EXTRACTION` may use `openAiTargetedLlmExtractorFromHostEnvironment`.
+Only `NEEDS_EXTRACTION` may use `targetedLlmExtractorFromStructuredModel`; it receives the same bounded structured model selected for the runtime.
 It receives the selected route, missing field descriptions, and the original
 one line—not page DOM, screenshots, browser secrets, cookies, or credentials.
 It has no tools, no retry, `store:false`, a strict JSON schema, and low
@@ -47,7 +47,7 @@ selected route, candidate field IDs, status, and elapsed time. Raw task text,
 LLM output text, browser text, cookies, and credentials are excluded.
 
 `typeSafeTransportFromHostEnvironment` requires `TYPESAFE_API_KEY` and
-`openAiTargetedLlmExtractorFromHostEnvironment` requires `OPENAI_API_KEY`.
+`targetedLlmExtractorFromStructuredModel` uses the same configured client/API model as the Pack and Swarm runtime. The legacy `openAiTargetedLlmExtractorFromHostEnvironment` remains for compatibility and requires `OPENAI_API_KEY`.
 Both read the secret at construction; neither accepts it in a task request,
 stores it, or returns provider error bodies. Configure those host secrets
 outside chat. First real use must be a no-write preflight with a benign pack;

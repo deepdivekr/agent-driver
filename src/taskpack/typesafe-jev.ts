@@ -3,6 +3,7 @@ import {choice,noul,TypeSafeClient,type SystemOneRequest} from '@typesafe-ai/sdk
 import {requireCondition} from '../core/contracts.js';
 import {canonicalJson} from './contracts.js';
 import {DecisionPlane,provisionalProfile,type DecisionBinding,type DecisionCatalog} from '../decision-plane/index.js';
+import {type StructuredModel} from './adaptive-spec.js';
 
 const unsupported='UNSUPPORTED',clarify='CLARIFY',notStated='NOT_STATED',notInCandidates='NOT_IN_CANDIDATES';
 const safeId=/^[a-z][a-z0-9_]{0,63}$/u;
@@ -225,20 +226,27 @@ function assertOpenAiOptions(options:OpenAiTargetedLlmOptions){
  * request plus code-owned field names, has no tools, stores no response state, and
  * must return literal spans rather than a synthesized answer.
  */
-export function openAiTargetedLlmRequest(request:TargetedLlmExtractionRequest,model=defaultCorrectionModel){
-  requireCondition(/^[A-Za-z0-9._-]{1,128}$/u.test(model),'INVALID_LLM_MODEL');
+function sourceAnchoredExtractionSchema(request:TargetedLlmExtractionRequest){
   const properties=Object.fromEntries(request.fields.map(field=>[field.id,{
     type:'object',additionalProperties:false,required:['value','start','end'],properties:{
       value:{type:'string',minLength:1,maxLength:8_000},start:{type:'integer',minimum:0},end:{type:'integer',minimum:1},
     },
   }]));
+  return {type:'object',additionalProperties:false,required:['values'],properties:{values:{type:'object',additionalProperties:false,required:request.fields.map(field=>field.id),properties}}};
+}
+export function targetedLlmExtractorFromStructuredModel(model:StructuredModel):TargetedLlmExtractor {
+  return {async extract(request){
+    const value=await model.call('correct','Extract only the requested fields. For each value, return the exact contiguous substring from request.text and its zero-based start and exclusive end offsets. Do not infer, normalize, translate, add a field, select a browser action, or provide explanation.',{request:{text:request.request},route_id:request.route_id,fields:request.fields},sourceAnchoredExtractionSchema(request));
+    const call=model.calls.at(-1);return {model:call?.model??'configured-model',...(value as Record<string,unknown>)};
+  }};
+}
+export function openAiTargetedLlmRequest(request:TargetedLlmExtractionRequest,model=defaultCorrectionModel){
+  requireCondition(/^[A-Za-z0-9._-]{1,128}$/u.test(model),'INVALID_LLM_MODEL');
   return {
     model,reasoning:{effort:'low'},store:false,stream:false,tools:[],max_output_tokens:1_024,
     instructions:'Extract only the requested fields. For each value, return the exact contiguous substring from request.text and its zero-based start and exclusive end offsets. Do not infer, normalize, translate, add a field, select a browser action, or provide explanation.',
     input:JSON.stringify({request:{text:request.request},route_id:request.route_id,fields:request.fields}),
-    text:{format:{type:'json_schema',name:'source_anchored_task_fields',strict:true,schema:{
-      type:'object',additionalProperties:false,required:['values'],properties:{values:{type:'object',additionalProperties:false,required:request.fields.map(field=>field.id),properties}},
-    }}},
+    text:{format:{type:'json_schema',name:'source_anchored_task_fields',strict:true,schema:sourceAnchoredExtractionSchema(request)}},
   };
 }
 function decodeOpenAiExtractionResponse(raw:unknown):unknown {
@@ -273,4 +281,15 @@ export function typeSafeTransportFromHostEnvironment(environment:NodeJS.ProcessE
   const apiKey=environment.TYPESAFE_API_KEY;requireCondition(typeof apiKey==='string'&&apiKey.trim().length>=16,'TYPESAFE_CREDENTIAL_UNAVAILABLE');
   const client=new TypeSafeClient({apiKey,logLevel:'off',retry:{maxRetries:0},timeout:1_500});
   return {systemOne:async(request,options)=>client.systemOne(request,options)};
+}
+
+export type OptionalJevSelection=
+  | {status:'ready';transport:JevSystemOneTransport;reason:'api_key_configured'}
+  | {status:'skipped_not_configured';transport:null;reason:'api_key_absent'};
+/** A missing Jev key is a supported deployment mode. A malformed configured key still fails closed. */
+export function optionalTypeSafeTransportFromHostEnvironment(environment:NodeJS.ProcessEnv=process.env):OptionalJevSelection {
+  const apiKey=environment.TYPESAFE_API_KEY;
+  if(apiKey===undefined||apiKey.trim()==='')return {status:'skipped_not_configured',transport:null,reason:'api_key_absent'};
+  requireCondition(apiKey.trim().length>=16,'TYPESAFE_CREDENTIAL_INVALID');
+  return {status:'ready',transport:typeSafeTransportFromHostEnvironment(environment),reason:'api_key_configured'};
 }
