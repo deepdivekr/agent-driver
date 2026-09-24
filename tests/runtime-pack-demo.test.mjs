@@ -9,10 +9,11 @@ import {BASE_PACK_CATALOG,basePackFamilyById} from '../dist/taskpacks/base-pack-
 import {FORM_DRAFT_SUBMIT_DEMO_CAPABILITY,FORM_DRAFT_SUBMIT_DEMO_INPUT,FORM_DRAFT_SUBMIT_DEMO_PACK,SyntheticFormDraftSubmitBrowserAdapter,normalizeFormDraftSubmit,renderFormDraftSubmitDemo,startSyntheticFormDraftSubmitSite} from '../dist/demo/form-draft-submit-demo.js';
 
 test('runtime contract generic base Pack catalog is user-neutral and keeps write routes approval-bound',()=>{
-  assert.deepEqual(BASE_PACK_CATALOG.map(pack=>pack.id),['research.search','portal.collect','form.draft-submit','record.update','inbox.triage','monitor.watch','file.pipeline','choose.stage']);
+  assert.deepEqual(BASE_PACK_CATALOG.map(pack=>pack.id),['research.search','portal.collect','form.draft-submit','record.update','inbox.triage','monitor.watch','file.pipeline','choose.stage','coding.orchestrate']);
   assert.equal(basePackFamilyById('form.draft-submit')?.approval,'before_external_effect');
   assert.equal(basePackFamilyById('portal.collect')?.effect,'local_file_write');
   assert.equal(basePackFamilyById('choose.stage')?.approval,'before_external_effect');
+  assert.equal(basePackFamilyById('coding.orchestrate')?.effect,'local_file_write');
   assert.equal(JSON.stringify(BASE_PACK_CATALOG).toLowerCase().includes('sampleportal'),false);
   assert.throws(()=>normalizeFormDraftSubmit({...FORM_DRAFT_SUBMIT_DEMO_INPUT,follow_up_at:FORM_DRAFT_SUBMIT_DEMO_INPUT.effective_at}),/FOLLOW_UP_MUST_FOLLOW_EFFECTIVE_TIME/);
 });

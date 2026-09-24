@@ -12,6 +12,7 @@ Agent Driver의 Pack은 사용자가 설치 전에 고르는 메뉴가 아니다
 | `monitor.watch` | 변화 감지·근거 알림 | 후속 행동 자동 시작 금지 |
 | `file.pipeline` | 파일 정리·변환·내용 검증 | 외부 업로드 금지 |
 | `choose.stage` | 비교·장바구니/요청 초안 준비 | 결제·예약 확정 금지 |
+| `coding.orchestrate` | 등록 프로젝트의 CLI 구현·검토·문서·소개문 분업 | 프로젝트별 쓰기·커밋 허용, 정확한 세션 ID, 단계별 검증 |
 
 공통 작업 노드는 `observe → discover/collect → extract → normalize → draft → verify → approve → commit → reconcile`이다. 모든 Pack이 모든 노드를 쓰는 것은 아니다. 특히 `form.draft-submit`과 `record.update`는 `commit` 전에 pre-submit snapshot과 task-bound single-use approval을 요구한다.
 
@@ -55,7 +56,7 @@ Jev는 선택 사항이며 **상태 확인 전용으로 제한하지 않는다**
 
 ## 현재 범위
 
-8개 family는 `agent-driver mcp`의 공통 `runtime_pack_*` 도구로 노출된다. 파일·HTTP GET·검토된 브라우저 표 소스, 검토된 브라우저 쓰기 대상이 host 설정에 연결되어야 실제 실행할 수 있다. 연결되지 않은 사이트를 recipe만으로 임의 조작하지 않는다. 읽기 결과·로컬 내보내기·변화 event·답변 초안은 각각 근거/hash/unknown을 남긴다. write family는 기존 durable snapshot·single-use approval·독립 readback을 재사용하며 MCP에는 승인 토큰이나 승인 도구가 없다.
+기존 8개 웹·데이터 family는 `agent-driver mcp`의 공통 `runtime_pack_*` 도구로 노출된다. `coding.orchestrate`는 별도의 `runtime_coding_*` 경로에서 등록 Git 프로젝트와 공식 CLI를 사용한다. 파일·HTTP GET·검토된 브라우저 표 소스, 검토된 브라우저 쓰기 대상이 host 설정에 연결되어야 실제 실행할 수 있다. 연결되지 않은 사이트를 recipe만으로 임의 조작하지 않는다. 읽기 결과·로컬 내보내기·변화 event·답변 초안은 각각 근거/hash/unknown을 남긴다. 웹 write family는 기존 durable snapshot·single-use approval·독립 readback을 재사용하며 MCP에는 승인 토큰이나 승인 도구가 없다.
 
 `monitor.watch`는 MCP runtime이 살아 있는 동안 30초 tick과 명시적 tick을 제공하고, 재시작 뒤 SQLite 기준값을 이어간다. 알림은 로컬 event까지이며 Telegram·메일 발송은 승인된 외부 오케스트레이터가 맡는다. write Pack은 loopback 검토 화면을 기본 브라우저에 열고 제출 직전 캡처와 snapshot을 보여 준다. URL·CSRF·approval token은 MCP에 반환하지 않는다. 실제 Windows/WSL/macOS/Linux 기본 브라우저 launcher의 사용자 환경 검증, OS 상주 자동시작, 처음 보는 사이트를 adaptive loop에서 자동으로 concrete source/target 연결로 승격하는 UX는 아직 별도 통합 작업이다.
 

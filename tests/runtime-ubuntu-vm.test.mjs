@@ -4,10 +4,13 @@ import {createHash} from 'node:crypto';
 import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {downloadVerifiedVmImage,inspectUbuntuBrowserVm,launchUbuntuBrowserVm,provisionUbuntuBrowserVm,ubuntuBrowserCloudInit,ubuntuBrowserNetworkConfig,ubuntuBrowserVmDevtoolsBridgePort,ubuntuBrowserVmLaunchArgs,ubuntuBrowserVmPaths,validateUbuntuBrowserVmSpec} from '../dist/isolation/ubuntu-browser-vm.js';
+import {downloadVerifiedVmImage,inspectUbuntuBrowserVm,launchUbuntuBrowserVm,provisionUbuntuBrowserVm,ubuntuBrowserCloudInit,ubuntuBrowserNetworkConfig,ubuntuBrowserVmDefaults,ubuntuBrowserVmDevtoolsBridgePort,ubuntuBrowserVmLaunchArgs,ubuntuBrowserVmPaths,validateUbuntuBrowserVmSpec} from '../dist/isolation/ubuntu-browser-vm.js';
 import {OwnedVmCdpPage} from '../dist/taskpack/owned-playwright.js';
 
 const readyHost={platform:'linux',async canUseKvm(){return true;}};
+test('runtime default Ubuntu browser VM fits the verified 3 GiB boot profile',()=>{
+  assert.equal(ubuntuBrowserVmDefaults.memory_mib,3072);
+});
 async function setup(t){
   const root=await mkdtemp(join(tmpdir(),'agent-driver-vm-')),base=join(root,'ubuntu-base.qcow2');await writeFile(base,'verified synthetic base image');
   t.after(async()=>{await rm(root,{recursive:true,force:true});});

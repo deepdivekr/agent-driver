@@ -68,7 +68,7 @@ export type MutationRecipe=Extract<Recipe,{family:'form.draft-submit'|'record.up
 export const packTools={
   runtime_pack_catalog:{schema:z.object({}).strict(),implemented:true,readOnly:true},
   runtime_pack_plan:{schema:z.object({prompt:common.request}).strict(),implemented:true,readOnly:true},
-  runtime_pack_run:{schema:z.object({request_id:key,recipe:recipeSchema}).strict(),implemented:true,readOnly:false},
+  runtime_pack_run:{schema:z.object({request_id:key,work_id:z.string().uuid().optional(),recipe:recipeSchema}).strict(),implemented:true,readOnly:false},
   runtime_pack_status:{schema:z.object({run_id:key}).strict(),implemented:true,readOnly:true},
   runtime_pack_execute_approved:{schema:z.object({run_id:key}).strict(),implemented:true,readOnly:false},
   runtime_pack_watch_tick:{schema:z.object({}).strict(),implemented:true,readOnly:false},

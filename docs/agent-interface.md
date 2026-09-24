@@ -4,6 +4,8 @@
 
 CLI와 stdio MCP는 같은 RuntimeApi를 사용한다. 이후 Pack family와 `runtime_channel_route`가 추가되어 고정 개수 대신 MCP `tools/list`의 실제 목록을 기준으로 한다. 조회/인계 계약은 [별도 안내](terminal-handoff.md), 저장 상태·계획·정리·죽은 owner 예약 회수는 [저장 경계](storage-boundaries.md), Hermes/Telegram 경계는 [Hermes + Telegram runtime](hermes-telegram-runtime.md)을 따른다.
 
+Phase 79의 `coding.orchestrate`는 등록 Git 프로젝트에 한정한다. `runtime_coding_projects`로 alias와 Codex/Claude 연결을 확인하고, 명시적인 “마지막 업무 이어가기”에는 `runtime_coding_last`를 먼저 조회한다. 신규 업무는 `runtime_work_start → runtime_coding_start → runtime_coding_step` 순서로 진행하고, 단계마다 `runtime_coding_status`의 revision·영수증을 확인한다. 일시정지·재개는 `runtime_coding_pause`, 만료된 쓰기 소유권 확인은 `runtime_coding_reconcile`이다. 자세한 권한·실행 범위는 [코딩 업무 안내](coding-orchestration.md)를 따른다.
+
 사용 가능: health, capabilities list/describe, task start/status/cancel/resume, recovery status/prepare, artifacts list(미지원/빈 목록 명시), events read/ack, intake. resume/prepare는 안전하게 준비된 미전송 작업에만 적용한다.
 
 terminal start/status/submit_prompt/resume/interrupt는 명시적으로 설정된 Linux Claude 구조화 세션에서 동작한다. 기본 CLI 내장 파일/shell 도구는 차단하며 `terminal.files`가 명시된 host에서만 runtime broker를 사용할 수 있다. [CLI adapter 근거표](cli-adapter-matrix.md)를 먼저 확인한다. 명시적 `NOT_IMPLEMENTED`: browser session open/status. 최상위 `verify`, `soak`, `ops` CLI 역시 미구현이며 help에 표시한다(`terminal verify`와 구분). 이 목록을 MCP 완전 구현이나 공식 릴리즈 완료라고 부르지 않는다.
@@ -34,7 +36,7 @@ node dist/cli.js mcp --config .runtime/lab-01/host.json
 
 마지막 명령은 MCP 클라이언트가 시작할 프로세스다. 일반 대화형 프롬프트를 읽지 않으며 JSON-RPC만 처리한다. Hermes는 `agent-driver hermes configure`가 현재 Node executable과 절대 `dist/cli.js` 경로를 보존적으로 등록한다. Phase 36에서 공식 Hermes CLI의 실제 stdio 연결·도구 발견을 검증했으며, Telegram end-to-end 실행은 유효한 secret과 model auth를 갖춘 별도 user-environment 검증이다.
 
-원문 한 줄만 전달하면 `NEEDS_EXTRACTION`과 좁은 인수 질문을 돌려준다. 호출 agent가 자신의 모델로 추출한 `name`, `note` 값과 UTF-16 `[start,end)` 원문 범위를 proposal로 전달하면 범위를 검증한다. 결과는 항상 `dispatch_allowed=false`; 범위 일치는 사용자 의도의 의미적 정답을 보장하지 않는다. 창작/다중 작업/모호한 지시/빠진 값은 호출 agent가 확인하며 지원 부분만 임의 실행하지 않는다. 사용자는 state/question을 작성하지 않는다. Jev/Luna API 연결·모델 sampling은 현재 제품 경로에 없다.
+원문 한 줄만 전달하면 `NEEDS_EXTRACTION`과 좁은 인수 질문을 돌려준다. 호출 agent가 자신의 모델로 추출한 `name`, `note` 값과 UTF-16 `[start,end)` 원문 범위를 proposal로 전달하면 범위를 검증한다. 결과는 항상 `dispatch_allowed=false`; 범위 일치는 사용자 의도의 의미적 정답을 보장하지 않는다. 창작/다중 작업/모호한 지시/빠진 값은 호출 agent가 확인하며 지원 부분만 임의 실행하지 않는다. 사용자는 state/question을 작성하지 않는다. 이 설명은 위 합성 fixture의 인수 추출에 한정한다. 현재 Work 접수와 AI 연결에는 MCP sampling·API 및 선택형 Jev가 별도로 제공되며, 이 fixture의 `dispatch_allowed=false`가 해당 기능의 부재를 뜻하지 않는다.
 
 실행은 기존 host 위임 안에서 별도 `runtime_task_start` 요청을 사용한다:
 

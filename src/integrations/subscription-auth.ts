@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {delimiter,isAbsolute,join} from 'node:path';
 import {hashJson,type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {requireCondition} from '../core/contracts.js';
+import {classifyClientFailure,handoffContext,type ClientRouteEvent,type HandoffClient,type HandoffReason} from './client-handoff.js';
 
 export type SubscriptionClientId='codex'|'claude'|'opencode'|'cursor'|'hermes';
 export interface SubscriptionClientStatus {
@@ -43,7 +44,7 @@ export const nativeProcessRunner:SafeProcessRunner={run(request){
     const child=spawn(request.executable,request.args,{cwd:request.cwd,env:executableEnvironment(),shell:false,windowsHide:true,stdio:['pipe','pipe','pipe'],signal:request.signal});
     let stdout='',stderr='',settled=false;
     let timer:NodeJS.Timeout;
-    const fail=(error:Error)=>{if(!settled){settled=true;clearTimeout(timer);reject(error);}};
+    const fail=(error:Error)=>{if(!settled){settled=true;clearTimeout(timer);child.kill('SIGKILL');reject(error);}};
     const append=(current:string,chunk:Buffer)=>{const next=current+chunk.toString('utf8');if(Buffer.byteLength(next)>outputLimit){child.kill('SIGKILL');throw Error('CLIENT_OUTPUT_TOO_LARGE');}return next;};
     child.stdout.on('data',(chunk:Buffer)=>{try{stdout=append(stdout,chunk);request.onStdout?.(chunk.toString('utf8'));}catch(error){fail(error as Error);}});
     child.stderr.on('data',(chunk:Buffer)=>{try{stderr=append(stderr,chunk);request.onStderr?.(chunk.toString('utf8'));}catch(error){fail(error as Error);}});
@@ -225,21 +226,23 @@ async function invokeCli(id:Exclude<SubscriptionClientId,'hermes'>,environment:N
   try{
     if(id==='codex'){
       const schemaPath=join(root,'schema.json');await writeFile(schemaPath,JSON.stringify(codexTransportSchema(schema)),{mode:0o600});
-      const result=await runner.run({executable,args:['exec','--json','--skip-git-repo-check','--ephemeral','--ignore-user-config','--ignore-rules','--sandbox','read-only','--output-schema',schemaPath,'-'],stdin:text,cwd:root,timeout_ms:60_000});
-      requireCondition(result.code===0,'CLIENT_MODEL_UNAVAILABLE');return {value:codexOutput(result.stdout),model:'codex-subscription'};
+      const selected=environment.AGENT_DRIVER_CODEX_MODEL;
+      const result=await runner.run({executable,args:[...(selected?['--model',selected]:[]),'exec','--json','--skip-git-repo-check','--ephemeral','--ignore-user-config','--ignore-rules','--sandbox','read-only','--output-schema',schemaPath,'-'],stdin:text,cwd:root,timeout_ms:60_000});
+      if(result.code!==0)throw Error(`CLIENT_${classifyClientFailure(result.stderr||result.stdout).toUpperCase()}`);return {value:codexOutput(result.stdout),model:selected??'client_default'};
     }
     if(id==='claude'){
-      const result=await runner.run({executable,args:['-p','--output-format','json','--json-schema',JSON.stringify(schema),'--tools','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--setting-sources','','--settings','{"disableAllHooks":true}','--disable-slash-commands','--no-chrome','--permission-mode','dontAsk','--no-session-persistence'],stdin:text,cwd:root,timeout_ms:120_000});
-      requireCondition(result.code===0,'CLIENT_MODEL_UNAVAILABLE');return {value:claudeOutput(result.stdout),model:'claude-subscription'};
+      const selected=environment.AGENT_DRIVER_CLAUDE_MODEL,transportSchema=structuredClone(schema);delete transportSchema.$schema;
+      const result=await runner.run({executable,args:['-p',...(selected?['--model',selected]:[]),'--output-format','json','--json-schema',JSON.stringify(transportSchema),'--tools','','--strict-mcp-config','--mcp-config','{"mcpServers":{}}','--setting-sources','','--settings','{"disableAllHooks":true}','--disable-slash-commands','--no-chrome','--permission-mode','dontAsk','--no-session-persistence'],stdin:text,cwd:root,timeout_ms:120_000});
+      if(result.code!==0)throw Error(`CLIENT_${classifyClientFailure(result.stderr||result.stdout).toUpperCase()}`);return {value:claudeOutput(result.stdout),model:selected??'client_default'};
     }
     if(id==='opencode'){
       await writeFile(join(root,'opencode.json'),JSON.stringify({permission:{'*':'deny'},share:'disabled'}),{mode:0o600});
       const model=environment.AGENT_DRIVER_OPENCODE_MODEL,args=['run','--format','json',...(model?['--model',model]:[]),text];
       const result=await runner.run({executable,args,cwd:root,timeout_ms:120_000});
-      requireCondition(result.code===0,'CLIENT_MODEL_UNAVAILABLE');return {value:opencodeOutput(result.stdout),model:model??'opencode-configured'};
+      if(result.code!==0)throw Error(`CLIENT_${classifyClientFailure(result.stderr||result.stdout).toUpperCase()}`);return {value:opencodeOutput(result.stdout),model:model??'client_default'};
     }
     const result=await runner.run({executable,args:['-p','--output-format','json'],stdin:text,cwd:root,timeout_ms:60_000});
-    requireCondition(result.code===0,'CLIENT_MODEL_UNAVAILABLE');return {value:cursorOutput(result.stdout),model:'cursor-subscription'};
+    if(result.code!==0)throw Error(`CLIENT_${classifyClientFailure(result.stderr||result.stdout).toUpperCase()}`);return {value:cursorOutput(result.stdout),model:'client_default'};
   }finally{await rm(root,{recursive:true,force:true});}
 }
 
@@ -260,7 +263,7 @@ export class McpSamplingStructuredModel implements StructuredModel{
 }
 
 export interface SubscriptionAwareModelOptions {
-  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';
+  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';onHandoff?:(event:ClientRouteEvent)=>void;
 }
 export class SubscriptionAwareStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];private statuses=new Map<SubscriptionClientId,{value:SubscriptionClientStatus;observed_at:number}>();
@@ -277,20 +280,23 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
   }
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
     const environment=this.options.environment??process.env,preferred=environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor','api'];
+    let failed:{client:HandoffClient;model:string;reason:HandoffReason}|null=null;
+    const transferred=(target:HandoffClient,targetModel:string)=>{if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target,source_model:failed.model,target_model:targetModel,reason:failed.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
     for(const id of preferred){
       try{
-        if(id==='mcp'&&this.options.sampling){const value=await this.options.sampling.call(purpose,instructions,input,schema);this.calls.push(this.options.sampling.calls.at(-1)!);return value;}
+        if(id==='mcp'&&this.options.sampling){const value=await this.options.sampling.call(purpose,instructions,input,schema);this.calls.push(this.options.sampling.calls.at(-1)!);transferred('mcp',this.options.sampling.calls.at(-1)?.model??'client_default');return value;}
         if(['codex','claude','opencode','cursor'].includes(id)){
           const client=id as Exclude<SubscriptionClientId,'hermes'>,state=await this.clientStatus(client);
-          if(state?.status!=='ready'||!state.structured_bridge)continue;
-          const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let accepted=false,model=client+'-subscription';
-          try{const result=await invokeCli(client,environment,this.options.runner??nativeProcessRunner,instructions,input,schema);model=result.model;accepted=true;return result.value;}
-          catch(error){this.statuses.delete(client);throw error;}
-          finally{this.calls.push({purpose,provider:client,auth:'subscription',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:'invalid_output'})});}
+          if(state?.status!=='ready'||!state.structured_bridge){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:state?.status==='expired'||state?.status==='signed_out'?'auth_expired':'provider_unavailable'};continue;}
+          const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let accepted=false,model=client+'-subscription',failureKind:ModelCall['failure_kind']='invalid_output';
+          try{const result=await invokeCli(client,environment,this.options.runner??nativeProcessRunner,instructions,input,schema);model=result.model;accepted=true;transferred(client,model);return result.value;}
+          catch(error){this.statuses.delete(client);const reason=classifyClientFailure(error);failureKind=reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='provider_unavailable'?'provider_unavailable':'incomplete';failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason};throw error;}
+          finally{this.calls.push({purpose,provider:client,auth:'subscription',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
         }
-        if(id==='api'&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);this.calls.push(this.options.fallbackModel.calls.at(-1)!);return value;}
-      }catch{continue;}
+        if(id==='api'&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);transferred('api',last.model);return value;}
+      }catch(error){if(!failed&&id==='mcp')failed={client:'mcp',model:'client_default',reason:classifyClientFailure(error)};continue;}
     }
+    if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target:null,source_model:failed.model,target_model:null,reason:failed.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
     throw Error('STRUCTURED_MODEL_UNAVAILABLE');
   }
 }

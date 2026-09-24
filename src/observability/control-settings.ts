@@ -8,6 +8,7 @@ import {approveNonInterferingConnection,localConnectionPaths,readLocalConnection
 import {ClientBootstrapController} from '../onboarding/client-bootstrap.js';
 import {McpRegistrationController,type McpRegistrationClient} from '../onboarding/mcp-registration.js';
 import {effectiveModelEnvironment,modelSettingsFingerprint,modelSettingsPath,previewModelSettings,publicModelSettings,readModelSettings,saveModelSettings,type ApiVerification} from '../onboarding/model-settings.js';
+import {apiModelCatalog,claudeModelCatalog,codexModelCatalog,opencodeModelCatalog} from '../onboarding/model-catalog.js';
 import {SetupActivityStream} from '../onboarding/setup-activity.js';
 import {settingsHtml} from './settings-ui.js';
 
@@ -27,6 +28,7 @@ export class ControlSettings{
         else if(suffix==='settings/status')send(200,this.status());
         else if(suffix==='settings/mcp')send(200,await this.mcp.view());
         else if(suffix==='settings/bootstrap')send(200,{...this.bootstrap.view(),connections:await this.auth.connections()});
+        else if(suffix==='settings/models'){const [codex,opencode]=await Promise.all([codexModelCatalog(),opencodeModelCatalog(this.environment)]);send(200,{codex,claude:claudeModelCatalog(),opencode});}
         else if(suffix==='settings/activity'){this.activity.attach(response);return true;}
         else if(suffix==='settings/flows')send(200,{flows:['codex','claude','opencode','cursor','hermes'].map(id=>this.auth.view(id as 'codex'|'claude'|'opencode'|'cursor'|'hermes'))});
         else send(404,{error:'NOT_FOUND'});return true;
@@ -37,7 +39,15 @@ export class ControlSettings{
       this.busy=true;
       try{
         const body=await readBody(request);
-        if(suffix==='settings/provider-probe'){
+        if(suffix==='settings/models'){
+          const value=body&&typeof body==='object'?body as Record<string,unknown>:{};
+          if(!['openai','anthropic','openrouter','openai_compatible'].includes(String(value.provider))){send(400,{error:'MODEL_PROVIDER_INVALID'});return true;}
+          const saved=readModelSettings(this.path),provider=value.provider as 'openai'|'anthropic'|'openrouter'|'openai_compatible';
+          const inputKey=typeof value.api_key==='string'?value.api_key:null;
+          const key=inputKey??(saved?.selection.api_provider===provider?effectiveModelEnvironment(saved,this.environment).AGENT_DRIVER_API_KEY:undefined)??'';
+          const base=provider==='openai_compatible'&&typeof value.api_base_url==='string'?value.api_base_url:saved?.selection.api_base_url??'';
+          send(200,await apiModelCatalog(provider,key,base,this.fetcher));
+        }else if(suffix==='settings/provider-probe'){
           await this.activity.record('ai','running','API 공급자 연결을 확인하는 중입니다.');
           const input=body&&typeof body==='object'?{...(body as Record<string,unknown>)}:{};delete input.setup_area;
           const proposed=previewModelSettings(this.path,input,this.environment);if(proposed.selection.mode!=='api'){send(400,{error:'MODEL_PROVIDER_PROBE_NOT_APPLICABLE'});return true;}
@@ -67,13 +77,21 @@ export class ControlSettings{
         }else if(suffix==='settings/client/install'){
           const value=body as {client?:unknown};if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))){send(400,{error:'CLIENT_INSTALL_TARGET_INVALID'});return true;}
           const client=value.client as McpRegistrationClient,name=({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor CLI',hermes:'Hermes'} as const)[client];
-          const result=await this.bootstrap.install(client,async stage=>{const message=stage==='downloading'?`${name} 공식 설치 프로그램을 내려받는 중입니다.`:stage==='running'?`${name} 공식 설치 프로그램을 실행하는 중입니다.`:`${name} 설치를 확인하는 중입니다.`;await this.activity.record('setup',stage==='verifying'?'running':'running',message);});
-          await this.activity.record('setup','success',`${name} 설치를 확인했습니다.`);send(200,result);
+          const started=Date.now();
+          const result=await this.bootstrap.install(client,async(stage,observation)=>{
+            const message=stage==='downloading'?`${name} 공식 설치 프로그램 다운로드 시작`
+              :stage==='downloaded'?`${name} 설치 파일 검증 완료 · ${observation?.byte_count??'미관측'}바이트`
+              :stage==='running'?`${name} 설치 프로그램 실행 시작`
+              :stage==='installer_exited'?`${name} 설치 프로그램 종료 코드 ${observation?.exit_code??'미관측'} · ${observation?.elapsed_ms===undefined?'시간 미관측':((observation.elapsed_ms)/1000).toFixed(1)+'초'}`
+              :`${name} 실행 파일 탐지 중`;
+            await this.activity.record('setup',stage==='installer_exited'&&observation?.exit_code!==0?'error':stage==='downloaded'||stage==='installer_exited'?'success':'running',message);
+          });
+          await this.activity.record('setup','success',`${name} 설치 확인 완료 · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
         }else if(suffix==='settings/mcp/register'){
           const value=body as {client?:unknown};if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))){send(400,{error:'MCP_CLIENT_INVALID'});return true;}
           const name=({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor',hermes:'Hermes'} as const)[value.client as McpRegistrationClient];
-          await this.activity.record('mcp','running',`$ ${name}에 agent-driver mcp 등록`);
-          const result=await this.mcp.register(value.client as McpRegistrationClient);await this.activity.record('mcp','success',`${name} MCP 등록을 마쳤습니다.`);send(200,result);
+          await this.activity.record('mcp','running',`${name}에 agent-driver mcp 등록 요청`);
+          const started=Date.now(),result=await this.mcp.register(value.client as McpRegistrationClient);await this.activity.record('mcp','success',`${name} MCP 등록 완료 · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
         }else if(suffix==='settings/computer'){
           if(this.connection().kind!=='local'||!body||typeof body!=='object'||(body as {mode?:unknown}).mode!=='non_interfering'){send(400,{error:'INVALID_COMPUTER_CONNECTION'});return true;}
           await this.activity.record('runtime','running','전용 작업 폴더와 로컬 실행 권한을 준비하는 중입니다.');await approveNonInterferingConnection(dirname(this.config.path));await this.activity.record('runtime','success','로컬 실행 연결을 승인했습니다.');send(200,this.status());

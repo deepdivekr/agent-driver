@@ -142,7 +142,7 @@ for (const [mode, reason] of [['wrong-session', 'CLI_SESSION_MISMATCH'], ['no-ac
   test(`runtime fixture terminal ${mode} stops and preserves uncertain turn without fake completion`, async t => {
     const x = await setup(t, {spool_bytes: 65536}), id = await session(x); await writeFile(join(x.root, 'mode.txt'), mode);
     await x.api.call('runtime_terminal_submit_prompt', request(x, id, mode));
-    await until(x, () => !!x.api.store.session(id).error_code);
+    await until(x, () => !!x.api.store.session(id).error_code, mode==='flood'?30000:7000);
     const snapshot = x.api.store.session(id); assert.equal(snapshot.state, 'reconciliation_required'); assert.equal(snapshot.error_code, reason); assert.equal(snapshot.last_turn_id, null);
     if(mode==='flood')assert.ok(snapshot.spool_bytes<=x.config.terminal.spool_bytes,'durable output exceeds the configured quota');
     assert.equal((await received(x)).length, 1);

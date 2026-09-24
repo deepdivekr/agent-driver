@@ -17,7 +17,7 @@ export const adaptiveSpecSchema=z.object({
 }).strict();
 export type AdaptiveSpec=z.infer<typeof adaptiveSpecSchema>;
 export interface AdaptiveTask {request:string;start_url:string;allowed_origins:string[];}
-export interface ModelCall {purpose:'design'|'repair'|'correct';provider?:string;auth?:'client_subscription'|'subscription'|'api_key'|'unknown';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;input_tokens:number|'unobserved';output_tokens:number|'unobserved';total_tokens:number|'unobserved';failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode';}
+export interface ModelCall {purpose:'design'|'repair'|'correct';provider?:string;auth?:'client_subscription'|'subscription'|'api_key'|'unknown';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;input_tokens:number|'unobserved';output_tokens:number|'unobserved';total_tokens:number|'unobserved';failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode'|'auth_error'|'quota_exhausted'|'rate_limited'|'provider_unavailable';}
 export interface StructuredModel {
   call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>):Promise<unknown>;
   calls:ModelCall[];

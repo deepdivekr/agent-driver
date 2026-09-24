@@ -83,12 +83,12 @@ function usage(raw:unknown){
 export function structuredModelFromEnvironment(environment:NodeJS.ProcessEnv=process.env,fetcher:typeof fetch=fetch):StructuredModel{
   const config=apiProviderConfigFromEnvironment(environment),calls:ModelCall[]=[];
   return {calls,async call(purpose,instructions,input,schema){
-    const started=performance.now(),input_sha256=hashJson({instructions,input,schema}),prepared=request(config,instructions,input,schema,purpose);let accepted=false,httpStatus:number|undefined,rawUsage:unknown;
+    const started=performance.now(),input_sha256=hashJson({instructions,input,schema}),prepared=request(config,instructions,input,schema,purpose);let accepted=false,httpStatus:number|undefined,rawUsage:unknown,failureKind:ModelCall['failure_kind']='network';
     try{
       const response=await fetcher(endpoint(config),{method:'POST',redirect:'error',headers:{'content-type':'application/json',...prepared.headers},body:JSON.stringify(prepared.body),signal:AbortSignal.timeout(60_000)});
-      httpStatus=response.status;requireCondition(response.ok,'MODEL_PROVIDER_HTTP_FAILURE');const decoded=decode(config,await response.json());rawUsage=decoded.usage;accepted=true;return decoded.value;
-    }catch(error){if(error instanceof Error&&error.message==='MODEL_PROVIDER_RESPONSE_INVALID')throw error;throw Error('MODEL_PROVIDER_UNAVAILABLE');}
-    finally{calls.push({purpose,provider:config.provider,auth:'api_key',model:config.model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',...(httpStatus===undefined?{}:{http_status:httpStatus}),...usage(rawUsage),...(accepted?{}:{failure_kind:'network'})});}
+      httpStatus=response.status;if(!response.ok)failureKind='http_error';requireCondition(response.ok,'MODEL_PROVIDER_HTTP_FAILURE');const decoded=decode(config,await response.json());rawUsage=decoded.usage;accepted=true;return decoded.value;
+    }catch(error){if(error instanceof Error&&error.message==='MODEL_PROVIDER_RESPONSE_INVALID'){failureKind='invalid_output';throw error;}throw Error('MODEL_PROVIDER_UNAVAILABLE');}
+    finally{calls.push({purpose,provider:config.provider,auth:'api_key',model:config.model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',...(httpStatus===undefined?{}:{http_status:httpStatus}),...usage(rawUsage),...(accepted?{}:{failure_kind:failureKind})});}
   }};
 }
 export async function probeStructuredModel(environment:NodeJS.ProcessEnv,fetcher:typeof fetch=fetch){

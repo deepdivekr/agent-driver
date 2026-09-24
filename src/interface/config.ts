@@ -27,6 +27,9 @@ const ObservabilityConfigSchema=z.object({
 }).strict();
 export type ControlSurface=z.infer<typeof VncSurfaceSchema>|z.infer<typeof BrowserSurfaceSchema>;
 export type ObservabilityConfig=z.infer<typeof ObservabilityConfigSchema>;
+const CodingProjectSchema=z.object({id:identifier,root:z.string().min(1),allow_write:z.boolean().default(false),allow_commit:z.boolean().default(false),verify:z.array(z.object({executable:z.string().min(1),args:z.array(z.string()).max(20),timeout_ms:z.number().int().min(1000).max(600000)}).strict()).max(5).default([])}).strict();
+const CodingConfigSchema=z.object({projects:z.array(CodingProjectSchema).min(1).max(20),model_data_approved:z.boolean().default(false)}).strict();
+export type CodingConfig=z.infer<typeof CodingConfigSchema>;
 export const HostConfigSchema=z.object({
   schema_version:z.literal(1), project_id:identifier, caller_ref:identifier,
   account_ref:identifier, worktree:z.string().min(1), data_dir:z.string().min(1),
@@ -39,6 +42,7 @@ export const HostConfigSchema=z.object({
   packs:packPolicySchema.optional(),
   swarm:swarmPolicySchema.optional(),
   observability:ObservabilityConfigSchema.optional(),
+  coding:CodingConfigSchema.optional(),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
@@ -50,6 +54,7 @@ export interface HostConfig {
   packs:PackPolicy|null;
   swarm:SwarmPolicy|null;
   observability:ObservabilityConfig|null;
+  coding:CodingConfig|null;
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
@@ -101,7 +106,14 @@ export function loadHostConfig(path:string):HostConfig {
       const url=new URL(surface.endpoint);requireCondition(url.protocol==='http:'&&url.hostname==='127.0.0.1'&&url.port!==''&&!url.username&&!url.password&&!url.search&&!url.hash,'CONTROL_SURFACE_LOOPBACK_REQUIRED');
     }
   }
-  const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,
-    fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
+  const coding=raw.coding?{...raw.coding,projects:raw.coding.projects.map(item=>{
+    requireCondition(isAbsolute(item.root),'CODING_PROJECT_ABSOLUTE_ROOT_REQUIRED');
+    const root=realpathSync(item.root),entry=statSync(root);requireCondition(entry.isDirectory(),'CODING_PROJECT_DIRECTORY_REQUIRED');
+    for(const check of item.verify)requireCondition(isAbsolute(check.executable),'CODING_VERIFY_ABSOLUTE_EXECUTABLE_REQUIRED');
+    return {...item,root};
+  })}:null;
+  if(coding){requireCondition(new Set(coding.projects.map(item=>item.id)).size===coding.projects.length,'CODING_PROJECT_DUPLICATE');requireCondition(coding.projects.every(item=>!item.allow_commit||item.allow_write),'CODING_COMMIT_REQUIRES_WRITE');}
+  const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(coding?['coding.orchestrate']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
+  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,coding,
+    fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,coding,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
 }

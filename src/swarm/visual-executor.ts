@@ -1,12 +1,10 @@
-import {randomBytes,randomUUID} from 'node:crypto';
-import {createServer,type Server} from 'node:http';
+import {randomUUID} from 'node:crypto';
 import {lookup} from 'node:dns/promises';
 import {isIP} from 'node:net';
 import {chromium,type Browser,type BrowserContext,type Page} from 'playwright';
 import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {type PackStore} from '../packs/store.js';
-import {type SurfaceFrame} from '../observability/surfaces.js';
 import {type SwarmRunSnapshot} from './contracts.js';
 import {sanitizeSwarmEndpoint} from './dashboard.js';
 import {authSite,authSites,connectOwnedBrowser,detectAuthGate,setSiteAuth} from './browser-auth.js';
@@ -14,7 +12,7 @@ import {assertAutomatedBrowserAllowed} from './account-browser-policy.js';
 
 export type VisualCommand={action:'navigate';url:string}|{action:'observe'}|{action:'scroll';direction:'up'|'down'};
 export interface VisualObservation {surface_id:string;url:string;title:string;text:string;links:Array<{text:string;url:string}>;captured_at:string;}
-interface Slot {id:string;run:string;worker:string;lease:string;context:BrowserContext;page:Page;links:Set<string>;steps:number;frame:SurfaceFrame|null;capturing:Promise<void>|null;busy:boolean;closed:boolean;}
+interface Slot {id:string;run:string;worker:string;lease:string;context:BrowserContext;page:Page;links:Set<string>;steps:number;busy:boolean;closed:boolean;}
 interface VisualOptions {max_contexts?:number;frame_interval_ms?:number;/** Native fixture only; production never permits loopback pages or injected owned browsers. */ fixture_origins?:string[];fixture_owned_connect?:()=>Promise<Browser>;}
 const privateAddress=(address:string)=>{
   if(address.includes(':'))return !/^2[0-9a-f]{3}:/iu.test(address)&&!/^3[0-9a-f]{3}:/iu.test(address);
@@ -26,8 +24,8 @@ const observationKey=(value:string)=>{const url=new URL(value);url.hash='';retur
 
 /** A page + non-persistent BrowserContext per lease, not a separate security VM. */
 export class SwarmVisualExecutor {
-  #slots=new Map<string,Promise<Slot>>();#browser:Promise<Browser>|null=null;#server:Promise<{server:Server;origin:string}>|null=null;
-  #token=randomBytes(24).toString('hex');#timer:ReturnType<typeof setInterval>;#closed=false;#active=0;
+  #slots=new Map<string,Promise<Slot>>();#browser:Promise<Browser>|null=null;
+  #timer:ReturnType<typeof setInterval>;#closed=false;#active=0;
   #dns=new Map<string,{at:number;allowed:boolean}>();readonly maxContexts:number;
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly options:VisualOptions={}){
     this.maxContexts=options.max_contexts??config.swarm?.visual.max_contexts??16;
@@ -37,8 +35,7 @@ export class SwarmVisualExecutor {
     this.#timer=setInterval(()=>{for(const pending of this.#slots.values())void pending.then(slot=>{
       if(slot.closed)return;
       try{this.lease(slot.run,slot.worker,slot.lease);}catch{void this.release(slot.run,slot.worker);return;}
-      void this.capture(slot);
-    }).catch(()=>{});},options.frame_interval_ms??config.swarm?.visual.frame_interval_ms??1_000);this.#timer.unref();
+    }).catch(()=>{});},5_000);this.#timer.unref();
   }
   private lease(runId:string,workerId:string,token:string){
     const snapshot=this.store.swarmRun(this.config.project.id,runId).snapshot as SwarmRunSnapshot,worker=snapshot.workers[workerId];
@@ -59,27 +56,6 @@ export class SwarmVisualExecutor {
     const addresses=await lookup(host,{all:true});const allowed=addresses.length>0&&addresses.every(item=>!privateAddress(item.address));
     this.#dns.set(host,{at:Date.now(),allowed});requireCondition(allowed,'CONTROL_BROWSER_PRIVATE_ADDRESS');return url;
   }
-  private server(){
-    return this.#server??=new Promise<{server:Server;origin:string}>((resolve,reject)=>{
-      const server=createServer(async(request,response)=>{
-        const address=server.address();if(!address||typeof address==='string'){response.writeHead(503).end();return;}
-        if(request.method!=='GET'||request.headers.host!==`127.0.0.1:${address.port}`||request.headers.origin){response.writeHead(403).end();return;}
-        const prefix=`/${this.#token}/frame/`,path=request.url??'';
-        if(!path.startsWith(prefix)){response.writeHead(404).end();return;}
-        const id=path.slice(prefix.length);const slots=await Promise.allSettled([...this.#slots.values()]);
-        const slot=slots.flatMap(item=>item.status==='fulfilled'?[item.value]:[]).find(item=>item.id===id);
-        if(!slot?.frame){response.writeHead(503,{'Cache-Control':'no-store'}).end();return;}
-        response.writeHead(200,{'Content-Type':'image/jpeg','Content-Length':slot.frame.body.length,'Cache-Control':'no-store','X-Captured-At':slot.frame.captured_at,'X-Surface-State':slot.closed?'closed':'active','X-Content-Type-Options':'nosniff'}).end(slot.frame.body);
-      });server.once('error',reject);server.listen(0,'127.0.0.1',()=>{const address=server.address();if(!address||typeof address==='string'){reject(Error('CONTROL_PREVIEW_LISTEN_FAILED'));return;}server.unref();resolve({server,origin:`http://127.0.0.1:${address.port}`});});
-    });
-  }
-  private async capture(slot:Slot){
-    if(slot.closed)return;
-    if(this.config.swarm?.visual.owned_vm){
-      if(authSites(this.store,this.config).some(site=>site.handoff)||await slot.page.locator('input[type="password"]').first().isVisible().catch(()=>true)||/\/(?:login|signin|i\/flow\/login)(?:\/|$)/u.test(new URL(slot.page.url()).pathname)){slot.frame=null;return;}
-    }
-    return slot.capturing??=(async()=>{try{const body=await slot.page.screenshot({type:'jpeg',quality:52,scale:'css',timeout:2_000});if(body.length<=4_194_304)slot.frame={content_type:'image/jpeg',body,captured_at:new Date().toISOString()};}catch{/* Keep timestamped last frame; never invent a fresh frame. */}finally{slot.capturing=null;}})();
-  }
   private activity(slot:Slot,kind:'started'|'navigating'|'observing',summary:string){
     const {snapshot}=this.lease(slot.run,slot.worker,slot.lease);
     this.store.recordSwarmActivity(this.config.project.id,slot.run,snapshot.revision,slot.worker,'worker.activity',{activity_kind:kind,summary,endpoint:sanitizeSwarmEndpoint(slot.page.url()),surface_id:slot.id,decision_layer:'code'});
@@ -91,16 +67,16 @@ export class SwarmVisualExecutor {
     const pending=(async()=>{
       let context:BrowserContext|undefined,page:Page|undefined;const persistent=!!this.config.swarm?.visual.owned_vm;
       try{
-        const [browser,server]=await Promise.all([this.#browser??=(persistent?(this.options.fixture_owned_connect?.()??connectOwnedBrowser(this.config)):chromium.launch({headless:true})),this.server()]);
+        const browser=await (this.#browser??=(persistent?(this.options.fixture_owned_connect?.()??connectOwnedBrowser(this.config)):chromium.launch({headless:true})));
         requireCondition(!this.#closed,'CONTROL_POOL_CLOSED');
         context=persistent?browser.contexts()[0]:await browser.newContext({viewport:{width:1024,height:640},locale:'en-US',acceptDownloads:false,serviceWorkers:'block'});
         requireCondition(context,'AUTH_PROFILE_MISSING');page=await context!.newPage();await page.setViewportSize({width:1024,height:640});
         await page.route('**/*',async route=>{try{await this.publicUrl(route.request().url());if(route.request().isNavigationRequest())requireCondition(route.request().method()==='GET','CONTROL_READ_ONLY_NAVIGATION');await route.continue();}catch{await route.abort('blockedbyclient').catch(()=>{});}});
         page.on('popup',popup=>{void popup.close();});page.on('download',download=>{void download.cancel();});
-        const slot:Slot={id:`browser-${randomUUID()}`,run:runId,worker:workerId,lease:leaseToken,context:context!,page,links:new Set(),steps:0,frame:null,capturing:null,busy:false,closed:false};
+        const slot:Slot={id:`browser-${randomUUID()}`,run:runId,worker:workerId,lease:leaseToken,context:context!,page,links:new Set(),steps:0,busy:false,closed:false};
         this.lease(runId,workerId,leaseToken);requireCondition(!this.#closed,'CONTROL_POOL_CLOSED');
-        this.store.bindControlSurface(this.config.project.id,runId,workerId,leaseToken,slot.id,`${server.origin}/${this.#token}/frame/${slot.id}`);
-        this.activity(slot,'started',persistent?'Independent page assigned in the persistent owned VM profile':'Independent headless browser assigned');await this.capture(slot);return slot;
+        this.store.bindControlSurface(this.config.project.id,runId,workerId,leaseToken,slot.id,'');
+        this.activity(slot,'started',persistent?'Independent page assigned in the persistent owned VM profile':'Independent headless browser assigned');return slot;
       }catch(error){if(persistent)await page?.close().catch(()=>{});else await context?.close().catch(()=>{});this.#active--;throw error;}
     })();this.#slots.set(key,pending);
     try{const slot=await pending;return {surface_id:slot.id,kind:'browser' as const};}catch(error){this.#slots.delete(key);throw error;}
@@ -121,7 +97,7 @@ export class SwarmVisualExecutor {
       const raw=await slot.page.evaluate(()=>({url:location.href,title:document.title,text:document.body?.innerText.slice(0,24_000)??'',links:Array.from(document.querySelectorAll('a[href]')).map(a=>({text:(a.textContent??'').trim().slice(0,160),url:(a as HTMLAnchorElement).href})).filter(a=>a.text&&/^https?:/u.test(a.url)).slice(0,120)}));
       if(this.config.swarm?.visual.owned_vm){
         const gate=detectAuthGate(raw.url,raw.title,raw.text,await slot.page.locator('input[type="password"]').first().isVisible().catch(()=>false));
-        if(gate){slot.frame=null;setSiteAuth(this.store,this.config,authSite(command.action==='navigate'?command.url:definition.source_urls[0]!),gate);throw Error('BROWSER_AUTH_REQUIRED');}
+        if(gate){setSiteAuth(this.store,this.config,authSite(command.action==='navigate'?command.url:definition.source_urls[0]!),gate);throw Error('BROWSER_AUTH_REQUIRED');}
       }
       const links=raw.links.filter(link=>{try{const url=new URL(link.url);return !url.username&&!url.password&&link.url.length<=4096;}catch{return false;}});
       for(const link of links)slot.links.add(observationKey(link.url));
@@ -129,7 +105,7 @@ export class SwarmVisualExecutor {
       requireCondition(slot.links.size<=2_000,'CONTROL_BROWSER_LINK_LIMIT');
       this.store.recordObservedUrl(this.config.project.id,runId,workerId,leaseToken,raw.url);
       if(observationKey(raw.url)!==raw.url)this.store.recordObservedUrl(this.config.project.id,runId,workerId,leaseToken,observationKey(raw.url));
-      this.activity(slot,'observing','Page text and observed links read');await this.capture(slot);
+      this.activity(slot,'observing','Page text and observed links read');
       return {...raw,links,surface_id:slot.id,captured_at:new Date().toISOString()};
     }finally{slot.busy=false;}
   }
@@ -141,6 +117,5 @@ export class SwarmVisualExecutor {
     if(this.#closed)return;this.#closed=true;clearInterval(this.#timer);
     await Promise.allSettled([...this.#slots.keys()].map(key=>{const split=key.indexOf(':');return this.release(key.slice(0,split),key.slice(split+1));}));
     if(this.#browser)await (await this.#browser.catch(()=>null))?.close().catch(()=>{});
-    if(this.#server){const service=await this.#server.catch(()=>null);if(service)await new Promise<void>(resolve=>{service.server.close(()=>resolve());service.server.closeAllConnections();});}
   }
 }

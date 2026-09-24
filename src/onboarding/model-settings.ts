@@ -7,10 +7,11 @@ import {requireCondition} from '../core/contracts.js';
 import {normalizeCompatibleBaseUrl,type ApiProvider} from '../integrations/model-provider.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
 
-const modelId=z.string().min(1).max(200).refine(value=>!/[\s\x00-\x1f]/u.test(value));
+const modelId=z.string().min(1).max(200).refine(value=>!/[\s\x00-\x1f]/u.test(value)&&!/^(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})$/u.test(value));
 const key=z.string().min(16).max(4096).refine(value=>!/[\s\x00-\x1f]/u.test(value));
 const provider=z.enum(['openai','anthropic','openrouter','openai_compatible']);
-const choice=z.object({mode:z.enum(['subscription','api']),client:z.enum(['auto','mcp','codex','claude','opencode']),api_provider:provider.default('openai'),api_model:modelId,api_base_url:z.string().max(2048).default(''),reasoning:z.enum(['low','medium','high']),jev:z.enum(['inherit','on','off'])}).strict();
+const clientModels=z.object({codex:modelId.nullable().default(null),claude:modelId.nullable().default(null),opencode:modelId.nullable().default(null)}).strict();
+const choice=z.object({mode:z.enum(['subscription','api']),client:z.enum(['auto','mcp','codex','claude','opencode']),client_models:clientModels.default({codex:null,claude:null,opencode:null}),api_to_subscription:z.boolean().default(false),api_provider:provider.default('openai'),api_model:modelId,api_base_url:z.string().max(2048).default(''),reasoning:z.enum(['low','medium','high']),jev:z.enum(['inherit','on','off'])}).strict();
 const verification=z.object({fingerprint:z.string().length(64),provider:provider,model:modelId,verified_at:z.string().datetime()}).strict();
 const savedSchema=z.object({format:z.literal(1),revision:z.number().int().positive(),selection:choice,onboarding_step:z.number().int().min(0).max(4),api_key:key.nullable().optional(),openai_key:key.nullable().optional(),jev_key:key.nullable().optional(),api_verification:verification.optional()}).strict();
 export type ModelSettings=z.infer<typeof savedSchema>;
@@ -32,7 +33,9 @@ export function effectiveModelEnvironment(saved:ModelSettings|null,base:NodeJS.P
   if(stored!==undefined){for(const name of ['AGENT_DRIVER_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY','OPENROUTER_API_KEY'])delete env[name];if(stored!==null)env.AGENT_DRIVER_API_KEY=stored;}
   if(saved.jev_key!==undefined){delete env.TYPESAFE_API_KEY;if(saved.jev_key!==null)env.TYPESAFE_API_KEY=saved.jev_key;}
   if(saved.selection.jev==='off')delete env.TYPESAFE_API_KEY;
-  env.AGENT_DRIVER_LLM_CLIENT=saved.selection.mode==='api'?'api':saved.selection.client==='auto'?'mcp,codex,claude,opencode':saved.selection.client;
+  const connected=['mcp','codex','claude','opencode'];
+  env.AGENT_DRIVER_LLM_CLIENT=saved.selection.mode==='api'?'api':saved.selection.client==='auto'?connected.join(','):[saved.selection.client,...connected.filter(client=>client!==saved.selection.client)].join(',');
+  for(const client of ['codex','claude','opencode'] as const){const name=`AGENT_DRIVER_${client.toUpperCase()}_MODEL`;if(saved.selection.client_models[client])env[name]=saved.selection.client_models[client]!;else delete env[name];}
   env.AGENT_DRIVER_API_PROVIDER=saved.selection.api_provider;env.AGENT_DRIVER_API_MODEL=saved.selection.api_model;env.AGENT_DRIVER_API_REASONING=saved.selection.reasoning;
   if(saved.selection.api_provider==='openai_compatible')env.AGENT_DRIVER_API_BASE_URL=normalizeCompatibleBaseUrl(saved.selection.api_base_url);else delete env.AGENT_DRIVER_API_BASE_URL;
   return env;
@@ -46,7 +49,7 @@ export function publicModelSettings(saved:ModelSettings|null,base:NodeJS.Process
   const defaultProvider=(base.AGENT_DRIVER_API_PROVIDER??'openai') as ApiProvider;
   const present=Boolean(env.AGENT_DRIVER_API_KEY||(defaultProvider==='openai'?env.OPENAI_API_KEY:defaultProvider==='anthropic'?env.ANTHROPIC_API_KEY:defaultProvider==='openrouter'?env.OPENROUTER_API_KEY:undefined));
   const verified=Boolean(saved?.api_verification&&saved.api_verification.fingerprint===modelSettingsFingerprint(saved,base));
-  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:base.AGENT_DRIVER_LLM_CLIENT==='api'?'api':'subscription',client:'auto',api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??'gpt-5.6-luna',api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
+  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:base.AGENT_DRIVER_LLM_CLIENT==='api'?'api':'subscription',client:'auto',client_models:{codex:null,claude:null,opencode:null},api_to_subscription:false,api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??'gpt-5.6-luna',api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
     api_key_present:present,api_key_stored:Boolean(saved?.api_key??saved?.openai_key),openai_key_present:present,openai_key_stored:Boolean(saved?.api_key??saved?.openai_key),jev_key_present:Boolean(env.TYPESAFE_API_KEY),jev_key_stored:Boolean(saved?.jev_key),
     api_connection:verified?'ready':'unchecked',api_verified_at:verified?saved!.api_verification!.verified_at:null,
     applies_to:'next_model_call',in_flight_calls:'unchanged',external_worker_models:'client_managed',credentials_exposed:false,storage:'local_private_file'};

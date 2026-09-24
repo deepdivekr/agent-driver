@@ -10,7 +10,8 @@ export interface ClientBootstrapSpec {
 export interface ClientBootstrapView extends ClientBootstrapSpec {
   installed:boolean;managed_install:boolean;reason:'installed'|'not_installed'|'managed_install_unavailable';credentials_exposed:false;
 }
-export type ClientInstallStage='downloading'|'running'|'verifying';
+export type ClientInstallStage='downloading'|'downloaded'|'running'|'installer_exited'|'verifying';
+export interface ClientInstallObservation {byte_count?:number;exit_code?:number|null;elapsed_ms?:number}
 
 export const CLIENT_BOOTSTRAP_CATALOG:readonly ClientBootstrapSpec[]=[
   {id:'codex',label:'Codex',docs_url:'https://learn.chatgpt.com/docs/codex/cli',installer_url:'https://chatgpt.com/codex/install.sh',install_command:'curl -fsSL https://chatgpt.com/codex/install.sh | sh',auth_guide_url:'https://learn.chatgpt.com/docs/auth'},
@@ -35,7 +36,7 @@ export class ClientBootstrapController {
   view(){
     return {clients:CLIENT_BOOTSTRAP_CATALOG.map(spec=>{const present=installed(spec.id,this.environment,this.resolver),managed=this.platform==='linux';return {...spec,installed:present,managed_install:managed,reason:present?'installed':managed?'not_installed':'managed_install_unavailable',credentials_exposed:false} satisfies ClientBootstrapView;}),credentials_exposed:false};
   }
-  async install(id:SubscriptionClientId,onStage:(stage:ClientInstallStage)=>void|Promise<void>=()=>{}){
+  async install(id:SubscriptionClientId,onStage:(stage:ClientInstallStage,observation?:ClientInstallObservation)=>void|Promise<void>=()=>{}){
     const spec=catalog(id);requireCondition(this.platform==='linux','CLIENT_INSTALL_PLATFORM_UNSUPPORTED');
     if(installed(id,this.environment,this.resolver))return this.view();
     await onStage('downloading');
@@ -45,10 +46,13 @@ export class ClientBootstrapController {
     requireCondition(response.ok&&!response.redirected&&(!response.url||response.url===spec.installer_url),'CLIENT_INSTALL_DOWNLOAD_REJECTED');
     const bytes=new Uint8Array(await response.arrayBuffer());requireCondition(bytes.length>0&&bytes.length<=2*1024*1024,'CLIENT_INSTALL_DOWNLOAD_REJECTED');
     const source=new TextDecoder('utf-8',{fatal:true}).decode(bytes);requireCondition(!source.includes('\0')&&/^#![^\r\n]*(?:sh|bash)\b/u.test(source.slice(0,256)),'CLIENT_INSTALL_SCRIPT_INVALID');
+    await onStage('downloaded',{byte_count:bytes.length});
     const root=await mkdtemp(join(tmpdir(),'agent-driver-client-install-')),path=join(root,'installer.sh');
     try{
       await writeFile(path,source,{mode:0o700});await chmod(path,0o700);await onStage('running');
-      const result=await this.runner.run({executable:'/bin/bash',args:[path],timeout_ms:10*60_000});requireCondition(result.code===0,'CLIENT_INSTALL_FAILED');
+      const started=Date.now(),result=await this.runner.run({executable:'/bin/bash',args:[path],timeout_ms:10*60_000});
+      await onStage('installer_exited',{exit_code:result.code,elapsed_ms:Date.now()-started});
+      requireCondition(result.code===0,'CLIENT_INSTALL_FAILED');
       await onStage('verifying');requireCondition(installed(id,this.environment,this.resolver),'CLIENT_INSTALL_NOT_DETECTED');return this.view();
     }finally{await rm(root,{recursive:true,force:true});}
   }

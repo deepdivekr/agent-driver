@@ -5,3 +5,4 @@ export * from './runtime.js';
 export * from './adapters.js';
 export * from './operations.js';
 export * from './registry.js';
+export * from './memory.js';

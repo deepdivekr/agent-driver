@@ -5,12 +5,16 @@ import {packTools} from '../packs/contracts.js';
 import {humanChannelRouteInput} from '../integrations/human-channel.js';
 import {swarmTools} from '../swarm/contracts.js';
 import {observabilityTools} from '../observability/contracts.js';
+import {workTools} from '../work/contracts.js';
+import {codingTools} from '../coding/contracts.js';
 export const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const draftInput=z.object({name:z.string().min(1).max(200),note:z.string().min(1).max(4000)}).strict();
 export const startRequest=z.object({request_id:id,capability:z.literal('fixture.draft.save'),account_ref:id,input:draftInput,deadline_ms:z.number().int().min(1000).max(120000).default(30000)}).strict();
 const task=z.object({task_id:id}).strict(),empty=z.object({}).strict();
 const notImplemented={implemented:false,readOnly:false};
 export const tools={
+  ...workTools,
+  ...codingTools,
   ...packTools,
   ...swarmTools,
   ...observabilityTools,
@@ -52,3 +56,4 @@ export const draftManifest={id:FIXTURE_DRAFT.id,version:1,input_schema:z.toJSONS
   status:'test_only',verified_for_environment:'owned_headless_fixture'};
 export type StartRequest=z.infer<typeof startRequest>;
 export const terminalManifest={id:'coding.session',version:2,input_schema:z.toJSONSchema(terminalSubmit),effect:'model_prompt',constraints:{allow_user_target:false,allow_foreground:false,allow_os_input:false,raw_terminal_write:false,native_tools_enabled:false,file_tools:'explicit_host_delegation_only',platform:'linux'},routes:['claude.structured'],verification:{turn:'official_user_replay_and_result',files:'broker_journal_and_readback',tests:'optional_isolated_node_stdio_cases',project:'external_orchestrator_required'},recovery:{mode:'explicit_finished_session_only'},status:'experimental_scoped_files',verified_for_environment:false};
+export const codingManifest={id:'coding.orchestrate',version:1,effect:'registered_project_scoped',routes:['codex.exec','claude.print'],constraints:{registered_project_required:true,model_data_approval_required:true,write_opt_in:true,commit_opt_in:true,no_push_or_deploy:true},verification:{stage:'git_diff_check_and_configured_checks',work:'completion_checks_remain_unverified'},recovery:{mode:'exact_session_id_and_no_blind_write_replay'},status:'experimental',verified_for_environment:false};

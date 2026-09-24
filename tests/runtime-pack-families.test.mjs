@@ -58,9 +58,9 @@ test('audit five collection families resume the same request after source restor
   // No configured model means inbox still truthfully requires semantic review.
 });
 
-test('runtime contract all eight Pack families share one MCP surface and natural-language plan never grants dispatch',async t=>{
+test('runtime contract nine Pack families share one MCP surface and natural-language plan never grants dispatch',async t=>{
   const x=await base(t),api=new RuntimeApi(x.config);t.after(()=>api.close());
-  const catalog=await api.call('runtime_pack_catalog',{});assert.deepEqual(catalog.families.map(f=>f.id),familyIds);assert.equal(catalog.connected,true);
+  const catalog=await api.call('runtime_pack_catalog',{});assert.deepEqual(catalog.families.map(f=>f.id),[...familyIds,'coding.orchestrate']);assert.equal(catalog.connected,true);
   const plan=await api.call('runtime_pack_plan',{prompt:'도쿄 호텔을 찾아줘'});assert.equal(plan.status,'needs_agent_design');assert.equal(plan.dispatch_allowed,false);assert.equal(plan.connections.sources[0].id,'records');assert.ok(plan.recipe_schema);
   const client=new Client({name:'pack-test',version:'1'}),transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.configPath],stderr:'pipe'});
   await client.connect(transport);t.after(()=>client.close());const listed=await client.listTools();

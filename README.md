@@ -4,7 +4,7 @@ AI 에이전트에 전용 브라우저·CLI·파일 작업 도구와 실행 기�
 
 Claude Code, Codex, Cursor, Hermes에서 웹 검색, 폼 입력, 파일 수집 같은 작업을 맡길 수 있습니다. 브라우저 작업은 전용 환경에서 진행하고, 실행 기록과 재개 정보는 로컬에 보관합니다.
 
-Apache-2.0 오픈소스이며, 현재 공개 저장소의 `main`은 개발 alpha입니다. Ubuntu 24.04와 Windows의 WSL2 Ubuntu에서 개발·검증합니다. 기능별 실제 확인 범위와 남은 제약은 [출시 검증 기록](docs/release-readiness-alpha-18.md)에서 확인하세요.
+Apache-2.0 오픈소스이며, 공개 버전은 개발 alpha입니다. Ubuntu 24.04와 Windows의 WSL2 Ubuntu에서 개발·검증합니다. 기능별 실제 확인 범위와 남은 제약은 [최신 출시 검증 기록](docs/release-readiness-alpha-19.md)에서 확인하세요.
 
 ## 시작하기
 
@@ -18,7 +18,7 @@ Apache-2.0 오픈소스이며, 현재 공개 저장소의 `main`은 개발 alpha
 curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/main/install.sh | bash
 ```
 
-설치기는 사용자 홈 아래에 저장소와 전용 실행 환경을 만들고, Node.js **22.22.0** 배포물의 checksum을 확인한 뒤 npm **11.11.0**, 의존성, 빌드, Playwright Chromium, `agent-driver` 명령을 준비합니다. 기존 비관리 폴더, 심볼릭 링크, 수정된 설치본은 덮어쓰지 않습니다. 원격 스크립트를 먼저 검토하려면 [install.sh](install.sh)를 내려받아 확인한 뒤 실행하세요.
+설치기는 사용자 홈 아래에 저장소와 전용 실행 환경을 만들고, Node.js **22.22.0** 배포물의 checksum을 확인한 뒤 npm **11.11.0**, 의존성, 빌드, Playwright Chromium, `agent-driver` 명령을 준비합니다. Chromium을 실제로 열어 확인하며, Ubuntu/WSL 시스템 라이브러리가 부족하면 설치 완료로 표시하지 않고 필요한 명령을 안내합니다. 시스템 패키지를 자동 설치하거나 관리자 권한을 요청하지는 않습니다. 기존 비관리 폴더, 심볼릭 링크, 수정된 설치본은 덮어쓰지 않습니다. 원격 스크립트를 먼저 검토하려면 [install.sh](install.sh)를 내려받아 확인한 뒤 실행하세요.
 
 완료되면 관제센터가 자동으로 열립니다. 이후에는 관제센터 하나에서 다음 순서로 진행합니다.
 
@@ -59,36 +59,39 @@ MCP에 연결하면 에이전트가 작업 도구를 호출할 수 있습니다.
 
 `agent-driver connect`를 실행하면 아래 네 단계가 한 화면에 하나씩 나타납니다.
 
+아래 화면은 실제 온보딩 UI를 로컬 데모 서버에서 캡처한 단계별 예시입니다. 장면마다 클라이언트 설치·로그인 상태와 연결 기록이 합성 상태로 달라지며, 실제 사용자 환경의 연결 완료를 증명하지 않습니다.
+
 ### 1. 에이전트 설치·로그인·MCP
 
 사용할 클라이언트가 없으면 설치하고, 공식 로그인을 완료한 뒤 `agent-driver mcp`를 등록합니다. 기존의 다른 MCP 설정은 유지합니다.
 
-![클라이언트 설치, 로그인과 MCP 등록 화면](docs/assets/onboarding/01-agent-install-auth.png)
+![데모: 클라이언트 설치, 로그인과 MCP 등록 화면](docs/assets/onboarding/01-agent-install-auth.png)
 
 ### 2. 로컬 실행
 
-전용 작업 폴더와 로컬 실행 권한을 한 번 승인합니다. Agent Driver는 사용자 마우스와 브라우저를 조작하지 않습니다.
+전용 작업 폴더와 로컬 실행 권한을 한 번 승인합니다. 현재 기본 모드는 사용자의 화면 마우스나 이미 열어 둔 Chrome 탭을 제어하지 않고, 별도 작업 브라우저를 사용합니다.
 
-![로컬 실행 승인 화면](docs/assets/onboarding/02-local-runtime.jpg)
+![데모: 로컬 실행 승인 화면](docs/assets/onboarding/02-local-runtime.jpg)
 
 ### 3. AI
 
 이미 로그인한 클라이언트 구독을 사용하거나 API 키를 연결합니다.
 
-![구독 연결 화면](docs/assets/onboarding/03-ai-subscription.jpg)
+![데모: 구독과 클라이언트별 모델 연결 화면](docs/assets/onboarding/03-ai-subscription.jpg)
 
 - **구독:** MCP sampling, Codex, Claude Code, OpenCode
 - **API:** OpenAI, Anthropic, OpenRouter, OpenAI 호환 서버
 
 API 방식은 공급자·모델·키를 입력하고 연결 확인을 통과해야 저장됩니다.
+Codex·Claude Code·OpenCode 모델은 클라이언트별로 선택합니다. 인계가 발생하면 받는 클라이언트에 저장한 모델을 쓰고, 업무 상세에 인계 이유를 기록합니다. 구독에서 API로 자동 과금 전환하지 않습니다. API에서 구독으로의 전환은 별도 선택을 켠 경우에만 허용합니다. [인계 범위](docs/client-handoff.md)
 
-![API 연결 화면](docs/assets/onboarding/04-ai-api.jpg)
+![데모: API 연결 화면](docs/assets/onboarding/04-ai-api.jpg)
 
 ### 4. Jev
 
 Jev는 반복되는 짧은 판단을 빠르게 처리하는 선택 기능입니다. 키가 없으면 LLM이 그대로 판단하므로 건너뛰어도 됩니다.
 
-![Jev 연결 화면](docs/assets/onboarding/05-jev-optional.jpg)
+![데모: 선택형 Jev 연결 화면](docs/assets/onboarding/05-jev-optional.jpg)
 
 사이트 로그인은 첫 설정에 포함되지 않습니다. Task가 로그인이 필요한 URL을 만났을 때 해당 worker가 멈추고 관제센터에 **사이트 로그인 필요**가 나타납니다.
 
@@ -96,11 +99,11 @@ Jev는 반복되는 짧은 판단을 빠르게 처리하는 선택 기능입니�
 
 VM은 공통 기반일 뿐입니다. Muse와 Grok Bot은 공급자가 계속 켜 두는 클라우드 컴퓨터에 자체 채팅, 장기 기억, 알림, 승인, 다중 bot 운영을 묶은 완성형 서비스입니다. Agent Driver는 사용자가 소유한 로컬 실행 환경을 Codex·Claude·Cursor·Hermes 같은 여러 클라이언트에 공통 MCP로 연결합니다.
 
-Agent Driver가 맡는 부분은 Task Pack 실행, LLM·Jev·코드 판단 분리, 중단 후 재개, 중복 효과 방지, 승인과 결과 증거입니다. 대화 기억은 연결한 클라이언트가 소유하며, 현재 호스트가 꺼지면 로컬 작업도 중단됩니다. 선택형 cloud worker와 관제센터 자체 Task 입력·결과함은 아직 제공하지 않습니다. [공식 자료 기반 비교](docs/product-comparison-2026-09-23.md)
+Agent Driver가 맡는 부분은 Task Pack 실행, LLM·Jev·코드 판단 분리, 중단 후 재개, 중복 효과 방지, 승인과 결과 증거입니다. 대화 기억은 연결한 클라이언트가 소유하며, 현재 호스트가 꺼지면 로컬 작업도 중단됩니다. 관제센터에서 한 줄 업무를 접수하고 진척을 볼 수 있지만, 실행 배정은 연결된 에이전트가 이어가며 별도의 완성형 결과함이나 cloud worker는 아직 제공하지 않습니다. [공식 자료 기반 비교](docs/product-comparison-2026-09-23.md)
 
 ## 어떤 작업에 쓰나요?
 
-Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단위입니다. 아래 여덟 종류의 Pack family를 바탕으로 연결된 사이트와 데이터에 맞는 작업을 구성합니다.
+Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단위입니다. 아래 아홉 종류의 Pack family를 바탕으로 연결된 사이트·데이터·프로젝트에 맞는 작업을 구성합니다.
 
 | 작업 | 예시 | Pack family |
 |---|---|---|
@@ -112,10 +115,13 @@ Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단
 | 받은 편지 정리 | 메시지 분류와 답장 초안 작성 | `inbox.triage` |
 | 변경 감시 | 가격·상태를 반복 확인하고 변경 기록 | `monitor.watch` |
 | 파일 처리 | CSV·JSON 필터링, 변환, 병합 | `file.pipeline` |
+| 코딩 업무 | 로컬 Git 프로젝트에서 Codex 구현·Claude 검토·문서 인계. GitHub 불필요 | `coding.orchestrate` (실험적) |
 
 각 사이트의 로그인과 실행 설정이 필요합니다. 검증된 작업 흐름은 다음 실행에서 재사용하며, 새 사이트에 대한 자동 적응은 실험 중입니다. 변경 알림의 외부 전송은 Hermes 같은 상위 에이전트가 담당합니다.
 
 [Pack 목록과 지원 범위](docs/pack-catalog.md)
+
+코딩 업무는 연결된 에이전트에게 “이 프로젝트의 마지막으로 중단된 업무를 이어서 진행해줘”라고 요청할 수 있습니다. 등록한 Git 프로젝트와 로그인된 CLI만 사용하고, 단계별 실행 기록을 보존합니다. 쓰기와 README 로컬 커밋은 프로젝트별 허용 범위가 필요하며 푸시·배포는 하지 않습니다. [설정과 제약](docs/coding-orchestration.md)
 
 ### 실제 실행 기록
 

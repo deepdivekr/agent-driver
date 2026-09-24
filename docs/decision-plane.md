@@ -69,6 +69,25 @@ primary와 shadow는 같은 state와 typed 질문을 병렬로 받지만 shadow�
 
 저장하는 핵심 지표는 판단별 불일치, provider 지연, unavailable/invalid 응답, 고신뢰 오답, fallback 뒤 최종 readback이다. Jev 사용 여부는 “선택지가 짧다”만으로 정하지 않고 같은 판단에서 latency·precision·fallback 비용의 marginal value가 확인되어야 한다.
 
+## 검증된 사례 메모리 (Phase 65)
+
+LLM이 Jev의 판단을 보정하면 우선 **후보**로 저장한다. 코드가 별도로 확인한 결과와 일치하는 후보만 다음 실행의 Jev state에 `verified_previous_cases`로 전달한다. 모델 가중치를 학습하거나 이전 답을 그대로 실행하는 기능은 아니다. 현재 관측과 같은 질문으로 Jev를 다시 호출하며, 기존 confidence·승인·완료 기준을 유지한다.
+
+현재 자동 연결한 경로는 읽기 전용 Swarm의 `workflow.next_step`이다. 미완료 worker·실패·검토 대기·실행 가능 작업 수를 코드로 집계하고, DB에 확정된 실행 상태와 대조해 `CONTINUE`와 `COMPLETE` 사례를 검증한다. 이 검증은 **작업 그래프 상태**에 대한 것이며 기사 내용의 진실성을 증명하지 않는다. `artifact.quality`의 LLM 점수는 독립 정답 검증이 없어 후보로만 저장하고 참고 입력으로 사용하지 않는다. 다른 Family·브라우저 클릭 판단은 아직 자동 사례 수집에 연결하지 않았다.
+
+`workflow.next_step` 질문 v2는 이미 실행 중인 worker를 기다리는 것도 `CONTINUE`로 정의한다. 완료된 품질 심사를 다시 열지 않도록 개별 품질 점수는 progress state에서 제외하고 worker 상태만 전달한다. Jev와 LLM에 같은 checkpoint 규칙을 사용한다. catalog/question hash가 바뀌므로 v1 사례와 calibration을 v2에 자동 이식하지 않는다.
+
+기존 활성 calibration이 이전 catalog에 묶여 있으면 Swarm은 LLM 판단으로 계속 진행한다. 상태 조회에는 `DECISION_ACTIVE_CATALOG_MISMATCH`를 남기며 이전 파일을 덮어쓰거나 새 provisional 기준으로 조용히 완화하지 않는다. 새 catalog의 profile 이관·운영 승격은 운영자 절차로 남긴다.
+
+- 사용자 프로젝트, 호스트 설정, Pack 목표·worker 구성, 질문, catalog, calibration profile, provider와 요청 모델을 hash로 결속한다. 새 실행 ID는 결속에서 제외하지만 같은 실행의 사례는 재사용하지 않는다.
+- 실제 응답 모델이 사례의 모델과 다르거나, 현재 코드 관측과 답이 충돌하면 해당 참고 사례를 폐기하고 LLM으로 넘긴다. alias 모델 교체는 응답 후에 확인하므로 첫 요청에 과거 사례가 포함될 수 있지만 그 답을 채택하지 않는다.
+- 상태 특징은 코드가 만든 수치·불리언·null, 답은 제한된 enum·수치만 저장한다. 사이트 원문, 비밀번호, 보정 문장을 예제로 저장하지 않는다.
+- 기존 SQLite에 영속 저장한다. 사례 유효기간은 7일, 요청당 최대 3개다. scope당 활성 512개, 프로젝트당 전체 10,000개로 수집을 제한하며, 가득 차면 신규 학습만 건너뛴다. 현재 오래된 행 자동 삭제는 하지 않는다.
+- 검증 라벨은 `unassigned`로 남는다. 입력 사례 재사용과 통계적 threshold calibration은 별개이며, fit·잠긴 holdout·운영 승격 절차를 우회하지 않는다.
+- `runtime_decision_status.memory`는 후보·검증·거부·폐기 개수만 반환한다. MCP/모델에 정답 라벨 등록이나 profile 승격 도구를 추가하지 않았다.
+
+따라서 두 번째 실행이 반드시 빨라지는 것은 아니다. 참고 사례로 Jev의 유효 판단이 늘어야 LLM 호출이 줄어든다. 사이트 로딩·자료 생성 시간은 별도이며, 참고 사례를 넣어도 품질 판단에서 계속 LLM이 필요할 수 있다.
+
 ## 차용한 OSS 패턴
 
 | 출처 패턴 | 반영한 시스템 | 그대로 복사하지 않은 경계 |

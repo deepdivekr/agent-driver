@@ -36,7 +36,7 @@ MCP client sampling
   → unavailable
 ```
 
-`AGENT_DRIVER_LLM_CLIENT=claude,opencode,api`처럼 순서를 좁힐 수 있다. 기본값은 `mcp,codex,claude,opencode,cursor,api`다. 각 CLI의 고정된 읽기 전용 status 명령만 실행하며 인증 파일을 직접 열지 않는다.
+`AGENT_DRIVER_LLM_CLIENT=claude,opencode,api`처럼 최초 저장 전의 호스트 설정에서 순서를 좁힐 수 있다. 기본값은 `mcp,codex,claude,opencode,cursor,api`다. 관제센터에서 저장한 **구독 방식**은 선택한 클라이언트를 우선하고 다른 연결된 구독 클라이언트를 후보로 둔다. API로 자동 전환하지 않는다. API 방식의 구독 대체도 사용자가 별도로 켠 경우에만 동작한다. 각 CLI의 고정된 읽기 전용 status 명령만 실행하며 인증 파일을 직접 열지 않는다. [모델 선택·인계 계약](client-handoff.md).
 
 | client | auth 확인 | 구조화 판단 경로 | 비고 |
 |---|---|---|---|

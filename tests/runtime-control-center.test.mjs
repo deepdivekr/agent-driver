@@ -5,7 +5,6 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {once} from 'node:events';
-import {setTimeout as delay} from 'node:timers/promises';
 import {Script} from 'node:vm';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {RuntimeApi} from '../dist/interface/api.js';
@@ -41,12 +40,12 @@ test('generic activity report is scoped, sanitized, durable and never grants aut
   await assert.rejects(api.call('runtime_activity_report',{owner_kind:'pack',owner_id:pack.id,actor_id:null,activity:{kind:'started',summary:'x',endpoint:null,surface_id:'not-delegated'}}),/CONTROL_SURFACE_UNDELEGATED/u);
 });
 
-test('presence distinguishes active stale stopped and Control Center HTTP remains capability-addressed read-only',async t=>{
+test('presence distinguishes active stale stopped and Office HTTP remains capability-addressed',async t=>{
   const x=await setup(t),stale=x.store.startPresence(x.config.project.id,'mcp');
   // A stale active row represents an uncleanly terminated gateway. Public APIs never forge active health from configuration.
   const db=(await import('node:sqlite')).DatabaseSync;const raw=new db(x.config.dbPath);raw.prepare('UPDATE runtime_presence SET heartbeat_at=? WHERE id=?').run('2020-01-01T00:00:00.000Z',stale);raw.close();
   assert.equal(readControlCenter(x.store,x.config).health.find(item=>item.id==='mcp').state,'stale');
-  const server=await startControlCenter(x.config,{poll_ms:25});const page=await fetch(server.url),body=await page.text();assert.equal(page.status,200);assert.match(body,/Control Center/u);assert.match(body,/LIVE ACTOR WALL/u);assert.match(body,/tag\(a,'llm'\)\+tag\(a,'jev'\)\+tag\(a,'code'\)/u);assert.match(body,/connections\.href=count\?'connections':'settings'/u);assert.match(body,/사이트 로그인 '\+count\+'개 필요/u);assert.doesNotThrow(()=>new Script(body.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)[1]));assert.equal((await fetch(server.url,{method:'POST'})).status,405);assert.equal((await fetch(new URL('../invalid',server.url))).status,404);assert.equal((await fetch(new URL('surface/missing/frame',server.url))).status,404);assert.equal((await fetch(new URL('surface/browser-a/frame',server.url))).status,503);
+  const server=await startControlCenter(x.config,{poll_ms:25});const page=await fetch(server.url),body=await page.text();assert.equal(page.status,200);assert.match(body,/Agent Office/u);assert.match(body,/업무 현황/u);assert.doesNotMatch(body,/LIVE ACTOR WALL|<img|surface-frame/u);assert.match(body,/href="connections"/u);assert.match(body,/href="settings"/u);assert.doesNotThrow(()=>new Script(body.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)[1]));assert.equal((await fetch(server.url,{method:'POST'})).status,405);assert.equal((await fetch(new URL('../invalid',server.url))).status,404);assert.equal((await fetch(new URL('surface/missing/frame',server.url))).status,404);assert.equal((await fetch(new URL('surface/browser-a/frame',server.url))).status,404);
   const snapshot=await (await fetch(new URL('snapshot',server.url))).json();assert.equal(snapshot.health.find(item=>item.id==='mcp').state,'stale');assert.equal(snapshot.read_only,true);await server.close();
   const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());assert.equal(reopened.presences(x.config.project.id).find(p=>p.kind==='dashboard').state,'stopped');
 });
@@ -57,7 +56,7 @@ test('managed worker surfaces bind before activity and expired leases stop proje
   x.store.saveSwarmPlan(x.config.project.id,swarm.plan,x.config.fingerprint);x.store.beginSwarmRun(x.config.project.id,swarm.request_id,swarm.plan.plan_id,swarm,x.config.fingerprint);
   x.store.bindControlSurface(x.config.project.id,swarm.run_id,'source-a','lease-a','managed-a','http://127.0.0.1:49321/'+ 'a'.repeat(48)+'/frame/managed-a');
   const active=readControlCenter(x.store,x.config),actor=active.runs[0].actors[0];
-  assert.equal(actor.surface.id,'managed-a');assert.equal(actor.surface.state,'active');assert.equal(actor.surface.frame_path,'surface/managed-a/frame');assert.equal(actor.decision_layer,null);assert.equal(actor.updated_at,null);assert.equal(actor.lane,'running');
+  assert.equal(actor.surface.id,'managed-a');assert.equal(actor.surface.state,'active');assert.equal(actor.surface.frame_path,null);assert.equal(actor.decision_layer,null);assert.equal(actor.updated_at,null);assert.equal(actor.lane,'running');
   assert.doesNotMatch(JSON.stringify(active),/49321|a{48}|preview_endpoint/u);
   const stale=readControlCenter(x.store,x.config,expires+1);assert.equal(stale.runs[0].actors[0].lease_stale,true);assert.equal(stale.runs[0].actors[0].lane,'attention');assert.notEqual(stale.latest_revision,active.latest_revision);
   x.store.endControlSurface(x.config.project.id,swarm.run_id,'source-a','closed');const closed=readControlCenter(x.store,x.config);assert.equal(closed.runs[0].actors[0].surface.state,'closed');assert.notEqual(closed.latest_revision,active.latest_revision);
@@ -72,21 +71,20 @@ test('brief Jev activity survives a following code event between snapshot polls 
   x.store.recordSwarmActivity(x.config.project.id,swarm.run_id,0,'source-a','worker.activity',{activity_kind:'navigating',summary:'Open the source',decision_layer:'code'},codeAt);
   const actors=readControlCenter(x.store,x.config,now).runs[0].actors,actor=actors.find(item=>item.id==='source-a');
   assert.equal(actor.decision_layer,'code','latest current layer remains code');assert.deepEqual(actor.layer_activity_at,{jev:jevAt,code:codeAt});assert.equal(actor.layer_activity_at.llm,undefined);assert.deepEqual(actors.find(item=>item.id==='source-b').layer_activity_at,{});
-  const server=await startControlCenter(x.config);t.after(()=>server.close());const body=await (await fetch(server.url)).text();
-  const functions=body.slice(body.indexOf('function leaseStale('),body.indexOf('function disposeTile('));const render=new Script(functions+'; [tag(actor,"jev"),tag(actor,"code"),tag(actor,"llm")]');
-  const tags=render.runInNewContext({actor,Date,esc:String});assert.match(tags[0],/jev active/u);assert.match(tags[1],/code active current/u);assert.doesNotMatch(tags[2],/ active/u);assert.match(tags[0],/동시 실행 의미 아님/u);
+  const server=await startControlCenter(x.config);t.after(()=>server.close());const office=await (await fetch(new URL('office/snapshot',server.url))).json();
+  assert.match(JSON.stringify(office.works[0].events),/Jev chose the next source/u);assert.match(JSON.stringify(office.works[0].events),/Open the source/u);
+  const body=await (await fetch(server.url)).text();assert.doesNotMatch(body,/decision-tag active/u);
 });
 
-test('managed frame proxy shares an in-flight capture and accepts only a valid reusable capability',async t=>{
+test('retired frame route never contacts an old managed preview endpoint',async t=>{
   const x=await setup(t),swarm=swarmSnapshot();Object.assign(swarm.workers['source-a'],{status:'leased',lease_token:'lease-a',lease_expires_at_ms:Date.now()+60000});
   x.store.saveSwarmPlan(x.config.project.id,swarm.plan,x.config.fingerprint);x.store.beginSwarmRun(x.config.project.id,swarm.request_id,swarm.plan.plan_id,swarm,x.config.fingerprint);
-  let requests=0,release,seen;const arrived=new Promise(resolve=>seen=resolve),gate=new Promise(resolve=>release=resolve),capturedAt='2026-09-22T07:00:00.000Z';
-  const preview=createServer(async(_request,response)=>{requests++;seen();await gate;response.writeHead(200,{'content-type':'image/jpeg','x-captured-at':capturedAt});response.end(Buffer.from([0xff,0xd8,0xff,0xd9]));});
+  let requests=0;
+  const preview=createServer((_request,response)=>{requests++;response.writeHead(200,{'content-type':'image/jpeg'});response.end(Buffer.from([0xff,0xd8,0xff,0xd9]));});
   preview.listen(0,'127.0.0.1');await once(preview,'listening');t.after(()=>new Promise(resolve=>preview.close(resolve)));
   const endpoint='http://127.0.0.1:'+preview.address().port+'/'+ 'b'.repeat(48)+'/frame/managed-a';x.store.bindControlSurface(x.config.project.id,swarm.run_id,'source-a','lease-a','managed-a',endpoint);
   await assert.rejects(startControlCenter(x.config,{capability_token:'../bad'}),/CONTROL_CENTER_CAPABILITY_INVALID/u);
   const server=await startControlCenter(x.config,{capability_token:'c'.repeat(48)});t.after(()=>server.close());assert.equal(new URL(server.url).pathname,'/'+ 'c'.repeat(48)+'/');
-  const path=new URL('surface/managed-a/frame',server.url),first=fetch(path);await arrived;await delay(550);const second=fetch(path);await delay(30);assert.equal(requests,1,'elapsed cache TTL must not start a second capture while one is pending');release();
-  const responses=await Promise.all([first,second]);for(const response of responses){assert.equal(response.status,200);assert.equal(response.headers.get('x-captured-at'),capturedAt);assert.deepEqual(Buffer.from(await response.arrayBuffer()),Buffer.from([0xff,0xd8,0xff,0xd9]));}
-  x.store.endControlSurface(x.config.project.id,swarm.run_id,'source-a','failed');assert.equal((await fetch(path)).status,503);
+  const path=new URL('surface/managed-a/frame',server.url),responses=await Promise.all([fetch(path),fetch(path)]);assert.ok(responses.every(response=>response.status===404));assert.equal(requests,0);
+  x.store.endControlSurface(x.config.project.id,swarm.run_id,'source-a','failed');assert.equal((await fetch(path)).status,404);assert.equal(requests,0);
 });

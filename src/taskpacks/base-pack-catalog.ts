@@ -15,6 +15,7 @@ export const basePackFamilyId=z.enum([
   'monitor.watch',
   'file.pipeline',
   'choose.stage',
+  'coding.orchestrate',
 ]);
 export type BasePackFamilyId=z.infer<typeof basePackFamilyId>;
 
@@ -38,6 +39,7 @@ export const BASE_PACK_CATALOG:readonly BasePackFamily[]=[
   {id:'monitor.watch',title:'변화 감시',user_goal:'정해진 소스의 변화를 주기적으로 확인하고 근거와 함께 알린다.',effect:'read_only',approval:'never_external_effect',required_nodes:['observe','collect','verify','notify'],default_boundary:'변화 여부를 관측하고 알릴 뿐, 후속 외부 행동을 자동으로 시작하지 않는다.'},
   {id:'file.pipeline',title:'파일 정리와 검증',user_goal:'파일을 수집·병합·변환·검증해 다음 작업에 쓸 결과물을 만든다.',effect:'local_file_write',approval:'never_external_effect',required_nodes:['collect','extract','normalize','verify'],default_boundary:'새 결과물은 별도 위치에 만들고 원본은 보존한다. 외부 업로드는 별도 승인형 Pack이다.'},
   {id:'choose.stage',title:'비교와 준비',user_goal:'상품·예약·공급업체 후보를 비교하고 장바구니나 요청 초안까지 준비한다.',effect:'external_write_staged',approval:'before_external_effect',required_nodes:['observe','discover','collect','extract','verify','approve','commit','reconcile'],default_boundary:'구매·결제·예약 확정은 포함하지 않는다. stage 결과도 대상·가격·계정 재확인이 필요하다.'},
+  {id:'coding.orchestrate',title:'코딩 업무 지휘',user_goal:'등록한 프로젝트에서 코딩 CLI의 구현·검토·문서 작업을 단계별로 인계한다.',effect:'local_file_write',approval:'none',required_nodes:['observe','draft','verify','reconcile'],default_boundary:'프로젝트별 허용 범위와 정확한 CLI 세션만 사용한다. 결과 문구만으로 완료·커밋·배포를 판정하지 않는다.'},
 ] as const;
 
 export function basePackFamilyById(id:string):BasePackFamily|undefined {

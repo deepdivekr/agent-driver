@@ -34,7 +34,11 @@ async function setup(t,overrides={}){
     let stdout='',stderr='';scope.child.stdout.on('data',b=>stdout+=b);scope.child.stderr.on('data',b=>stderr+=b);
     scope.child.stdin.on('error',()=>{});
     const done=new Promise((resolve,reject)=>{scope.child.once('error',reject);scope.child.once('close',(code,signal)=>resolve({code,signal,stdout,stderr}));});
-    await until(()=>stdout.includes('\n')||scope.child.exitCode!==null);
+    try {await until(()=>stdout.includes('\n')||scope.child.exitCode!==null,15000);}
+    catch (error) {
+      const state=await resourceUnit(scope.unit);
+      throw Error('resource barrier timeout '+JSON.stringify({mode,stdout,stderr,exitCode:scope.child.exitCode,signalCode:scope.child.signalCode,state}));
+    }
     assert.ok(stdout.includes('\n'),'scope must start inside a verified resource domain: '+stderr);
     const info=JSON.parse(stdout.split('\n')[0]);assertBudgetMembership(handle,info.pid,scope.unit);
     if(start)scope.child.stdin.write('run\n');
@@ -75,7 +79,7 @@ test('runtime native aggregate CPU quota throttles two concurrent scopes while u
   const before=readBudget(handle),started=performance.now();
   a.child.stdin.write('run\n');b.child.stdin.write('run\n');
   const results=await Promise.all([a.done,b.done]),elapsed=performance.now()-started,after=readBudget(handle);
-  for(const result of results)assert.equal(result.code,0,result.stderr);
+  for(const result of results)assert.equal(result.code,0,JSON.stringify(result));
   assert.ok(after.cpu.nr_throttled>before.cpu.nr_throttled);
   const usedMs=(after.cpu.usage_usec-before.cpu.usage_usec)/1000;
   // Includes concurrent bootstrap monitoring; one quota period plus measurement margin.

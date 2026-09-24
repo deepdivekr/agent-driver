@@ -194,17 +194,17 @@ export function validateSwarmPlanDraft(raw:unknown,limits:{max_workers:number;ca
 
 export const swarmTools={
   runtime_swarm_recover:{schema:z.object({run_id:z.string().uuid()}).strict(),implemented:true,readOnly:false},
-  runtime_swarm_start:{schema:z.object({request_id:id,goal:sentence.max(8000),context:z.record(z.string().max(120),z.union([z.string().max(4000),z.number().finite(),z.boolean(),z.null()])).default({}),mode:swarmResearchModeSchema.default('standard')}).strict(),implemented:true,readOnly:false},
+  runtime_swarm_start:{schema:z.object({request_id:id,work_id:z.string().uuid().optional(),goal:sentence.max(8000),context:z.record(z.string().max(120),z.union([z.string().max(4000),z.number().finite(),z.boolean(),z.null()])).default({}),mode:swarmResearchModeSchema.default('standard')}).strict(),implemented:true,readOnly:false},
   runtime_swarm_plan:{schema:z.object({goal:sentence.max(8000),context:z.record(z.string().max(120),z.union([z.string().max(4000),z.number().finite(),z.boolean(),z.null()])).default({})}).strict(),implemented:true,readOnly:true},
   runtime_swarm_replan:{schema:z.object({run_id:z.string().uuid(),reason:sentence.max(2000)}).strict(),implemented:true,readOnly:false},
-  runtime_swarm_run:{schema:z.object({request_id:id,plan_id:z.string().uuid()}).strict(),implemented:true,readOnly:false},
+  runtime_swarm_run:{schema:z.object({request_id:id,work_id:z.string().uuid().optional(),plan_id:z.string().uuid()}).strict(),implemented:true,readOnly:false},
   runtime_swarm_tick:{schema:z.object({run_id:z.string().uuid()}).strict(),implemented:true,readOnly:false},
   runtime_swarm_browser:{schema:z.object({run_id:z.string().uuid(),worker_id:id,lease_token:z.string().uuid(),command:z.discriminatedUnion('action',[
     z.object({action:z.literal('navigate'),url:z.string().url().max(2000)}).strict(),
     z.object({action:z.literal('observe')}).strict(),
     z.object({action:z.literal('scroll'),direction:z.enum(['up','down'])}).strict(),
   ])}).strict(),implemented:true,readOnly:false},
-  runtime_swarm_activity:{schema:z.object({run_id:z.string().uuid(),worker_id:id,lease_token:z.string().uuid(),activity:z.object({kind:z.enum(['started','navigating','observing','tool_call','checkpoint']),summary:sentence.max(500),endpoint:z.string().url().max(2000).nullable().default(null),surface_id:id.nullable().optional(),decision_layer:z.enum(['llm','jev','code']).nullable().optional()}).strict()}).strict(),implemented:true,readOnly:false},
+  runtime_swarm_activity:{schema:z.object({run_id:z.string().uuid(),worker_id:id,lease_token:z.string().uuid(),activity:z.object({kind:z.enum(['started','navigating','observing','tool_call','checkpoint']),summary:sentence.max(500),endpoint:z.string().url().max(2000).nullable().default(null),surface_id:id.nullable().optional(),actor_id:id.nullable().optional(),decision_layer:z.enum(['llm','jev','code']).nullable().optional()}).strict()}).strict(),implemented:true,readOnly:false},
   runtime_swarm_report:{schema:z.object({run_id:z.string().uuid(),worker_id:id,lease_token:z.string().uuid(),report:swarmWorkerReportSchema}).strict(),implemented:true,readOnly:false},
   runtime_swarm_status:{schema:z.object({run_id:z.string().uuid()}).strict(),implemented:true,readOnly:true},
 } as const;

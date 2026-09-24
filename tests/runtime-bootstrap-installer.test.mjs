@@ -9,10 +9,23 @@ import {fileURLToPath} from 'node:url';
 const root=resolve(fileURLToPath(new URL('..',import.meta.url))),installer=join(root,'install.sh');
 function run(executable,args,options={}){const result=spawnSync(executable,args,{encoding:'utf8',...options});return result;}
 function must(result){assert.equal(result.status,0,result.stderr||result.stdout);return result;}
-async function fixtureSource(base){
+async function fixtureSource(base,{browser=false}={}){
   const source=join(base,'source');await mkdir(source);
-  await writeFile(join(source,'package.json'),JSON.stringify({name:'fixture-agent-driver',version:'1.0.0',type:'module',scripts:{build:'node build.mjs'}})+'\n');
-  await writeFile(join(source,'package-lock.json'),JSON.stringify({name:'fixture-agent-driver',version:'1.0.0',lockfileVersion:3,requires:true,packages:{'':{name:'fixture-agent-driver',version:'1.0.0'}}})+'\n');
+  await writeFile(join(source,'package.json'),JSON.stringify({name:'fixture-agent-driver',version:'1.0.0',type:'module',scripts:{build:'node build.mjs'},...(browser?{dependencies:{playwright:'file:fake-playwright'}}:{})})+'\n');
+  if(browser){
+    const fake=join(source,'fake-playwright');await mkdir(fake);
+    await writeFile(join(fake,'package.json'),JSON.stringify({name:'playwright',version:'1.0.0',type:'module',main:'index.js',bin:{playwright:'cli.js'}})+'\n');
+    await writeFile(join(fake,'cli.js'),`#!/usr/bin/env node
+import {appendFileSync} from 'node:fs';
+if(process.argv.slice(2).join(' ')!=='install chromium')process.exit(71);
+appendFileSync(process.env.AGENT_DRIVER_FAKE_BROWSER_MARKER,'install\\n');
+`);await chmod(join(fake,'cli.js'),0o755);
+    await writeFile(join(fake,'index.js'),`import {appendFileSync} from 'node:fs';
+const record=value=>appendFileSync(process.env.AGENT_DRIVER_FAKE_BROWSER_MARKER,value+'\\n');
+export const chromium={async launch(){record('launch');if(process.env.AGENT_DRIVER_FAKE_BROWSER_FAIL==='1')throw Error('fixture missing host library');return {async newPage(){return {async goto(url){if(!url.startsWith('data:text/html,'))throw Error('unexpected URL');record('goto');},async title(){return 'agent-driver-browser-check';}};},async close(){record('close');}};}};
+`);
+    must(run('npm',['install','--package-lock-only','--ignore-scripts','--offline','--no-audit','--no-fund'],{cwd:source}));
+  }else await writeFile(join(source,'package-lock.json'),JSON.stringify({name:'fixture-agent-driver',version:'1.0.0',lockfileVersion:3,requires:true,packages:{'':{name:'fixture-agent-driver',version:'1.0.0'}}})+'\n');
   await writeFile(join(source,'.gitignore'),'node_modules/\ndist/\n');
   await writeFile(join(source,'build.mjs'),"import{mkdirSync,writeFileSync}from'node:fs';mkdirSync('dist',{recursive:true});writeFileSync('dist/cli.js',`console.log('fixture:'+process.argv.slice(2).join(','))\\n`);\n");
   must(run('git',['init','--initial-branch=main'],{cwd:source}));must(run('git',['config','user.email','fixture@example.test'],{cwd:source}));must(run('git',['config','user.name','Fixture'],{cwd:source}));must(run('git',['add','.'],{cwd:source}));must(run('git',['commit','-m','fixture'],{cwd:source}));return source;
@@ -28,6 +41,31 @@ test('runtime native bootstrap installs, builds, exposes an absolute wrapper and
   const launcher=join(environment.AGENT_DRIVER_BIN_DIR,'agent-driver'),result=must(run(launcher,['hello','world'],{env:environment}));assert.equal(result.stdout.trim(),'fixture:hello,world');
   const installed=await realpath(environment.AGENT_DRIVER_INSTALL_DIR);assert.ok(installed.startsWith(await realpath(environment.HOME)+ '/'));
   const second=must(run('bash',[installer],{env:environment}));assert.match(second.stdout,/Agent Driver 소스 업데이트/u);assert.equal((await readFile(join(environment.AGENT_DRIVER_INSTALL_DIR,'.git','agent-driver-managed'),'utf8')).startsWith('format=1\n'),true);
+});
+
+test('runtime native bootstrap uses its selected Node for npm when PATH contains an unusable node',async t=>{
+  const base=await mkdtemp(join(tmpdir(),'agent-driver-bootstrap-node-path-'));t.after(()=>rm(base,{recursive:true,force:true}));
+  const source=await fixtureSource(base),environment=await installEnvironment(base,source),shim=join(base,'shim');
+  await mkdir(shim);const wrongNode=join(shim,'node');
+  await writeFile(wrongNode,'#!/bin/sh\nprintf "wrong node selected\\n" >&2\nexit 79\n');await chmod(wrongNode,0o755);
+  environment.PATH=`${shim}:${environment.PATH}`;
+  const installed=must(run('bash',[installer],{env:environment}));
+  assert.match(installed.stdout,/설치 완료/u);
+  assert.doesNotMatch(installed.stderr,/wrong node selected/u);
+  assert.equal(must(run(join(environment.AGENT_DRIVER_BIN_DIR,'agent-driver'),['version-check'],{env:environment})).stdout.trim(),'fixture:version-check');
+});
+
+test('runtime native bootstrap verifies Chromium launch and keeps system package changes manual',async t=>{
+  const base=await mkdtemp(join(tmpdir(),'agent-driver-bootstrap-browser-'));t.after(()=>rm(base,{recursive:true,force:true}));
+  const source=await fixtureSource(base,{browser:true}),environment=await installEnvironment(base,source),marker=join(base,'browser-probe.txt');
+  environment.AGENT_DRIVER_SKIP_BROWSER_INSTALL='0';environment.AGENT_DRIVER_FAKE_BROWSER_MARKER=marker;environment.AGENT_DRIVER_FAKE_BROWSER_FAIL='1';
+  const missing=run('bash',[installer],{env:environment});assert.notEqual(missing.status,0);assert.match(missing.stdout,/전용 Chromium 실행 확인/u);
+  assert.match(missing.stderr,/시스템 라이브러리/u);assert.match(missing.stderr,/install-deps chromium/u);
+  assert.equal((await readFile(marker,'utf8')).trim(),'install\nlaunch');
+  assert.equal((await readFile(join(environment.AGENT_DRIVER_INSTALL_DIR,'.git','agent-driver-managed'),'utf8')).startsWith('format=1\n'),true);
+  environment.AGENT_DRIVER_FAKE_BROWSER_FAIL='0';
+  const ready=must(run('bash',[installer],{env:environment}));assert.match(ready.stdout,/전용 Chromium 실행 확인/u);assert.match(ready.stdout,/설치 완료/u);
+  assert.deepEqual((await readFile(marker,'utf8')).trim().split('\n'),['install','launch','install','launch','goto','close']);
 });
 
 test('runtime native bootstrap refuses unmanaged directories and symlink install roots',async t=>{

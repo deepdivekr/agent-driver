@@ -76,8 +76,8 @@ test('runtime contract migrates legacy site-policy blocks back to ordinary sign-
 });
 
 test('runtime contract connections UI protects mutations with capability and same-origin human action',async t=>{
-  const x=await setup(t);requireSiteAuth(x.api.store,x.config,['https://x.com']);const server=await startControlCenter(x.config);t.after(()=>server.close());
-  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const browserPage=await browser.newPage();await browserPage.goto(server.url);const attention=browserPage.getByRole('link',{name:'사이트 로그인 1개 필요',exact:true});await attention.waitFor();assert.match(await attention.getAttribute('href'),/connections$/u);
+  const x=await setup(t);requireSiteAuth(x.api.store,x.config,['https://x.com']);const server=await startControlCenter(x.config);let browser;t.after(async()=>{await browser?.close();await server.close()});
+  browser=await chromium.launch({headless:true});const browserPage=await browser.newPage();await browserPage.goto(server.url);const attention=browserPage.getByRole('link',{name:'사이트 로그인 1개 필요',exact:true});await attention.waitFor();assert.match(await attention.getAttribute('href'),/connections$/u);
   const page=await fetch(server.url+'connections'),body=await page.text();assert.equal(page.status,200);assert.match(body,/사이트 로그인/);assert.doesNotThrow(()=>new Script(body.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)[1]));
   const url=server.url+'connections/retry/x.com';assert.equal((await fetch(url)).status,405);assert.equal((await fetch(url,{method:'POST'})).status,403);
   assert.equal((await fetch(url,{method:'POST',headers:{Origin:'https://evil.example','X-Agent-Driver':'human-connection'}})).status,403);
@@ -111,7 +111,7 @@ async function launchPersistent(root,port){
   const child=spawn(chromium.executablePath(),['--headless=new','--no-sandbox','--disable-gpu','--no-first-run',`--remote-debugging-port=${port}`,`--user-data-dir=${root}`,'about:blank'],{stdio:'ignore'});
   for(let attempt=0;attempt<100;attempt++){if(child.exitCode!==null)throw Error('FIXTURE_BROWSER_EXIT');try{const response=await fetch(`http://127.0.0.1:${port}/json/version`);if(response.ok)return child;}catch{}await delay(100);}child.kill();throw Error('FIXTURE_BROWSER_TIMEOUT');
 }
-async function stop(child){if(child.exitCode!==null)return;const closed=once(child,'exit');child.kill('SIGTERM');await closed;}
+async function stop(child){if(child.exitCode!==null||child.signalCode!==null)return;const closed=once(child,'exit');if(!child.kill('SIGTERM'))return;await closed;}
 async function gracefulStop(child,port){const closed=once(child,'exit'),browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`),session=await browser.newBrowserCDPSession();await session.send('Browser.close').catch(()=>{});await closed;}
 test('runtime native persistent profile survives worker-page cleanup and browser restart without cookie export',async t=>{
   const server=createServer((req,res)=>{res.setHeader('Content-Type','text/html');if(req.url==='/login-fixture')res.setHeader('Set-Cookie','fixture_session=ready; Max-Age=3600; Path=/');res.end(`<html><title>Owned profile fixture</title><body><h1>${req.url}</h1><p>${req.headers.cookie?.includes('fixture_session=ready')?'fixture signed in':'fixture anonymous'}</p></body></html>`);});server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));

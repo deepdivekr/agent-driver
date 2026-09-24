@@ -129,12 +129,12 @@ export class FamilyRuntime {
     if(name==='runtime_pack_events')return {events:this.store.packEvents(this.config.project.id,Number(input.after),Number(input.limit)),delivery:'local_only'};
     if(name==='runtime_pack_watch_pause'){this.store.pauseWatch(this.config.project.id,String(input.run_id),Boolean(input.paused));return {paused:input.paused};}
     if(name==='runtime_pack_watch_tick')return this.tick();
-    const promise=name==='runtime_pack_run'?this.run(String(input.request_id),recipeSchema.parse(input.recipe)):this.executeApproved(String(input.run_id));
+    const promise=name==='runtime_pack_run'?this.run(String(input.request_id),recipeSchema.parse(input.recipe),input.work_id as string|undefined):this.executeApproved(String(input.run_id));
     this.operations.add(promise);try{return await promise;}finally{this.operations.delete(promise);}
   }
-  private async run(requestId:string,recipe:Recipe){
+  private async run(requestId:string,recipe:Recipe,workId?:string){
     requireCondition(!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(JSON.stringify(recipe)),'CREDENTIAL_LIKE_INPUT');
-    const begun=this.store.beginPack(this.config.project.id,requestId,recipe,this.engineBinding());
+    const begun=this.store.beginPack(this.config.project.id,requestId,recipe,this.engineBinding(),workId);
     const legacyReadFailure=begun.run.status==='failed'&&!isMutation(recipe)&&this.store.packExecution(this.config.project.id,begun.run.id)===null;
     if(!begun.created&&!legacyReadFailure&&!['running','retryable_failure','waiting_auth','paused_config'].includes(begun.run.status))return {...this.publicRun(begun.run),deduplicated:true};
     const claim=this.store.claimPackExecution(this.config.project.id,begun.run.id);

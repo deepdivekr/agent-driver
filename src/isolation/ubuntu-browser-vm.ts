@@ -85,7 +85,7 @@ export interface UbuntuBrowserVmSpec {
   vnc_port:number;
   guest_user:string;
 }
-export const ubuntuBrowserVmDefaults=Object.freeze({memory_mib:4096,cpus:2,disk_gib:30,ssh_port:2222,devtools_port:9222,vnc_port:5901,guest_user:'agentdriver'});
+export const ubuntuBrowserVmDefaults=Object.freeze({memory_mib:3072,cpus:2,disk_gib:30,ssh_port:2222,devtools_port:9222,vnc_port:5901,guest_user:'agentdriver'});
 /** Pinned from Ubuntu's Noble current SHA256SUMS on 2026-09-21. Update only with a reviewed release change. */
 export const defaultUbuntu2404Amd64Image=Object.freeze({
   filename:'noble-server-cloudimg-amd64.img',url:'https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img',sha256:'612b2c0cc1bc413a6cb8c38fd611794caf0f2b436c50013d8b3794db12ad7354',

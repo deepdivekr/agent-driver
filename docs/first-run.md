@@ -1,10 +1,10 @@
 # 첫 실행: 설치 확인과 MCP 연결
 
-Agent Driver의 설치 경험은 사용자가 Pack, registry, GitHub 경로, MCP 설정 파일을 이해하도록 요구하지 않는다. 사용자는 설치를 담당하는 에이전트에게 다음처럼 한 번만 말하면 된다.
+Agent Office의 설치 경험은 사용자가 Pack, registry, GitHub 경로, MCP 설정 파일을 이해하도록 요구하지 않는다. 사용자는 설치를 담당하는 에이전트에게 다음처럼 한 번만 말하면 된다. 기존 `agent-driver` 설치 명령과 MCP 이름은 호환을 위해 유지한다.
 
 > Agent Driver를 설치하고, 앞으로 컴퓨터·브라우저 작업은 Agent Driver로 해줘.
 
-기본 agent runtime은 Hermes다. 설치 에이전트가 Agent Driver를 설치하고 `agent-driver connect`를 실행하면 로컬 온보딩이 열린다. 첫 화면은 설치 성공을 확인하고 Codex·Claude Code·OpenCode·Cursor·Hermes 중 현재 WSL/Linux 환경에 있는 클라이언트에 공통 stdio 서버를 등록한다. Telegram 대화·장기 기억·계획은 Hermes가, 외부 효과·lease·승인·검증은 Agent Driver가 맡는다.
+기본 agent runtime은 Hermes다. 설치 에이전트가 Agent Driver를 설치하고 `agent-driver connect`를 실행하면 Agent Office의 로컬 온보딩이 열린다. 첫 화면은 설치 성공을 확인하고 Codex·Claude Code·OpenCode·Cursor·Hermes 중 현재 WSL/Linux 환경에 있는 클라이언트에 공통 stdio 서버를 등록한다. 연결 뒤에는 같은 화면의 업무 현황에서 단계별 진척·중단 이유·인계 기록을 확인한다. Telegram 대화·장기 기억·계획은 Hermes가, 외부 효과·lease·승인·검증은 Agent Driver가 맡는다.
 
 직접 설치할 때는 Ubuntu/WSL 터미널에서 다음 한 줄을 실행한다.
 
@@ -22,7 +22,7 @@ bootstrap은 홈 디렉터리 안에 고정 Node/npm 런타임과 저장소를 �
 
 ## 연결 화면
 
-연결 화면은 관제센터의 **연결 및 설정**이다. **에이전트 → 로컬 실행 → AI → Jev**를 한 화면씩 설정한다. 화면 하단의 SETUP TAIL은 설치 확인, MCP 등록, 로컬 실행, AI, Jev의 시작·완료·실패만 보여주며 키와 CLI 원문 출력은 기록하지 않는다. 사이트 로그인은 온보딩에 포함하지 않는다. Task가 인증이 필요한 URL을 실제로 만났을 때 해당 worker를 멈추고 관제센터에 사이트별 로그인 요청을 표시한다. `connect`는 서버를 별도 프로세스로 유지하고 기존 연결을 재사용하며, MCP 재접속은 창을 다시 열지 않는다. [세부 동작과 지원 범위](control-settings.md).
+연결 화면은 관제센터의 **연결 및 설정**이다. **에이전트 → 로컬 실행 → AI → Jev**를 한 화면씩 설정한다. 화면 하단의 **연결 작업 기록**은 이 화면에서 실행한 설치·등록·연결의 시작과 결과를 보여준다. 터미널 출력이나 업무 실행 로그가 아니다. 실제 업무 진행 기록은 **업무 현황 → 업무 상세**에서 본다. 키와 CLI 원문 출력은 기록하지 않는다. 사이트 로그인은 온보딩에 포함하지 않는다. Task가 인증이 필요한 URL을 실제로 만났을 때 해당 worker를 멈추고 관제센터에 사이트별 로그인 요청을 표시한다. `connect`는 서버를 별도 프로세스로 유지하고 기존 연결을 재사용하며, MCP 재접속은 창을 다시 열지 않는다. [세부 동작과 지원 범위](control-settings.md).
 
 현재 제공되는 승인 선택지는 **방해하지 않는 모드** 하나다. 사용자 desktop, 탭, foreground, clipboard는 공유하거나 제어하지 않고, 지속형 전용 Agent Computer의 browser surface만 사용한다.
 

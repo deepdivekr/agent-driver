@@ -19,8 +19,8 @@ test('runtime contract managed client install downloads one allowlisted script, 
   const resolver=id=>{assert.equal(id,'codex');if(!installed)throw Error('missing');return '/home/fixture/.local/bin/codex';};
   const fetcher=async(url,options)=>{assert.equal(url,'https://chatgpt.com/codex/install.sh');assert.equal(options.redirect,'error');return new Response('#!/usr/bin/env bash\nprintf ready\n',{status:200,headers:{'content-type':'text/x-shellscript'}});};
   const runner={async run(request){assert.equal(request.executable,'/bin/bash');assert.equal(request.args.length,1);assert.equal(request.timeout_ms,600000);scriptPath=request.args[0];assert.match(await readFile(scriptPath,'utf8'),/^#!\/usr\/bin\/env bash/u);installed=true;return {code:0,stdout:'credential-like-output-must-not-escape',stderr:''};}};
-  const controller=new ClientBootstrapController({},runner,fetcher,resolver,'linux'),result=await controller.install('codex',stage=>stages.push(stage));
-  assert.deepEqual(stages,['downloading','running','verifying']);assert.equal(result.clients[0].installed,true);assert.doesNotMatch(JSON.stringify(result),/credential-like-output/iu);await assert.rejects(readFile(scriptPath,'utf8'),/ENOENT/);
+  const controller=new ClientBootstrapController({},runner,fetcher,resolver,'linux'),result=await controller.install('codex',(stage,observation)=>stages.push({stage,observation}));
+  assert.deepEqual(stages.map(item=>item.stage),['downloading','downloaded','running','installer_exited','verifying']);assert.ok(stages[1].observation.byte_count>0);assert.equal(stages[3].observation.exit_code,0);assert.ok(stages[3].observation.elapsed_ms>=0);assert.equal(result.clients[0].installed,true);assert.doesNotMatch(JSON.stringify(result),/credential-like-output/iu);await assert.rejects(readFile(scriptPath,'utf8'),/ENOENT/);
 });
 
 test('runtime contract managed install rejects unsupported platform, redirect and non-shell payload before execution',async()=>{
@@ -30,6 +30,17 @@ test('runtime contract managed install rejects unsupported platform, redirect an
   await assert.rejects(new ClientBootstrapController({},runner,redirected,missing,'linux').install('codex'),/CLIENT_INSTALL_DOWNLOAD_REJECTED/);
   const invalid=async()=>new Response('console.log(1)',{status:200});
   await assert.rejects(new ClientBootstrapController({},runner,invalid,missing,'linux').install('codex'),/CLIENT_INSTALL_SCRIPT_INVALID/);assert.equal(calls,0);
+});
+
+test('runtime contract failed installer reports its actual exit code without exposing raw output',async()=>{
+  const observations=[];
+  const missing=()=>{throw Error('missing');};
+  const fetcher=async()=>new Response('#!/bin/bash\nexit 2\n',{status:200});
+  const runner={async run(){return {code:2,stdout:'secret-stdout',stderr:'secret-stderr'};}};
+  const controller=new ClientBootstrapController({},runner,fetcher,missing,'linux');
+  await assert.rejects(controller.install('codex',(stage,observation)=>observations.push({stage,observation})),/CLIENT_INSTALL_FAILED/u);
+  assert.equal(observations.find(item=>item.stage==='installer_exited')?.observation?.exit_code,2);
+  assert.doesNotMatch(JSON.stringify(observations),/secret/u);
 });
 
 test('runtime native client resolver finds managed Linux paths and the official Cursor agent command',async()=>{

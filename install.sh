@@ -77,6 +77,12 @@ else
 fi
 [[ "$(node_version "$node_bin")" == "$AGENT_DRIVER_NODE_VERSION" ]] || fail "Node.js ${AGENT_DRIVER_NODE_VERSION}이 필요합니다."
 
+# npm and package lifecycle scripts resolve `node` through /usr/bin/env. Keep
+# the selected, verified Node first for each child without changing the user's
+# shell PATH or relying on an unrelated system Node installation.
+readonly AGENT_DRIVER_TOOL_PATH="$(dirname -- "$node_bin"):${PATH:-}"
+with_selected_node() { env PATH="$AGENT_DRIVER_TOOL_PATH" "$@"; }
+
 if [[ -e "$INSTALL_DIR" ]]; then
   [[ -d "$INSTALL_DIR/.git" && -f "$INSTALL_DIR/.git/agent-driver-managed" ]] || fail "기존 비관리 디렉터리를 덮어쓰지 않습니다: $INSTALL_DIR"
   [[ "$(git -C "$INSTALL_DIR" remote get-url origin)" == "$REPOSITORY_URL" ]] || fail "기존 설치의 원격 저장소가 다릅니다."
@@ -94,24 +100,37 @@ fi
 base_npm=""
 if [[ -x "$(dirname -- "$node_bin")/npm" ]]; then base_npm="$(dirname -- "$node_bin")/npm"; elif command -v npm >/dev/null 2>&1; then base_npm="$(command -v npm)"; else fail "npm bootstrap을 찾지 못했습니다."; fi
 npm_bin="$base_npm"
-if [[ "$($base_npm --version 2>/dev/null || true)" != "$AGENT_DRIVER_NPM_VERSION" ]]; then
+if [[ "$(with_selected_node "$base_npm" --version 2>/dev/null || true)" != "$AGENT_DRIVER_NPM_VERSION" ]]; then
   npm_root="$RUNTIME_DIR/npm-${AGENT_DRIVER_NPM_VERSION}"
   safe_home_path "$npm_root"
   if [[ ! -x "$npm_root/node_modules/.bin/npm" ]]; then
     say "npm ${AGENT_DRIVER_NPM_VERSION} 준비"
-    "$base_npm" install --silent --no-audit --no-fund --prefix "$npm_root" --no-save "npm@${AGENT_DRIVER_NPM_VERSION}"
+    with_selected_node "$base_npm" install --silent --no-audit --no-fund --prefix "$npm_root" --no-save "npm@${AGENT_DRIVER_NPM_VERSION}"
   fi
   npm_bin="$npm_root/node_modules/.bin/npm"
 fi
-[[ "$($npm_bin --version)" == "$AGENT_DRIVER_NPM_VERSION" ]] || fail "npm ${AGENT_DRIVER_NPM_VERSION}을 준비하지 못했습니다."
+[[ "$(with_selected_node "$npm_bin" --version)" == "$AGENT_DRIVER_NPM_VERSION" ]] || fail "npm ${AGENT_DRIVER_NPM_VERSION}을 준비하지 못했습니다."
 
 say "의존성 설치"
-(cd "$INSTALL_DIR" && "$npm_bin" ci --no-audit --no-fund)
+(cd "$INSTALL_DIR" && with_selected_node "$npm_bin" ci --no-audit --no-fund)
 say "Agent Driver 빌드"
-(cd "$INSTALL_DIR" && "$npm_bin" run build)
+(cd "$INSTALL_DIR" && with_selected_node "$npm_bin" run build)
 if [[ "${AGENT_DRIVER_SKIP_BROWSER_INSTALL:-0}" != "1" ]]; then
   say "전용 Chromium 준비"
-  (cd "$INSTALL_DIR" && "$npm_bin" exec -- playwright install chromium)
+  (cd "$INSTALL_DIR" && with_selected_node "$npm_bin" exec -- playwright install chromium)
+  say "전용 Chromium 실행 확인"
+  if ! (cd "$INSTALL_DIR" && with_selected_node "$node_bin" --input-type=module -e '
+    import {chromium} from "playwright";
+    const browser=await chromium.launch({headless:true,timeout:15000});
+    try {
+      const page=await browser.newPage();
+      await page.goto("data:text/html,<title>agent-driver-browser-check</title>",{timeout:5000});
+      if(await page.title()!=="agent-driver-browser-check")throw Error("BROWSER_SMOKE_TITLE_MISMATCH");
+    } finally {await browser.close();}
+  ') >/dev/null 2>&1; then
+    printf -v browser_deps_command '%q %q install-deps chromium' "$node_bin" "$INSTALL_DIR/node_modules/playwright/cli.js"
+    fail "Chromium을 실행하지 못했습니다. Ubuntu/WSL 시스템 라이브러리가 부족할 수 있습니다. 필요한 경우 '${browser_deps_command}'를 직접 실행한 뒤 설치를 다시 시도하세요. 이 명령은 시스템 패키지 설치 권한을 요청할 수 있습니다."
+  fi
 fi
 
 launcher="$BIN_DIR/agent-driver"

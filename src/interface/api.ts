@@ -11,7 +11,7 @@ import {liveness,type ProcessIdentity} from '../supervisor/identity.js';
 import {ensureSupervisor} from '../supervisor/manager.js';
 import {requireCondition} from '../core/contracts.js';
 import {loadHostConfig,type HostConfig} from './config.js';
-import {draftManifest,terminalManifest,startRequest,tools} from './catalog.js';
+import {codingManifest,draftManifest,terminalManifest,startRequest,tools} from './catalog.js';
 import {intake} from './intake.js';
 import {resourceHealth} from '../resources/configured.js';
 import {storageError} from '../storage/budget.js';
@@ -33,6 +33,8 @@ import {sanitizeSwarmEndpoint} from '../swarm/dashboard.js';
 import {SwarmVisualExecutor} from '../swarm/visual-executor.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
+import {WorkRuntime} from '../work/runtime.js';
+import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
 
 export type SwarmBrowserCommand={action:'navigate';url:string}|{action:'observe'}|{action:'scroll';direction:'up'|'down'};
 export interface SwarmVisualAdapter{
@@ -42,11 +44,13 @@ export interface SwarmVisualAdapter{
   close():Promise<void>;
 }
 type SwarmDispatch=Awaited<ReturnType<SwarmRuntime['tick']>>['dispatches'][number];
-export interface RuntimeApiOptions {channelTransport?:JevSystemOneTransport;approval?:PackApprovalDispatcher;swarmModel?:StructuredModel;swarmJev?:JevSystemOneTransport;swarmProviders?:SwarmRuntimeProviders;swarmVisual?:SwarmVisualAdapter;}
+export interface RuntimeApiOptions {channelTransport?:JevSystemOneTransport;approval?:PackApprovalDispatcher;swarmModel?:StructuredModel;swarmJev?:JevSystemOneTransport;swarmProviders?:SwarmRuntimeProviders;swarmVisual?:SwarmVisualAdapter;coding?:CodingRuntimeOptions;}
 
 export class RuntimeApi{
   readonly store:PackStore;
   readonly packs:FamilyRuntime;
+  readonly work:WorkRuntime;
+  readonly coding:CodingRuntime;
   readonly swarm:SwarmRuntime;
   readonly visual:SwarmVisualAdapter|null;
   private closing:Promise<void>|null=null;
@@ -55,7 +59,9 @@ export class RuntimeApi{
   private explicitProviders:boolean;
   constructor(readonly config:HostConfig,readonly options:RuntimeApiOptions={}){
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
-    this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config));
+    this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
+    this.work=new WorkRuntime(this.store,config,this.model);
+    this.coding=new CodingRuntime(this.store,config,this.model,options.coding);
     this.packs=new FamilyRuntime(this.store,config,{approval:options.approval??new LocalApprovalDispatcher(this.store),llm:this.model});
     let jev=options.swarmJev;if(!jev&&config.swarm?.enabled)jev=optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport??undefined;
     this.explicitProviders=options.swarmProviders!==undefined;
@@ -70,11 +76,10 @@ export class RuntimeApi{
   }
   private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
   close(){
-    if(this.closed)return;this.closed=true;this.packs.close();
-    if(this.visual)this.closing=this.visual.close().catch(()=>{process.exitCode=1;}).finally(()=>this.store.close());
-    else this.store.close();
+    if(this.closed)return;this.closed=true;this.packs.close();this.coding.close();
+    this.closing=(async()=>{await this.coding.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
   }
-  async drain(){await this.packs.drain();if(this.closing)await this.closing;}
+  async drain(){await this.packs.drain();await this.coding.drain();if(this.closing)await this.closing;}
   private async releaseFinishedVisuals(runId:string){
     if(!this.visual)return;
     const status=this.swarm.status(runId);
@@ -110,6 +115,29 @@ export class RuntimeApi{
   private scoped(taskId:string){const task=this.store.task(taskId);requireCondition(task.project_id===this.config.project.id,'TASK_SCOPE_MISMATCH');return task;}
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');
+    if(name.startsWith('runtime_work_')){
+      switch(name){
+        case 'runtime_work_start':return this.work.start(args);
+        case 'runtime_work_define':return this.work.define(args);
+        case 'runtime_work_answer':return this.work.answer(args);
+        case 'runtime_work_status':return this.work.status(args);
+        case 'runtime_work_list':return this.work.list(args);
+        case 'runtime_work_pause':return this.work.pause(args);
+        default:throw Error('UNKNOWN_TOOL');
+      }
+    }
+    if(name.startsWith('runtime_coding_')){
+      switch(name){
+        case 'runtime_coding_projects':return this.coding.projects(args);
+        case 'runtime_coding_last':return this.coding.last(args);
+        case 'runtime_coding_start':return this.coding.start(args);
+        case 'runtime_coding_step':return this.coding.step(args);
+        case 'runtime_coding_status':return this.coding.status(args);
+        case 'runtime_coding_pause':return this.coding.pause(args);
+        case 'runtime_coding_reconcile':return this.coding.reconcile(args);
+        default:throw Error('UNKNOWN_TOOL');
+      }
+    }
     if(name.startsWith('runtime_swarm_')&&!this.explicitProviders&&!this.options.swarmJev){
       const jev=optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport;
       if(jev)this.swarm.providers.decision={id:'typesafe-jev',systemOne:(request,settings)=>jev.systemOne(request,settings)};else delete this.swarm.providers.decision;
@@ -131,13 +159,14 @@ export class RuntimeApi{
       const tool=swarmTools[name as keyof typeof swarmTools];requireCondition(tool,'UNKNOWN_TOOL');const input=tool.schema.parse(args) as Record<string,unknown>,writes=!tool.readOnly,reservation=writes?this.store.storage(this.config).reserve('swarm_execution',4_194_304):null;let failed=false;
       try{switch(name){
         case 'runtime_swarm_start':{
-          const result=await this.swarm.start(String(input.request_id),String(input.goal),input.context as Record<string,string|number|boolean|null>,input.mode as 'standard');
+          const args=[String(input.request_id),String(input.goal),input.context as Record<string,string|number|boolean|null>,input.mode as 'standard'] as const;
+          const result=input.work_id===undefined?await this.swarm.start(...args):await this.swarm.start(...args,String(input.work_id));
           return this.visual?await this.attachVisualDispatches(result,result.run.run_id):result;
         }
         case 'runtime_swarm_plan':return this.swarm.plan(String(input.goal),input.context as Record<string,string|number|boolean|null>);
         case 'runtime_swarm_replan':return this.swarm.replan(String(input.run_id),String(input.reason));
         case 'runtime_swarm_recover':return this.swarm.recover(String(input.run_id));
-        case 'runtime_swarm_run':return this.swarm.run(String(input.request_id),String(input.plan_id));
+        case 'runtime_swarm_run':return input.work_id===undefined?this.swarm.run(String(input.request_id),String(input.plan_id)):this.swarm.run(String(input.request_id),String(input.plan_id),String(input.work_id));
         case 'runtime_swarm_tick':return await this.attachVisualDispatches(await this.swarm.tick(String(input.run_id)),String(input.run_id));
         case 'runtime_swarm_browser':{
           requireCondition(this.visual,'SWARM_VISUAL_NOT_ENABLED');
@@ -177,7 +206,7 @@ export class RuntimeApi{
       case 'runtime_decision_status':{
         const root=join(dirname(this.config.dbPath),'decisions'),registry=new DecisionProfileRegistry(join(root,'registry')),scope=this.config.environment==='fixture'?'fixture' as const:'production' as const,entries=[{catalog:ROW_DECISION_CATALOG,journal:'family.jsonl'},{catalog:ONE_LINE_DECISION_CATALOG,journal:'intake.jsonl'},{catalog:ADAPTIVE_DECISION_CATALOG,journal:'adaptive.jsonl'},{catalog:SWARM_DECISION_CATALOG,journal:'swarm.jsonl'}],decisions=[];
         for(const entry of entries)try{const profile=await registry.status(entry.catalog,scope),audit=await auditDecisionJournal(join(root,entry.journal)),report=decisionOperationsReport(entry.catalog,'jev-latest',audit);decisions.push({catalog_id:entry.catalog.id,profile,events:report.events,judgments:report.judgments,labeled:report.labels.valid,journal_errors:report.journal_errors.length,provider:report.provider,by_decision:report.by_decision});}catch(error){decisions.push({catalog_id:entry.catalog.id,profile:{status:'invalid'},error:error instanceof Error&&/^DECISION_[A-Z_]+$/u.test(error.message)?error.message:'DECISION_STATUS_UNAVAILABLE'});}
-        return {scope,decisions,mutation_allowed:false,profile_promotion_exposed:false};
+        return {scope,decisions,memory:this.store.decisionMemory.summary(this.config.project.id),mutation_allowed:false,profile_promotion_exposed:false};
       }
       case 'runtime_storage_plan':return this.store.retention(this.config).plan();
       case 'runtime_storage_prune':return this.store.retention(this.config).execute(String(input.plan_sha256));
@@ -187,11 +216,11 @@ export class RuntimeApi{
         const storage_boundary=ledger.status();
         const model_boundary=this.model instanceof SubscriptionAwareStructuredModel||this.model instanceof ConfiguredStructuredModel?await this.model.status():{mcp_sampling:'unobserved',clients:[],fallback:'configured',credentials_exposed:false};
         const jev=optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment());
-        return {health:this.config.environment==='fixture'&&process.platform==='linux'&&resource_boundary.status!=='unavailable_or_changed'&&!['blocked','unavailable'].includes(storage_boundary.status)?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.packs?'configured_pack_sources_and_targets':this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux',model_execution_enabled:this.config.terminal!==null||(this.config.packs!==null&&this.config.packs.models!=='off')||Boolean(this.config.swarm?.enabled),autonomous_planning_enabled:Boolean(this.config.swarm?.enabled),
+        return {health:this.config.environment==='fixture'&&process.platform==='linux'&&resource_boundary.status!=='unavailable_or_changed'&&!['blocked','unavailable'].includes(storage_boundary.status)?'ready':'degraded',verified_for_environment:false,environment:this.config.environment,execution_scope:this.config.coding?'configured_coding_projects':this.config.packs?'configured_pack_sources_and_targets':this.config.terminal?.files?'configured_fixture_and_owned_cli_scoped_files':this.config.terminal?'configured_fixture_and_owned_cli_protocol':'configured_fixture_only',execution_platform_supported:process.platform==='linux'||process.platform==='win32',model_execution_enabled:this.config.terminal!==null||(this.config.packs!==null&&this.config.packs.models!=='off')||Boolean(this.config.swarm?.enabled)||Boolean(this.config.coding?.model_data_approved),autonomous_planning_enabled:Boolean(this.config.swarm?.enabled||this.config.coding?.model_data_approved),
           swarm_boundary:this.config.swarm?{status:this.config.swarm.enabled?'configured':'disabled',planner:'llm_required',max_logical_workers:this.config.swarm.max_logical_workers,max_concurrency:this.config.swarm.max_concurrency,worker_execution:'orchestrator_pull_adapter'}:{status:'not_configured'},pack_boundary:this.config.packs?{status:'connected',sources:this.config.packs.sources.length,targets:this.config.packs.targets.length,models:this.config.packs.models,model_data_approved:this.config.packs.model_data_approved}:{status:'not_connected'},decision_providers:{jev:{status:jev.status,reason:jev.reason},llm:model_boundary,cascade:['mcp_client_subscription','native_client_subscription','configured_fallback','code_validation']},resource_boundary,storage_boundary};
       }
-      case 'runtime_capabilities_list':return {capabilities:[draftManifest,terminalManifest].filter(m=>this.config.project.capabilities.includes(m.id))};
-      case 'runtime_capability_describe':requireCondition(this.config.project.capabilities.includes(String(input.capability)),'CAPABILITY_NOT_DELEGATED');return input.capability==='coding.session'?terminalManifest:draftManifest;
+      case 'runtime_capabilities_list':return {capabilities:[draftManifest,terminalManifest,codingManifest].filter(m=>this.config.project.capabilities.includes(m.id))};
+      case 'runtime_capability_describe':requireCondition(this.config.project.capabilities.includes(String(input.capability)),'CAPABILITY_NOT_DELEGATED');return input.capability==='coding.session'?terminalManifest:input.capability==='coding.orchestrate'?codingManifest:draftManifest;
       case 'runtime_terminal_start':{
         await ensureTerminalHost(this.config);const result=this.store.startSession(this.config,String(input.request_id));
         return {...this.store.terminalStatus(result.session.id),deduplicated:!result.created};

@@ -84,6 +84,16 @@ worker report는 hash만 전달하지 않는다. 최대 32개의 `{source_url, c
 
 ## 권한과 완료
 
+### 반복 실행의 판단 메모리
+
+읽기 전용 Swarm은 LLM 보정 후보와 코드로 검증한 workflow 사례를 로컬 DB에 남긴다. 다음 실행에서는 같은 목표·worker 구성·질문·모델 범위의 검증 사례 최대 3개를 Jev의 참고 입력으로 재사용한다. 프로그램 재시작 후에도 유지되며 다른 사용자나 다른 작업으로 전용하지 않는다. 자세한 검증·만료·폐기 범위는 [Decision Plane](decision-plane.md#검증된-사례-메모리-phase-65)을 참고한다.
+
+내부 `SwarmRuntimeProviders.learning`의 기본값은 `reuse`다. `collect`는 사례를 저장하되 입력에는 넣지 않고, `off`는 수집·재사용을 모두 중단한다. 이 값은 실행 권한이나 사용자 승인과 무관하다. LLM 품질 평가는 정답으로 자동 학습하지 않는다.
+
+개발자가 실사이트 조사 드라이버를 비교할 때는 `scripts/live-visual-research.mjs`의 `--decision-mode llm-only|hybrid`와 `--learning off|collect|reuse`를 사용한다. LLM-only는 Jev 키를 요구하지 않으며 암묵적으로 Jev를 호출하지 않는다. `scripts/decision-memory-ablation.mjs --help`는 별도의 **저장된 실사이트 근거 재생** 비교다. 실제 모델을 호출하지만 사이트 재방문·worker 생성·새 카드뉴스 제작 시간을 측정하지 않는다.
+
+### 실행 경계
+
 - LLM/Jev의 plan과 판단에는 항상 `execution_authority=false`, `approval_granted=false`가 기록된다.
 - `external_effect`와 `irreversible` worker는 dispatch하지 않고 사람 예외 큐로 보낸다. 기존 snapshot-bound 승인 경로와 결합되기 전에는 실행할 수 없다.
 - `succeeded` 보고에는 독립 readback hash와 방법이 필수다.

@@ -60,7 +60,13 @@ test('runtime native restore does not replay queued work after source records a 
  assert.throws(()=>new RuntimeStore(join(x.restored,'runtime.sqlite')),/RESTORE_RECONCILIATION_REQUIRED/);
  const loose=join(x.root,'restored-loose.sqlite');copyFileSync(join(x.restored,'runtime.sqlite'),loose);assert.throws(()=>new RuntimeStore(loose),/RESTORE_RECONCILIATION_REQUIRED/);
  writeFileSync(x.configPath,JSON.stringify({...x.raw,data_dir:x.restored}));assert.throws(()=>new RuntimeApi(loadHostConfig(x.configPath)),/RESTORE_RECONCILIATION_REQUIRED/);
- for(const args of [['tasks','--project','backup','--db',loose],['recover','--task',x.task.id,'--db',loose],['mcp','--config',x.configPath],['supervisor','start','--config',x.configPath]])await assert.rejects(exec(process.execPath,['dist/cli.js',...args],{timeout:10000}),error=>/RESTORE_RECONCILIATION_REQUIRED/.test(error.stderr));
+ for(const args of [['tasks','--project','backup','--db',loose],['recover','--task',x.task.id,'--db',loose],['mcp','--config',x.configPath],['supervisor','start','--config',x.configPath]]){
+  await assert.rejects(exec(process.execPath,['dist/cli.js',...args],{timeout:30000}),error=>{
+   assert.notEqual(error.code,'ETIMEDOUT',`CLI timed out before checking restored database: ${args[0]}`);
+   assert.match(String(error.stderr),/RESTORE_RECONCILIATION_REQUIRED/,`CLI did not reject restored database: ${args[0]}`);
+   return true;
+  });
+ }
  assert.equal(readFileSync(effect,'utf8'),'one observed effect');assert.equal(x.store.task(x.task.id).status,'succeeded');
 });
 test('runtime native backup binds live spool prefix and handoff without copying worktree or unknown files',async t=>{
