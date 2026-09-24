@@ -1,10 +1,10 @@
 import {randomBytes} from 'node:crypto';
 import {type IncomingMessage,type ServerResponse} from 'node:http';
 import {dirname,resolve} from 'node:path';
-import {type HostConfig} from '../interface/config.js';
+import {type HostConfig,workModelDataApproved} from '../interface/config.js';
 import {SubscriptionAuthFlowController} from '../integrations/subscription-auth.js';
 import {probeStructuredModel} from '../integrations/model-provider.js';
-import {approveNonInterferingConnection,localConnectionPaths,readLocalConnection} from '../onboarding/connection.js';
+import {approveNonInterferingConnection,localConnectionPaths,readLocalConnection,setWorkModelDataApproval} from '../onboarding/connection.js';
 import {ClientBootstrapController} from '../onboarding/client-bootstrap.js';
 import {McpRegistrationController,type McpRegistrationClient} from '../onboarding/mcp-registration.js';
 import {effectiveModelEnvironment,modelSettingsFingerprint,modelSettingsPath,previewModelSettings,publicModelSettings,readModelSettings,saveModelSettings,type ApiVerification} from '../onboarding/model-settings.js';
@@ -17,7 +17,7 @@ export class ControlSettings{
   readonly path:string;private busy=false;private providerProbe:{token:string;fingerprint:string;verification:ApiVerification;expires_at:number}|null=null;
   constructor(readonly config:HostConfig,readonly auth:Pick<SubscriptionAuthFlowController,'connections'|'view'|'start'|'close'>=new SubscriptionAuthFlowController(),readonly environment:NodeJS.ProcessEnv=process.env,readonly fetcher:typeof fetch=fetch,readonly mcp=new McpRegistrationController(dirname(config.path),environment),readonly activity=new SetupActivityStream(dirname(config.path)),readonly bootstrap=new ClientBootstrapController(environment,undefined,fetcher)){this.path=modelSettingsPath(config);}
   private connection(){const root=dirname(this.config.path);return resolve(this.config.path)===localConnectionPaths(root).runtimeConfig?{kind:'local' as const,connected:readLocalConnection(root)!==null}: {kind:'host_configured' as const,connected:true};}
-  private status(){return {...publicModelSettings(readModelSettings(this.path),this.environment),computer:this.connection(),runtime_platform:process.platform,site_login_configured:Boolean(this.config.swarm?.visual.owned_vm),execution_approval_unchanged:true};}
+  private status(){return {...publicModelSettings(readModelSettings(this.path),this.environment),computer:this.connection(),runtime_platform:process.platform,site_login_configured:Boolean(this.config.swarm?.visual.owned_vm),work_model_data:{approved:workModelDataApproved(this.config),editable:this.connection().kind==='local'},execution_approval_unchanged:true};}
   async handle(request:IncomingMessage,response:ServerResponse,suffix:string,host:string){
     if(suffix!=='settings'&&!suffix.startsWith('settings/'))return false;
     const nonce=randomBytes(18).toString('base64url');
@@ -46,7 +46,8 @@ export class ControlSettings{
           const inputKey=typeof value.api_key==='string'?value.api_key:null;
           const key=inputKey??(saved?.selection.api_provider===provider?effectiveModelEnvironment(saved,this.environment).AGENT_DRIVER_API_KEY:undefined)??'';
           const base=provider==='openai_compatible'&&typeof value.api_base_url==='string'?value.api_base_url:saved?.selection.api_base_url??'';
-          send(200,await apiModelCatalog(provider,key,base,this.fetcher));
+          const current=typeof value.current==='string'&&value.current.length<=200?value.current:'';
+          send(200,await apiModelCatalog(provider,key,base,this.fetcher,current));
         }else if(suffix==='settings/provider-probe'){
           await this.activity.record('ai','running','API 공급자 연결을 확인하는 중입니다.');
           const input=body&&typeof body==='object'?{...(body as Record<string,unknown>)}:{};delete input.setup_area;
@@ -92,6 +93,10 @@ export class ControlSettings{
           const name=({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor',hermes:'Hermes'} as const)[value.client as McpRegistrationClient];
           await this.activity.record('mcp','running',`${name}에 agent-driver mcp 등록 요청`);
           const started=Date.now(),result=await this.mcp.register(value.client as McpRegistrationClient);await this.activity.record('mcp','success',`${name} MCP 등록 완료 · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
+        }else if(suffix==='settings/work-data'){
+          const approved=body&&typeof body==='object'?(body as {approved?:unknown}).approved:undefined;
+          if(this.connection().kind!=='local'||typeof approved!=='boolean'){send(400,{error:'WORK_DATA_APPROVAL_INVALID'});return true;}
+          await setWorkModelDataApproval(this.config.path,approved);await this.activity.record('ai','success',approved?'업무 내용을 선택한 AI로 보내 정의하도록 허용했습니다.':'업무 내용의 AI 전송 허용을 해제했습니다.');send(200,this.status());
         }else if(suffix==='settings/computer'){
           if(this.connection().kind!=='local'||!body||typeof body!=='object'||(body as {mode?:unknown}).mode!=='non_interfering'){send(400,{error:'INVALID_COMPUTER_CONNECTION'});return true;}
           await this.activity.record('runtime','running','전용 작업 폴더와 로컬 실행 권한을 준비하는 중입니다.');await approveNonInterferingConnection(dirname(this.config.path));await this.activity.record('runtime','success','로컬 실행 연결을 승인했습니다.');send(200,this.status());

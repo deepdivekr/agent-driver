@@ -1,10 +1,11 @@
 import {spawn} from 'node:child_process';
 import {createInterface} from 'node:readline';
 import {normalizeCompatibleBaseUrl,type ApiProvider} from '../integrations/model-provider.js';
+import {FAST_MODEL_DEFAULTS,selectedFastModel} from '../integrations/fast-models.js';
 import {nativeProcessRunner,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
 
 export interface ModelOption {id:string;label:string;}
-export interface ModelCatalog {source:string;status:'available'|'unavailable';models:ModelOption[];fetched_at:string|null;}
+export interface ModelCatalog {source:string;status:'available'|'unavailable';models:ModelOption[];fetched_at:string|null;selected?:string;}
 const valid=(value:unknown):value is string=>typeof value==='string'&&value.length>0&&value.length<=200&&!/[\s\x00-\x1f]/u.test(value)&&!/^(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})$/u.test(value);
 const validKey=(value:unknown):value is string=>typeof value==='string'&&value.length>=16&&value.length<=4_096&&!/[\s\x00-\x1f]/u.test(value);
 const catalog=(source:string,models:ModelOption[]):ModelCatalog=>({source,status:models.length?'available':'unavailable',models,fetched_at:models.length?new Date().toISOString():null});
@@ -42,7 +43,14 @@ export async function opencodeModelCatalog(environment:NodeJS.ProcessEnv=process
   }catch{return unavailable('opencode_cli');}
 }
 
-export async function apiModelCatalog(provider:ApiProvider,key:string,baseUrl:string='',fetcher:typeof fetch=fetch):Promise<ModelCatalog>{
+/** Live provider list plus the luna-class selection; without a key the pinned fast default is offered so the picker never keeps another provider's model. */
+export async function apiModelCatalog(provider:ApiProvider,key:string,baseUrl:string='',fetcher:typeof fetch=fetch,current=''):Promise<ModelCatalog>{
+  const live=await liveApiModelCatalog(provider,key,baseUrl,fetcher),ids=live.models.map(model=>model.id);
+  if(live.status==='available')return {...live,selected:selectedFastModel(provider,ids,current)};
+  const fallback=FAST_MODEL_DEFAULTS[provider];
+  return {...live,models:fallback?[{id:fallback,label:fallback}]:[],selected:fallback||current};
+}
+async function liveApiModelCatalog(provider:ApiProvider,key:string,baseUrl:string,fetcher:typeof fetch):Promise<ModelCatalog>{
   if(!validKey(key))return unavailable(`${provider}_api`);
   const url=provider==='openai'?'https://api.openai.com/v1/models':provider==='anthropic'?'https://api.anthropic.com/v1/models?limit=1000':provider==='openrouter'?'https://openrouter.ai/api/v1/models':new URL('models',normalizeCompatibleBaseUrl(baseUrl)).href;
   const headers=provider==='anthropic'?{'x-api-key':key,'anthropic-version':'2023-06-01'}:{Authorization:`Bearer ${key}`};

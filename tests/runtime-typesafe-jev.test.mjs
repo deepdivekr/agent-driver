@@ -50,7 +50,7 @@ test('runtime targeted LLM correction accepts only exact one-line provenance for
 });
 test('runtime OpenAI correction adapter is one-shot, schema-bound, and host-secret-only',async()=>{
   const request={request:input.request,route_id:'draft_save',fields:[{id:'memo',description:'Draft memo.'}]},packet=openAiTargetedLlmRequest(request);
-  assert.deepEqual({model:packet.model,effort:packet.reasoning.effort,store:packet.store,tools:packet.tools,strict:packet.text.format.strict},{model:'gpt-5.6-luna',effort:'low',store:false,tools:[],strict:true});
+  assert.deepEqual({model:packet.model,effort:packet.reasoning.effort,store:packet.store,tools:packet.tools,strict:packet.text.format.strict},{model:'gpt-6-luna',effort:'low',store:false,tools:[],strict:true});
   assert.deepEqual(packet.text.format.schema.properties.values.required,['memo']);assert.equal(packet.text.format.schema.properties.values.additionalProperties,false);
   const calls=[],start=input.request.indexOf('오후에 다시 연락'),extractor=openAiTargetedLlmExtractorFromHostEnvironment({OPENAI_API_KEY:'test-only-safe-host-secret'}, {timeout_ms:1_500,fetcher:async(url,options)=>{
     calls.push({url,options});return {ok:true,json:async()=>({status:'completed',model:'gpt-5.6-luna',output:[{type:'reasoning'},{type:'message',content:[{type:'output_text',text:JSON.stringify({values:{memo:{value:'오후에 다시 연락',start,end:start+'오후에 다시 연락'.length}}})}]}]})};

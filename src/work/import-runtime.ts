@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {type HostConfig} from '../interface/config.js';
+import {type HostConfig,workModelDataApproved} from '../interface/config.js';
 import {type PackStore} from '../packs/store.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {snapshotHash} from '../taskpack/contracts.js';
@@ -73,7 +73,7 @@ export class WorkImportRuntime{
   async scan(raw:unknown){
     const input=workImportScanSchema.parse(raw),scan=await scanProject(input.path);
     let analysis:ProjectAnalysis|null=null,analysis_status:ProjectBody['analysis_status']='not_approved';
-    const allowed=Boolean(this.config.swarm?.model_data_approved||this.config.packs?.model_data_approved||this.config.coding?.model_data_approved);
+    const allowed=workModelDataApproved(this.config);
     if(allowed&&scan.evidence.length){
       try{
         const safeInput={kind:scan.kind,purpose:scan.purpose,readme_excerpt:scan.readme_excerpt,commands:scan.commands,scripts:scan.scripts,evidence:scan.evidence,unknowns:scan.unknowns};

@@ -36,7 +36,7 @@ node scripts/run-adaptive-travel.mjs --source both --repeat 2 \
 
 `--probe-only` opens sources without model calls or actions and is recorded as NOT_RUN, never task success. `--connect-models` optionally exposes a transient loopback-only one-use connection form; the tested runs used private files instead. `--headed` requires an agent-owned display and must not be used to interrupt the user's desktop.
 
-Luna is pinned to `gpt-5.6-luna`, reasoning `low`. The TypeSafe request uses `jev-latest`; the actual returned model version is recorded. Current observations are compacted to bounded text and element data: execution retains full local bindings, while models see shortened labels/URLs and an explicit truncation flag. Unknown omitted evidence must not be invented.
+Luna defaults to `gpt-6-luna` (`AGENT_DRIVER_API_MODEL` overrides it), reasoning `low`. The TypeSafe request uses `jev-latest`; the actual returned model version is recorded. Current observations are compacted to bounded text and element data: execution retains full local bindings, while models see shortened labels/URLs and an explicit truncation flag. Unknown omitted evidence must not be invented.
 
 ## Evidence and limitations
 

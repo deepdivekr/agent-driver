@@ -3,6 +3,7 @@ import {mkdir,readFile,writeFile,rename} from 'node:fs/promises';
 import {join} from 'node:path';
 import {z} from 'zod';
 import {canonicalJson} from './contracts.js';
+import {FAST_MODEL_DEFAULTS} from '../integrations/fast-models.js';
 import {requireCondition} from '../core/contracts.js';
 
 export const ADAPTIVE_DESIGN_VERSION='adaptive_readonly_v1';
@@ -66,7 +67,7 @@ export async function obtainAdaptiveSpec(task:AdaptiveTask,observation:unknown,m
 /** Same host credentials, Responses endpoint and Luna/low as the existing correction adapter. */
 export function adaptiveLlmFromHostEnvironment(environment:NodeJS.ProcessEnv=process.env,fetcher:typeof fetch=fetch):StructuredModel {
   const key=environment.OPENAI_API_KEY;requireCondition(typeof key==='string'&&key.trim().length>=16,'OPENAI_CREDENTIAL_UNAVAILABLE');
-  const model=environment.AGENT_DRIVER_API_MODEL??'gpt-5.6-luna',reasoning=environment.AGENT_DRIVER_API_REASONING??'low',calls:ModelCall[]=[];
+  const model=environment.AGENT_DRIVER_API_MODEL??FAST_MODEL_DEFAULTS.openai,reasoning=environment.AGENT_DRIVER_API_REASONING??'low',calls:ModelCall[]=[];
   requireCondition(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/u.test(model)&&['low','medium','high'].includes(reasoning),'INVALID_MODEL_SELECTION');
   return {calls,async call(purpose,instructions,input,schema){
     const started=performance.now(),inputHash=hashJson({instructions,input,schema});let accepted=false,httpStatus:number|undefined,failureKind:ModelCall['failure_kind']='network',usage:{input_tokens?:number;output_tokens?:number;total_tokens?:number}={};

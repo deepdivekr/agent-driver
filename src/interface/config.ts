@@ -30,6 +30,9 @@ export type ObservabilityConfig=z.infer<typeof ObservabilityConfigSchema>;
 const CodingProjectSchema=z.object({id:identifier,root:z.string().min(1),allow_write:z.boolean().default(false),allow_commit:z.boolean().default(false),verify:z.array(z.object({executable:z.string().min(1),args:z.array(z.string()).max(20),timeout_ms:z.number().int().min(1000).max(600000)}).strict()).max(5).default([])}).strict();
 const CodingConfigSchema=z.object({projects:z.array(CodingProjectSchema).min(1).max(20),model_data_approved:z.boolean().default(false)}).strict();
 export type CodingConfig=z.infer<typeof CodingConfigSchema>;
+/** Human consent that one-line Work text and import evidence may be sent to the selected AI. Read live, never bound to run fingerprints. */
+const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional()}).strict();
+export type WorkConfig=z.infer<typeof WorkConfigSchema>;
 export const HostConfigSchema=z.object({
   schema_version:z.literal(1), project_id:identifier, caller_ref:identifier,
   account_ref:identifier, worktree:z.string().min(1), data_dir:z.string().min(1),
@@ -43,6 +46,7 @@ export const HostConfigSchema=z.object({
   swarm:swarmPolicySchema.optional(),
   observability:ObservabilityConfigSchema.optional(),
   coding:CodingConfigSchema.optional(),
+  work:WorkConfigSchema.optional(),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
@@ -55,6 +59,7 @@ export interface HostConfig {
   swarm:SwarmPolicy|null;
   observability:ObservabilityConfig|null;
   coding:CodingConfig|null;
+  work:WorkConfig|null;
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
@@ -114,6 +119,11 @@ export function loadHostConfig(path:string):HostConfig {
   })}:null;
   if(coding){requireCondition(new Set(coding.projects.map(item=>item.id)).size===coding.projects.length,'CODING_PROJECT_DUPLICATE');requireCondition(coding.projects.every(item=>!item.allow_commit||item.allow_write),'CODING_COMMIT_REQUIRES_WRITE');}
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(coding?['coding.orchestrate']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,coding,
-    fingerprint:createHash('sha256').update(JSON.stringify({raw,worktree,data,coding,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
+  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,coding,work:raw.work??null,
+    fingerprint:createHash('sha256').update(JSON.stringify({raw:{...raw,work:undefined},worktree,data,coding,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
+}
+/** Work-definition consent is read from disk on each use so a running MCP server or Control Center sees a new approval without restart. */
+export function workModelDataApproved(config:Pick<HostConfig,'path'|'swarm'|'packs'|'coding'|'work'>):boolean{
+  if(config.swarm?.model_data_approved||config.packs?.model_data_approved||config.coding?.model_data_approved)return true;
+  try{const raw=JSON.parse(readFileSync(config.path,'utf8')) as {work?:unknown};return WorkConfigSchema.optional().parse(raw.work)?.model_data_approved===true;}catch{return config.work?.model_data_approved===true;}
 }

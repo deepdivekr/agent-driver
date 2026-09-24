@@ -3,6 +3,7 @@ import {choice,noul,TypeSafeClient,type SystemOneRequest} from '@typesafe-ai/sdk
 import {requireCondition} from '../core/contracts.js';
 import {canonicalJson} from './contracts.js';
 import {DecisionPlane,provisionalProfile,type DecisionBinding,type DecisionCatalog} from '../decision-plane/index.js';
+import {FAST_MODEL_DEFAULTS} from '../integrations/fast-models.js';
 import {type StructuredModel} from './adaptive-spec.js';
 
 const unsupported='UNSUPPORTED',clarify='CLARIFY',notStated='NOT_STATED',notInCandidates='NOT_IN_CANDIDATES';
@@ -216,7 +217,7 @@ export async function resolveTargetedLlmExtraction(input:OneLineJevInput,decisio
 }
 
 const openAiResponsesEndpoint='https://api.openai.com/v1/responses';
-const defaultCorrectionModel='gpt-5.6-luna';
+const defaultCorrectionModel=FAST_MODEL_DEFAULTS.openai;
 function assertOpenAiOptions(options:OpenAiTargetedLlmOptions){
   if(options.model!==undefined)requireCondition(/^[A-Za-z0-9._-]{1,128}$/u.test(options.model),'INVALID_LLM_MODEL');
   if(options.timeout_ms!==undefined)requireCondition(Number.isInteger(options.timeout_ms)&&options.timeout_ms>=100&&options.timeout_ms<=120_000,'INVALID_LLM_TIMEOUT');

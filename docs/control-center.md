@@ -24,6 +24,10 @@ agent-driver dashboard --config /absolute/path/to/host.json
 
 작업자별 브라우저 Page는 실제 작업에 계속 사용하지만 주기적 스크린샷을 찍거나 관제 화면에 보내지 않는다. 상태 snapshot의 `frame_path`는 항상 `null`이며 기존 `surface/:id/frame` 주소는 404를 반환한다. 과거 설정의 `frame_interval_ms`와 `observability.surfaces`는 호환성을 위해 읽지만 미리보기 수집을 켜지 않는다. 이는 모델이 별도 작업에서 명시적으로 요청한 단일 증거 캡처까지 금지한다는 뜻은 아니다.
 
+## 업무 내용의 AI 전송 동의
+
+한 줄 업무 정의와 가져오기 분석은 `swarm`·`packs`·`coding`의 `model_data_approved` 중 하나, 또는 로컬 설정의 `work.model_data_approved`가 켜져 있어야 모델을 호출한다. 관제센터 AI 단계의 동의 체크박스는 `~/.agent-driver/runtime-config.json`에 `{"work":{"model_data_approved":true,"approved_at":"…"}}`를 기록한다. 값은 호출마다 파일에서 다시 읽고 config fingerprint에는 포함하지 않는다. 동의가 없으면 업무는 `needs_model`, 사유 `MODEL_DATA_APPROVAL_REQUIRED`로 저장된다. AI 단계에서 허용한 뒤 업무 상세의 "업무 정의 재시도"로 다시 정의한다. 호스트가 직접 관리하는 설정 파일은 이 화면에서 바꾸지 않는다.
+
 ## 로컬 제어와 안전
 
 업무 단계 수정은 같은 출처의 사용자 조작과 revision을 확인하고, 이미 실행한 후속 단계를 조용히 다시 쓰지 않는다. 화면·상태 API는 capability URL로 보호하며 작업 실행·외부 제출 권한을 만들지 않는다. 사이트 로그인 정보와 비밀번호는 snapshot·활동 로그에 기록하지 않는다.
