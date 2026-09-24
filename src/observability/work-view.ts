@@ -21,7 +21,7 @@ function boardRow(row:OfficeRow){
   const intake=row.intake_status===null?null:{status:row.intake_status,revision:row.intake_revision??0,mode:row.mode,paused:Boolean(row.paused)};
   const run=row.source_id?{kind:row.source_kind,id:row.source_id,status:row.source_kind==='pack'?row.pack_status:['coding','coding_dialog'].includes(row.source_kind??'')?row.coding_status:row.swarm_status}:null;
   const state=intake?.paused?'paused':run?.status??intake?.status??'unobserved';
-  return {id:row.id,title:clean(row.title,64),status:state,work_status:intake?.status??null,run,run_revision:row.run_revision,updated_at:row.display_updated_at,has_contract:Boolean(intake),paused:Boolean(intake?.paused)};
+  return {id:row.id,title:clean(row.title,64),pack:row.pack_family??null,status:state,work_status:intake?.status??null,run,run_revision:row.run_revision,updated_at:row.display_updated_at,has_contract:Boolean(intake),paused:Boolean(intake?.paused)};
 }
 
 export function readWorkBoard(store:PackStore,config:HostConfig,limit=60){

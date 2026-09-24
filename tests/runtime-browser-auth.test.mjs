@@ -15,6 +15,7 @@ import {PackStore} from '../dist/packs/store.js';
 import {authProfile,authSite,authSites,requireSiteAuth,setSiteAuth,blockedAuthSites,detectAuthGate,BrowserLoginBroker,connectOwnedBrowser} from '../dist/swarm/browser-auth.js';
 import {SwarmVisualExecutor} from '../dist/swarm/visual-executor.js';
 import {startControlCenter,readControlCenter} from '../dist/observability/control-center.js';
+const koPage=async(browser,options)=>{const page=await browser.newPage(options);await page.addInitScript(()=>{try{localStorage.setItem('office-lang','ko')}catch{}});return page;};
 
 async function setup(t,{allProtected=false,fixtureOrigin=null,owned=true,deferCleanup=false}={}){
   const root=await mkdtemp(join(tmpdir(),'driver-browser-auth-')),path=join(root,'host.json');
@@ -79,7 +80,7 @@ test('runtime contract migrates legacy site-policy blocks back to ordinary sign-
 
 test('runtime contract connections UI protects mutations with capability and same-origin human action',async t=>{
   const x=await setup(t);requireSiteAuth(x.api.store,x.config,['https://x.com']);const server=await startControlCenter(x.config);let browser;t.after(async()=>{await browser?.close();await server.close()});
-  browser=await chromium.launch({headless:true});const browserPage=await browser.newPage();await browserPage.goto(server.url);const attention=browserPage.getByRole('link',{name:'사이트 로그인 1개 필요',exact:true});await attention.waitFor();assert.match(await attention.getAttribute('href'),/connections$/u);
+  browser=await chromium.launch({headless:true});const browserPage=await koPage(browser);await browserPage.goto(server.url);const attention=browserPage.getByRole('link',{name:'사이트 로그인 1개 필요',exact:true});await attention.waitFor();assert.match(await attention.getAttribute('href'),/connections$/u);
   const page=await fetch(server.url+'connections'),body=await page.text();assert.equal(page.status,200);assert.match(body,/사이트 로그인/);assert.doesNotThrow(()=>new Script(body.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)[1]));
   const url=server.url+'connections/retry/x.com';assert.equal((await fetch(url)).status,405);assert.equal((await fetch(url,{method:'POST'})).status,403);
   assert.equal((await fetch(url,{method:'POST',headers:{Origin:'https://evil.example','X-Agent-Driver':'human-connection'}})).status,403);

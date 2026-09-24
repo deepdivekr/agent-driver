@@ -1,0 +1,34 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {chromium} from 'playwright';
+import {loadHostConfig} from '../dist/interface/config.js';
+import {startControlCenter} from '../dist/observability/control-center.js';
+
+test('Control Center renders English by default and the flag button switches to Korean per browser',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'driver-i18n-')),path=join(root,'host.json');
+  await writeFile(path,JSON.stringify({schema_version:1,project_id:'i18n-project',caller_ref:'local-agent',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production'}));
+  const server=await startControlCenter(loadHostConfig(path),{poll_ms:50});
+  const browser=await chromium.launch({headless:true});
+  t.after(async()=>{await browser.close();server.close();await rm(root,{recursive:true,force:true});});
+  const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
+  await page.goto(server.url);
+  await page.getByRole('button',{name:'Submit',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>document.documentElement.lang),'en');
+  assert.equal(await page.getByPlaceholder('What should the agent do? One line is enough.').count(),1);
+  const hangul=/[가-힣]/u;
+  assert.doesNotMatch(await page.locator('aside').innerText(),hangul);
+  assert.doesNotMatch(await page.locator('#intake').innerText(),hangul);
+  assert.equal(await page.locator('#lang-toggle [data-lang-code]').textContent(),'EN');
+  await page.locator('#lang-toggle').click();
+  await page.getByRole('button',{name:'업무 접수',exact:true}).waitFor();
+  assert.equal(await page.evaluate(()=>document.documentElement.lang),'ko');
+  assert.equal(await page.locator('#lang-toggle [data-lang-code]').textContent(),'KO');
+  await page.goto(server.url+'settings');
+  await page.getByRole('heading',{name:'연결 및 설정',exact:true}).waitFor();
+  await page.locator('#lang-toggle').click();
+  await page.getByRole('heading',{name:'Connections & settings',exact:true}).waitFor();
+  assert.deepEqual(errors,[]);
+});
