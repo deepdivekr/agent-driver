@@ -16,7 +16,7 @@ import {authProfile,authSite,authSites,requireSiteAuth,setSiteAuth,blockedAuthSi
 import {SwarmVisualExecutor} from '../dist/swarm/visual-executor.js';
 import {startControlCenter,readControlCenter} from '../dist/observability/control-center.js';
 
-async function setup(t,{allProtected=false,fixtureOrigin=null,owned=true}={}){
+async function setup(t,{allProtected=false,fixtureOrigin=null,owned=true,deferCleanup=false}={}){
   const root=await mkdtemp(join(tmpdir(),'driver-browser-auth-')),path=join(root,'host.json');
   await writeFile(path,JSON.stringify({schema_version:1,project_id:'auth-test',caller_ref:'test',account_ref:'account-a',worktree:root,data_dir:'data',environment:fixtureOrigin?'fixture':'production',...(fixtureOrigin?{fixture_url:`${fixtureOrigin}/fixture/account-a/`}:{}),swarm:{enabled:true,model_data_approved:true,max_logical_workers:8,max_concurrency:6,visual:{enabled:true,max_contexts:6,...(owned?{owned_vm:{id:'test-owned',storage_root:join(root,'vm'),devtools_port:49222,vnc_port:45901}}:{})}}}));
   const urls=fixtureOrigin?Array.from({length:6},(_,i)=>`${fixtureOrigin}/worker-${i}`):['https://x.com/search','https://www.reddit.com/r/ASTSpaceMobile/',...Array.from({length:4},(_,i)=>allProtected?'https://x.com/home':`https://example.test/${i}`)];
@@ -25,7 +25,9 @@ async function setup(t,{allProtected=false,fixtureOrigin=null,owned=true}={}){
   const visual={assigned:[],released:[],async assign(run,id){this.assigned.push(id);return {surface_id:`surface-${id}`,kind:'browser'};},async perform(){throw Error('BROWSER_AUTH_REQUIRED');},async release(run,id){this.released.push(id);},async close(){}};
   const model={calls:[],async call(purpose){this.calls.push({model:'contract-model',input_sha256:'a'.repeat(64),status:'accepted'});if(purpose==='design')return {summary:'Auth preflight contract fixture.',workers:[...sources,worker('reduce','reduction',[],sources.map(w=>w.id)),worker('synthesize','synthesis',[],['reduce'])]};throw Error('MODEL_NOT_USED');}};
   const config=loadHostConfig(path),api=new RuntimeApi(config,{swarmModel:model,swarmVisual:visual});
-  t.after(async()=>{api.close();await api.drain();await rm(root,{recursive:true,force:true});});return {root,path,config,api,visual};
+  const cleanup=async()=>{api.close();await api.drain();await rm(root,{recursive:true,force:true});};
+  if(!deferCleanup)t.after(cleanup);
+  return {root,path,config,api,visual,cleanup};
 }
 const start=x=>x.api.call('runtime_swarm_start',{request_id:'auth-run',goal:'Research requested sources with website login preflight.'});
 
@@ -115,10 +117,13 @@ async function stop(child){if(child.exitCode!==null||child.signalCode!==null)ret
 async function gracefulStop(child,port){const closed=once(child,'exit'),browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`),session=await browser.newBrowserCDPSession();await session.send('Browser.close').catch(()=>{});await closed;}
 test('runtime native persistent profile survives worker-page cleanup and browser restart without cookie export',async t=>{
   const server=createServer((req,res)=>{res.setHeader('Content-Type','text/html');if(req.url==='/login-fixture')res.setHeader('Set-Cookie','fixture_session=ready; Max-Age=3600; Path=/');res.end(`<html><title>Owned profile fixture</title><body><h1>${req.url}</h1><p>${req.headers.cookie?.includes('fixture_session=ready')?'fixture signed in':'fixture anonymous'}</p></body></html>`);});server.listen(0,'127.0.0.1');await once(server,'listening');t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
-  const origin=`http://127.0.0.1:${server.address().port}`,x=await setup(t,{fixtureOrigin:origin}),reserve=createServer();reserve.listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(resolve=>reserve.close(resolve));
-  let child=await launchPersistent(join(x.root,'profile'),port);t.after(()=>stop(child));let browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`),context=browser.contexts()[0];const login=await context.newPage();await login.goto(origin+'/login-fixture');await login.reload();assert.match(await login.locator('body').innerText(),/fixture signed in/);await browser.close();
-  const pool=new SwarmVisualExecutor(x.api.store,x.config,{fixture_origins:[origin],fixture_owned_connect:()=>chromium.connectOverCDP(`http://127.0.0.1:${port}`)});t.after(()=>pool.close());const run=await start(x),workers=run.dispatches.slice(0,2);
+  const origin=`http://127.0.0.1:${server.address().port}`,x=await setup(t,{fixtureOrigin:origin,deferCleanup:true});
+  let child=null,browser=null,pool=null;
+  t.after(async()=>{await pool?.close().catch(()=>{});await browser?.close().catch(()=>{});if(child)await stop(child);await x.cleanup();});
+  const reserve=createServer();reserve.listen(0,'127.0.0.1');await once(reserve,'listening');const port=reserve.address().port;await new Promise(resolve=>reserve.close(resolve));
+  child=await launchPersistent(join(x.root,'profile'),port);browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);let context=browser.contexts()[0];const login=await context.newPage();await login.goto(origin+'/login-fixture');await login.reload();assert.match(await login.locator('body').innerText(),/fixture signed in/);await browser.close();
+  pool=new SwarmVisualExecutor(x.api.store,x.config,{fixture_origins:[origin],fixture_owned_connect:()=>chromium.connectOverCDP(`http://127.0.0.1:${port}`)});const run=await start(x),workers=run.dispatches.slice(0,2);
   const results=await Promise.all(workers.map(w=>pool.perform(run.run.run_id,w.worker_id,w.lease_token,{action:'navigate',url:w.source_urls[0]})));assert.equal(new Set(results.map(r=>r.surface_id)).size,2);assert.ok(results.every(r=>r.text.includes('fixture signed in')));
   await pool.close();browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);assert.ok(browser.contexts()[0].pages().some(p=>p.url()===origin+'/login-fixture'));assert.ok(!browser.contexts()[0].pages().some(p=>p.url().includes('/worker-')));await browser.close();
-  await gracefulStop(child,port);child=await launchPersistent(join(x.root,'profile'),port);browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);const probe=await browser.contexts()[0].newPage();await probe.goto(origin+'/read-after-restart');assert.match(await probe.locator('body').innerText(),/fixture signed in/);await browser.close();await stop(child);
+  await gracefulStop(child,port);child=await launchPersistent(join(x.root,'profile'),port);browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`);const probe=await browser.contexts()[0].newPage();await probe.goto(origin+'/read-after-restart');assert.match(await probe.locator('body').innerText(),/fixture signed in/);await browser.close();await gracefulStop(child,port);
 });

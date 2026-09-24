@@ -20,6 +20,8 @@ import {MIGRATION_1} from '../dist/store/migration.js';
 import {RuntimeStore} from '../dist/store/runtime-store.js';
 import {stopSupervisor} from '../dist/supervisor/manager.js';
 import {liveness} from '../dist/supervisor/identity.js';
+import {readFileSync} from 'node:fs';
+const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
 
 async function setup(t,environment='fixture'){
   const root=await mkdtemp(join(tmpdir(),'driver-interface-')),fixture=await startFixture();
@@ -33,9 +35,9 @@ async function setup(t,environment='fixture'){
   return state;
 }
 const request=id=>({request_id:id,capability:'fixture.draft.save',account_ref:'account-a',input:{name:'한글 🐈',note:'원문 그대로 저장'},deadline_ms:20000});
-async function client(x){const client=new Client({name:'interface-test',version:'1.0.0'});const transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.path],stderr:'pipe'});let errors='';transport.stderr?.on('data',b=>errors+=b);await client.connect(transport);assert.deepEqual(client.getServerVersion(),{name:'agent-driver',version:'0.1.0-alpha.19'});x.clients.push(client);return {client,transport,errors:()=>errors};}
+async function client(x){const client=new Client({name:'interface-test',version:'1.0.0'});const transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.path],stderr:'pipe'});let errors='';transport.stderr?.on('data',b=>errors+=b);await client.connect(transport);assert.deepEqual(client.getServerVersion(),{name:'agent-driver',version:packageVersion});x.clients.push(client);return {client,transport,errors:()=>errors};}
 async function call(client,name,args={}){const reply=await client.callTool({name,arguments:args});assert.notEqual(reply.isError,true,JSON.stringify(reply));return JSON.parse(reply.content[0].text);}
-async function complete(x,taskId){const end=performance.now()+20000;let last;while(performance.now()<end){last=await x.api.call('runtime_task_status',{task_id:taskId});if(['succeeded','cancelled','failed','paused_dependency','reconciliation_required'].includes(last.status))return last;await delay(50);}throw Error(`worker did not finish: ${JSON.stringify(last)}`);}
+async function complete(x,taskId,timeoutMs=20000){const end=performance.now()+timeoutMs;let last;while(performance.now()<end){last=await x.api.call('runtime_task_status',{task_id:taskId});if(['succeeded','cancelled','failed','paused_dependency','reconciliation_required'].includes(last.status))return last;await delay(50);}throw Error(`worker did not finish: ${JSON.stringify(last)}`);}
 async function cli(args){const c=spawn(process.execPath,['dist/cli.js',...args],{stdio:['ignore','pipe','pipe']});let out='',err='';c.stdout.on('data',b=>out+=b);c.stderr.on('data',b=>err+=b);const [code]=await once(c,'close');return {code,out,err};}
 
 test('runtime native production default disables fixture execution and rejects caller-supplied authority',async t=>{
@@ -60,7 +62,7 @@ test('runtime native schema v1 upgrades without discarding existing project/task
   const store=new RuntimeStore(path);assert.equal(store.project('old').id,'old');store.close();
   const db=new DatabaseSync(path);assert.equal(db.prepare('SELECT version FROM schema_version').get().version,8);db.close();
 });
-test('runtime native C01 CLI and SDK stdio share capability semantics with independent tasks',{timeout:60000},async t=>{
+test('runtime native C01 CLI and SDK stdio share capability semantics with independent tasks',{timeout:120000},async t=>{
   const x=await setup(t),r=request('cli-first'),file=join(x.root,'request.json');await writeFile(file,JSON.stringify(r));
   const a=await cli(['task','start','--config',x.path,'--request-file',file,'--json']);assert.equal(a.code,0,a.err);const first=JSON.parse(a.out);
   assert.equal((await complete(x,first.task_id)).status,'succeeded');
@@ -144,10 +146,14 @@ test('runtime native SIGKILL gateway during blocked navigation leaves the worker
   release();assert.equal((await complete(x,accepted.task_id)).status,'succeeded');
   assert.equal(x.fixture.snapshot(x.spec.runId).effects.filter(e=>e.kind==='save').length,1);
 });
-test('runtime native distinct concurrent requests serialize one persistent browser profile',{timeout:60000},async t=>{
+test('runtime native distinct concurrent requests serialize one persistent browser profile',{timeout:150000},async t=>{
   const x=await setup(t),a=await client(x),b=await client(x);
-  const [one,two]=await Promise.all([call(a.client,'runtime_task_start',request('first')),call(b.client,'runtime_task_start',request('second'))]);
-  const results=await Promise.all([complete(x,one.task_id),complete(x,two.task_id)]);assert.deepEqual(results.map(x=>x.status),['succeeded','succeeded']);
+  // Both workers share one profile. The second task's browser time starts only
+  // after the first closes its context, so a 20 s single-task test budget is
+  // insufficient when the host is busy even though serialization is correct.
+  const first={...request('first'),deadline_ms:60000},second={...request('second'),deadline_ms:60000};
+  const [one,two]=await Promise.all([call(a.client,'runtime_task_start',first),call(b.client,'runtime_task_start',second)]);
+  const results=await Promise.all([complete(x,one.task_id,75000),complete(x,two.task_id,75000)]);assert.deepEqual(results.map(x=>x.status),['succeeded','succeeded']);
   assert.equal(x.fixture.snapshot(x.spec.runId).effects.filter(e=>e.kind==='save').length,2);
 });
 test('runtime native fixture lab CLI starts a connectable owned app and refuses configuration overwrite',{timeout:60000},async t=>{

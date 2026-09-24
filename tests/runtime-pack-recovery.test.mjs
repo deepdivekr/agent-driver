@@ -140,14 +140,17 @@ test('fixture authentication wait stays distinct, does not automatically retry, 
   loggedIn=true;const done=await api.call('runtime_pack_run',{request_id:'auth-recovery',recipe});assert.equal(done.status,'succeeded');assert.equal(done.run_id,waiting.run_id);assert.equal(done.result.rows[0].id,'observed');
 });
 
-test('native SIGKILL during second source preserves first checkpoint and resumes through the public runtime call',{timeout:45000},async t=>{
+test('native SIGKILL during second source preserves first checkpoint and resumes through the public runtime call',{timeout:70000},async t=>{
   let unblock=false,secondSeen;const reached=new Promise(resolve=>{secondSeen=resolve;}),hits={first:0,second:0};
   const origin=await serverFor(t,(req,res)=>{const id=req.url.slice(1);if(!(id in hits)){res.end('ok');return;}hits[id]++;if(id==='second'&&!unblock){secondSeen();return;}res.setHeader('content-type','application/json');res.end(JSON.stringify([{id}]));});
   const x=await base(t,{origin,sources:['first','second'].map(id=>httpSource(origin,id))}),recipe=request('research.search',['first','second']);
   const module=new URL('../dist/interface/api.js',import.meta.url).href,configModule=new URL('../dist/interface/config.js',import.meta.url).href;
   const child=spawn(process.execPath,['--input-type=module','-e',`import {RuntimeApi} from ${JSON.stringify(module)};import {loadHostConfig} from ${JSON.stringify(configModule)};const api=new RuntimeApi(loadHostConfig(${JSON.stringify(x.configPath)}));await api.call('runtime_pack_run',{request_id:'native-kill',recipe:${JSON.stringify(recipe)}});api.close();`],{stdio:['ignore','ignore','pipe']});
   let stderr='';child.stderr.on('data',chunk=>{stderr+=chunk;});t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');});
-  await Promise.race([reached,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error(`Source not reached: ${stderr.slice(-1000)}`)),10000);timer.unref();})]);
+  // The rendezvous only waits for a separately booted Node process to reach a
+  // local HTTP fixture. It is not the recovery latency assertion; WSL startup
+  // can exceed 10 s when the full native suite is running.
+  await Promise.race([reached,new Promise((_,reject)=>{const timer=setTimeout(()=>reject(Error(`Source not reached: ${JSON.stringify({hits,exitCode:child.exitCode,signalCode:child.signalCode,stderr:stderr.slice(-1000)})}`)),25000);timer.unref();})]);
   const exited=once(child,'exit');child.kill('SIGKILL');await exited;unblock=true;
   const api=new RuntimeApi(loadHostConfig(x.configPath));t.after(()=>api.close());const interrupted=api.store.packRuns(x.config.project.id)[0],execution=api.store.packExecution(x.config.project.id,interrupted.id);
   assert.equal(interrupted.status,'running');assert.equal(Object.keys(execution.checkpoint.sources).length,1);

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {chmod,mkdir,mkdtemp,readFile,realpath,rm,symlink,writeFile} from 'node:fs/promises';
+import {chmod,mkdir,mkdtemp,readFile,realpath,rm,stat,symlink,writeFile} from 'node:fs/promises';
 import {spawnSync} from 'node:child_process';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
@@ -32,7 +32,7 @@ export const chromium={async launch(){record('launch');if(process.env.AGENT_DRIV
 }
 async function installEnvironment(base,source){
   const home=join(base,'home'),node=await realpath(process.execPath);await mkdir(home);
-  return {...process.env,HOME:home,AGENT_DRIVER_REPOSITORY_URL:`file://${source}`,AGENT_DRIVER_ALLOW_LOCAL_FIXTURE:'1',AGENT_DRIVER_INSTALL_DIR:join(home,'.local','share','agent-driver'),AGENT_DRIVER_BIN_DIR:join(home,'.local','bin'),AGENT_DRIVER_RUNTIME_DIR:join(home,'.local','share','agent-driver-runtime'),AGENT_DRIVER_NODE_BIN:node,AGENT_DRIVER_SKIP_BROWSER_INSTALL:'1',AGENT_DRIVER_SKIP_CONNECT:'1'};
+  return {...process.env,HOME:home,AGENT_DRIVER_REPOSITORY_URL:`file://${source}`,AGENT_DRIVER_VERSION:'main',AGENT_DRIVER_ALLOW_LOCAL_FIXTURE:'1',AGENT_DRIVER_INSTALL_DIR:join(home,'.local','share','agent-driver'),AGENT_DRIVER_BIN_DIR:join(home,'.local','bin'),AGENT_DRIVER_RUNTIME_DIR:join(home,'.local','share','agent-driver-runtime'),AGENT_DRIVER_NODE_BIN:node,AGENT_DRIVER_SKIP_BROWSER_INSTALL:'1',AGENT_DRIVER_SKIP_CONNECT:'1'};
 }
 
 test('runtime native bootstrap installs, builds, exposes an absolute wrapper and reruns without user-home or network effects',async t=>{
@@ -76,7 +76,16 @@ test('runtime native bootstrap refuses unmanaged directories and symlink install
   const linked=run('bash',[installer],{env:environment});assert.notEqual(linked.status,0);assert.match(linked.stderr,/심볼릭 링크/u);
 });
 
+test('runtime native bootstrap rejects paths outside HOME before creating their parents',async t=>{
+  const base=await mkdtemp(join(tmpdir(),'agent-driver-bootstrap-boundary-'));t.after(()=>rm(base,{recursive:true,force:true}));
+  const source=await fixtureSource(base),environment=await installEnvironment(base,source),outside=join(base,'outside');
+  environment.AGENT_DRIVER_INSTALL_DIR=join(outside,'agent-driver');
+  const result=run('bash',[installer],{env:environment});assert.notEqual(result.status,0);
+  assert.match(result.stderr,/사용자 HOME 내부/u);
+  await assert.rejects(stat(outside),{code:'ENOENT'});
+});
+
 test('runtime contract bootstrap pins official source and toolchain, verifies Node checksum and never requests sudo or evaluates text',async()=>{
-  const text=await readFile(installer,'utf8');assert.match(text,/https:\/\/github\.com\/deepdivekr\/agent-driver\.git/u);assert.match(text,/22\.22\.0/u);assert.match(text,/11\.11\.0/u);assert.match(text,/SHASUMS256\.txt/u);assert.match(text,/sha256sum --check/u);assert.match(text,/playwright install chromium/u);
+  const text=await readFile(installer,'utf8');assert.match(text,/https:\/\/github\.com\/deepdivekr\/agent-driver\.git/u);assert.match(text,/AGENT_DRIVER_VERSION:-v0\.1\.0/u);assert.match(text,/22\.22\.0/u);assert.match(text,/11\.11\.0/u);assert.match(text,/SHASUMS256\.txt/u);assert.match(text,/sha256sum --check/u);assert.match(text,/playwright install chromium/u);
   assert.doesNotMatch(text,/\bsudo\b/u);assert.doesNotMatch(text,/\beval\b/u);assert.doesNotMatch(text,/curl[^\n]*\|\s*(?:ba)?sh/u);
 });

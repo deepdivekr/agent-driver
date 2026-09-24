@@ -4,7 +4,7 @@ AI 에이전트에 전용 브라우저·CLI·파일 작업 도구와 실행 기�
 
 Claude Code, Codex, Cursor, Hermes에서 웹 검색, 폼 입력, 파일 수집 같은 작업을 맡길 수 있습니다. 브라우저 작업은 전용 환경에서 진행하고, 실행 기록과 재개 정보는 로컬에 보관합니다.
 
-Apache-2.0 오픈소스이며, 공개 버전은 개발 alpha입니다. Ubuntu 24.04와 Windows의 WSL2 Ubuntu에서 개발·검증합니다. 기능별 실제 확인 범위와 남은 제약은 [최신 출시 검증 기록](docs/release-readiness-alpha-19.md)에서 확인하세요.
+Apache-2.0 오픈소스입니다. v0.1.0의 설치·실행 지원 범위는 Ubuntu 24.04 x86_64와 Windows 11의 WSL2 Ubuntu 24.04입니다. 기능별 검증 근거와 실험 기능의 제약은 [출시 검증 기록](docs/release-readiness-v0.1.0.md)에 있습니다.
 
 ## 시작하기
 
@@ -15,12 +15,12 @@ Apache-2.0 오픈소스이며, 공개 버전은 개발 alpha입니다. Ubuntu 24
 직접 설치하려면 Ubuntu 또는 WSL2 Ubuntu 터미널에서 한 번 실행합니다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/main/install.sh | bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.0/install.sh | bash'
 ```
 
 설치기는 사용자 홈 아래에 저장소와 전용 실행 환경을 만들고, Node.js **22.22.0** 배포물의 checksum을 확인한 뒤 npm **11.11.0**, 의존성, 빌드, Playwright Chromium, `agent-driver` 명령을 준비합니다. Chromium을 실제로 열어 확인하며, Ubuntu/WSL 시스템 라이브러리가 부족하면 설치 완료로 표시하지 않고 필요한 명령을 안내합니다. 시스템 패키지를 자동 설치하거나 관리자 권한을 요청하지는 않습니다. 기존 비관리 폴더, 심볼릭 링크, 수정된 설치본은 덮어쓰지 않습니다. 원격 스크립트를 먼저 검토하려면 [install.sh](install.sh)를 내려받아 확인한 뒤 실행하세요.
 
-완료되면 관제센터가 자동으로 열립니다. 이후에는 관제센터 하나에서 다음 순서로 진행합니다.
+완료되면 관제센터 주소가 터미널에 표시되고, 브라우저를 열 수 있는 환경에서는 화면도 자동으로 열립니다. 이후에는 관제센터 하나에서 다음 순서로 진행합니다.
 
 1. 사용할 Codex·Claude Code·OpenCode·Cursor CLI·Hermes가 없으면 공식 설치를 실행합니다.
 2. 설치된 클라이언트의 공식 로그인/Auth를 완료합니다.
@@ -28,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/main/instal
 4. 로컬 실행을 승인하고 구독 또는 API 모델, 선택적 Jev를 연결합니다.
 5. 클라이언트나 Hermes에서 자연어로 Task를 요청합니다.
 
-버튼을 누르면 하단 **SETUP TAIL**에 설치·인증·등록 단계만 표시되고 raw CLI 출력과 credential은 남기지 않습니다. 연결 정보는 기본적으로 `~/.agent-driver`에 저장됩니다. 사이트 로그인은 Task가 인증이 필요한 URL을 만났을 때만 해당 작업을 멈추고 요청합니다.
+버튼을 누르면 하단 **연결 작업 기록**에 설치·인증·등록 단계만 표시되고 터미널 원문과 인증 정보는 남기지 않습니다. 연결 정보는 기본적으로 `~/.agent-driver`에 저장됩니다. 사이트 로그인은 Task가 인증이 필요한 URL을 만났을 때만 해당 작업을 멈추고 요청합니다.
 
 설치와 등록은 사용자가 버튼을 눌렀을 때만 시작합니다. 관리 설치는 공식 HTTPS 원본만 허용하지만 공급자 script의 checksum을 고정하지는 않습니다. 원격 설치 프로그램 실행을 원하지 않으면 화면의 공식 안내를 사용하세요. 자동 등록을 사용할 수 없는 클라이언트의 수동 명령은 다음과 같습니다.
 
@@ -49,7 +49,7 @@ JSON 설정을 사용하는 클라이언트에서는 아래와 같습니다.
 }
 ```
 
-이 예시는 클라이언트와 서버가 같은 Ubuntu/WSL 환경에서 실행될 때 사용합니다. Windows 앱에서 연결할 때는 MCP 실행 명령을 WSL로 연결해야 합니다. 클라이언트에서 명령을 찾지 못하면 `command`에 실행 파일의 절대 경로를 지정하세요.
+이 예시는 클라이언트와 서버가 같은 Ubuntu/WSL 환경에서 실행될 때 사용합니다. Windows 앱에 연결할 때는 관제센터가 표시하는 `wsl.exe --distribution ... --exec ... mcp` 명령을 해당 앱의 MCP 설정에 사용합니다. 이는 Windows 앱이 WSL 안의 서버를 시작하는 연결이며 native Windows 실행을 뜻하지 않습니다. 연결 상태를 확인하기 전에는 등록만으로 연결 완료로 표시하지 않습니다.
 
 MCP에 연결하면 에이전트가 작업 도구를 호출할 수 있습니다. 사용할 사이트와 파일 경로의 접근 범위는 작업에 맞게 설정합니다. Jev API 키는 선택 사항입니다.
 
@@ -147,7 +147,7 @@ Jev는 현재 상태와 후보를 받아 선택 결과와 확률을 반환합니
 
 ## 실행 환경과 현재 범위
 
-- **지원 환경:** Ubuntu 24.04 / Linux x86_64, Windows + WSL2 Ubuntu. Native Windows·macOS 설치와 데스크톱 앱 제어는 미지원입니다.
+- **지원 환경:** Ubuntu 24.04 x86_64, Windows 11 + WSL2 Ubuntu 24.04. Native Windows·macOS 설치와 데스크톱 앱 제어는 미지원입니다.
 - **브라우저:** Playwright Chromium을 사용합니다. 선택형 Ubuntu VM은 KVM·QEMU가 필요하며, VM 안에서 별도로 로그인합니다.
 - **AI 연결:** MCP sampling이나 Codex·Claude Code·OpenCode 구독을 사용할 수 있습니다. API 방식은 OpenAI, Anthropic, OpenRouter 또는 구조화 출력을 지원하는 OpenAI 호환 서버를 연결할 수 있습니다.
 - **외부 변경:** 폼 제출과 레코드 수정은 변경 내용을 확인한 사람의 승인을 거칩니다.

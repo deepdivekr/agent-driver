@@ -169,9 +169,21 @@ test('runtime contract real MCP broker child verifies CLI parent identity, obser
   const observed=await client.callTool({name:'read_file',arguments:input});assert.equal(observed.isError,undefined);assert.equal(JSON.parse(observed.content[0].text).sha256,x.files.read(input.path).sha256);
   x.store.observeToolResult(x.session,x.host,1,toolId,observed.content,false);
   const missing=await client.callTool({name:'write_file',arguments:{turn_id:x.turn,path:'README.md',request_id:'unobserved',expected_sha256:null,content:'must not write'}});assert.equal(missing.isError,true);assert.equal(x.files.read('README.md').sha256,null);
-  const identity=JSON.parse(record.identity_json);x.store.stopTerminalHost(x.config.project.id,x.host);
-  for(let n=0;n<200&&await liveness(identity)!=='dead';n++)await delay(20);
-  assert.equal(await liveness(identity),'dead');assert.equal(processIdentitySync(process.pid).pid,process.pid);
+  const identity=JSON.parse(record.identity_json);
+  // The SDK emits onclose only after its spawned broker child closes. This is
+  // independent evidence when a transient /proc read cannot classify liveness.
+  const previousClose=transport.onclose;let brokerChildClosed=false;
+  transport.onclose=()=>{brokerChildClosed=true;previousClose?.call(transport);};
+  x.store.stopTerminalHost(x.config.project.id,x.host);
+  assert.throws(()=>x.store.fileFence(x.config,{...x.authority,broker:record.identity_json},x.turn),/STALE_TERMINAL_HOST/);
+  for(let n=0;n<200&&!brokerChildClosed&&await liveness(identity)!=='dead';n++)await delay(20);
+  const after=await liveness(identity);
+  if(after!=='dead'&&!brokerChildClosed){
+    const current=processIdentitySync(identity.pid);
+    t.diagnostic(JSON.stringify({broker_liveness:after,broker_sync_identity:typeof current==='string'?current:JSON.stringify(current)===JSON.stringify(identity)?'same':'different',transport_pid:transport.pid}));
+  }
+  assert.ok(after==='dead'||brokerChildClosed,'broker did not exit after host revocation');
+  assert.equal(x.files.read('README.md').sha256,null);assert.equal(processIdentitySync(process.pid).pid,process.pid);
  }finally{await client.close();}
 });
 test('runtime contract killed MCP broker cannot commit a stale queued write',async t=>{

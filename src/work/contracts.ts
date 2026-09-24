@@ -30,6 +30,7 @@ export const workAnswerSchema=z.object({work_id:id,revision:z.number().int().non
 export const workStatusSchema=z.object({work_id:id}).strict();
 export const workListSchema=z.object({limit:z.number().int().min(1).max(100).default(30)}).strict();
 export const workPauseSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),paused:z.boolean()}).strict();
+export const workJevSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),enabled:z.boolean(),cost_acknowledged:z.boolean().default(false)}).strict();
 export const workTools={
   runtime_work_start:{schema:workStartSchema,implemented:true,readOnly:false},
   runtime_work_define:{schema:workDefineSchema,implemented:true,readOnly:false},

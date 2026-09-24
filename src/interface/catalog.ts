@@ -6,6 +6,7 @@ import {humanChannelRouteInput} from '../integrations/human-channel.js';
 import {swarmTools} from '../swarm/contracts.js';
 import {observabilityTools} from '../observability/contracts.js';
 import {workTools} from '../work/contracts.js';
+import {workImportPasteSchema} from '../work/import-runtime.js';
 import {codingTools} from '../coding/contracts.js';
 export const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const draftInput=z.object({name:z.string().min(1).max(200),note:z.string().min(1).max(4000)}).strict();
@@ -14,6 +15,10 @@ const task=z.object({task_id:id}).strict(),empty=z.object({}).strict();
 const notImplemented={implemented:false,readOnly:false};
 export const tools={
   ...workTools,
+  runtime_work_import_prompt:{schema:empty,implemented:true,readOnly:true},
+  runtime_work_import_paste:{schema:workImportPasteSchema,implemented:true,readOnly:false},
+  runtime_work_import_status:{schema:z.object({import_id:z.string().uuid()}).strict(),implemented:true,readOnly:true},
+  runtime_work_import_scan:{schema:z.object({project_ref:id}).strict(),implemented:true,readOnly:false},
   ...codingTools,
   ...packTools,
   ...swarmTools,

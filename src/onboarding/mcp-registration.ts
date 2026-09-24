@@ -1,7 +1,7 @@
 import {randomUUID,createHash} from 'node:crypto';
 import {existsSync,lstatSync,readFileSync} from 'node:fs';
 import {chmod,mkdir,rename,writeFile} from 'node:fs/promises';
-import {homedir} from 'node:os';
+import {homedir,userInfo} from 'node:os';
 import {dirname,isAbsolute,join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {z} from 'zod';
@@ -15,9 +15,18 @@ const clientIds=['codex','claude','opencode','cursor','hermes'] as const;
 const receiptSchema=z.object({format:z.literal(1),registrations:z.partialRecord(z.enum(clientIds),z.object({registered_at:z.string().datetime(),command_fingerprint:z.string().regex(/^[a-f0-9]{64}$/u)}).strict()).default({})}).strict();
 type Receipts=z.infer<typeof receiptSchema>;
 export interface McpClientRegistrationView {id:McpRegistrationClient;installed:boolean;registration:'registered'|'not_registered'|'unavailable'|'conflict'|'unknown';automatic:boolean;reason:string;restart_required:boolean;}
-export interface McpRegistrationView {agent_driver:{installed:true;mcp_command:'agent-driver mcp'};clients:McpClientRegistrationView[];registered_count:number;credentials_exposed:false;}
+export interface WindowsMcpBridge {command:'wsl.exe';args:string[];registration:'manual_unverified';}
+export interface McpRegistrationView {agent_driver:{installed:true;mcp_command:'agent-driver mcp'};clients:McpClientRegistrationView[];registered_count:number;windows_bridge?:WindowsMcpBridge;credentials_exposed:false;}
 
 function entrypoint(){return resolve(fileURLToPath(new URL('../cli.js',import.meta.url)));}
+/** Windows desktop MCP clients can launch the same WSL stdio server without a shell or credential copy. */
+export function windowsMcpBridge(environment:NodeJS.ProcessEnv=process.env):WindowsMcpBridge|undefined{
+  const distro=environment.WSL_DISTRO_NAME;
+  if(!distro||distro.length>128||/[\u0000-\u001f\u007f]/u.test(distro))return undefined;
+  const user=userInfo().username;
+  if(!user||user.length>128||/[\u0000-\u001f\u007f]/u.test(user))return undefined;
+  return {command:'wsl.exe',args:['--distribution',distro,'--user',user,'--exec',process.execPath,entrypoint(),'mcp'],registration:'manual_unverified'};
+}
 function fingerprint(command:string,args:readonly string[]){return createHash('sha256').update(JSON.stringify({command,args})).digest('hex');}
 function privatePath(root:string){return join(localConnectionPaths(root).root,'mcp-registrations.json');}
 function readReceipts(root:string):Receipts{const path=privatePath(root);if(!existsSync(path))return {format:1,registrations:{}};return receiptSchema.parse(JSON.parse(readFileSync(path,'utf8')));}
@@ -55,7 +64,8 @@ export class McpRegistrationController{
       if(!present){registration='unavailable';reason=this.environment.WSL_DISTRO_NAME||this.environment.WSL_INTEROP?'wsl_native_client_not_found':'client_not_available';}
       clients.push({id,installed:present,registration,automatic:present,reason,restart_required:registration==='registered'});
     }
-    return {agent_driver:{installed:true,mcp_command:'agent-driver mcp'},clients,registered_count:clients.filter(item=>item.registration==='registered').length,credentials_exposed:false};
+    const windows_bridge=windowsMcpBridge(this.environment);
+    return {agent_driver:{installed:true,mcp_command:'agent-driver mcp'},clients,registered_count:clients.filter(item=>item.registration==='registered').length,...(windows_bridge?{windows_bridge}:{}),credentials_exposed:false};
   }
   async register(id:McpRegistrationClient){
     requireCondition(clientIds.includes(id),'MCP_CLIENT_INVALID');const present=installed(id,this.environment);requireCondition(present,'MCP_CLIENT_UNAVAILABLE');

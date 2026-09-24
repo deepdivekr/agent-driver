@@ -1,4 +1,4 @@
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {TerminalStore} from '../terminal/store.js';
 import {requireCondition} from '../core/contracts.js';
 import {snapshotHash} from '../taskpack/contracts.js';
@@ -8,6 +8,7 @@ import {redact} from '../terminal/contracts.js';
 import {DecisionMemory} from '../decision-plane/memory.js';
 import {type CodingPlan} from '../coding/contracts.js';
 import {type LocalGitCheckpoint} from '../coding/local-checkpoint.js';
+import {sanitizeCodingReply} from '../coding/reply-safety.js';
 import {clientHandoffSchema,makeClientHandoff,type ClientHandoff,type ClientRouteEvent} from '../integrations/client-handoff.js';
 
 export interface PackRun {id:string;project_id:string;request_id:string;binding:string;recipe:Recipe;status:string;result:unknown;task_id:string|null;}
@@ -24,13 +25,32 @@ export interface OfficeEvent {id:number;run_id:string;worker_id:string|null;kind
 export interface IntakeWork {
   id:string;project_id:string;request_id:string;prompt:string;mode:'quick'|'guided';status:string;
   revision:number;spec:unknown|null;questions:unknown[];answers:Record<string,string>;
-  paused:boolean;created_at:string;updated_at:string;
+  paused:boolean;jev_enabled:boolean;jev_cost_consent_at:string|null;created_at:string;updated_at:string;
 }
+export interface WorkImportRecord {id:string;project_id:string;kind:'pasted'|'project';status:'draft'|'accepted';body:unknown;source_digest:string;accepted_work_id:string|null;created_at:string;updated_at:string;}
 export interface CodingRun {id:string;project_id:string;request_id:string;work_id:string;project_ref:string;project_root:string;config_fingerprint:string;plan:CodingPlan;status:string;revision:number;paused:boolean;created_at:string;updated_at:string;}
 export interface CodingStageRow {run_id:string;stage_id:string;ordinal:number;status:string;session_id:string|null;attempts:number;summary:string|null;receipt:unknown|null;started_at:string|null;finished_at:string|null;owner:string|null;lease_until_ms:number;}
 export interface CodingCheckpointRow {run_id:string;project_id:string;revision:number;head:string;state_sha256:string;changed_paths:string[];updated_at:string;}
+export type CodingDialogStatus='waiting_user'|'queued'|'running'|'advising'|'reconciliation_required'|'stopped';
+export type CodingDialogTurnStatus='queued'|'running'|'completed'|'uncertain'|'failed_preflight';
+export interface CodingDialog {
+  id:string;project_id:string;request_id:string;work_id:string;project_ref:string;project_root:string;
+  config_fingerprint:string;request_binding:string;model:string;session_id:string|null;goal:string;
+  status:CodingDialogStatus;revision:number;active_turn_id:string|null;
+  git_head:string;git_state_sha256:string;changed_paths:string[];created_at:string;updated_at:string;
+}
+export interface CodingDialogTurn {
+  id:string;dialog_id:string;ordinal:number;request_id:string;instruction:string;instruction_sha256:string;
+  status:CodingDialogTurnStatus;session_id:string|null;model:string|null;reply:string|null;
+  reply_sha256:string|null;reply_redacted:boolean;advice:string|null;owner:string|null;lease_until_ms:number;
+  reason:string|null;created_at:string;started_at:string|null;completed_at:string|null;advice_at:string|null;
+}
 const safeEndpoint=(value:string|null)=>{if(value===null)return null;try{const url=new URL(value);if(!['http:','https:'].includes(url.protocol))return null;const path=url.pathname.split('/').map((part,index,all)=>part&&(/^(?:token|secret|password|api-?key|auth|session)$/iu.test(all[index-1]??'')||part.length>64||/^[A-Za-z0-9_-]{32,}$/u.test(part))?':redacted':part).join('/');return `${url.origin}${path}`;}catch{return null;}};
 const safeSummary=(value:string)=>redact(value).replace(/https?:\/\/[^\s<>"']+/giu,url=>safeEndpoint(url)??'[REDACTED_URL]').replace(/((?:token|secret|password|api.?key)\s*[:=]\s*)\S+/giu,'$1[REDACTED]');
+const codingDialogUuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
+const codingDialogCredential=/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})\b/u;
+const codingDialogInlineSecret=/(?:password|token|secret|api[_-]?key)\s*[:=]\s*\S+/iu;
+const sha256Text=(value:string)=>createHash('sha256').update(value).digest('hex');
 export class PackStore extends TerminalStore {
   get decisionMemory(){return new DecisionMemory(this.connection);}
   constructor(path:string){super(path);this.connection.exec(`
@@ -55,9 +75,12 @@ export class PackStore extends TerminalStore {
     CREATE TABLE IF NOT EXISTS office_control(project_id TEXT NOT NULL,run_id TEXT NOT NULL,paused INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,paused_at_ms INTEGER,updated_at TEXT NOT NULL,PRIMARY KEY(project_id,run_id));
     CREATE TABLE IF NOT EXISTS office_work(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,goal TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS office_work_project_updated ON office_work(project_id,updated_at);
-    CREATE TABLE IF NOT EXISTS office_intake(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,request_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,mode TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL,prompt TEXT NOT NULL,spec TEXT NOT NULL,questions TEXT NOT NULL,answers TEXT NOT NULL,define_owner TEXT,define_lease_until_ms INTEGER NOT NULL DEFAULT 0,paused INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(project_id,request_id));
+    CREATE TABLE IF NOT EXISTS office_intake(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,request_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,mode TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL,prompt TEXT NOT NULL,spec TEXT NOT NULL,questions TEXT NOT NULL,answers TEXT NOT NULL,define_owner TEXT,define_lease_until_ms INTEGER NOT NULL DEFAULT 0,paused INTEGER NOT NULL DEFAULT 0,jev_enabled INTEGER NOT NULL DEFAULT 0,jev_cost_consent_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(project_id,request_id));
     CREATE INDEX IF NOT EXISTS office_intake_project_updated ON office_intake(project_id,updated_at);
     CREATE TABLE IF NOT EXISTS office_work_revision(work_id TEXT NOT NULL REFERENCES office_work(id),revision INTEGER NOT NULL,kind TEXT NOT NULL,spec TEXT NOT NULL,answers TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(work_id,revision));
+    CREATE TABLE IF NOT EXISTS office_import(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,body TEXT NOT NULL,source_digest TEXT NOT NULL,accepted_work_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS office_import_work ON office_import(project_id,accepted_work_id);
+    CREATE TABLE IF NOT EXISTS office_import_coding_approval(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,project_ref TEXT NOT NULL,plan_approved_at TEXT,stage_run_id TEXT,stage_id TEXT,stage_revision INTEGER,stage_approved_at TEXT);
     CREATE TABLE IF NOT EXISTS office_run(project_id TEXT NOT NULL,work_id TEXT NOT NULL REFERENCES office_work(id),source_kind TEXT NOT NULL,source_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(project_id,source_kind,source_id));
     CREATE TABLE IF NOT EXISTS office_step_instruction(project_id TEXT NOT NULL,run_id TEXT NOT NULL,worker_id TEXT NOT NULL,version INTEGER NOT NULL,instruction TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(project_id,run_id,worker_id,version));
     CREATE TABLE IF NOT EXISTS office_event(id INTEGER PRIMARY KEY AUTOINCREMENT,project_id TEXT NOT NULL,run_id TEXT NOT NULL,worker_id TEXT,kind TEXT NOT NULL,detail TEXT NOT NULL,created_at TEXT NOT NULL);
@@ -69,6 +92,13 @@ export class PackStore extends TerminalStore {
     CREATE TABLE IF NOT EXISTS coding_stage(run_id TEXT NOT NULL REFERENCES coding_run(id),stage_id TEXT NOT NULL,ordinal INTEGER NOT NULL,status TEXT NOT NULL,session_id TEXT,attempts INTEGER NOT NULL DEFAULT 0,summary TEXT,receipt TEXT,started_at TEXT,finished_at TEXT,owner TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,PRIMARY KEY(run_id,stage_id),UNIQUE(run_id,ordinal));
     CREATE TABLE IF NOT EXISTS coding_checkpoint(run_id TEXT PRIMARY KEY REFERENCES coding_run(id),project_id TEXT NOT NULL,revision INTEGER NOT NULL,head TEXT NOT NULL,state_sha256 TEXT NOT NULL,changed_paths TEXT NOT NULL,updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS coding_run_work ON coding_run(project_id,work_id,created_at);
+    CREATE TABLE IF NOT EXISTS coding_dialog(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,request_id TEXT NOT NULL,work_id TEXT NOT NULL REFERENCES office_work(id),project_ref TEXT NOT NULL,project_root TEXT NOT NULL,config_fingerprint TEXT NOT NULL,request_binding TEXT NOT NULL,model TEXT NOT NULL,session_id TEXT,goal TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL DEFAULT 0,active_turn_id TEXT,git_head TEXT NOT NULL,git_state_sha256 TEXT NOT NULL,changed_paths TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(project_id,request_id));
+    CREATE INDEX IF NOT EXISTS coding_dialog_work ON coding_dialog(project_id,work_id,created_at);
+    DROP INDEX IF EXISTS coding_dialog_live_session;
+    CREATE UNIQUE INDEX coding_dialog_live_session ON coding_dialog(session_id) WHERE session_id IS NOT NULL AND status<>'stopped';
+    CREATE TABLE IF NOT EXISTS coding_dialog_turn(id TEXT PRIMARY KEY,dialog_id TEXT NOT NULL REFERENCES coding_dialog(id),ordinal INTEGER NOT NULL,request_id TEXT NOT NULL,instruction TEXT NOT NULL,instruction_sha256 TEXT NOT NULL,status TEXT NOT NULL,session_id TEXT,model TEXT,reply TEXT,reply_sha256 TEXT,reply_redacted INTEGER NOT NULL DEFAULT 0,advice TEXT,owner TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,reason TEXT,created_at TEXT NOT NULL,started_at TEXT,completed_at TEXT,advice_at TEXT,UNIQUE(dialog_id,ordinal),UNIQUE(dialog_id,request_id));
+    CREATE INDEX IF NOT EXISTS coding_dialog_turn_dialog ON coding_dialog_turn(dialog_id,ordinal);
+    CREATE TABLE IF NOT EXISTS office_import_coding_dialog_turn_approval(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,dialog_id TEXT NOT NULL,dialog_revision INTEGER NOT NULL,instruction_sha256 TEXT NOT NULL,approved_at TEXT NOT NULL);
   `);
     const columns=new Set((this.connection.prepare('PRAGMA table_info(runtime_activity)').all() as Array<{name:string}>).map(column=>column.name));
     if(!columns.has('surface_id'))this.connection.exec('ALTER TABLE runtime_activity ADD COLUMN surface_id TEXT');
@@ -78,6 +108,9 @@ export class PackStore extends TerminalStore {
     const codingColumns=new Set((this.connection.prepare('PRAGMA table_info(coding_stage)').all() as Array<{name:string}>).map(column=>column.name));
     if(!codingColumns.has('owner'))this.connection.exec('ALTER TABLE coding_stage ADD COLUMN owner TEXT');
     if(!codingColumns.has('lease_until_ms'))this.connection.exec('ALTER TABLE coding_stage ADD COLUMN lease_until_ms INTEGER NOT NULL DEFAULT 0');
+    const intakeColumns=new Set((this.connection.prepare('PRAGMA table_info(office_intake)').all() as Array<{name:string}>).map(column=>column.name));
+    if(!intakeColumns.has('jev_enabled'))this.connection.exec('ALTER TABLE office_intake ADD COLUMN jev_enabled INTEGER NOT NULL DEFAULT 0');
+    if(!intakeColumns.has('jev_cost_consent_at'))this.connection.exec('ALTER TABLE office_intake ADD COLUMN jev_cost_consent_at TEXT');
   }
   packRuns(project:string,limit=30):PackRun[]{
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=100,'PACK_RUN_LIMIT_INVALID');
@@ -289,12 +322,79 @@ export class PackStore extends TerminalStore {
   intakeWork(project:string,id:string):IntakeWork{
     const row=this.connection.prepare('SELECT * FROM office_intake WHERE project_id=? AND work_id=?').get(project,id);
     requireCondition(row,'WORK_NOT_FOUND');
-    return {id:String(row.work_id),project_id:project,request_id:String(row.request_id),prompt:String(row.prompt),mode:String(row.mode) as IntakeWork['mode'],status:String(row.status),revision:Number(row.revision),spec:JSON.parse(String(row.spec)),questions:JSON.parse(String(row.questions)),answers:JSON.parse(String(row.answers)),paused:Boolean(row.paused),created_at:String(row.created_at),updated_at:String(row.updated_at)};
+    return {id:String(row.work_id),project_id:project,request_id:String(row.request_id),prompt:String(row.prompt),mode:String(row.mode) as IntakeWork['mode'],status:String(row.status),revision:Number(row.revision),spec:JSON.parse(String(row.spec)),questions:JSON.parse(String(row.questions)),answers:JSON.parse(String(row.answers)),paused:Boolean(row.paused),jev_enabled:Boolean(row.jev_enabled),jev_cost_consent_at:row.jev_cost_consent_at===null?null:String(row.jev_cost_consent_at),created_at:String(row.created_at),updated_at:String(row.updated_at)};
   }
   intakeWorks(project:string,limit=100):IntakeWork[]{
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=200,'WORK_LIMIT_INVALID');
     const ids=this.connection.prepare('SELECT work_id FROM office_intake WHERE project_id=? ORDER BY updated_at DESC LIMIT ?').all(project,limit);
     return ids.map(row=>this.intakeWork(project,String(row.work_id)));
+  }
+  createWorkImport(project:string,kind:'pasted'|'project',body:unknown,sourceDigest:string):WorkImportRecord{
+    requireCondition(/^[a-f0-9]{64}$/u.test(sourceDigest),'WORK_IMPORT_DIGEST_INVALID');
+    const serialized=JSON.stringify(body);requireCondition(serialized.length<=100_000,'WORK_IMPORT_TOO_LARGE');
+    const id=randomUUID(),at=new Date().toISOString();
+    this.connection.prepare('INSERT INTO office_import VALUES (?,?,?,?,?,?,?,?,?)').run(id,project,kind,'draft',serialized,sourceDigest,null,at,at);
+    return this.workImport(project,id);
+  }
+  workImport(project:string,id:string):WorkImportRecord{
+    const row=this.connection.prepare('SELECT * FROM office_import WHERE project_id=? AND id=?').get(project,id);
+    requireCondition(row,'WORK_IMPORT_NOT_FOUND');
+    return {id:String(row.id),project_id:project,kind:String(row.kind) as WorkImportRecord['kind'],status:String(row.status) as WorkImportRecord['status'],body:JSON.parse(String(row.body)),source_digest:String(row.source_digest),accepted_work_id:row.accepted_work_id===null?null:String(row.accepted_work_id),created_at:String(row.created_at),updated_at:String(row.updated_at)};
+  }
+  workImportForWork(project:string,workId:string):WorkImportRecord|null{
+    const row=this.connection.prepare('SELECT id FROM office_import WHERE project_id=? AND accepted_work_id=? LIMIT 1').get(project,workId);
+    return row?this.workImport(project,String(row.id)):null;
+  }
+  private importedCoding(project:string,workId:string){
+    const record=this.workImportForWork(project,workId);
+    return record?.kind==='project'?record:null;
+  }
+  approveImportedCodingPlan(project:string,workId:string,projectRef:string){
+    requireCondition(this.importedCoding(project,workId),'WORK_IMPORT_CODING_PROJECT_REQUIRED');
+    const work=this.intakeWork(project,workId);
+    requireCondition(work.status==='ready'&&!work.paused,'WORK_IMPORT_CODING_WORK_NOT_READY');
+    requireCondition(!this.officeRuns(project,workId).some(item=>item.source_kind==='coding'||item.source_kind==='coding_dialog'),'WORK_IMPORT_CODING_ALREADY_STARTED');
+    const at=new Date().toISOString();
+    this.connection.prepare('INSERT INTO office_import_coding_approval(work_id,project_id,project_ref,plan_approved_at) VALUES (?,?,?,?) ON CONFLICT(work_id) DO UPDATE SET project_ref=excluded.project_ref,plan_approved_at=excluded.plan_approved_at,stage_run_id=NULL,stage_id=NULL,stage_revision=NULL,stage_approved_at=NULL').run(workId,project,projectRef,at);
+  }
+  consumeImportedCodingPlan(project:string,workId:string,projectRef:string){
+    if(!this.importedCoding(project,workId))return;
+    const result=this.connection.prepare('UPDATE office_import_coding_approval SET plan_approved_at=NULL WHERE project_id=? AND work_id=? AND project_ref=? AND plan_approved_at IS NOT NULL').run(project,workId,projectRef);
+    requireCondition(result.changes===1,'WORK_IMPORT_CODING_PLAN_APPROVAL_REQUIRED');
+  }
+  approveImportedCodingStage(project:string,runId:string,expectedRevision:number){
+    const run=this.codingRun(project,runId);
+    requireCondition(this.importedCoding(project,run.work_id),'WORK_IMPORT_CODING_PROJECT_REQUIRED');
+    const work=this.intakeWork(project,run.work_id);
+    requireCondition(!work.paused&&run.status==='ready'&&!run.paused&&run.revision===expectedRevision,'WORK_IMPORT_CODING_STAGE_NOT_READY');
+    const stage=this.codingStages(project,runId).find(item=>item.status==='pending');
+    requireCondition(stage,'WORK_IMPORT_CODING_NO_PENDING_STAGE');
+    const result=this.connection.prepare('UPDATE office_import_coding_approval SET stage_run_id=?,stage_id=?,stage_revision=?,stage_approved_at=? WHERE project_id=? AND work_id=? AND project_ref=?').run(runId,stage.stage_id,expectedRevision,new Date().toISOString(),project,run.work_id,run.project_ref);
+    requireCondition(result.changes===1,'WORK_IMPORT_CODING_PLAN_APPROVAL_REQUIRED');
+  }
+  consumeImportedCodingStage(project:string,runId:string,expectedRevision:number){
+    const run=this.codingRun(project,runId);
+    if(!this.importedCoding(project,run.work_id))return;
+    const stage=this.codingStages(project,runId).find(item=>item.status==='pending');
+    requireCondition(stage,'WORK_IMPORT_CODING_NO_PENDING_STAGE');
+    const result=this.connection.prepare('UPDATE office_import_coding_approval SET stage_run_id=NULL,stage_id=NULL,stage_revision=NULL,stage_approved_at=NULL WHERE project_id=? AND work_id=? AND project_ref=? AND stage_run_id=? AND stage_id=? AND stage_revision=? AND stage_approved_at IS NOT NULL').run(project,run.work_id,run.project_ref,runId,stage.stage_id,expectedRevision);
+    requireCondition(result.changes===1,'WORK_IMPORT_CODING_STAGE_APPROVAL_REQUIRED');
+  }
+  acceptWorkImport(project:string,importId:string,prompt:string,spec:unknown,jevEnabled=false,costAcknowledged=false):IntakeWork{
+    return this.transaction(()=>{
+      const record=this.workImport(project,importId);
+      if(record.accepted_work_id)return this.intakeWork(project,record.accepted_work_id);
+      requireCondition(record.status==='draft','WORK_IMPORT_NOT_DRAFT');
+      if(jevEnabled)requireCondition(costAcknowledged,'JEV_API_COST_CONSENT_REQUIRED');
+      requireCondition(prompt.trim().length>0&&prompt.length<=8000&&!/[\r\n]/u.test(prompt),'WORK_IMPORT_PROMPT_INVALID');
+      const id=randomUUID(),at=new Date().toISOString(),title=typeof spec==='object'&&spec!==null&&'title' in spec?String(spec.title):'가져온 업무',goal=typeof spec==='object'&&spec!==null&&'desired_outcome' in spec?String(spec.desired_outcome):prompt;
+      this.connection.prepare('INSERT INTO office_work VALUES (?,?,?,?,?,?)').run(id,project,title,goal,at,at);
+      this.connection.prepare('INSERT INTO office_intake(work_id,project_id,request_id,prompt_hash,mode,status,revision,prompt,spec,questions,answers,jev_enabled,jev_cost_consent_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,`import-${importId}`,snapshotHash(prompt),'quick','ready',1,prompt,JSON.stringify(spec),'[]','{}',Number(jevEnabled),jevEnabled?at:null,at,at);
+      this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,0,'received','null','{}',at);
+      this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,1,'imported',JSON.stringify(spec),'{}',at);
+      this.connection.prepare("UPDATE office_import SET status='accepted',accepted_work_id=?,updated_at=? WHERE id=? AND project_id=? AND status='draft'").run(id,at,importId,project);
+      return this.intakeWork(project,id);
+    });
   }
   claimWorkDefinition(project:string,id:string,now=Date.now()){
     const owner=randomUUID(),until=now+90_000;
@@ -349,22 +449,37 @@ export class PackStore extends TerminalStore {
       if(latest?.source_kind==='swarm')requireCondition(!['running','needs_human'].includes((this.swarmRun(project,latest.source_id).snapshot as SwarmRunSnapshot).status),'WORK_ACTIVE_RUN_USE_STEP_CONTROL');
       if(latest?.source_kind==='pack')requireCondition(!['running','retryable_failure','waiting_auth','waiting_approval','approved','reconciliation_required'].includes(this.packRun(project,latest.source_id).status),'WORK_ACTIVE_PACK_NOT_PAUSABLE');
       if(latest?.source_kind==='coding')requireCondition(!['ready','running','reconciliation_required'].includes(this.codingRun(project,latest.source_id).status),'WORK_ACTIVE_CODING_USE_RUN_CONTROL');
+      if(latest?.source_kind==='coding_dialog')requireCondition(!['queued','running','reconciliation_required'].includes(this.codingDialog(project,latest.source_id).status),'WORK_ACTIVE_CODING_USE_RUN_CONTROL');
       const at=new Date().toISOString(),revision=work.revision+1;
       this.connection.prepare('UPDATE office_intake SET paused=?,revision=?,updated_at=? WHERE project_id=? AND work_id=?').run(Number(paused),revision,at,project,id);
       this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,revision,paused?'paused':'resumed',JSON.stringify(work.spec),JSON.stringify(work.answers),at);
       return this.intakeWork(project,id);
     });
   }
+  setWorkJev(project:string,id:string,expectedRevision:number,enabled:boolean,costAcknowledged:boolean){
+    return this.transaction(()=>{
+      const work=this.intakeWork(project,id);
+      requireCondition(work.revision===expectedRevision,'WORK_REVISION_CONFLICT');
+      requireCondition(work.jev_enabled!==enabled,'WORK_JEV_STATE_UNCHANGED');
+      requireCondition(['ready','running'].includes(work.status),'WORK_NOT_READY');
+      if(enabled)requireCondition(costAcknowledged,'JEV_API_COST_CONSENT_REQUIRED');
+      const at=new Date().toISOString(),revision=work.revision+1;
+      this.connection.prepare('UPDATE office_intake SET jev_enabled=?,jev_cost_consent_at=CASE WHEN ?=1 THEN ? ELSE jev_cost_consent_at END,revision=?,updated_at=? WHERE project_id=? AND work_id=? AND revision=?').run(Number(enabled),Number(enabled),at,revision,at,project,id,expectedRevision);
+      this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,revision,enabled?'jev_enabled':'jev_disabled',JSON.stringify(work.spec),JSON.stringify(work.answers),at);
+      return this.intakeWork(project,id);
+    });
+  }
   officeWorkSummaries(project:string,limit=100){
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=200,'WORK_LIMIT_INVALID');
     return this.connection.prepare(`SELECT w.id,w.title,w.goal,w.created_at,w.updated_at,i.mode,i.status AS intake_status,i.revision AS intake_revision,i.paused,
-      r.source_kind,r.source_id,fr.status AS pack_status,json_extract(sr.snapshot,'$.status') AS swarm_status,cr.status AS coding_status,COALESCE(sr.revision,cr.revision) AS run_revision,
-      COALESCE(sr.updated_at,cr.updated_at,i.updated_at,w.updated_at) AS display_updated_at FROM office_work w
+      r.source_kind,r.source_id,fr.status AS pack_status,json_extract(sr.snapshot,'$.status') AS swarm_status,COALESCE(cr.status,cd.status) AS coding_status,COALESCE(sr.revision,cr.revision,cd.revision) AS run_revision,
+      COALESCE(sr.updated_at,cr.updated_at,cd.updated_at,i.updated_at,w.updated_at) AS display_updated_at FROM office_work w
       LEFT JOIN office_intake i ON i.work_id=w.id AND i.project_id=w.project_id
       LEFT JOIN office_run r ON r.rowid=(SELECT recent.rowid FROM office_run recent WHERE recent.project_id=w.project_id AND recent.work_id=w.id ORDER BY recent.created_at DESC,recent.rowid DESC LIMIT 1)
       LEFT JOIN family_run fr ON r.source_kind='pack' AND fr.id=r.source_id AND fr.project_id=w.project_id
       LEFT JOIN swarm_run sr ON r.source_kind='swarm' AND sr.id=r.source_id AND sr.project_id=w.project_id
       LEFT JOIN coding_run cr ON r.source_kind='coding' AND cr.id=r.source_id AND cr.project_id=w.project_id
+      LEFT JOIN coding_dialog cd ON r.source_kind='coding_dialog' AND cd.id=r.source_id AND cd.project_id=w.project_id
       WHERE w.project_id=? ORDER BY COALESCE(r.created_at,w.updated_at) DESC,w.id DESC LIMIT ?`).all(project,limit) as Array<{id:string;title:string;goal:string;created_at:string;updated_at:string;mode:string|null;intake_status:string|null;intake_revision:number|null;paused:number|null;source_kind:string|null;source_id:string|null;pack_status:string|null;swarm_status:string|null;coding_status:string|null;run_revision:number|null;display_updated_at:string}>;
   }
   intakeWorkOptional(project:string,id:string):IntakeWork|null{
@@ -384,17 +499,17 @@ export class PackStore extends TerminalStore {
     if(kind==='pack'||kind==='coding')requireCondition(spec?.route?.pack_family===family,'WORK_PACK_FAMILY_MISMATCH');
     return work.id;
   }
-  registerOfficeRun(project:string,kind:'pack'|'swarm'|'coding',runId:string,goal:string,at=new Date().toISOString(),requestId?:string,workId?:string){
+  registerOfficeRun(project:string,kind:'pack'|'swarm'|'coding'|'coding_dialog',runId:string,goal:string,at=new Date().toISOString(),requestId?:string,workId?:string){
     // An immutable plan ID is a safe repeat identity. Never merge by similar titles.
     const previous=kind==='swarm'?this.connection.prepare(`SELECT o.work_id FROM office_run o JOIN swarm_run current ON current.id=? AND current.project_id=o.project_id JOIN swarm_run prior ON prior.id=o.source_id AND prior.project_id=o.project_id WHERE o.project_id=? AND o.source_kind='swarm' AND prior.plan_id=current.plan_id ORDER BY o.created_at,o.source_id LIMIT 1`).get(runId,project):null;
     const intakeId=workId??(requestId?this.connection.prepare('SELECT work_id FROM office_intake WHERE project_id=? AND request_id=?').get(project,requestId)?.work_id as string|undefined:undefined);
     const assignedId=intakeId??(previous?.work_id?String(previous.work_id):`${kind}:${runId}`);
-    this.connection.prepare('INSERT OR IGNORE INTO office_work VALUES (?,?,?,?,?,?)').run(assignedId,project,kind==='swarm'?'Swarm 업무':kind==='coding'?'코딩 업무':'Task Pack 업무',goal,at,at);
+    this.connection.prepare('INSERT OR IGNORE INTO office_work VALUES (?,?,?,?,?,?)').run(assignedId,project,kind==='swarm'?'Swarm 업무':kind==='coding'||kind==='coding_dialog'?'코딩 업무':'Task Pack 업무',goal,at,at);
     this.connection.prepare('INSERT OR IGNORE INTO office_run VALUES (?,?,?,?,?)').run(project,assignedId,kind,runId,at);
     if(intakeId)this.connection.prepare("UPDATE office_intake SET status='running',updated_at=? WHERE work_id=? AND project_id=?").run(at,assignedId,project);
     return assignedId;
   }
-  officeWork(project:string,kind:'pack'|'swarm'|'coding',runId:string){
+  officeWork(project:string,kind:'pack'|'swarm'|'coding'|'coding_dialog',runId:string){
     return this.connection.prepare('SELECT w.id,w.project_id,w.title,w.goal,w.created_at,w.updated_at FROM office_run r JOIN office_work w ON w.id=r.work_id WHERE r.project_id=? AND r.source_kind=? AND r.source_id=?').get(project,kind,runId)??null;
   }
   officeWorkById(project:string,id:string){
@@ -411,6 +526,243 @@ export class PackStore extends TerminalStore {
   }
   clientHandoffs(project:string,workId:string):ClientHandoff[]{
     return this.connection.prepare('SELECT * FROM client_handoff WHERE project_id=? AND work_id=? ORDER BY created_at DESC,id DESC LIMIT 50').all(project,workId).map(row=>clientHandoffSchema.parse(row));
+  }
+  codingDialog(project:string,id:string):CodingDialog{
+    const row=this.connection.prepare('SELECT * FROM coding_dialog WHERE project_id=? AND id=?').get(project,id);
+    requireCondition(row,'CODING_DIALOG_NOT_FOUND');
+    return {...row,changed_paths:JSON.parse(String(row.changed_paths))} as unknown as CodingDialog;
+  }
+  codingDialogTurns(project:string,id:string,limit=20):CodingDialogTurn[]{
+    this.codingDialog(project,id);
+    requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=100,'CODING_DIALOG_TURN_LIMIT_INVALID');
+    return this.connection.prepare('SELECT * FROM (SELECT * FROM coding_dialog_turn WHERE dialog_id=? ORDER BY ordinal DESC LIMIT ?) ORDER BY ordinal').all(id,limit).map(row=>({...row,reply_redacted:Boolean(row.reply_redacted)})) as unknown as CodingDialogTurn[];
+  }
+  codingDialogTurnCount(project:string,id:string):number{
+    this.codingDialog(project,id);
+    return Number(this.connection.prepare('SELECT COUNT(*) AS count FROM coding_dialog_turn WHERE dialog_id=?').get(id)?.count??0);
+  }
+  private codingDialogTurn(project:string,id:string,turnId:string):CodingDialogTurn{
+    this.codingDialog(project,id);
+    const row=this.connection.prepare('SELECT * FROM coding_dialog_turn WHERE dialog_id=? AND id=?').get(id,turnId);
+    requireCondition(row,'CODING_DIALOG_TURN_NOT_FOUND');
+    return {...row,reply_redacted:Boolean(row.reply_redacted)} as unknown as CodingDialogTurn;
+  }
+  codingDialogTurnById(project:string,id:string,turnId:string):CodingDialogTurn|null{
+    this.codingDialog(project,id);
+    const row=this.connection.prepare('SELECT id FROM coding_dialog_turn WHERE dialog_id=? AND id=?').get(id,turnId);
+    return row?this.codingDialogTurn(project,id,turnId):null;
+  }
+  codingDialogTurnByRequestId(project:string,id:string,requestId:string):CodingDialogTurn|null{
+    this.codingDialog(project,id);
+    const row=this.connection.prepare('SELECT id FROM coding_dialog_turn WHERE dialog_id=? AND request_id=?').get(id,requestId);
+    return row?this.codingDialogTurn(project,id,String(row.id)):null;
+  }
+  beginCodingDialog(project:string,requestId:string,workId:string,projectRef:string,root:string,fingerprint:string,model:string,git:LocalGitCheckpoint,sessionId:string|null,goal:string):{dialog:CodingDialog;created:boolean}{
+    requireCondition(requestId.length>0&&requestId.length<=80&&goal.trim().length>0&&goal.length<=8_000&&!codingDialogCredential.test(goal)&&!codingDialogInlineSecret.test(goal),'CODING_DIALOG_REQUEST_INVALID');
+    requireCondition(model.trim().length>0&&model.length<=128&&(!sessionId||codingDialogUuid.test(sessionId)),'CODING_DIALOG_SESSION_INVALID');
+    requireCondition(/^[a-f0-9]{40,64}$/u.test(git.head)&&/^[a-f0-9]{64}$/u.test(git.state_sha256),'CODING_DIALOG_CHECKPOINT_INVALID');
+    const binding=snapshotHash({workId,projectRef,root,fingerprint,model,sessionId,goal});
+    return this.transaction(()=>{
+      const old=this.connection.prepare('SELECT id FROM coding_dialog WHERE project_id=? AND request_id=?').get(project,requestId);
+      if(old){const dialog=this.codingDialog(project,String(old.id));requireCondition(dialog.request_binding===binding,'CODING_DIALOG_REQUEST_ID_CONFLICT');return {dialog,created:false};}
+      this.assertWorkRunBinding(project,requestId,'coding','coding.orchestrate',workId);
+      requireCondition(!this.officeRuns(project,workId).some(item=>item.source_kind==='coding'||item.source_kind==='coding_dialog'),'CODING_DIALOG_WORK_ALREADY_STARTED');
+      if(sessionId)requireCondition(!this.connection.prepare("SELECT 1 FROM coding_dialog WHERE session_id=? AND status<>'stopped'").get(sessionId),'CODING_DIALOG_SESSION_ALREADY_ATTACHED');
+      const imported=this.importedCoding(project,workId);
+      if(imported){
+        const source=imported.body as {scan?:{root?:string}};
+        requireCondition(source.scan?.root===root,'WORK_IMPORT_CODING_PROJECT_NOT_WRITABLE');
+        this.consumeImportedCodingPlan(project,workId,projectRef);
+      }
+      const id=randomUUID(),at=new Date().toISOString();
+      this.connection.prepare('INSERT INTO coding_dialog VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,requestId,workId,projectRef,root,fingerprint,binding,model,sessionId,safeSummary(goal),'waiting_user',0,null,git.head,git.state_sha256,JSON.stringify(git.changed_paths.map(safeSummary)),at,at);
+      this.registerOfficeRun(project,'coding_dialog',id,goal,at,requestId,workId);
+      return {dialog:this.codingDialog(project,id),created:true};
+    });
+  }
+  approveImportedCodingDialogTurn(project:string,id:string,expectedRevision:number,instruction:string):void{
+    requireCondition(instruction.trim().length>=3&&instruction.length<=8_000&&!codingDialogCredential.test(instruction)&&!codingDialogInlineSecret.test(instruction),'CODING_DIALOG_INSTRUCTION_INVALID');
+    this.transaction(()=>{
+      const dialog=this.codingDialog(project,id);
+      requireCondition(this.importedCoding(project,dialog.work_id),'WORK_IMPORT_CODING_PROJECT_REQUIRED');
+      requireCondition(dialog.status==='waiting_user'&&dialog.active_turn_id===null&&dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
+      requireCondition(!this.intakeWork(project,dialog.work_id).paused,'WORK_PAUSED');
+      this.connection.prepare('INSERT INTO office_import_coding_dialog_turn_approval(work_id,project_id,dialog_id,dialog_revision,instruction_sha256,approved_at) VALUES (?,?,?,?,?,?) ON CONFLICT(work_id) DO UPDATE SET project_id=excluded.project_id,dialog_id=excluded.dialog_id,dialog_revision=excluded.dialog_revision,instruction_sha256=excluded.instruction_sha256,approved_at=excluded.approved_at').run(dialog.work_id,project,id,expectedRevision,sha256Text(instruction.trim()),new Date().toISOString());
+    });
+  }
+  queueCodingDialogTurn(project:string,id:string,expectedRevision:number,requestId:string,instruction:string):{dialog:CodingDialog;turn:CodingDialogTurn;created:boolean}{
+    requireCondition(requestId.length>0&&requestId.length<=80&&instruction.trim().length>=3&&instruction.length<=8_000&&!codingDialogCredential.test(instruction)&&!codingDialogInlineSecret.test(instruction),'CODING_DIALOG_INSTRUCTION_INVALID');
+    const instructionSha256=sha256Text(instruction);
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id);
+      const old=this.connection.prepare('SELECT id,instruction_sha256 FROM coding_dialog_turn WHERE dialog_id=? AND request_id=?').get(id,requestId);
+      if(old){requireCondition(String(old.instruction_sha256)===instructionSha256,'CODING_DIALOG_TURN_REQUEST_ID_CONFLICT');return {dialog,turn:this.codingDialogTurn(project,id,String(old.id)),created:false};}
+      requireCondition(dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
+      requireCondition(dialog.status==='waiting_user'&&dialog.active_turn_id===null,'CODING_DIALOG_NOT_WAITING_USER');
+      requireCondition(!this.intakeWork(project,dialog.work_id).paused,'WORK_PAUSED');
+      if(this.importedCoding(project,dialog.work_id)){
+        const approved=this.connection.prepare('DELETE FROM office_import_coding_dialog_turn_approval WHERE work_id=? AND project_id=? AND dialog_id=? AND dialog_revision=? AND instruction_sha256=? AND approved_at>=?').run(dialog.work_id,project,id,expectedRevision,instructionSha256,new Date(Date.now()-60_000).toISOString());
+        requireCondition(approved.changes===1,'WORK_IMPORT_CODING_DIALOG_TURN_APPROVAL_REQUIRED');
+      }
+      const ordinal=Number(this.connection.prepare('SELECT COALESCE(MAX(ordinal),-1)+1 AS ordinal FROM coding_dialog_turn WHERE dialog_id=?').get(id)?.ordinal),turnId=randomUUID(),at=new Date().toISOString();
+      this.connection.prepare("INSERT INTO coding_dialog_turn(id,dialog_id,ordinal,request_id,instruction,instruction_sha256,status,session_id,created_at) VALUES (?,?,?,?,?,?,'queued',?,?)").run(turnId,id,ordinal,requestId,instruction,instructionSha256,dialog.session_id,at);
+      const changed=this.connection.prepare("UPDATE coding_dialog SET status='queued',active_turn_id=?,revision=revision+1,updated_at=? WHERE project_id=? AND id=? AND revision=? AND status='waiting_user'").run(turnId,at,project,id,expectedRevision);
+      requireCondition(changed.changes===1,'CODING_DIALOG_REVISION_CONFLICT');
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turnId,'coding_dialog.turn_queued',`Turn ${ordinal+1} queued`,at);
+      return {dialog:this.codingDialog(project,id),turn:this.codingDialogTurn(project,id,turnId),created:true};
+    });
+  }
+  claimCodingDialogTurn(project:string,id:string,expectedRevision:number):{dialog:CodingDialog;turn:CodingDialogTurn;owner:string}{
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id);
+      requireCondition(dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
+      requireCondition(dialog.status==='queued'&&dialog.active_turn_id,'CODING_DIALOG_NOT_QUEUED');
+      requireCondition(!this.intakeWork(project,dialog.work_id).paused,'WORK_PAUSED');
+      const turn=this.codingDialogTurn(project,id,dialog.active_turn_id),owner=randomUUID(),at=new Date().toISOString();
+      requireCondition(turn.status==='queued','CODING_DIALOG_TURN_NOT_QUEUED');
+      const changed=this.connection.prepare("UPDATE coding_dialog_turn SET status='running',owner=?,lease_until_ms=?,started_at=? WHERE dialog_id=? AND id=? AND status='queued'").run(owner,Date.now()+30_000,at,id,turn.id);
+      requireCondition(changed.changes===1,'CODING_DIALOG_TURN_NOT_QUEUED');
+      this.connection.prepare("UPDATE coding_dialog SET status='running',revision=revision+1,updated_at=? WHERE project_id=? AND id=?").run(at,project,id);
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turn.id,'coding_dialog.turn_started',`Turn ${turn.ordinal+1} started`,at);
+      return {dialog:this.codingDialog(project,id),turn:this.codingDialogTurn(project,id,turn.id),owner};
+    });
+  }
+  renewCodingDialogTurn(project:string,id:string,turnId:string,owner:string):boolean{
+    const dialog=this.codingDialog(project,id);
+    if(dialog.status!=='running'||dialog.active_turn_id!==turnId)return false;
+    return this.connection.prepare("UPDATE coding_dialog_turn SET lease_until_ms=? WHERE dialog_id=? AND id=? AND status='running' AND owner=? AND lease_until_ms>?").run(Date.now()+30_000,id,turnId,owner,Date.now()).changes===1;
+  }
+  setCodingDialogSession(project:string,id:string,turnId:string,owner:string,sessionId:string):CodingDialog{
+    requireCondition(codingDialogUuid.test(sessionId),'CODING_DIALOG_SESSION_INVALID');
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id),turn=this.codingDialogTurn(project,id,turnId);
+      requireCondition(dialog.status==='running'&&dialog.active_turn_id===turnId&&turn.status==='running'&&turn.owner===owner&&turn.lease_until_ms>Date.now(),'CODING_DIALOG_OWNER_LOST');
+      requireCondition((dialog.session_id===null||dialog.session_id===sessionId)&&(turn.session_id===null||turn.session_id===sessionId),'CODING_DIALOG_SESSION_MISMATCH');
+      requireCondition(!this.connection.prepare("SELECT 1 FROM coding_dialog WHERE session_id=? AND id<>? AND status<>'stopped'").get(sessionId,id),'CODING_DIALOG_SESSION_ALREADY_ATTACHED');
+      this.connection.prepare('UPDATE coding_dialog_turn SET session_id=? WHERE dialog_id=? AND id=?').run(sessionId,id,turnId);
+      this.connection.prepare('UPDATE coding_dialog SET session_id=? WHERE project_id=? AND id=?').run(sessionId,project,id);
+      return this.codingDialog(project,id);
+    });
+  }
+  completeCodingDialogTurn(project:string,id:string,turnId:string,owner:string,sessionId:string,model:string,reply:string,git:LocalGitCheckpoint,replyRedacted=false,unsafeReason:string|null=null):CodingDialog{
+    requireCondition(codingDialogUuid.test(sessionId)&&model.trim().length>0&&model.length<=128,'CODING_DIALOG_SESSION_INVALID');
+    requireCondition(reply.trim().length>0&&Buffer.byteLength(reply,'utf8')<=1024*1024,'CODING_DIALOG_REPLY_TOO_LARGE');
+    requireCondition(/^[a-f0-9]{40,64}$/u.test(git.head)&&/^[a-f0-9]{64}$/u.test(git.state_sha256),'CODING_DIALOG_CHECKPOINT_INVALID');
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id),turn=this.codingDialogTurn(project,id,turnId);
+      requireCondition(dialog.status==='running'&&dialog.active_turn_id===turnId&&turn.status==='running'&&turn.owner===owner&&turn.lease_until_ms>Date.now(),'CODING_DIALOG_OWNER_LOST');
+      requireCondition((dialog.session_id===null||dialog.session_id===sessionId)&&(turn.session_id===null||turn.session_id===sessionId),'CODING_DIALOG_SESSION_MISMATCH');
+      requireCondition(!this.connection.prepare("SELECT 1 FROM coding_dialog WHERE session_id=? AND id<>? AND status<>'stopped'").get(sessionId,id),'CODING_DIALOG_SESSION_ALREADY_ATTACHED');
+      const at=new Date().toISOString(),sanitized=sanitizeCodingReply(reply),stored=sanitized.text,redacted=replyRedacted||sanitized.redacted;
+      this.connection.prepare("UPDATE coding_dialog_turn SET status='completed',session_id=?,model=?,reply=?,reply_sha256=?,reply_redacted=?,reason=?,owner=NULL,lease_until_ms=0,completed_at=? WHERE dialog_id=? AND id=?").run(sessionId,model,stored,sha256Text(reply),Number(redacted),unsafeReason?safeSummary(unsafeReason).slice(0,2000):null,at,id,turnId);
+      if(unsafeReason){
+        this.connection.prepare("UPDATE coding_dialog SET status='reconciliation_required',active_turn_id=NULL,session_id=?,model=?,revision=revision+1,updated_at=? WHERE project_id=? AND id=?").run(sessionId,model,at,project,id);
+        this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turnId,'coding_dialog.turn_policy_violation',safeSummary(unsafeReason),at);
+      }else{
+        this.connection.prepare("UPDATE coding_dialog SET status='advising',active_turn_id=NULL,session_id=?,model=?,revision=revision+1,git_head=?,git_state_sha256=?,changed_paths=?,updated_at=? WHERE project_id=? AND id=?").run(sessionId,model,git.head,git.state_sha256,JSON.stringify(git.changed_paths.map(safeSummary)),at,project,id);
+        this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turnId,'coding_dialog.turn_completed',`Turn ${turn.ordinal+1} completed; advice pending`,at);
+      }
+      return this.codingDialog(project,id);
+    });
+  }
+  setCodingDialogAdvice(project:string,id:string,expectedRevision:number,turnId:string,advice:string|null):CodingDialog{
+    requireCondition(advice===null||(advice.trim().length>0&&Buffer.byteLength(advice,'utf8')<=16*1024),'CODING_DIALOG_ADVICE_INVALID');
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id),turn=this.codingDialogTurn(project,id,turnId);
+      requireCondition(dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
+      requireCondition(dialog.status==='advising'&&dialog.active_turn_id===null&&turn.status==='completed'&&turn.advice_at===null,'CODING_DIALOG_NOT_ADVISING');
+      const latest=this.connection.prepare('SELECT id FROM coding_dialog_turn WHERE dialog_id=? ORDER BY ordinal DESC LIMIT 1').get(id);requireCondition(latest?.id===turnId,'CODING_DIALOG_TURN_NOT_LATEST');
+      const at=new Date().toISOString();
+      this.connection.prepare('UPDATE coding_dialog_turn SET advice=?,advice_at=? WHERE dialog_id=? AND id=?').run(advice===null?null:safeSummary(advice),at,id,turnId);
+      this.connection.prepare("UPDATE coding_dialog SET status='waiting_user',revision=revision+1,updated_at=? WHERE project_id=? AND id=?").run(at,project,id);
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turnId,advice===null?'coding_dialog.advice_unavailable':'coding_dialog.advice_ready',advice===null?'Codex reply preserved; supervisor advice unavailable':'Codex reply and separate supervisor advice ready',at);
+      return this.codingDialog(project,id);
+    });
+  }
+  markExpiredCodingDialogAdvice(project:string,id:string,nowMs=Date.now()):CodingDialog{
+    requireCondition(Number.isFinite(nowMs),'CODING_DIALOG_CLOCK_INVALID');
+    const dialog=this.codingDialog(project,id);
+    if(dialog.status!=='advising')return dialog;
+    const latest=this.connection.prepare('SELECT id,completed_at FROM coding_dialog_turn WHERE dialog_id=? ORDER BY ordinal DESC LIMIT 1').get(id);
+    const completedAt=typeof latest?.completed_at==='string'?Date.parse(latest.completed_at):NaN;
+    if(typeof latest?.id!=='string'||!Number.isFinite(completedAt)||nowMs-completedAt<120_000)return dialog;
+    try{return this.setCodingDialogAdvice(project,id,dialog.revision,latest.id,null);}
+    catch(error){
+      const current=this.codingDialog(project,id);
+      if(current.revision!==dialog.revision)return current;
+      throw error;
+    }
+  }
+  expireCodingDialogAdvice(project:string,nowMs=Date.now()):number{
+    const rows=this.connection.prepare("SELECT id FROM coding_dialog WHERE project_id=? AND status='advising' LIMIT 50").all(project);
+    let recovered=0;
+    for(const row of rows)if(this.markExpiredCodingDialogAdvice(project,String(row.id),nowMs).status==='waiting_user')recovered++;
+    return recovered;
+  }
+  markCodingDialogUncertain(project:string,id:string,turnId:string,owner:string|null,reason:string):CodingDialog{
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id),turn=this.codingDialogTurn(project,id,turnId);
+      requireCondition(dialog.active_turn_id===turnId&&['queued','running'].includes(dialog.status),'CODING_DIALOG_NOT_ACTIVE');
+      requireCondition(turn.status===dialog.status,'CODING_DIALOG_TURN_STATE_MISMATCH');
+      if(turn.status==='running')requireCondition(owner!==null&&turn.owner===owner&&turn.lease_until_ms>Date.now(),'CODING_DIALOG_OWNER_LOST');
+      else requireCondition(owner===null,'CODING_DIALOG_OWNER_MISMATCH');
+      const at=new Date().toISOString();
+      this.connection.prepare("UPDATE coding_dialog_turn SET status='uncertain',owner=NULL,lease_until_ms=0,reason=?,completed_at=? WHERE dialog_id=? AND id=?").run(safeSummary(reason).slice(0,2000),at,id,turnId);
+      this.connection.prepare("UPDATE coding_dialog SET status='reconciliation_required',active_turn_id=NULL,revision=revision+1,updated_at=? WHERE project_id=? AND id=?").run(at,project,id);
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turnId,'coding_dialog.turn_uncertain','Effect uncertain; no automatic replay',at);
+      return this.codingDialog(project,id);
+    });
+  }
+  markCodingDialogPreflightFailed(project:string,id:string,turnId:string,owner:string,reason:string):CodingDialog{
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id),turn=this.codingDialogTurn(project,id,turnId);
+      requireCondition(dialog.status==='running'&&dialog.active_turn_id===turnId&&turn.status==='running'&&turn.owner===owner&&turn.lease_until_ms>Date.now(),'CODING_DIALOG_OWNER_LOST');
+      const at=new Date().toISOString();
+      this.connection.prepare("UPDATE coding_dialog_turn SET status='failed_preflight',owner=NULL,lease_until_ms=0,reason=?,completed_at=? WHERE dialog_id=? AND id=?").run(safeSummary(reason).slice(0,2000),at,id,turnId);
+      this.connection.prepare("UPDATE coding_dialog SET status='waiting_user',active_turn_id=NULL,revision=revision+1,updated_at=? WHERE project_id=? AND id=?").run(at,project,id);
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turnId,'coding_dialog.preflight_failed','Codex was not launched; correct the prerequisite and send a new instruction',at);
+      return this.codingDialog(project,id);
+    });
+  }
+  acceptCodingDialogCheckpoint(project:string,id:string,expectedRevision:number,git:LocalGitCheckpoint):CodingDialog{
+    requireCondition(/^[a-f0-9]{40,64}$/u.test(git.head)&&/^[a-f0-9]{64}$/u.test(git.state_sha256),'CODING_DIALOG_CHECKPOINT_INVALID');
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id);
+      requireCondition(dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
+      requireCondition(['reconciliation_required','waiting_user'].includes(dialog.status)&&dialog.active_turn_id===null,'CODING_DIALOG_RECONCILE_NOT_SAFE');
+      const at=new Date().toISOString();
+      this.connection.prepare("UPDATE coding_dialog SET status='waiting_user',git_head=?,git_state_sha256=?,changed_paths=?,revision=revision+1,updated_at=? WHERE project_id=? AND id=? AND revision=?").run(git.head,git.state_sha256,JSON.stringify(git.changed_paths.map(safeSummary)),at,project,id,expectedRevision);
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,null,'coding_dialog.checkpoint_accepted','Human reviewed Codex session and current Git; no turn replayed',at);
+      return this.codingDialog(project,id);
+    });
+  }
+  markExpiredCodingDialogTurn(project:string,id:string):CodingDialog{
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id);
+      if(dialog.status!=='running'||!dialog.active_turn_id)return dialog;
+      const turn=this.codingDialogTurn(project,id,dialog.active_turn_id);
+      if(turn.status!=='running'||turn.lease_until_ms>Date.now())return dialog;
+      const at=new Date().toISOString();
+      this.connection.prepare("UPDATE coding_dialog_turn SET status='uncertain',owner=NULL,lease_until_ms=0,reason='Execution owner expired; inspect Codex session and Git before continuing',completed_at=? WHERE dialog_id=? AND id=?").run(at,id,turn.id);
+      this.connection.prepare("UPDATE coding_dialog SET status='reconciliation_required',active_turn_id=NULL,revision=revision+1,updated_at=? WHERE project_id=? AND id=?").run(at,project,id);
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,turn.id,'coding_dialog.owner_expired','Execution owner expired; no automatic replay',at);
+      return this.codingDialog(project,id);
+    });
+  }
+  expireCodingDialogTurns(project:string):number{
+    const rows=this.connection.prepare("SELECT id FROM coding_dialog WHERE project_id=? AND status='running' AND active_turn_id IN (SELECT id FROM coding_dialog_turn WHERE status='running' AND lease_until_ms<=?) LIMIT 50").all(project,Date.now());
+    for(const row of rows)this.markExpiredCodingDialogTurn(project,String(row.id));
+    return rows.length;
+  }
+  stopCodingDialog(project:string,id:string,expectedRevision:number):CodingDialog{
+    return this.transaction(()=>{
+      const dialog=this.codingDialog(project,id);requireCondition(dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
+      requireCondition(['waiting_user','advising'].includes(dialog.status)&&dialog.active_turn_id===null,'CODING_DIALOG_NOT_STOPPABLE');
+      const at=new Date().toISOString();
+      this.connection.prepare("UPDATE coding_dialog SET status='stopped',revision=revision+1,updated_at=? WHERE project_id=? AND id=?").run(at,project,id);
+      this.connection.prepare('INSERT INTO office_event(project_id,run_id,worker_id,kind,detail,created_at) VALUES (?,?,?,?,?,?)').run(project,id,null,'coding_dialog.stopped','User stopped coding conversation',at);
+      return this.codingDialog(project,id);
+    });
   }
   codingRun(project:string,id:string):CodingRun{
     const row=this.connection.prepare('SELECT * FROM coding_run WHERE project_id=? AND id=?').get(project,id);

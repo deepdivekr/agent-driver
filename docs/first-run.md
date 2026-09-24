@@ -1,23 +1,23 @@
 # 첫 실행: 설치 확인과 MCP 연결
 
-Agent Office의 설치 경험은 사용자가 Pack, registry, GitHub 경로, MCP 설정 파일을 이해하도록 요구하지 않는다. 사용자는 설치를 담당하는 에이전트에게 다음처럼 한 번만 말하면 된다. 기존 `agent-driver` 설치 명령과 MCP 이름은 호환을 위해 유지한다.
+Agent Driver의 설치 경험은 사용자가 Pack, registry, GitHub 경로, MCP 설정 파일을 이해하도록 요구하지 않는다. 사용자는 설치를 담당하는 에이전트에게 다음처럼 한 번만 말하면 된다.
 
 > Agent Driver를 설치하고, 앞으로 컴퓨터·브라우저 작업은 Agent Driver로 해줘.
 
-기본 agent runtime은 Hermes다. 설치 에이전트가 Agent Driver를 설치하고 `agent-driver connect`를 실행하면 Agent Office의 로컬 온보딩이 열린다. 첫 화면은 설치 성공을 확인하고 Codex·Claude Code·OpenCode·Cursor·Hermes 중 현재 WSL/Linux 환경에 있는 클라이언트에 공통 stdio 서버를 등록한다. 연결 뒤에는 같은 화면의 업무 현황에서 단계별 진척·중단 이유·인계 기록을 확인한다. Telegram 대화·장기 기억·계획은 Hermes가, 외부 효과·lease·승인·검증은 Agent Driver가 맡는다.
+설치 에이전트가 Agent Driver를 설치하고 `agent-driver connect`를 실행하면 Agent Driver의 로컬 온보딩이 열린다. 첫 화면은 설치 성공을 확인하고 Codex·Claude Code·OpenCode·Cursor·Hermes 중 사용할 클라이언트의 설치·로그인·MCP 등록을 안내한다. 연결 뒤에는 같은 화면의 업무 현황에서 단계별 진척·중단 이유·인계 기록을 확인한다. Hermes를 연결한 경우 Telegram 대화·장기 기억·계획은 Hermes가, 외부 효과·lease·승인·검증은 Agent Driver가 맡는다.
 
 직접 설치할 때는 Ubuntu/WSL 터미널에서 다음 한 줄을 실행한다.
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/main/install.sh | bash
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.0/install.sh | bash'
 ```
 
-bootstrap은 홈 디렉터리 안에 고정 Node/npm 런타임과 저장소를 준비하고, 의존성·빌드·Chromium·절대경로 launcher를 설치한 다음 `agent-driver connect`를 실행한다. 기존 비관리 경로, symlink, 수정된 checkout은 덮어쓰지 않는다. 설치가 끝난 뒤에는 터미널과 관제센터를 번갈아 열 필요 없이 관제센터에서 client 설치·인증·MCP 등록·모델 설정을 이어간다.
+bootstrap은 홈 디렉터리 안에 고정 Node/npm 런타임과 저장소를 준비하고, 의존성·빌드·Chromium·절대경로 launcher를 설치한 다음 `agent-driver connect`를 실행한다. 기존 비관리 경로, symlink, 수정된 checkout은 덮어쓰지 않는다. 관제센터 주소가 터미널에 표시되고, 브라우저를 열 수 있는 환경에서는 화면도 자동으로 열린다. 이후 관제센터에서 client 설치·인증·MCP 등록·모델 설정을 이어간다.
 
 사용자가 직접 보는 절차는 다음과 같다.
 
 1. 설치를 지시한다.
-2. `agent-driver connect`가 연 loopback 화면에서 사용할 클라이언트를 선택한다. 없으면 **설치**, 설치됐지만 로그아웃 상태면 **로그인**, 준비됐으면 **MCP 등록** 순서로 같은 카드가 바뀐다.
+2. `agent-driver connect`가 표시한 로컬 화면에서 사용할 클라이언트를 선택한다. 없으면 **설치**, 설치됐지만 로그아웃 상태면 **로그인**, 준비됐으면 **MCP 등록** 순서로 같은 카드가 바뀐다.
 3. **로컬 실행 승인** 뒤 AI 연결과 선택적 Jev를 설정한다. Telegram을 쓸 때는 Hermes가 안내하는 bot 연결에서 token과 허용 사용자만 한 번 입력한다.
 
 ## 연결 화면

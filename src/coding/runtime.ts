@@ -14,6 +14,7 @@ import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {redact} from '../terminal/contracts.js';
 import {codingPlanSchema,codingTools,type CodingPlan,type CodingStage} from './contracts.js';
 import {projectMap,readLocalGitCheckpoint,renderLocalHandoff,writeLocalHandoff} from './local-checkpoint.js';
+import {type CodexSessionCatalog} from './session-catalog.js';
 
 const uuid=/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 const credential=/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})\b/u;
@@ -23,7 +24,7 @@ const contentSchema=z.object({content:z.string().min(1).max(60000),summary:z.str
 const safe=(value:string,max=1500)=>redact(value).slice(0,max);
 const PLAN_INSTRUCTIONS=`Plan a bounded coding Work for one registered project. Use the supplied codebase map as orientation, then choose only tracked source_paths relevant to each stage. Return only the JSON schema. Stage IDs are unique. Codex may implement; Claude may review a diff, write README.md text, or draft marketing copy. Choose source_paths only from supplied tracked paths when Claude needs repository context. A code-owned commit_readme stage is permitted only when the user explicitly requests a commit and host policy allows it; it commits README.md only. Use the requested roles, not invented work. A review does not equal independent test proof. Document and commit_readme target_path is exactly README.md; marketing has no target_path. No push, deployment, browser access, credential reads, user configuration edits, or destructive Git actions. No external session is implicitly resumed. Code validates every scope and stage before execution.`;
 
-export interface CodingRuntimeOptions {runner?:SafeProcessRunner;executables?:{codex:string;claude:string};}
+export interface CodingRuntimeOptions {runner?:SafeProcessRunner;executables?:{codex:string;claude:string};sessionCatalog?:CodexSessionCatalog;}
 export class CodingRuntime {
   readonly runner:SafeProcessRunner;
   private readonly active=new Set<AbortController>();
@@ -86,7 +87,14 @@ export class CodingRuntime {
     const work=this.store.intakeWork(projectId,input.work_id),item=this.project(input.project_ref);
     requireCondition(this.config.coding?.model_data_approved,'CODING_MODEL_DATA_APPROVAL_REQUIRED');
     this.store.assertWorkRunBinding(projectId,input.request_id,'coding','coding.orchestrate',input.work_id);
+    const imported=this.store.workImportForWork(projectId,input.work_id);
+    if(imported?.kind==='project'){
+      const source=imported.body as {scan?:{root?:string}};
+      requireCondition(source.scan?.root===item.root&&item.allow_write,'WORK_IMPORT_CODING_PROJECT_NOT_WRITABLE');
+      requireCondition(work.status==='ready'&&!work.paused,'WORK_IMPORT_CODING_WORK_NOT_READY');
+    }
     await this.gitRoot(item.root);
+    this.store.consumeImportedCodingPlan(projectId,input.work_id,item.id);
     const trackedPaths=(await this.git(item.root,['ls-files','-z'])).split('\0').filter(Boolean).filter(path=>!/(?:^|\/)(?:\.env(?:\.[^\/]*)?|\.secrets|credentials(?:\.json)?)$/iu.test(path)).slice(0,300);
     const map=await projectMap(item.root,this.gitRead);
     const rawPlan=await this.model.call('design',PLAN_INSTRUCTIONS,{work_id:input.work_id,prompt:work.prompt,completion_checks:(work.spec as {completion_checks?:unknown})?.completion_checks??[],project_ref:item.id,allow_write:item.allow_write,allow_commit:item.allow_commit,tracked_paths:trackedPaths,codebase_map:map},z.toJSONSchema(codingPlanSchema));
@@ -187,12 +195,19 @@ export class CodingRuntime {
     const before=this.store.codingRun(projectId,input.run_id);
     requireCondition(before.revision===input.expected_revision,'CODING_REVISION_CONFLICT');
     const bound=this.project(before.project_ref);
+    const imported=this.store.workImportForWork(projectId,before.work_id);
+    if(imported?.kind==='project'){
+      const source=imported.body as {scan?:{root?:string}};
+      requireCondition(source.scan?.root===bound.root&&bound.allow_write&&this.config.coding?.model_data_approved,'WORK_IMPORT_CODING_PROJECT_NOT_WRITABLE');
+      requireCondition(!this.store.intakeWork(projectId,before.work_id).paused,'WORK_IMPORT_CODING_WORK_PAUSED');
+    }
     requireCondition(before.config_fingerprint===this.config.fingerprint&&before.project_root===bound.root,'CODING_CONFIG_CHANGED');
     await this.gitRoot(bound.root);
     const expected=this.store.codingCheckpoint(projectId,input.run_id);
     requireCondition(expected,'CODING_CHECKPOINT_MISSING');
     const observed=await this.gitCheckpoint(bound.root);
     requireCondition(expected.head===observed.head&&expected.state_sha256===observed.state_sha256,'CODING_GIT_CHECKPOINT_CHANGED');
+    this.store.consumeImportedCodingStage(projectId,input.run_id,input.expected_revision);
     const handoffDocument=await this.publishCheckpoint(input.run_id);
     const claimed=this.store.claimCodingStage(projectId,input.run_id,input.expected_revision),run=claimed.run,stage=run.plan.stages[claimed.stage.ordinal]!;
     const controller=new AbortController();this.active.add(controller);

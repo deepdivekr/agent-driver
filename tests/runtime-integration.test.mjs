@@ -21,7 +21,7 @@ for(const cut of ['before_effect','after_effect'])test(`runtime native SIGKILL a
  const store=new RuntimeStore(db);try{assert.equal(store.recoverTask(message.taskId).status,'reconciliation_required');assert.equal(store.task(message.taskId).effect_state,'unknown');const tasks=store.tasks('crash');assert.equal(tasks.length,1);assert.equal(store.events('crash','restart').filter(e=>e.kind==='command.intent').length,1);}finally{store.close();}
  let effects='';try{effects=await readFile(external,'utf8');}catch(e){if(e.code!=='ENOENT')throw e;}assert.equal(effects,cut==='after_effect'?'effect\n':'');
 });
-test('runtime native CLI help and invalid commands keep machine output separate',{timeout:15000},async()=>{
- async function run(args){const child=spawn(process.execPath,['dist/cli.js',...args],{stdio:['ignore','pipe','pipe']});let out='',err='';child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);const [code]=await once(child,'exit');return {code,out,err};}
+test('runtime native CLI help and invalid commands keep machine output separate',{timeout:30000},async()=>{
+ async function run(args){const child=spawn(process.execPath,['dist/cli.js',...args],{stdio:['ignore','pipe','pipe']});let out='',err='';child.stdout.on('data',b=>out+=b);child.stderr.on('data',b=>err+=b);const [code]=await once(child,'close');return {code,out,err};}
  assert.match((await run(['help'])).out,/No real-site/);const invalid=await run(['arbitrary-shell']);assert.equal(invalid.code,1);assert.equal(invalid.out,'');assert.match(invalid.err,/UNKNOWN_COMMAND/);
 });

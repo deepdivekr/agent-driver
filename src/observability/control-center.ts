@@ -10,8 +10,13 @@ import {authSites,blockedAuthSites} from '../swarm/browser-auth.js';
 import {readOffice} from './office.js';
 import {workHtml} from './work-ui.js';
 import {readWorkBoard,readWorkDetail} from './work-view.js';
-import {workStartSchema,workDefineSchema,workAnswerSchema,workPauseSchema} from '../work/contracts.js';
+import {workStartSchema,workDefineSchema,workAnswerSchema,workPauseSchema,workJevSchema} from '../work/contracts.js';
 import {WorkRuntime} from '../work/runtime.js';
+import {WorkImportRuntime,importedCodingReadiness,workImportPasteSchema,workImportScanSchema,workImportAcceptSchema,workImportCodingStartSchema,workImportCodingStepSchema} from '../work/import-runtime.js';
+import {scanProject} from '../work/project-scan.js';
+import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
+import {CodingDialogRuntime} from '../coding/conversation.js';
+import {codingDialogAttachSchema,codingDialogTurnSchema} from '../coding/contracts.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {modelSettingsPath} from '../onboarding/model-settings.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
@@ -71,16 +76,75 @@ export function readControlCenter(store:PackStore,config:HostConfig,now=Date.now
 
 function headers(nonce?:string){return {'cache-control':'no-store','content-security-policy':`default-src 'none'; connect-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src ${nonce?`'nonce-${nonce}'`:`'none'`}; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,'referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};}
 function reply(response:ServerResponse,status:number,body:string,type='text/plain; charset=utf-8',nonce?:string){response.writeHead(status,{'content-type':type,...headers(nonce)});response.end(body);}
-export async function startControlCenter(config:HostConfig,options:{port?:number;poll_ms?:number;capability_token?:string;workModel?:StructuredModel}={}):Promise<ControlCenterServer>{
+export async function startControlCenter(config:HostConfig,options:{port?:number;poll_ms?:number;capability_token?:string;workModel?:StructuredModel;coding?:CodingRuntimeOptions}={}):Promise<ControlCenterServer>{
   if(options.capability_token!==undefined&&!/^[a-f0-9]{48}$/u.test(options.capability_token))throw Error('CONTROL_CENTER_CAPABILITY_INVALID');
   const token=options.capability_token??randomBytes(24).toString('hex'),store=new PackStore(config.dbPath);try{store.registerProject(config.project);}catch(error){store.close();throw error;}const presence=store.startPresence(config.project.id,'dashboard',{transport:'loopback-read-only'}),clients=new Set<ServerResponse>(),lightClients=new Set<ServerResponse>(),poll=options.poll_ms??500;let host='',done:()=>void=()=>undefined,stopped=false;const closed=new Promise<void>(resolve=>done=resolve);
   const connections=new BrowserConnections(store,config),settings=new ControlSettings(config);
-  const workRuntime=new WorkRuntime(store,config,options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config)));
+  const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config));
+  const workRuntime=new WorkRuntime(store,config,workModel),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);
   const server=createServer(async (request:IncomingMessage,response:ServerResponse)=>{
     if(request.headers.host!==host){reply(response,403,'forbidden');return;}
     const url=new URL(request.url??'/','http://127.0.0.1'),base=`/${token}/`;if(!url.pathname.startsWith(base)){reply(response,404,'not found');return;}const suffix=url.pathname.slice(base.length);
     if(await settings.handle(request,response,suffix,host))return;
     if(await connections.handle(request,response,suffix,host))return;
+    if(['work/coding/attach','work/coding/turn','work/coding/stop','work/coding/reconcile'].includes(suffix)){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>8_192)throw Error('CODING_DIALOG_REQUEST_TOO_LARGE');}
+        const raw=JSON.parse(body) as unknown;
+        if(suffix==='work/coding/attach'){
+          const input=codingDialogAttachSchema.parse(raw),source=store.workImportForWork(config.project.id,input.work_id);
+          if(source?.kind==='project'){
+            const ready=importedCodingReadiness(store,config,input.work_id);
+            if(!ready?.can_start||ready.project_ref!==input.project_ref)throw Error('WORK_IMPORT_CODING_NOT_READY');
+            const observed=await scanProject(ready.project_path);
+            if(observed.content_sha256!==source.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
+            store.approveImportedCodingPlan(config.project.id,input.work_id,input.project_ref);
+          }
+        }
+        if(suffix==='work/coding/turn'){
+          const input=codingDialogTurnSchema.parse(raw),dialog=store.codingDialog(config.project.id,input.dialog_id);
+          const source=store.workImportForWork(config.project.id,dialog.work_id);
+          if(source?.kind==='project'&&!store.codingDialogTurnByRequestId(config.project.id,input.dialog_id,input.request_id)){
+            store.approveImportedCodingDialogTurn(config.project.id,input.dialog_id,input.expected_revision,input.instruction);
+          }
+        }
+        const result=suffix==='work/coding/attach'?await codingDialog.attach(raw):suffix==='work/coding/turn'?await codingDialog.turn(raw):suffix==='work/coding/stop'?codingDialog.stop(raw):await codingDialog.reconcile(raw);
+        reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:safeControlText(error instanceof Error?error.message:'CODING_DIALOG_FAILED',300)}),'application/json; charset=utf-8');}return;
+    }
+    if(suffix==='work/import/paste'||suffix==='work/import/scan'||suffix==='work/import/accept'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';const max=suffix==='work/import/paste'?70_000:4_096;for await(const chunk of request){body+=String(chunk);if(body.length>max)throw Error('WORK_IMPORT_REQUEST_TOO_LARGE');}
+        const raw=JSON.parse(body) as unknown;
+        const result=suffix==='work/import/paste'?imports.paste(workImportPasteSchema.parse(raw)):suffix==='work/import/scan'?await imports.scan(workImportScanSchema.parse(raw)):await imports.accept(workImportAcceptSchema.parse(raw));
+        reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_IMPORT_FAILED'}),'application/json; charset=utf-8');}return;
+    }
+    if(suffix==='work/import/coding/start'||suffix==='work/import/coding/step'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2_048)throw Error('WORK_IMPORT_CODING_REQUEST_TOO_LARGE');}
+        const raw=JSON.parse(body) as unknown,project=config.project.id;
+        if(suffix==='work/import/coding/start'){
+          const input=workImportCodingStartSchema.parse(raw),ready=importedCodingReadiness(store,config,input.work_id);
+          if(!ready?.can_start||!ready.project_ref)throw Error('WORK_IMPORT_CODING_NOT_READY');
+          const source=store.workImportForWork(project,input.work_id)!;
+          const observed=await scanProject(ready.project_path);
+          if(observed.content_sha256!==source.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
+          store.approveImportedCodingPlan(project,input.work_id,ready.project_ref);
+          const result=await codingRuntime.start({request_id:`import-${input.work_id}`,work_id:input.work_id,project_ref:ready.project_ref});
+          reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+        }else{
+          const input=workImportCodingStepSchema.parse(raw),ready=importedCodingReadiness(store,config,input.work_id);
+          if(!ready?.can_step||ready.run_id!==input.run_id||ready.run_revision!==input.expected_revision)throw Error('WORK_IMPORT_CODING_STAGE_NOT_READY');
+          store.approveImportedCodingStage(project,input.run_id,input.expected_revision);
+          const result=await codingRuntime.step({run_id:input.run_id,expected_revision:input.expected_revision});
+          reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+        }
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_IMPORT_CODING_FAILED'}),'application/json; charset=utf-8');}return;
+    }
     if(suffix==='work/start'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
@@ -117,6 +181,14 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         reply(response,200,JSON.stringify({work_id:work.id,paused:work.paused,revision:work.revision,scope:'future_dispatch'}),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_PAUSE_FAILED'}),'application/json; charset=utf-8');}return;
     }
+    if(suffix==='work/jev'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2048)throw Error('WORK_REQUEST_TOO_LARGE');}
+        const input=workJevSchema.parse(JSON.parse(body)),result=workRuntime.jev(input);
+        reply(response,200,JSON.stringify({work_id:result.work_id,revision:result.revision,jev:result.jev,scope:'future_decisions'}),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_JEV_FAILED'}),'application/json; charset=utf-8');}return;
+    }
     if(suffix==='office/action'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
@@ -128,7 +200,12 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'OFFICE_ACTION_FAILED'}),'application/json; charset=utf-8');}return;
     }
     if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
+    if(suffix==='work/coding/sessions'){
+      try{const project_ref=url.searchParams.get('project_ref');const result=await codingDialog.sessions({project_ref});reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');}
+      catch(error){reply(response,409,JSON.stringify({error:safeControlText(error instanceof Error?error.message:'CODING_DIALOG_SESSIONS_FAILED',300)}),'application/json; charset=utf-8');}return;
+    }
     if(suffix===''){const nonce=randomBytes(18).toString('base64url');reply(response,200,workHtml(nonce),'text/html; charset=utf-8',nonce);return;}
+    if(suffix==='work/import/prompt'){reply(response,200,JSON.stringify(imports.prompt()),'application/json; charset=utf-8');return;}
     if(suffix==='work/board'){reply(response,200,JSON.stringify(readWorkBoard(store,config)),'application/json; charset=utf-8');return;}
     if(suffix==='work/detail'){
       const id=url.searchParams.get('id');if(!id||id.length>128){reply(response,400,'work id required');return;}
@@ -147,5 +224,5 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   });
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??0,'127.0.0.1',resolve)});const address=server.address();if(address===null||typeof address==='string'){store.stopPresence(config.project.id,presence);store.close();throw Error('CONTROL_CENTER_BIND_FAILED');}host=`127.0.0.1:${address.port}`;const heartbeat=setInterval(()=>{try{store.heartbeatPresence(config.project.id,presence);}catch{}},2_000);heartbeat.unref();
   let lastBoard='',lastKeep=Date.now();const lightTick=setInterval(()=>{if(!lightClients.size)return;try{const board=readWorkBoard(store,config),payload=JSON.stringify({works:board.works,auth_attention_count:board.auth_attention_count});if(payload!==lastBoard){lastBoard=payload;for(const client of lightClients)if(!client.destroyed)client.write(`event: board\ndata: ${JSON.stringify(board)}\n\n`);}if(Date.now()-lastKeep>=15_000){lastKeep=Date.now();for(const client of lightClients)if(!client.destroyed)client.write(': keep-alive\n\n');}}catch{for(const client of lightClients)client.end();lightClients.clear();}},Math.max(1000,poll));lightTick.unref();
-  const close=async()=>{if(stopped)return;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);settings.close();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
+  const close=async()=>{if(stopped)return;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);settings.close();codingRuntime.close();codingDialog.close();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
 }

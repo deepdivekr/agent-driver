@@ -27,5 +27,5 @@ if(JSON.parse(read('package.json')).name==='agent-driver')test('public package e
   assert.doesNotMatch(read('src/interface/catalog.ts'),/workflowTools/u);
   assert.doesNotMatch(read('src/interface/mcp.ts'),/runtime_workflow_/u);
   assert.doesNotMatch(read('src/integrations/hermes.ts'),/runtime_workflow_/u);
-  assert.ok(read('src/interface/mcp.ts').includes(`version:'${JSON.parse(read('package.json')).version}'`));
+  assert.match(read('src/interface/mcp.ts'),/version:packageVersion/u);
 });

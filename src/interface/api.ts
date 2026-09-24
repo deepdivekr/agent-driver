@@ -34,7 +34,10 @@ import {SwarmVisualExecutor} from '../swarm/visual-executor.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {WorkRuntime} from '../work/runtime.js';
+import {WorkImportRuntime} from '../work/import-runtime.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
+import {CodingDialogRuntime} from '../coding/conversation.js';
+import {codingTools} from '../coding/contracts.js';
 
 export type SwarmBrowserCommand={action:'navigate';url:string}|{action:'observe'}|{action:'scroll';direction:'up'|'down'};
 export interface SwarmVisualAdapter{
@@ -50,7 +53,9 @@ export class RuntimeApi{
   readonly store:PackStore;
   readonly packs:FamilyRuntime;
   readonly work:WorkRuntime;
+  readonly imports:WorkImportRuntime;
   readonly coding:CodingRuntime;
+  readonly codingDialog:CodingDialogRuntime;
   readonly swarm:SwarmRuntime;
   readonly visual:SwarmVisualAdapter|null;
   private closing:Promise<void>|null=null;
@@ -61,7 +66,9 @@ export class RuntimeApi{
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
     this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
     this.work=new WorkRuntime(this.store,config,this.model);
+    this.imports=new WorkImportRuntime(this.store,config,this.model);
     this.coding=new CodingRuntime(this.store,config,this.model,options.coding);
+    this.codingDialog=new CodingDialogRuntime(this.store,config,this.model,options.coding);
     this.packs=new FamilyRuntime(this.store,config,{approval:options.approval??new LocalApprovalDispatcher(this.store),llm:this.model});
     let jev=options.swarmJev;if(!jev&&config.swarm?.enabled)jev=optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport??undefined;
     this.explicitProviders=options.swarmProviders!==undefined;
@@ -76,10 +83,10 @@ export class RuntimeApi{
   }
   private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
   close(){
-    if(this.closed)return;this.closed=true;this.packs.close();this.coding.close();
-    this.closing=(async()=>{await this.coding.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
+    if(this.closed)return;this.closed=true;this.packs.close();this.coding.close();this.codingDialog.close();
+    this.closing=(async()=>{await this.coding.drain();await this.codingDialog.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
   }
-  async drain(){await this.packs.drain();await this.coding.drain();if(this.closing)await this.closing;}
+  async drain(){await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();if(this.closing)await this.closing;}
   private async releaseFinishedVisuals(runId:string){
     if(!this.visual)return;
     const status=this.swarm.status(runId);
@@ -117,6 +124,15 @@ export class RuntimeApi{
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');
     if(name.startsWith('runtime_work_')){
       switch(name){
+        case 'runtime_work_import_prompt':return this.imports.prompt();
+        case 'runtime_work_import_paste':return this.imports.paste(args);
+        case 'runtime_work_import_status':return this.imports.status(args);
+        case 'runtime_work_import_scan':{
+          const input=args as {project_ref?:unknown};
+          const item=this.config.coding?.projects.find(project=>project.id===input.project_ref);
+          requireCondition(item,'WORK_IMPORT_PROJECT_NOT_REGISTERED');
+          return this.imports.scan({path:item.root});
+        }
         case 'runtime_work_start':return this.work.start(args);
         case 'runtime_work_define':return this.work.define(args);
         case 'runtime_work_answer':return this.work.answer(args);
@@ -135,6 +151,12 @@ export class RuntimeApi{
         case 'runtime_coding_status':return this.coding.status(args);
         case 'runtime_coding_pause':return this.coding.pause(args);
         case 'runtime_coding_reconcile':return this.coding.reconcile(args);
+        case 'runtime_coding_dialog_sessions':return this.codingDialog.sessions(args);
+        case 'runtime_coding_dialog_attach':return this.codingDialog.attach(args);
+        case 'runtime_coding_dialog_turn':return this.codingDialog.turn(args);
+        case 'runtime_coding_dialog_status':return this.codingDialog.status(args);
+        case 'runtime_coding_dialog_stop':return this.codingDialog.stop(args);
+        case 'runtime_coding_dialog_reconcile':return this.codingDialog.reconcile(codingTools.runtime_coding_dialog_reconcile.schema.parse(args));
         default:throw Error('UNKNOWN_TOOL');
       }
     }

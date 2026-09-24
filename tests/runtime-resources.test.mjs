@@ -23,14 +23,19 @@ async function until(fn,ms=6000){const end=performance.now()+ms;while(performanc
 async function setup(t,overrides={}){
   const limits=budget(overrides),handle=await ensureBudget(limits),scopes=[];
   t.after(async()=>{
-    for(const scope of scopes)await scope.stop();
+    for(const scope of scopes)try{await scope.stop();}catch(error){throw Error(`resource cleanup scope ${scope.unit}: ${error.message}`);}
     const checked=await inspectBudget(limits);
-    assert.equal(readBudget(checked).events.populated,0,'do not stop a populated budget');
+    assert.equal(readBudget(checked).events.populated,0,`resource cleanup ${handle.unit}: do not stop a populated budget`);
     // Only this test's random domain; no external launcher can know this private fixture ID.
-    await exec('/usr/bin/systemctl',['--user','stop',handle.unit],{env:managerEnvironment(),timeout:5000});
+    try{await exec('/usr/bin/systemctl',['--user','stop',handle.unit],{env:managerEnvironment(),timeout:5000});}
+    catch(error){throw Error(`resource cleanup budget ${handle.unit}: ${error.message}`);}
   });
   const launch=async(mode,{start=true}={})=>{
-    const scope=await launchResourceUnit(limits,process.execPath,[fixture,mode],{},mode==='memory'?30000:10000);scopes.push(scope);
+    // RuntimeMaxSec starts when systemd launches the scope, before the parent has
+    // verified membership and released the CPU fixture's start barrier. At a
+    // shared 20% quota, two concurrent bootstraps can consume most of 10 s on
+    // a busy host; keep the finite guard without making it the quota oracle.
+    const scope=await launchResourceUnit(limits,process.execPath,[fixture,mode],{},mode==='cpu'||mode==='memory'?30000:10000);scopes.push(scope);
     let stdout='',stderr='';scope.child.stdout.on('data',b=>stdout+=b);scope.child.stderr.on('data',b=>stderr+=b);
     scope.child.stdin.on('error',()=>{});
     const done=new Promise((resolve,reject)=>{scope.child.once('error',reject);scope.child.once('close',(code,signal)=>resolve({code,signal,stdout,stderr}));});
@@ -70,7 +75,8 @@ test('runtime native resource slice reads actual limits and rejects other member
 
 test('runtime native aggregate CPU quota throttles two concurrent scopes while unrelated sentinel survives',async t=>{
   const {handle,launch}=await setup(t,{memory_mb:256});
-  const sentinel=spawn('/usr/bin/sleep',['20'],{stdio:'ignore'});t.after(()=>sentinel.kill());
+  // The sentinel must outlive even a slow, still-bounded scope startup.
+  const sentinel=spawn('/usr/bin/sleep',['60'],{stdio:'ignore'});t.after(()=>sentinel.kill());
   await new Promise((r,j)=>{sentinel.once('spawn',r);sentinel.once('error',j);});
   const sentinelMembership=readFileSync('/proc/'+sentinel.pid+'/cgroup','utf8');
   // Both targets must be ready before either consumes the shared CPU quota.

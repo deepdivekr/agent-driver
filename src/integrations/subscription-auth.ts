@@ -23,6 +23,7 @@ export interface SubscriptionClientConnection extends SubscriptionClientStatus {
 }
 export interface ProcessRequest {
   executable:string;args:string[];stdin?:string;cwd?:string;timeout_ms:number;signal?:AbortSignal;
+  output_limit_bytes?:number;
   onStdout?:(text:string)=>void;onStderr?:(text:string)=>void;
 }
 export interface ProcessResult {code:number|null;stdout:string;stderr:string;}
@@ -45,9 +46,12 @@ export const nativeProcessRunner:SafeProcessRunner={run(request){
     let stdout='',stderr='',settled=false;
     let timer:NodeJS.Timeout;
     const fail=(error:Error)=>{if(!settled){settled=true;clearTimeout(timer);child.kill('SIGKILL');reject(error);}};
-    const append=(current:string,chunk:Buffer)=>{const next=current+chunk.toString('utf8');if(Buffer.byteLength(next)>outputLimit){child.kill('SIGKILL');throw Error('CLIENT_OUTPUT_TOO_LARGE');}return next;};
-    child.stdout.on('data',(chunk:Buffer)=>{try{stdout=append(stdout,chunk);request.onStdout?.(chunk.toString('utf8'));}catch(error){fail(error as Error);}});
-    child.stderr.on('data',(chunk:Buffer)=>{try{stderr=append(stderr,chunk);request.onStderr?.(chunk.toString('utf8'));}catch(error){fail(error as Error);}});
+    const append=(current:string,chunk:string)=>{const next=current+chunk;if(Buffer.byteLength(next)>(request.output_limit_bytes??outputLimit)){child.kill('SIGKILL');throw Error('CLIENT_OUTPUT_TOO_LARGE');}return next;};
+    // Node's streaming decoder carries an incomplete UTF-8 code point across chunks.
+    // Per-chunk Buffer#toString corrupts Korean and other multibyte CLI answers.
+    child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
+    child.stdout.on('data',(chunk:string)=>{try{stdout=append(stdout,chunk);request.onStdout?.(chunk);}catch(error){fail(error as Error);}});
+    child.stderr.on('data',(chunk:string)=>{try{stderr=append(stderr,chunk);request.onStderr?.(chunk);}catch(error){fail(error as Error);}});
     child.once('error',fail);
     child.once('close',code=>{if(!settled){settled=true;clearTimeout(timer);resolve({code,stdout,stderr});}});
     timer=setTimeout(()=>{child.kill('SIGKILL');fail(Error('CLIENT_TIMEOUT'));},request.timeout_ms);

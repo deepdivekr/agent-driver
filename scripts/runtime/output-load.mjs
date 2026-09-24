@@ -39,7 +39,7 @@ export async function runOutputLoad({durationMs=3000,onProgress=()=>{}}={}){
   await until(()=>api.store.turn(accepted.turn_id).status==='acknowledged');const loadStart=performance.now();
   await observe();
   const normalStart=performance.now();
-  try{const a=await api.call('runtime_terminal_submit_prompt',{request_id:'fairness',session_ref:normalId,expected_generation:1,expected_previous_turn_id:null,prompt:'other session stays responsive'});result.normal_turn_id=a.turn_id;result.normal_turn='accepted';}catch(e){result.normal_turn='FAIL';result.normal_error=/^[A-Z_]+$/.test(e.message)?e.message:'SUBMIT_ERROR';}
+  try{const a=await api.call('runtime_terminal_submit_prompt',{request_id:'fairness',session_ref:normalId,expected_generation:1,expected_previous_turn_id:null,prompt:'other session stays responsive'});result.normal_turn_id=a.turn_id;result.normal_turn='accepted';}catch(e){result.normal_turn='FAIL';result.normal_error=typeof e?.code==='string'&&/^[A-Z_]+$/.test(e.code)?e.code:typeof e?.message==='string'&&/^[A-Z_]+$/.test(e.message)?e.message:'SUBMIT_ERROR';}
   result.normal_submit_ms=performance.now()-normalStart;
   while(performance.now()-loadStart<durationMs){await delay(200);await observe();if(result.normal_turn==='accepted'&&api.store.session(normalId).state==='input_ready'){result.normal_turn='PASS';result.normal_completed_ms=performance.now()-normalStart;}}
   result.actual_load_ms=performance.now()-loadStart;

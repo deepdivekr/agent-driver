@@ -5,14 +5,28 @@ import {mkdtemp,readFile,writeFile,rm,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {parse} from 'yaml';
-import {McpRegistrationController} from '../dist/onboarding/mcp-registration.js';
+import {McpRegistrationController,windowsMcpBridge} from '../dist/onboarding/mcp-registration.js';
 import {SetupActivityStream,appendSetupActivity,readSetupActivity} from '../dist/onboarding/setup-activity.js';
 import {prepareLocalConnection} from '../dist/onboarding/connection.js';
 import {ControlSettings} from '../dist/observability/control-settings.js';
 import {loadHostConfig} from '../dist/interface/config.js';
+import {settingsHtml} from '../dist/observability/settings-ui.js';
 
 async function setup(t){const root=await mkdtemp(join(tmpdir(),'driver-mcp-onboarding-'));t.after(()=>rm(root,{recursive:true,force:true}));const paths=await prepareLocalConnection(root);return {root,paths,config:loadHostConfig(paths.runtimeConfig)};}
 function environment(root){return {HOME:root,WSL_DISTRO_NAME:'Ubuntu-24.04',HERMES_HOME:join(root,'.hermes'),AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude',AGENT_DRIVER_OPENCODE_EXECUTABLE:'/fixture/opencode',AGENT_DRIVER_CURSOR_EXECUTABLE:'/fixture/cursor-agent',AGENT_DRIVER_HERMES_EXECUTABLE:'/fixture/hermes',AGENT_DRIVER_CURSOR_MCP_CONFIG:join(root,'.cursor','mcp.json')};}
+
+test('runtime contract Windows host MCP bridge pins distro and user, bypasses shell, and remains unverified',async t=>{
+  const x=await setup(t),controller=new McpRegistrationController(x.root,{HOME:x.root,WSL_DISTRO_NAME:'Ubuntu-24.04'});
+  const view=await controller.view(),bridge=view.windows_bridge;
+  assert.equal(view.registered_count,0);
+  assert.equal(bridge.command,'wsl.exe');assert.equal(bridge.registration,'manual_unverified');
+  assert.deepEqual(bridge.args.slice(0,5),['--distribution','Ubuntu-24.04','--user',bridge.args[3],'--exec']);
+  assert.equal(bridge.args.at(-1),'mcp');assert.equal(bridge.args.at(-2).endsWith('/dist/cli.js'),true);
+  assert.equal(bridge.args.includes('--config'),false,'manual bridge must retain local approval gate');
+  assert.equal(windowsMcpBridge({WSL_DISTRO_NAME:'bad\nvalue'}),undefined);
+  assert.equal(windowsMcpBridge({}),undefined);
+  const html=settingsHtml('fixture-nonce');assert.match(html,/Windows 앱에서 연결하기/u);assert.match(html,/manual_unverified|등록 여부는 이 화면에서 자동 확인되지 않습니다/u);
+});
 
 test('runtime contract onboarding registers five clients without a shell and preserves unrelated config',async t=>{
   const x=await setup(t),env=environment(x.root),calls=[],runner={async run(request){calls.push(request);return {code:0,stdout:'configured',stderr:''};}};

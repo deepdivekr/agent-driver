@@ -100,18 +100,28 @@ export class FamilyRuntime {
     }
     throw Error('PACK_EXPORT_READBACK_MISMATCH');
   }
-  private async decisionProviders(){
+  private async decisionProviders(run:PackRun){
     const policy=this.config.packs!,saved=readModelSettings(modelSettingsPath(this.config)),environment=effectiveModelEnvironment(saved);let jev=this.providers.jev,llm=this.providers.llm;
+    const office=this.store.officeWork(this.config.project.id,'pack',run.id) as {id:string}|null;
+    const boundWork=office?this.store.intakeWorkOptional(this.config.project.id,office.id):null;
+    const workJevEnabled=boundWork?.jev_enabled??null,jevPermitted=workJevEnabled!==false;
     if(policy.models!=='off'){
       requireCondition(policy.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
-      if(!jev)jev=optionalTypeSafeTransportFromHostEnvironment(environment).transport??undefined;
-      if(policy.models==='jev_llm'&&!llm)try{llm=structuredModelFromEnvironment(environment);}catch{}
+      if(jevPermitted&&!jev)jev=optionalTypeSafeTransportFromHostEnvironment(environment).transport??undefined;
+      if((policy.models==='jev_llm'||!jevPermitted||!jev)&&!llm)try{llm=structuredModelFromEnvironment(environment);}catch{}
     }else{jev=undefined;llm=undefined;}
-    const shadow=this.providers.shadowJev?{id:'shadow-system-one',systemOne:(request:Parameters<JevSystemOneTransport['systemOne']>[0],settings:Parameters<JevSystemOneTransport['systemOne']>[1])=>this.providers.shadowJev!.systemOne(request,settings)}:policy.decision_shadow.provider==='llm'&&llm?structuredModelShadowProvider(llm):undefined;
+    if(!jevPermitted)jev=undefined;
+    const shadow=jev&&(this.providers.shadowJev?{id:'shadow-system-one',systemOne:(request:Parameters<JevSystemOneTransport['systemOne']>[0],settings:Parameters<JevSystemOneTransport['systemOne']>[1])=>this.providers.shadowJev!.systemOne(request,settings)}:policy.decision_shadow.provider==='llm'&&llm?structuredModelShadowProvider(llm):undefined);
     const fallback=rowDecisionProfile(policy.confidence),registry=new DecisionProfileRegistry(join(dirname(this.config.dbPath),'decisions','registry')),profile=jev?(await registry.resolve(ROW_DECISION_CATALOG,this.config.environment==='fixture'?'fixture':'production',fallback)).profile:fallback;
     const plane=jev?new DecisionPlane({catalog:ROW_DECISION_CATALOG,profile,primary:{id:'typesafe-jev',systemOne:(request,settings)=>jev!.systemOne(request,settings)},...(shadow?{shadow}:{}),journal:new FileDecisionJournal(join(dirname(this.config.dbPath),'decisions','family.jsonl')),shadow_sample_rate:shadow?(this.providers.shadowJev?.systemOne?0.1:policy.decision_shadow.sample_rate):0}):undefined;
-    const binding=snapshotHash({settings_revision:saved?.revision??0,selection:saved?.selection??null,model:environment.AGENT_DRIVER_API_MODEL??null,client:environment.AGENT_DRIVER_LLM_CLIENT??null,provider:environment.AGENT_DRIVER_API_PROVIDER??null,profile,models:policy.models});
-    return {jev,llm,policy,plane,binding};
+    const binding=snapshotHash({settings_revision:saved?.revision??0,selection:saved?.selection??null,model:environment.AGENT_DRIVER_API_MODEL??null,client:environment.AGENT_DRIVER_LLM_CLIENT??null,provider:environment.AGENT_DRIVER_API_PROVIDER??null,profile,models:policy.models,work_jev_enabled:workJevEnabled});
+    return {jev,llm,policy,plane,binding,workJevEnabled};
+  }
+  private async refreshDecisionProviders(run:PackRun,previous:Awaited<ReturnType<FamilyRuntime['decisionProviders']>>){
+    const office=this.store.officeWork(this.config.project.id,'pack',run.id) as {id:string}|null;
+    const enabled=office?this.store.intakeWorkOptional(this.config.project.id,office.id)?.jev_enabled??null:null;
+    // A Work toggle affects the next row. An already-started model request keeps its original provider.
+    return enabled===previous.workJevEnabled?previous:this.decisionProviders(run);
   }
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(this.accepting,'PACK_RUNTIME_DRAINING');
@@ -179,8 +189,8 @@ export class FamilyRuntime {
           rows=rows.filter(row=>tokens.every(token=>recipe.search_fields.some(field=>String(row[field]??'').toLocaleLowerCase().includes(token))));
           const unknown:Row[]=[];
           if(recipe.relevance){
-            requireCondition(rows.length<=100,'SEARCH_JUDGMENT_BATCH_TOO_LARGE');const providers=await this.decisionProviders(),accepted:Row[]=[],decisionTrace=[];
-            for(const row of rows){this.fresh();const decision=await this.checkpointedJudgment(run,owner,checkpoint,row,recipe.relevance.question,recipe.relevance.labels,providers);decisionTrace.push({event_id:decision.decision_event_id,decider:decision.decider,label:decision.label,shadow_disagreements:decision.shadow_disagreements});
+            requireCondition(rows.length<=100,'SEARCH_JUDGMENT_BATCH_TOO_LARGE');let providers=await this.decisionProviders(run);const accepted:Row[]=[],decisionTrace=[];
+            for(const row of rows){this.fresh();providers=await this.refreshDecisionProviders(run,providers);const decision=await this.checkpointedJudgment(run,owner,checkpoint,row,recipe.relevance.question,recipe.relevance.labels,providers);decisionTrace.push({event_id:decision.decision_event_id,decider:decision.decider,label:decision.label,shadow_disagreements:decision.shadow_disagreements});
               if(decision.label==='unknown')unknown.push(row);else if(recipe.relevance.accept_labels.includes(decision.label))accepted.push(row);}
             rows=accepted;result.decision_trace=decisionTrace;if(unknown.length)status='needs_review';
           }
@@ -197,9 +207,9 @@ export class FamilyRuntime {
           requireCondition(rows.length<=50,'TRIAGE_BATCH_TOO_LARGE');
           requireCondition(Object.keys(recipe.judgment.labels).length>0&&Object.keys(recipe.judgment.labels).length<=20&&!Object.hasOwn(recipe.judgment.labels,'unknown'),'INVALID_TRIAGE_LABELS');
           requireCondition(Object.keys(recipe.draft_by_label).every(k=>Object.hasOwn(recipe.judgment.labels,k)),'DRAFT_LABEL_UNKNOWN');
-          const providers=await this.decisionProviders();
+          let providers=await this.decisionProviders(run);
           const items=[];
-          for(const row of rows){this.fresh();const decision=await this.checkpointedJudgment(run,owner,checkpoint,row,recipe.judgment.question,recipe.judgment.labels,providers);
+          for(const row of rows){this.fresh();providers=await this.refreshDecisionProviders(run,providers);const decision=await this.checkpointedJudgment(run,owner,checkpoint,row,recipe.judgment.question,recipe.judgment.labels,providers);
             items.push({record:row,...decision,draft:decision.label==='unknown'?null:recipe.draft_by_label[decision.label]??null,sent:false});}
           const unknown=items.filter(item=>item.label==='unknown').length;result={...result,items,unknown_count:unknown,external_messages_sent:0};if(unknown)status='needs_review';break;
         }

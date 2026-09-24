@@ -1,5 +1,5 @@
 // Synthetic authority, real SQLite/filesystem and process death. NOT a Claude fixture.
-import {writeFileSync} from 'node:fs';
+import {renameSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {loadHostConfig} from '../../dist/interface/config.js';
@@ -17,5 +17,11 @@ store.dispatch(session.id,host,1,config);store.acknowledge(session.id,host,1,tur
 const authority = {session:session.id,generation:1,host,broker:encoded,cli:encoded};store.bindBroker(config,authority);
 const input = fileWrite.parse({turn_id:turn.id,path:'src/app.mjs',request_id:'write-once',expected_sha256:new ScopedFiles(config).read('src/app.mjs').sha256,content:'after crash 🐈'});
 store.toolRequested(session.id,host,1,randomUUID(),'mcp__runtime_files__write_file',input);
-await new FileBroker(config,store,authority,at=>{if(at===point){writeFileSync(join(config.project.worktree,'checkpoint.json'),JSON.stringify({session:session.id,turn:turn.id,authority,point:at}));process.kill(process.pid,'SIGSTOP');}}).call('write_file',input);
+await new FileBroker(config,store,authority,at=>{if(at===point){
+  const checkpoint=join(config.project.worktree,'checkpoint.json');
+  // The parent polls for this name. Publish it only after the JSON is complete.
+  writeFileSync(checkpoint+'.pending',JSON.stringify({session:session.id,turn:turn.id,authority,point:at}));
+  renameSync(checkpoint+'.pending',checkpoint);
+  process.kill(process.pid,'SIGSTOP');
+}}).call('write_file',input);
 throw Error('CRASH_POINT_NOT_REACHED');

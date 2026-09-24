@@ -3,7 +3,7 @@ import {requireCondition} from '../core/contracts.js';
 
 // A single durable frame can still block on the OS. These bounds limit work
 // between event-loop opportunities, not disk latency or kernel pipe memory.
-export const OUTPUT_SLICE = Object.freeze({bytes: 65536, frames: 8, ms: 32, gapMs: 5, readableBytes: 131072});
+export const OUTPUT_SLICE = Object.freeze({bytes: 65536, frames: 8, ms: 32, gapMs: 25, readableBytes: 131072});
 export interface FrameDecoder {push(bytes: Buffer): void; end(): void; discard(): void}
 export class OutputPump {
   private chunk: Buffer | null = null;

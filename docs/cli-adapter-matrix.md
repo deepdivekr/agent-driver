@@ -1,5 +1,7 @@
 # CLI adapter — Phase 18, structured protocol only
 
+이 문서는 Phase 18의 저수준 Claude host 계약 검증 기록이다. 이후 추가된 로컬 Git 코딩 업무와 Codex 대화형 경로의 현재 범위는 [코딩 업무 오케스트레이션](coding-orchestration.md)을 참고한다.
+
 2026-09-20. Claude Code **2.1.126**, Node22.22.0. Linux/WSL에서 별도 소유 host와 실제 CLI 구독 인증을 시험했다. native Windows ConPTY, interactive TUI, 실제 코드 수정, 임의 사용자 터미널 연결은 지원 완료가 아니다.
 
 ## 검증 근거와 상태
