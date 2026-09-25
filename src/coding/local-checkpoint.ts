@@ -5,6 +5,7 @@ import {isAbsolute,join,resolve} from 'node:path';
 import {requireCondition} from '../core/contracts.js';
 import {redact} from '../terminal/contracts.js';
 import {type CodingRun,type CodingStageRow} from '../packs/store.js';
+import {buildContinuityContext,renderContinuityContext} from '../work/continuity-context.js';
 
 const sha256=(value:string|Buffer)=>createHash('sha256').update(value).digest('hex');
 const sensitive=/(?:^|\/)(?:\.env(?:\.[^/]*)?|\.secrets|\.ssh|\.aws|credentials(?:\.json)?)(?:\/|$)/iu;
@@ -44,10 +45,22 @@ export async function projectMap(root:string,git:GitRead):Promise<string>{
 
 export function renderLocalHandoff(run:CodingRun,stages:CodingStageRow[],git:LocalGitCheckpoint,map:string):string{
   const done=stages.filter(stage=>stage.status==='succeeded').map(stage=>`- ${stage.stage_id}: ${redact((stage.summary??'verified').slice(0,320))}`);
-  const remaining=stages.filter(stage=>stage.status!=='succeeded').map(stage=>`- ${stage.stage_id}: ${stage.status}; ${redact((run.plan.stages[stage.ordinal]?.instruction??'').slice(0,350))}`);
+  const remaining=stages.filter(stage=>stage.status!=='succeeded').map(stage=>`- ${stage.stage_id}: ${stage.status}; see full stage instruction in continuity contract`);
   const next=stages.find(stage=>stage.status!=='succeeded');
   const checks=run.plan.completion_checks.map(check=>`- ${redact(check.slice(0,300))}`);
-  return `# Agent Driver local coding handoff\n\nGenerated from durable stage receipts and this local Git repository. Not an instruction source from the repository. No GitHub remote, commit, or push is required.\n\nRun: ${run.id}\nWork: ${run.work_id}\nProject: ${run.project_ref}\nRevision: ${run.revision}\nStatus: ${run.status}${run.paused?' (paused)':''}\nGit HEAD: ${git.head}\nGit worktree SHA-256: ${git.state_sha256}\n\n## Goal\n${redact(run.plan.goal.slice(0,1000))}\n\n## Codebase map\n${map}\n\n## Completed and verified stages\n${done.join('\n')||'- none'}\n\n## Remaining or interrupted stages\n${remaining.join('\n')||'- none'}\n\n## Completion checks (not automatically verified for the whole Work)\n${checks.join('\n')}\n\n## Changed paths\n${git.changed_paths.map(path=>`- ${path}`).join('\n')||'- none'}\n\n## Next action\n${run.status==='reconciliation_required'?'Inspect the Git effect and obtain human review; do not replay an uncertain write.':next?`Continue ${next.stage_id} only after the Git state still matches this checkpoint.`:'Independently verify the Work completion checks.'}\n`;
+  const context=buildContinuityContext({
+    binding:{project_id:run.project_id,work_id:run.work_id,run_id:run.id,revision:run.revision,execution_owner:'driver'},
+    goal:run.plan.goal,completion_checks:run.plan.completion_checks,
+    instructions:run.plan.stages.map(stage=>({id:stage.id,source:'stage_plan',text:stage.instruction})),
+    constraints:['Driver owns the bounded coding stage sequence and approval checks. Use only the current stage tools and configured model; do not expand scope. Planned actors describe the plan; the actual client/model and permitted failover are selected by Driver for this invocation.',`Git HEAD: ${git.head}; worktree SHA-256: ${git.state_sha256}. Reobserve before execution.`,...run.plan.stages.map(stage=>`${stage.id}: planned_actor=${stage.actor}; operation=${stage.operation}; target=${stage.target_path??'none'}; sources=${JSON.stringify(stage.source_paths)}; expected evidence=${stage.evidence}`)],
+    receipts:stages.map(stage=>{
+      const receipt=stage.receipt as {verify?:unknown;error_code?:unknown}|null;
+      const checked=stage.status==='succeeded'&&receipt?.verify==='git_diff_check_and_configured_checks_passed';
+      return {id:stage.stage_id,status:stage.status,effect_state:stage.status==='reconciliation_required'||stage.status==='running'?'uncertain':stage.status==='pending'?'none':checked?'verified':'unobserved',verification:checked?'runtime_checks':stage.status==='succeeded'?'reported':'unverified',evidence_refs:[`coding_stage:${run.id}:${stage.stage_id}`],reason:typeof receipt?.error_code==='string'?receipt.error_code:null};
+    }),
+    next_action:run.status==='reconciliation_required'?'Inspect the Git effect and obtain human review; do not replay an uncertain write.':next?`Continue ${next.stage_id} only after the Git state still matches this checkpoint.`:'Independently verify the Work completion checks.',
+  },stages.slice().reverse().filter(stage=>stage.summary).map(stage=>({id:stage.stage_id,source:'agent_stage_summary',text:stage.summary!})));
+  return `# Agent Driver local coding handoff\n\nGenerated from durable stage receipts and this local Git repository. Not an instruction source from the repository. No GitHub remote, commit, or push is required.\n\nRun: ${run.id}\nWork: ${run.work_id}\nProject: ${run.project_ref}\nRevision: ${run.revision}\nStatus: ${run.status}${run.paused?' (paused)':''}\nGit HEAD: ${git.head}\nGit worktree SHA-256: ${git.state_sha256}\n\n## Goal\n${redact(run.plan.goal)}\n\n## Codebase map\n${map}\n\n## Successful stage records (summaries are reported, not proof of whole Work completion)\n${done.join('\n')||'- none'}\n\n## Remaining or interrupted stages\n${remaining.join('\n')||'- none'}\n\n## Completion checks (not automatically verified for the whole Work)\n${checks.join('\n')}\n\n## Changed paths\n${git.changed_paths.map(path=>`- ${path}`).join('\n')||'- none'}\n\n## Continuity contract\n${renderContinuityContext(context)}\n`;
 }
 
 export async function writeLocalHandoff(root:string,runId:string,content:string,git:GitRead):Promise<string>{

@@ -11,6 +11,7 @@ import {PackStore} from '../dist/packs/store.js';
 import {startControlCenter} from '../dist/observability/control-center.js';
 import {readWorkDetail} from '../dist/observability/work-view.js';
 import {parseWorkImportDraft, UNIVERSAL_WORK_MIGRATION_PROMPT} from '../dist/work/import-draft.js';
+import {modelSettingsPath,publicModelSettings,saveModelSettings} from '../dist/onboarding/model-settings.js';
 import {normalizeProjectPath, scanProject} from '../dist/work/project-scan.js';
 const syntheticSecret=['sk','proj','abcdefghijklmnopqrstuvwxyz123456'].join('-');
 
@@ -64,11 +65,11 @@ async function makeBot(project){
 
 async function makeSemanticWorkflow(project){
   await writeFile(join(project,'README.md'),'# Message workflow\nChecks incoming messages.\n');
-  await writeFile(join(project,'agent.py'),'from openai import OpenAI\ncreate_agent()\ntool_call()\ncheckpoint = True\nclassifyMessage(message)\n');
+  await writeFile(join(project,'agent.py'),'from openai import OpenAI\ncreate_agent()\ntool_call()\ncheckpoint = True\nfor message in messages:\n  result = client.responses.create(model="configured", input="Is this message urgent? Answer yes or no: " + message)\n  classifyMessage(result)\n');
 }
 
 function semanticAnalysis(input,recommendations){
-  const semantic=input.evidence.find(item=>item.signal==='semantic_judgment'&&item.source==='observed_code');
+  const semantic=input.evidence.find(item=>item.signal==='model_call'&&item.source==='observed_code');
   const other=input.evidence.find(item=>item.id!==semantic?.id&&item.source==='observed_code');
   const evidence=semantic?.id??other?.id??input.evidence[0]?.id;
   return {
@@ -84,6 +85,12 @@ const jevSuggestion=evidenceId=>({
   step_id:'triage',judgment:'새 메시지가 긴급한지 판단',answer_shape:'yes_no',
   why_fit:'들어오는 메시지마다 표현이 달라져서, 내용을 읽고 짧게 판단하는 단계입니다.',
   evidence_ids:[evidenceId],
+  benefit_kind:'replace_llm_judgment',baseline:'메시지마다 기존 LLM을 불러 긴급 여부를 확인합니다.',
+  expected_gain:'긴급 여부만 짧게 판단해 긴 LLM 응답 생성을 줄일 여지가 있습니다.',
+  why_selected:'관측된 호출 중 같은 형태의 짧은 판단이 반복되는 이 지점을 선정했습니다.',
+  repetition_basis:'messages 반복문 안에서 메시지마다 모델을 호출합니다.',
+  state_inputs:[{name:'message 원문',evidence_id:evidenceId}],
+  fallback:'입력이 부족하거나 판단이 불확실하면 기존 LLM 호출을 유지합니다.',compared_evidence_ids:[evidenceId],
 });
 
 test('universal prompt produces an untrusted, evidence-linked draft and rejects invented evidence or credentials',()=>{
@@ -176,7 +183,7 @@ test('project scan recommends only an observed semantic step, preserves its plai
   assert.equal(recommendation.step_goal,'메시지 뜻을 읽고 분류한다');
   assert.equal(recommendation.answer_shape,'yes_no');
   assert.match(recommendation.why_fit,/표현이 달라져서/u);
-  assert.deepEqual(recommendation.evidence.map(item=>item.signal),['semantic_judgment']);
+  assert.deepEqual(recommendation.evidence.map(item=>item.signal),['model_call']);
   assert.deepEqual(recommendation.evidence.map(item=>item.file),['agent.py']);
   assert.equal(recommendation.status,'proposal_unverified');assert.equal(recommendation.enabled,false);
   assert.equal(scanned.preview.jev.enabled,false);
@@ -330,12 +337,13 @@ test('a Work-bound Pack uses LLM with Jev off, calls Jev only after consent, and
   await writeFile(join(x.project,'messages.json'),JSON.stringify([{id:'m1',subject:'server down',body:'Production is unavailable'}]));
   x.api.packs.providers.jev={async systemOne(){jevCalls++;return {answers:{label:{type:'choice',choice:'urgent',confidence:.99,probabilities:{urgent:.99,routine:.005,unknown:.005}}}};}};
   const work=await x.api.call('runtime_work_start',{request_id:'triage-work',prompt:'메시지 중요도 분류'});
-  assert.equal(work.status,'ready');assert.equal(work.jev.enabled,false);
+  assert.equal(work.status,'ready');assert.equal(work.jev.enabled,null);
+  const optedOut=x.api.work.jev({work_id:work.work_id,revision:work.revision,enabled:false});
   const recipe={version:1,family:'inbox.triage',request:'메시지 중요도 분류',sources:[{id:'messages',parameters:{}}],filters:[],deduplicate_by:['id'],judgment:{question:'긴급 대응이 필요한가?',labels:{urgent:'장애 또는 안전 문제',routine:'일반 요청'}},draft_by_label:{}};
   const first=await x.api.call('runtime_pack_run',{request_id:'triage-off-1',work_id:work.work_id,recipe});
   assert.equal(first.status,'succeeded');assert.equal(first.result.items[0].decider,'llm');
   assert.equal(llmCalls,1);assert.equal(jevCalls,0);
-  const enabled=x.api.work.jev({work_id:work.work_id,revision:work.revision,enabled:true,cost_acknowledged:true});
+  const enabled=x.api.work.jev({work_id:work.work_id,revision:optedOut.revision,enabled:true,cost_acknowledged:true});
   const second=await x.api.call('runtime_pack_run',{request_id:'triage-on-1',work_id:work.work_id,recipe});
   assert.equal(second.status,'succeeded');assert.equal(second.result.items[0].decider,'jev');
   assert.equal(llmCalls,1);assert.equal(jevCalls,1);
@@ -344,6 +352,31 @@ test('a Work-bound Pack uses LLM with Jev off, calls Jev only after consent, and
   assert.equal(third.status,'succeeded');assert.equal(third.result.items[0].decider,'llm');
   assert.equal(llmCalls,2);assert.equal(jevCalls,1);
   assert.equal(x.api.store.officeRuns(x.config.project.id,work.work_id).length,3);
+});
+
+test('runtime fixture a new Work uses Pack judgments without a second Work Jev plan',async t=>{
+  let jevCalls=0,definitionCalls=0,fallbackCalls=0;
+  const model={async call(purpose){
+    if(purpose==='correct'){fallbackCalls++;return {label:'urgent',evidence_quote:'server down'};}
+    assert.equal(purpose,'design');definitionCalls++;
+    return {title:'메시지 분류',desired_outcome:'긴급 메시지를 찾는다',completion_checks:[{id:'classified',result:'분류 완료',evidence:'분류 기록'}],assumptions:[],route:{kind:'pack',pack_family:'inbox.triage'},requested_effect:'draft_only',recurrence:{kind:'once',rule:null},questions:[]};
+  }};
+  const x=await setup(t,{packModels:'jev',model});
+  await writeFile(join(x.project,'messages.json'),JSON.stringify([{id:'m1',subject:'server down'}]));
+  x.api.packs.providers.jev={async systemOne(){jevCalls++;return {answers:{label:{type:'choice',choice:'urgent',confidence:.99,probabilities:{urgent:.99,routine:.005,unknown:.005}}}};}};
+  const work=await x.api.call('runtime_work_start',{request_id:'pack-owned',prompt:'메시지 분류'});
+  assert.equal(work.jev.enabled,null);assert.equal(work.jev.cost_consent_at,null);
+  assert.equal('jev' in work.spec,false);
+  const recipe={version:1,family:'inbox.triage',request:'메시지 분류',sources:[{id:'messages',parameters:{}}],filters:[],deduplicate_by:['id'],judgment:{question:'긴급 대응이 필요한가?',labels:{urgent:'장애',routine:'일반'}},draft_by_label:{}};
+  const result=await x.api.call('runtime_pack_run',{request_id:'pack-owned-run',work_id:work.work_id,recipe});
+  assert.equal(result.status,'succeeded');assert.equal(result.result.items[0].decider,'jev');
+  assert.equal(jevCalls,1);assert.equal(definitionCalls,1);
+  const selection={...publicModelSettings(null,{}).selection,mode:'subscription',client:'codex',jev:'off'};
+  saveModelSettings(modelSettingsPath(x.config),{revision:0,selection,onboarding_step:4},{});
+  const off=await x.api.call('runtime_pack_run',{request_id:'pack-owned-global-off',work_id:work.work_id,recipe});
+  assert.equal(off.status,'succeeded');assert.equal(off.result.items[0].decider,'llm');
+  assert.equal(jevCalls,1);assert.equal(fallbackCalls,1);
+  const reopened=new PackStore(x.config.dbPath);try{assert.equal(reopened.intakeWork(x.config.project.id,work.work_id).jev_enabled,null);}finally{reopened.close();}
 });
 
 test('Jev changes during a multi-row Pack run apply to the next judgment',async t=>{

@@ -38,6 +38,9 @@ import {WorkImportRuntime} from '../work/import-runtime.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
 import {CodingDialogRuntime} from '../coding/conversation.js';
 import {codingTools} from '../coding/contracts.js';
+import {HermesMigrationRuntime,migrationPreview} from '../work/hermes-migration.js';
+import {RemoteOffice,remotePropose,remoteDiscover} from '../work/remote.js';
+import {z} from 'zod';
 
 export type SwarmBrowserCommand={action:'navigate';url:string}|{action:'observe'}|{action:'scroll';direction:'up'|'down'};
 export interface SwarmVisualAdapter{
@@ -54,6 +57,8 @@ export class RuntimeApi{
   readonly packs:FamilyRuntime;
   readonly work:WorkRuntime;
   readonly imports:WorkImportRuntime;
+  readonly migrations:HermesMigrationRuntime;
+  readonly remote:RemoteOffice;
   readonly coding:CodingRuntime;
   readonly codingDialog:CodingDialogRuntime;
   readonly swarm:SwarmRuntime;
@@ -67,6 +72,8 @@ export class RuntimeApi{
     this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
     this.work=new WorkRuntime(this.store,config,this.model);
     this.imports=new WorkImportRuntime(this.store,config,this.model);
+    this.migrations=new HermesMigrationRuntime(this.store,config);
+    this.remote=new RemoteOffice(this.store,config);
     this.coding=new CodingRuntime(this.store,config,this.model,options.coding);
     this.codingDialog=new CodingDialogRuntime(this.store,config,this.model,options.coding);
     this.packs=new FamilyRuntime(this.store,config,{approval:options.approval??new LocalApprovalDispatcher(this.store),llm:this.model});
@@ -78,15 +85,15 @@ export class RuntimeApi{
   attachClientSampling(sampling:McpSamplingStructuredModel){
     if(this.explicitProviders)return;
     if(this.options.swarmModel)return;
-    if(this.model instanceof ConfiguredStructuredModel)this.model.sampling=sampling;
+    for(const model of [this.model,this.coding.model,this.codingDialog.model])if(model instanceof ConfiguredStructuredModel)model.sampling=sampling;
     this.packs.providers.llm=this.model;this.swarm.providers.planner=new LlmSwarmPlanner(this.model);this.swarm.providers.llm_fallback=new LlmSwarmDecisionFallback(this.model);
   }
   private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
   close(){
     if(this.closed)return;this.closed=true;this.packs.close();this.coding.close();this.codingDialog.close();
-    this.closing=(async()=>{await this.coding.drain();await this.codingDialog.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
+    this.closing=(async()=>{await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
   }
-  async drain(){await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();if(this.closing)await this.closing;}
+  async drain(){await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.closing)await this.closing;}
   private async releaseFinishedVisuals(runId:string){
     if(!this.visual)return;
     const status=this.swarm.status(runId);
@@ -122,8 +129,16 @@ export class RuntimeApi{
   private scoped(taskId:string){const task=this.store.task(taskId);requireCondition(task.project_id===this.config.project.id,'TASK_SCOPE_MISMATCH');return task;}
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');
-    if(name.startsWith('runtime_work_')){
-      switch(name){
+      if(name.startsWith('runtime_work_')){
+        switch(name){
+          case 'runtime_work_remote_targets':z.object({}).strict().parse(args);return this.remote.targets().map(t=>({id:t.id,name:t.name,provider:'openclaw'}));
+          case 'runtime_work_remote_discover':return this.remote.discover(remoteDiscover.parse(args));
+          case 'runtime_work_remote_status':return this.remote.status(z.object({work_id:z.string().uuid()}).strict().parse(args).work_id);
+          case 'runtime_work_remote_refresh':return this.remote.refresh(z.object({work_id:z.string().uuid()}).strict().parse(args).work_id);
+          case 'runtime_work_remote_propose':return this.remote.propose(remotePropose.parse(args));
+        case 'runtime_work_migration_discover':return this.migrations.discover(z.object({offset:z.number().int().min(0).max(10000).optional()}).strict().parse(args));
+        case 'runtime_work_migration_preview':return this.migrations.preview(migrationPreview.omit({home:true}).parse(args));
+        case 'runtime_work_migration_status':return this.migrations.status(args);
         case 'runtime_work_import_prompt':return this.imports.prompt();
         case 'runtime_work_import_paste':return this.imports.paste(args);
         case 'runtime_work_import_status':return this.imports.status(args);

@@ -17,7 +17,7 @@ test('Work board exposes three import routes and does not activate on preview',(
   assert.match(html,/work\/import\/coding\/start/u);
   assert.match(html,/work\/import\/coding\/step/u);
   assert.match(html,/다음 단계 실행/u);
-  assert.match(html,/README 요약과 근거 위치를 해당 모델에 보낼 수 있습니다/u);
+  assert.match(html,/README 요약·비밀값을 가린 코드 일부·근거 위치를 해당 모델에 보낼 수 있습니다/u);
   assert.match(html,/개선용 업무 초안을 만듭니다/u);
   assert.match(html,/실행되거나 일정이 켜지지 않습니다/u);
   assert.match(html,/가져온 계획/u);
@@ -86,9 +86,13 @@ test('Jev point and its reason use readable, escaped text in both import preview
   };
   vm.runInNewContext(previewFragment+'\nrenderImportPreview();',previewContext);
   assert.match(preview.innerHTML,/새 메시지가 긴급한지 판단<\/b> · 예\/아니오 확인/u);
+  assert.equal((preview.innerHTML.match(/class="jev-recommendation"/gu)||[]).length,1);
+  assert.match(preview.innerHTML,/Jev 추천 · 한 곳/u);
+  assert.doesNotMatch(preview.innerHTML,/id="import-jev"/u);
+  assert.equal((preview.innerHTML.match(/id="import-cost"/gu)||[]).length,1);
   assert.match(preview.innerHTML,/왜 Jev일까요\? 메시지마다 표현이 달라져/u);
   assert.match(preview.innerHTML,/근거: agent\.py:5/u);
-  assert.match(preview.innerHTML,/실제 반복 빈도·정답률·속도 이득은 아직 검증되지 않았습니다/u);
+  assert.match(preview.innerHTML,/속도·비용 개선은 미측정/u);
   assert.match(preview.innerHTML,/자동으로 삽입되지는 않습니다/u);
   assert.match(preview.innerHTML,/API 비용이 발생할 수 있습니다/u);
   assert.match(preview.innerHTML,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
@@ -101,7 +105,7 @@ test('Jev point and its reason use readable, escaped text in both import preview
   vm.runInNewContext(helper+detailFragment+'\nrenderDetail();',detailContext);
   assert.match(app.innerHTML,/새 메시지가 긴급한지 판단<\/b> · 예\/아니오 확인/u);
   assert.match(app.innerHTML,/왜 Jev일까요\? 메시지마다 표현이 달라져/u);
-  assert.match(app.innerHTML,/읽기 전용 분석에서 나온 제안입니다/u);
+  assert.match(app.innerHTML,/코드 분석을 바탕으로 한 예상입니다/u);
   assert.match(app.innerHTML,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
   assert.match(app.innerHTML,/id="jev-toggle" disabled/u);
   assert.doesNotMatch(app.innerHTML,/<script>alert\(1\)<\/script>/u);
@@ -118,22 +122,31 @@ test('import preview says why no Jev point was suggested when analysis was not a
     assert.ok(output.includes(reason));
     assert.doesNotMatch(output,/Jev가 도움이 될 수 있는 지점/u);
   }
+  const ambiguous=vm.runInNewContext(helper+'\nrenderJevRecommendations([{judgment:"A"},{judgment:"B"}],"complete")',{esc});
+  assert.match(ambiguous,/Jev 추천 없음/u);
+  assert.doesNotMatch(ambiguous,/class="jev-recommendation"/u);
 });
 
-test('import acceptance requires goal, completion and separate Jev cost acknowledgment',async()=>{
+test('import acceptance uses the single cost acknowledgment and skips Jev without blocking Work',async()=>{
   const script=workHtml('safe-nonce').match(/<script nonce="safe-nonce">([\s\S]*?)<\/script>/u)?.[1];
   assert.ok(script);
   const fragment=script.slice(script.indexOf('async function acceptImport'),script.indexOf('async function submitWork'));
-  const inputs={'import-goal':{value:'Improve the bot'},'import-completion':{value:'Verified new behavior'},'import-jev':{checked:true},'import-cost':{checked:false}};
+  const inputs={'import-goal':{value:'Improve the bot'},'import-completion':{value:'Verified new behavior'},'import-cost':{checked:false}};
   const messages=[],calls=[];
-  const context={importResult:{import_id:'import-1',kind:'project',preview:{kind:'bot_only'}},importBusy:false,document:{getElementById:id=>inputs[id]},setMessage:value=>messages.push(value),fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({work_id:'work-1'})}},openWork:()=>{}};
+  const makeResult=()=>({import_id:'import-1',kind:'project',preview:{kind:'bot_only',jev_recommendations:[{judgment:'메시지 분류'}]}});
+  const context={importResult:makeResult(),importBusy:false,document:{getElementById:id=>inputs[id]},setMessage:value=>messages.push(value),fetch:async(_url,options)=>{calls.push(JSON.parse(options.body));return {ok:true,json:async()=>({work_id:'work-1'})}},openWork:()=>{}};
   await vm.runInNewContext(fragment+'\nacceptImport()',context);
-  assert.equal(calls.length,0);
-  assert.match(messages.at(-1),/비용/u);
-  inputs['import-cost'].checked=true;
-  await vm.runInNewContext('acceptImport()',context);
   assert.equal(calls.length,1);
-  assert.equal(calls[0].mode,'augment');
-  assert.equal(calls[0].jev_enabled,true);
-  assert.equal(calls[0].cost_acknowledged,true);
+  assert.equal(calls[0].jev_enabled,false);
+  assert.equal(calls[0].cost_acknowledged,false);
+  inputs['import-cost'].checked=true;
+  context.importResult=makeResult();
+  await vm.runInNewContext('acceptImport()',context);
+  assert.equal(calls.length,2);
+  assert.equal(calls[1].mode,'augment');
+  assert.equal(calls[1].jev_enabled,true);
+  assert.equal(calls[1].cost_acknowledged,true);
+  context.importResult={import_id:'import-2',preview:{kind:'bot_only',jev_recommendations:[]}};
+  await vm.runInNewContext('acceptImport()',context);
+  assert.equal(calls[2].jev_enabled,false);
 });

@@ -1,0 +1,9 @@
+{
+  "RQ-707": {"status":"done","evidence":["scripts/release/check-public-boundary.mjs","tests/runtime-license.test.mjs","PUBLICATION.md"],"note":"Allowlisted common transfer only; 398 non-ignored files scanned without credential findings. Pattern checks are not a complete privacy guarantee."},
+  "RQ-708": {"status":"done","evidence":["docs/release-readiness-v0.2.0.md","tests/runtime-hermes-migration.test.mjs","tests/runtime-remote-office.test.mjs","tests/runtime-coding-model-settings.test.mjs","tests/runtime-continuity-context.test.mjs"],"note":"Common features passed the PR's 625/625 check snapshot; model and remote-service fixtures are not live-provider certification."},
+  "RQ-709": {"status":"done","evidence":["package.json","install.sh","README.md","README.ko.md","docs/releases/v0.2.0.md"],"note":"v0.2.0 pinned consistently; new-Work Jev call/skip proposal excluded."},
+  "RQ-710": {"status":"partial","note":"PR snapshot 46f94fe passed 625/625 checks and audit; recheck the final browser-startup correction. Earlier UI/readiness failures remain recorded."},
+  "RQ-711": {"status":"partial","note":"GitHub fresh/v0.1.0/v0.1.1 installer probes passed. Local WSL startup exceeded the old 15-second check; validate the corrected bounded startup in the final snapshot."},
+  "RQ-712": {"status":"partial","note":"PR #28 is open; merge and verify public tag/assets only after the final snapshot passes release gates."},
+  "RQ-713": {"status":"done","evidence":["src/packs/store.ts","src/packs/runtime.ts","src/swarm/runtime.ts","tests/runtime-work-migration.test.mjs","tests/runtime-decision-memory.test.mjs","tests/runtime-import-single-jev-browser.test.mjs"],"note":"Task Packs own judgment points. New Work delegates without a second LLM Jev policy; global OFF, explicit opt-outs, import consent and legacy values are preserved. Focused 56/56 checks and PR regression passed."}
+}

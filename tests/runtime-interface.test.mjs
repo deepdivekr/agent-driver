@@ -21,7 +21,8 @@ import {RuntimeStore} from '../dist/store/runtime-store.js';
 import {stopSupervisor} from '../dist/supervisor/manager.js';
 import {liveness} from '../dist/supervisor/identity.js';
 import {readFileSync} from 'node:fs';
-const packageVersion=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8')).version;
+const packageMetadata=JSON.parse(readFileSync(new URL('../package.json',import.meta.url),'utf8'));
+const packageVersion=packageMetadata.version+(packageMetadata.agentDriverBuild?'+'+packageMetadata.agentDriverBuild:'');
 
 async function setup(t,environment='fixture'){
   const root=await mkdtemp(join(tmpdir(),'driver-interface-')),fixture=await startFixture();
@@ -35,7 +36,7 @@ async function setup(t,environment='fixture'){
   return state;
 }
 const request=id=>({request_id:id,capability:'fixture.draft.save',account_ref:'account-a',input:{name:'한글 🐈',note:'원문 그대로 저장'},deadline_ms:20000});
-async function client(x){const client=new Client({name:'interface-test',version:'1.0.0'});const transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.path],stderr:'pipe'});let errors='';transport.stderr?.on('data',b=>errors+=b);await client.connect(transport);assert.deepEqual(client.getServerVersion(),{name:'agent-driver',version:packageVersion});x.clients.push(client);return {client,transport,errors:()=>errors};}
+async function client(x){const client=new Client({name:'interface-test',version:'1.0.0'});const transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.path],stderr:'pipe'});let errors='';transport.stderr?.on('data',b=>errors+=b);x.clients.push(client);try{await client.connect(transport);assert.deepEqual(client.getServerVersion(),{name:'agent-driver',version:packageVersion});return {client,transport,errors:()=>errors};}catch(error){await client.close().catch(()=>{});throw error}}
 async function call(client,name,args={}){const reply=await client.callTool({name,arguments:args});assert.notEqual(reply.isError,true,JSON.stringify(reply));return JSON.parse(reply.content[0].text);}
 async function complete(x,taskId,timeoutMs=20000){const end=performance.now()+timeoutMs;let last;while(performance.now()<end){last=await x.api.call('runtime_task_status',{task_id:taskId});if(['succeeded','cancelled','failed','paused_dependency','reconciliation_required'].includes(last.status))return last;await delay(50);}throw Error(`worker did not finish: ${JSON.stringify(last)}`);}
 async function cli(args){const c=spawn(process.execPath,['dist/cli.js',...args],{stdio:['ignore','pipe','pipe']});let out='',err='';c.stdout.on('data',b=>out+=b);c.stderr.on('data',b=>err+=b);const [code]=await once(c,'close');return {code,out,err};}

@@ -104,7 +104,7 @@ export class FamilyRuntime {
     const policy=this.config.packs!,saved=readModelSettings(modelSettingsPath(this.config)),environment=effectiveModelEnvironment(saved);let jev=this.providers.jev,llm=this.providers.llm;
     const office=this.store.officeWork(this.config.project.id,'pack',run.id) as {id:string}|null;
     const boundWork=office?this.store.intakeWorkOptional(this.config.project.id,office.id):null;
-    const workJevEnabled=boundWork?.jev_enabled??null,jevPermitted=workJevEnabled!==false;
+    const workJevEnabled=boundWork?.jev_enabled??null,jevPermitted=workJevEnabled!==false&&saved?.selection.jev!=='off';
     if(policy.models!=='off'){
       requireCondition(policy.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
       if(jevPermitted&&!jev)jev=optionalTypeSafeTransportFromHostEnvironment(environment).transport??undefined;
@@ -115,13 +115,14 @@ export class FamilyRuntime {
     const fallback=rowDecisionProfile(policy.confidence),registry=new DecisionProfileRegistry(join(dirname(this.config.dbPath),'decisions','registry')),profile=jev?(await registry.resolve(ROW_DECISION_CATALOG,this.config.environment==='fixture'?'fixture':'production',fallback)).profile:fallback;
     const plane=jev?new DecisionPlane({catalog:ROW_DECISION_CATALOG,profile,primary:{id:'typesafe-jev',systemOne:(request,settings)=>jev!.systemOne(request,settings)},...(shadow?{shadow}:{}),journal:new FileDecisionJournal(join(dirname(this.config.dbPath),'decisions','family.jsonl')),shadow_sample_rate:shadow?(this.providers.shadowJev?.systemOne?0.1:policy.decision_shadow.sample_rate):0}):undefined;
     const binding=snapshotHash({settings_revision:saved?.revision??0,selection:saved?.selection??null,model:environment.AGENT_DRIVER_API_MODEL??null,client:environment.AGENT_DRIVER_LLM_CLIENT??null,provider:environment.AGENT_DRIVER_API_PROVIDER??null,profile,models:policy.models,work_jev_enabled:workJevEnabled});
-    return {jev,llm,policy,plane,binding,workJevEnabled};
+    return {jev,llm,policy,plane,binding,workJevEnabled,settingsRevision:saved?.revision??0};
   }
   private async refreshDecisionProviders(run:PackRun,previous:Awaited<ReturnType<FamilyRuntime['decisionProviders']>>){
     const office=this.store.officeWork(this.config.project.id,'pack',run.id) as {id:string}|null;
     const enabled=office?this.store.intakeWorkOptional(this.config.project.id,office.id)?.jev_enabled??null:null;
     // A Work toggle affects the next row. An already-started model request keeps its original provider.
-    return enabled===previous.workJevEnabled?previous:this.decisionProviders(run);
+    const settingsRevision=readModelSettings(modelSettingsPath(this.config))?.revision??0;
+    return enabled===previous.workJevEnabled&&settingsRevision===previous.settingsRevision?previous:this.decisionProviders(run);
   }
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(this.accepting,'PACK_RUNTIME_DRAINING');

@@ -9,7 +9,7 @@
 <sub>저장소·CLI 이름: <code>agent-driver</code></sub>
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.1.1-informational)
+![Version](https://img.shields.io/badge/version-v0.2.0-informational)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%2024.04%20%7C%20WSL2-orange)
 ![MCP](https://img.shields.io/badge/MCP-stdio-8A2BE2)
 
@@ -17,9 +17,13 @@
 
 **Claude Code, Codex, Cursor, OpenCode, Hermes**에 연결하면 웹 검색, 폼 입력, 파일 수집, 코딩 업무를 맡길 수 있습니다. 브라우저 작업은 사용자가 쓰는 브라우저가 아닌 별도 브라우저에서 진행합니다. 모든 단계는 로컬 SQLite에 기록되어 중단된 작업을 멈춘 곳에서 이어갈 수 있습니다. 사용자의 마우스나 열린 탭은 건드리지 않습니다.
 
-> **v0.1.1 지원 범위:** Ubuntu 24.04 x86_64, Windows 11 + WSL2 Ubuntu 24.04. 기능별 검증 근거와 실험 기능의 제약은 [출시 검증 기록](docs/release-readiness-v0.1.1.md)에 있습니다.
+> **v0.2.0 지원 범위:** Ubuntu 24.04 x86_64, Windows 11 + WSL2 Ubuntu 24.04. 기능별 검증 근거와 실험 기능의 제약은 [출시 검증 기록](docs/release-readiness-v0.2.0.md)에 있습니다.
 
-> **v0.1.1:** 설치본에 Agent Office 화면, 내장 프리텐다드, 관제센터 수정, 구독→유료 API 자동 전환 차단이 포함됩니다. [변경 내역](docs/releases/v0.1.1.md).
+> **v0.2.0:** Hermes 업무 가져오기, 실행 서버를 유지하는 원격 OpenClaw 관리, 코딩 전용 모델 설정이 추가되었습니다. 프로젝트 가져오기는 코드 근거가 있는 Jev 개선 지점을 최대 한 곳 추천하며, Jev 없이도 사용할 수 있습니다. [변경 내역](docs/releases/v0.2.0.md).
+
+**업무 현황 → 가져오기**에서 프롬프트 붙여넣기, 로컬 프로젝트, [Hermes 업무](docs/work-migration.md), [원격 OpenClaw](docs/remote-office.md)를 선택합니다. 내용을 확인하고 연결하며, 가져오기만으로 실행하거나 예약을 켜지 않습니다. Hermes는 호환 로컬 설치가, 원격 OpenClaw는 Office가 실행되는 환경의 SSH 연결이 필요합니다. 원격 업무의 실행 서버는 그대로 유지합니다.
+
+코딩 전용 모델은 **연결 및 설정 → AI → 코딩 업무 전용**에서 선택합니다. 기본값은 전역 설정 상속입니다. [모델 설정](docs/control-settings.md) · [업무 인계](docs/continuity-and-execution-ownership.md) · [선택적 Jev 추천](docs/jev-import-recommendation.md).
 
 ---
 
@@ -48,10 +52,10 @@ Claude Code, Codex 같은 에이전트에 다음과 같이 요청하세요.
 Ubuntu 또는 WSL2 Ubuntu 터미널에서 한 번 실행합니다.
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.1/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.2.0/install.sh | bash'
 ```
 
-아래는 같은 설치 단계를 거치는 **v0.1.0 당시**의 Ubuntu 24.04 x86_64 설치 화면입니다. 당시 **16초**, 종료 코드 0을 기록했으며 v0.1.1의 소요 시간 측정은 아닙니다.
+아래는 같은 설치 단계를 거치는 **v0.1.0 당시**의 Ubuntu 24.04 x86_64 설치 화면입니다. 당시 **16초**, 종료 코드 0을 기록했으며 v0.2.0의 소요 시간 측정은 아닙니다.
 
 ![터미널: Ubuntu 24.04에서 설치 명령 한 줄 실행. Node.js 준비부터 control_center_ready까지](docs/assets/readme/terminal-install.png)
 
@@ -172,6 +176,10 @@ agent-driver mcp
 
 어떤 요소를 클릭할지, 결과가 맞는지 같은 짧고 반복되는 판단을 빠르게 처리합니다. 키가 없으면 LLM이 대신 판단합니다.
 
+Jev를 호출할 지점과 조건은 Task Pack에 있습니다. 신규 Work는 전역 연결 설정이 허용하는
+범위에서 이를 사용하며, Work를 설계하는 LLM이 별도의 Jev ON/OFF 정책을 만들지 않습니다.
+사용자가 개별 업무에서 명시적으로 끈 설정은 유지합니다.
+
 ![Jev 단계: 사용 방식 Auto, 네 단계 모두 체크 표시](docs/assets/readme/cc-06-jev.png)
 
 ### ① 업무: 보드와 목록
@@ -245,7 +253,7 @@ agent-driver mcp
 
 ### Task Pack
 
-Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단위입니다. v0.1.1에는 아홉 가지 Pack family가 있습니다.
+Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단위입니다. v0.2.0에는 아홉 가지 Pack family가 있습니다.
 
 | 작업 | 예시 | Pack family |
 |---|---|---|
@@ -275,7 +283,7 @@ Task Pack은 작업의 입력, 실행 순서, 결과 확인 방법을 묶은 단
 | **Task·복구** | `runtime_task_*`, `runtime_recovery_*` (7) | 작업 접수, 시작·취소·재개, generation 확인을 거친 복구 준비 |
 | **운영** | health, storage, events, artifacts, capabilities, decision, channel, activity (13) | 상태·저장소 확인과 정리, 이벤트 읽기·확인, 결과물 목록, 활동 보고, Decision Plane 상태 확인 |
 
-`runtime_browser_session_open`과 `runtime_browser_session_status`는 v0.1.1에서도 자리만 있는 도구입니다. 호출하면 "미구현" 오류를 반환합니다.
+`runtime_browser_session_open`과 `runtime_browser_session_status`는 v0.2.0에서도 자리만 있는 도구입니다. 호출하면 "미구현" 오류를 반환합니다.
 
 ### 코딩 업무
 

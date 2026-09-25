@@ -8,6 +8,8 @@ import {observabilityTools} from '../observability/contracts.js';
 import {workTools} from '../work/contracts.js';
 import {workImportPasteSchema} from '../work/import-runtime.js';
 import {codingTools} from '../coding/contracts.js';
+import {migrationPreview,migrationId} from '../work/hermes-migration.js';
+import {remoteDiscover,remotePropose} from '../work/remote.js';
 export const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const draftInput=z.object({name:z.string().min(1).max(200),note:z.string().min(1).max(4000)}).strict();
 export const startRequest=z.object({request_id:id,capability:z.literal('fixture.draft.save'),account_ref:id,input:draftInput,deadline_ms:z.number().int().min(1000).max(120000).default(30000)}).strict();
@@ -16,6 +18,14 @@ const notImplemented={implemented:false,readOnly:false};
 export const tools={
   ...workTools,
   runtime_work_import_prompt:{schema:empty,implemented:true,readOnly:true},
+  runtime_work_remote_targets:{schema:empty,implemented:true,readOnly:true},
+  runtime_work_remote_discover:{schema:remoteDiscover,implemented:true,readOnly:true},
+  runtime_work_remote_status:{schema:z.object({work_id:z.string().uuid()}).strict(),implemented:true,readOnly:true},
+  runtime_work_remote_refresh:{schema:z.object({work_id:z.string().uuid()}).strict(),implemented:true,readOnly:true},
+  runtime_work_remote_propose:{schema:remotePropose,implemented:true,readOnly:false},
+  runtime_work_migration_discover:{schema:z.object({offset:z.number().int().min(0).max(10000).optional()}).strict(),implemented:true,readOnly:true},
+  runtime_work_migration_preview:{schema:migrationPreview.omit({home:true}),implemented:true,readOnly:false},
+  runtime_work_migration_status:{schema:migrationId,implemented:true,readOnly:true},
   runtime_work_import_paste:{schema:workImportPasteSchema,implemented:true,readOnly:false},
   runtime_work_import_status:{schema:z.object({import_id:z.string().uuid()}).strict(),implemented:true,readOnly:true},
   runtime_work_import_scan:{schema:z.object({project_ref:id}).strict(),implemented:true,readOnly:false},

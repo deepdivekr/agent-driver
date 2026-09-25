@@ -16,15 +16,18 @@ const runId=new Date().toISOString().replaceAll(':','-'),log=join(evidence,runId
 const browserCache=process.env.PLAYWRIGHT_BROWSERS_PATH||join(homedir(),'.cache/ms-playwright');
 const env=Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','HTTP_PROXY','HTTPS_PROXY','NO_PROXY','NODE_EXTRA_CA_CERTS'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
 Object.assign(env,{NPM_CONFIG_CACHE:process.env.NPM_CONFIG_CACHE||join(homedir(),'.npm'),PLAYWRIGHT_BROWSERS_PATH:browserCache,AGENT_DRIVER_SKIP_CONNECT:'1'});
-async function run(command,args,{cwd=repo,environment=env,timeout=360000}={}){
+async function run(command,args,{cwd=repo,environment=env,timeout=600000}={}){
   await appendFile(log,JSON.stringify({command,args,cwd})+'\n');
   return await new Promise((resolveRun,reject)=>{
     const child=spawn(command,args,{cwd,env:environment,stdio:['ignore','pipe','pipe'],detached:true});
-    let output='',timer=setTimeout(()=>{process.kill(-child.pid,'SIGTERM');},timeout);
+    let output='',forced,timedOut=false;
+    const signal=name=>{try{process.kill(-child.pid,name);}catch(error){if(error.code!=='ESRCH')throw error;}};
+    const timer=setTimeout(()=>{timedOut=true;signal('SIGTERM');forced=setTimeout(()=>signal('SIGKILL'),5000);},timeout);
     child.stdout.on('data',b=>{output+=b;});child.stderr.on('data',b=>{output+=b;});
     child.on('error',reject);child.on('close',async code=>{
-      clearTimeout(timer);await appendFile(log,output+'\n');
-      if(code!==0)reject(Error(command+' failed ('+code+'); see '+log));
+      clearTimeout(timer);clearTimeout(forced);await appendFile(log,output+'\n');
+      if(timedOut)reject(Error(command+' timed out; see '+log));
+      else if(code!==0)reject(Error(command+' failed ('+code+'); see '+log));
       else resolveRun(output.trim());
     });
   });
@@ -37,7 +40,7 @@ try{
     // Public release tags may already exist on later CI runs. Do not import
     // the current tag into this disposable candidate mirror or overwrite it.
     await run('git',['clone','--quiet','--no-hardlinks','--no-tags',repo,source]);
-    await run('git',['-C',source,'fetch','--quiet','origin','refs/tags/v0.1.0:refs/tags/v0.1.0']);
+    for(const baseline of ['v0.1.0','v0.1.1'])await run('git',['-C',source,'fetch','--quiet','origin',`refs/tags/${baseline}:refs/tags/${baseline}`]);
     const ref=await run('git',['rev-parse','HEAD']);
     await run('git',['-C',source,'checkout','--quiet','--detach',ref]);
     await run('git',['-C',source,'tag',tag,ref]);
@@ -45,31 +48,32 @@ try{
     env.AGENT_DRIVER_ALLOW_LOCAL_FIXTURE='1';
   }
   env.AGENT_DRIVER_REPOSITORY_URL=source;
-  for(const scenario of ['upgrade','fresh']){
+  for(const scenario of ['upgrade-0.1.0','upgrade-0.1.1','fresh']){
+    const baseline=scenario.startsWith('upgrade-')?scenario.slice('upgrade-'.length):null;
     const home=join(base,scenario);await mkdir(home);
     const installed=join(home,'.local/share/agent-driver'),state=join(home,'.agent-driver');
     const childEnv={...env,HOME:home,AGENT_DRIVER_CONNECTION_ROOT:state};
     const installer=join(repo,'install.sh');
-    if(scenario==='upgrade'){
-      console.log('Installing v0.1.0 for upgrade verification');
-      await run('bash',[installer],{environment:{...childEnv,AGENT_DRIVER_VERSION:'v0.1.0'}});
-      assert.equal(JSON.parse(await readFile(join(installed,'package.json'),'utf8')).version,'0.1.0');
-      await run(process.execPath,[join(repo,'scripts/release/install-probe.mjs'),installed,state,'seed','0.1.0'],{environment:childEnv});
+    if(baseline){
+      console.log('Installing v'+baseline+' for upgrade verification');
+      await run('bash',[installer],{environment:{...childEnv,AGENT_DRIVER_VERSION:'v'+baseline}});
+      assert.equal(JSON.parse(await readFile(join(installed,'package.json'),'utf8')).version,baseline);
+      await run(process.execPath,[join(repo,'scripts/release/install-probe.mjs'),installed,state,'seed',baseline],{environment:childEnv});
     }
-    const preserve=['connection.json','runtime-config.json','release-work-id.json'];
-    const before=scenario==='upgrade'?await Promise.all(preserve.map(f=>readFile(join(state,f)))):[];
+    const preserve=['connection.json','runtime-config.json','release-work-id.json','release-model-settings.json'];
+    const before=baseline?await Promise.all(preserve.map(f=>readFile(join(state,f)))):[];
     console.log('Installing '+tag+' ('+scenario+')');
     const started=Date.now();
     await run('bash',[installer],{environment:childEnv});
     assert.equal(JSON.parse(await readFile(join(installed,'package.json'),'utf8')).version,pkg.version);
     const installedSha=await run('git',['-C',installed,'rev-parse','HEAD']);
-    if(scenario==='upgrade')for(let i=0;i<preserve.length;i++)assert.deepEqual(await readFile(join(state,preserve[i])),before[i]);
+    if(baseline)for(let i=0;i<preserve.length;i++)assert.deepEqual(await readFile(join(state,preserve[i])),before[i]);
     else await run(process.execPath,[join(repo,'scripts/release/install-probe.mjs'),installed,state,'seed',pkg.version],{environment:childEnv});
     await run(join(home,'.local/bin/agent-driver'),['connection','status'],{cwd:base,environment:childEnv});
     const probe=await run(process.execPath,[join(repo,'scripts/release/install-probe.mjs'),installed,state,'verify',pkg.version],{environment:childEnv});
     const dirty=await run('git',['-C',installed,'status','--porcelain']);
     assert.equal(dirty,'');
-    report.cases.push({scenario,status:'PASS',installed_sha:installedSha,duration_ms:Date.now()-started,checks:['real_npm_ci','real_build','real_chromium','wrapper_from_other_directory','mcp_version','work_id_and_prompt_preserved','local_pretendard','clean_managed_checkout'],probe:JSON.parse(probe.split('\n').at(-1))});
+    report.cases.push({scenario,baseline,status:'PASS',installed_sha:installedSha,duration_ms:Date.now()-started,checks:['real_npm_ci','real_build','real_chromium','wrapper_from_other_directory','mcp_version','common_tool_catalog','work_id_and_prompt_preserved','model_preferences_preserved','local_pretendard','clean_managed_checkout'],probe:JSON.parse(probe.split('\n').at(-1))});
     console.log(scenario+': PASS');
   }
   report.installer_sha256=createHash('sha256').update(await readFile(join(repo,'install.sh'))).digest('hex');

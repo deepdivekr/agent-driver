@@ -7,6 +7,8 @@ import {authSites} from '../swarm/browser-auth.js';
 import {type WorkImportDraft} from '../work/import-draft.js';
 import {type ProjectScan} from '../work/project-scan.js';
 import {importedCodingReadiness,projectJevRecommendations} from '../work/import-runtime.js';
+import {hermesBoardRow,hermesWorkDetail} from '../work/hermes.js';
+import {remoteBoard,remoteDetail} from '../work/remote.js';
 
 const clean=(value:string,max=800)=>{const text=redact(value).replace(/https?:\/\/[^\s<>"']+/giu,raw=>{try{const url=new URL(raw);return url.origin+url.pathname;}catch{return '[URL]';}});return text.length<=max?text:text.slice(0,max-1)+'…';};
 const verified=(worker:SwarmRunSnapshot['workers'][string])=>worker.status==='succeeded'&&worker.result?.readback?.verified===true&&worker.quality?.accepted===true;
@@ -26,12 +28,14 @@ function boardRow(row:OfficeRow){
 
 export function readWorkBoard(store:PackStore,config:HostConfig,limit=60){
   const project=config.project.id;store.expireCodingStages(project);store.expireCodingDialogTurns(project);store.expireCodingDialogAdvice(project);
-  const works=store.officeWorkSummaries(project,limit).map(boardRow);
+  const works=store.officeWorkSummaries(project,limit).map(row=>({...boardRow(row),...(hermesBoardRow(store,project,row.id)??{}),...(remoteBoard(store,project,row.id)??{})}));
   const auth_attention_count=authSites(store,config).filter(site=>site.handoff||site.state!=='ready'&&site.state!=='retry_requested').length;
   return {format:1,project_id:project,generated_at:new Date().toISOString(),works,auth_attention_count,read_only:false,coverage:{runtime_only:true,unobserved_work:'not_shown'}};
 }
 
 export function readWorkDetail(store:PackStore,config:HostConfig,id:string){
+  const remote=remoteDetail(store,config.project.id,id);if(remote)return remote;
+  const hermes=hermesWorkDetail(store,config.project.id,id);if(hermes)return hermes;
   const project=config.project.id;store.expireCodingStages(project);store.expireCodingDialogTurns(project);store.expireCodingDialogAdvice(project);
   const record=store.officeWorkById(project,id);
   const intake: IntakeWork|null=store.intakeWorkOptional(project,id);

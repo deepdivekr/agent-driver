@@ -1,7 +1,7 @@
 import {type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {McpSamplingStructuredModel,subscriptionAwareModelFromHostEnvironment,type SubscriptionAwareModelOptions} from '../integrations/subscription-auth.js';
 import {structuredModelFromEnvironment} from '../integrations/model-provider.js';
-import {effectiveModelEnvironment,publicModelSettings,readModelSettings} from './model-settings.js';
+import {publicModelSettings,scopedModelConfiguration,type ModelScope} from './model-settings.js';
 import {classifyClientFailure,handoffContext,type ClientRouteEvent,type HandoffReason} from '../integrations/client-handoff.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
 
@@ -9,21 +9,22 @@ import {hashJson} from '../taskpack/adaptive-spec.js';
 export class ConfiguredStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];
   sampling?:McpSamplingStructuredModel;
-  constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel}={},readonly onHandoff?:(event:ClientRouteEvent)=>void){}
-  environment(){return effectiveModelEnvironment(readModelSettings(this.path),this.base);}
-  private resolve(){
-    const saved=readModelSettings(this.path),environment=effectiveModelEnvironment(saved,this.base);
+  constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel}={},readonly onHandoff?:(event:ClientRouteEvent)=>void,readonly scope:ModelScope='global'){}
+  forScope(scope:ModelScope){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,scope);if(this.sampling)model.sampling=this.sampling;return model;}
+  environment(){return scopedModelConfiguration(this.path,this.scope,this.base).environment;}
+  private resolve(context:ReturnType<typeof scopedModelConfiguration>){
+    const {saved,environment}=context;
     const api=()=>this.factories.api?.(environment)??structuredModelFromEnvironment(environment);
     if(saved?.selection.mode==='api'||!saved&&environment.AGENT_DRIVER_LLM_CLIENT==='api')return api();
     // An ambient key is not permission to switch subscription work to paid API calls.
     const options={environment,...(this.sampling?{sampling:this.sampling}:{}),...(this.onHandoff?{onHandoff:this.onHandoff}:{})};
     return this.factories.subscription?.(options)??subscriptionAwareModelFromHostEnvironment(options,environment);
   }
-  async status(){const saved=readModelSettings(this.path);return {...publicModelSettings(saved,this.base),...await subscriptionAwareModelFromHostEnvironment({...(this.sampling?{sampling:this.sampling}:{})},this.environment()).status()};}
+  async status(){const context=scopedModelConfiguration(this.path,this.scope,this.base);return {...publicModelSettings(context.saved,context.base),model_scope:this.scope,model_source:context.source,...await subscriptionAwareModelFromHostEnvironment({...(this.sampling?{sampling:this.sampling}:{})},context.environment).status()};}
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
-    const saved=readModelSettings(this.path);
+    const context=scopedModelConfiguration(this.path,this.scope,this.base),{saved}=context;
     if(saved?.selection.mode==='api'&&saved.selection.api_to_subscription){
-      const env=effectiveModelEnvironment(saved,this.base),api=this.factories.api?.(env)??structuredModelFromEnvironment(env);
+      const env=context.environment,api=this.factories.api?.(env)??structuredModelFromEnvironment(env);
       try{return await api.call(purpose,instructions,input,schema);}catch(error){
         const call=api.calls.at(-1),status=call?.http_status;
         if(error instanceof Error&&error.message==='MODEL_PROVIDER_RESPONSE_INVALID'||status!==undefined&&status>=400&&status<500&&![401,402,403,429].includes(status))throw error;
@@ -40,6 +41,6 @@ export class ConfiguredStructuredModel implements StructuredModel{
         }finally{this.calls.push(...alternative.calls);}
       }finally{this.calls.push(...api.calls);}
     }
-    const provider=this.resolve();try{return await provider.call(purpose,instructions,input,schema);}finally{this.calls.push(...provider.calls);}
+    const provider=this.resolve(context);try{return await provider.call(purpose,instructions,input,schema);}finally{this.calls.push(...provider.calls);}
   }
 }
