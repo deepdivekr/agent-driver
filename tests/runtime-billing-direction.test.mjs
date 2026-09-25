@@ -61,6 +61,23 @@ test('runtime contract unclassified CLI credentials are not used as an automatic
   }
 });
 
+test('runtime contract Claude API-key login is not mistaken for subscription auth',async()=>{
+  for(const client of ['claude','codex,claude'])for(const authMethod of ['api_key','unknown']){
+    let invoked=0;const model=new SubscriptionAwareStructuredModel({
+      environment:{...environment,AGENT_DRIVER_LLM_CLIENT:client},
+      runner:{async run(r){
+        if(r.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod,subscriptionType:null}),stderr:''};
+        if(r.executable==='/fixture/claude'){invoked++;throw Error('UNEXPECTED_CLAUDE_API_BILLING');}
+        return runner.run(r);
+      }},
+    });
+    await assert.rejects(model.call('correct','Choose.',{},schema),/STRUCTURED_MODEL_UNAVAILABLE/);
+    assert.equal(invoked,0);
+    const status=(await model.status()).clients.find(c=>c.id==='claude');
+    assert.equal(status.status,'unknown');assert.equal(status.reason,'client_auth_not_subscription');
+  }
+});
+
 test('runtime contract exhausted API transfers to saved auth model once, never returns to API',async t=>{
   for(const authWorks of [true,false]){
     const path=await fixture(t);saveModelSettings(path,{revision:0,onboarding_step:2,selection:{...selection,mode:'api'},api_action:'replace',api_key:key},{});
