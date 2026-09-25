@@ -10,6 +10,8 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 22.22.0
@@ -34,6 +36,8 @@ jobs:
           fi
       - run: npx playwright install --with-deps chromium
       - run: npm test
+      - name: Verify real fresh installation and upgrade
+        run: node scripts/release/verify-install.mjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -41,4 +45,38 @@ jobs:
           path: |
             tests/evidence/runtime-tests-*.json
             tests/report.json
+            tests/evidence/release-install/
           if-no-files-found: warn
+  release:
+    needs: runtime
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-agent-driver-release
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish a new version only after all release gates
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(node -p "require('./package.json').version")
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Not a stable release version"; exit 1; }
+          tag="v$version"
+          if test -n "$(git ls-remote --tags origin "refs/tags/$tag")"; then
+            echo "$tag already exists; existing tags and releases are never overwritten."
+            exit 0
+          fi
+          test -f "docs/releases/$tag.md"
+          mkdir -p release-assets
+          git archive --format=tar.gz --prefix="agent-driver-$version/" "$GITHUB_SHA" > "release-assets/agent-driver-$version.tar.gz"
+          cp install.sh release-assets/install.sh
+          (cd release-assets && sha256sum "agent-driver-$version.tar.gz" install.sh > SHA256SUMS)
+          gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Agent Office $tag" --notes-file "docs/releases/$tag.md" --latest release-assets/*

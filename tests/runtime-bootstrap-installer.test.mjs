@@ -86,6 +86,7 @@ test('runtime native bootstrap rejects paths outside HOME before creating their 
 });
 
 test('runtime contract bootstrap pins official source and toolchain, verifies Node checksum and never requests sudo or evaluates text',async()=>{
-  const text=await readFile(installer,'utf8');assert.match(text,/https:\/\/github\.com\/deepdivekr\/agent-driver\.git/u);assert.match(text,/AGENT_DRIVER_VERSION:-v0\.1\.0/u);assert.match(text,/22\.22\.0/u);assert.match(text,/11\.11\.0/u);assert.match(text,/SHASUMS256\.txt/u);assert.match(text,/sha256sum --check/u);assert.match(text,/playwright install chromium/u);
+  const text=await readFile(installer,'utf8'),pkg=JSON.parse(await readFile(join(root,'package.json'),'utf8'));
+  assert.match(text,/https:\/\/github\.com\/deepdivekr\/agent-driver\.git/u);assert.ok(text.includes('AGENT_DRIVER_VERSION:-v'+pkg.version));assert.match(text,/22\.22\.0/u);assert.match(text,/11\.11\.0/u);assert.match(text,/SHASUMS256\.txt/u);assert.match(text,/sha256sum --check/u);assert.match(text,/playwright install chromium/u);
   assert.doesNotMatch(text,/\bsudo\b/u);assert.doesNotMatch(text,/\beval\b/u);assert.doesNotMatch(text,/curl[^\n]*\|\s*(?:ba)?sh/u);
 });
