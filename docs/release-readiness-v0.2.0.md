@@ -43,3 +43,16 @@ Only product source, synthetic tests, documentation and the public release workf
 are included. Private raw evidence is not uploaded. `tests/report.json`,
 `tests/evidence`, databases, logs, profiles and environment files remain ignored.
 Historical evaluation documents keep their original scope; they are not new v0.2.0 claims.
+
+## Failure history retained
+
+- The first PR snapshot had one obsolete UI expectation: 624/625 checks passed.
+  The test was updated for the requested Pack-owned default, retaining disabled-state,
+  explicit opt-out and cost-consent checks. The next snapshot passed 625/625 checks
+  and all three real installer scenarios in GitHub Actions.
+- A separate local WSL probe stopped while preparing v0.1.0 because the installer's
+  15-second browser startup check failed. An isolated launch in the same environment
+  succeeded after 43.346 seconds. The installer now allows 60 seconds and distinguishes
+  timeout from startup failure. The final snapshot must pass the same release gates.
+- Local focused Work/Pack/Swarm/settings/UI checks passed 56/56 including input stability.
+  These fixtures do not establish live Jev accuracy or performance.

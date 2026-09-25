@@ -16,15 +16,18 @@ const runId=new Date().toISOString().replaceAll(':','-'),log=join(evidence,runId
 const browserCache=process.env.PLAYWRIGHT_BROWSERS_PATH||join(homedir(),'.cache/ms-playwright');
 const env=Object.fromEntries(['PATH','LANG','LC_ALL','TMPDIR','HTTP_PROXY','HTTPS_PROXY','NO_PROXY','NODE_EXTRA_CA_CERTS'].filter(k=>process.env[k]).map(k=>[k,process.env[k]]));
 Object.assign(env,{NPM_CONFIG_CACHE:process.env.NPM_CONFIG_CACHE||join(homedir(),'.npm'),PLAYWRIGHT_BROWSERS_PATH:browserCache,AGENT_DRIVER_SKIP_CONNECT:'1'});
-async function run(command,args,{cwd=repo,environment=env,timeout=360000}={}){
+async function run(command,args,{cwd=repo,environment=env,timeout=600000}={}){
   await appendFile(log,JSON.stringify({command,args,cwd})+'\n');
   return await new Promise((resolveRun,reject)=>{
     const child=spawn(command,args,{cwd,env:environment,stdio:['ignore','pipe','pipe'],detached:true});
-    let output='',timer=setTimeout(()=>{process.kill(-child.pid,'SIGTERM');},timeout);
+    let output='',forced,timedOut=false;
+    const signal=name=>{try{process.kill(-child.pid,name);}catch(error){if(error.code!=='ESRCH')throw error;}};
+    const timer=setTimeout(()=>{timedOut=true;signal('SIGTERM');forced=setTimeout(()=>signal('SIGKILL'),5000);},timeout);
     child.stdout.on('data',b=>{output+=b;});child.stderr.on('data',b=>{output+=b;});
     child.on('error',reject);child.on('close',async code=>{
-      clearTimeout(timer);await appendFile(log,output+'\n');
-      if(code!==0)reject(Error(command+' failed ('+code+'); see '+log));
+      clearTimeout(timer);clearTimeout(forced);await appendFile(log,output+'\n');
+      if(timedOut)reject(Error(command+' timed out; see '+log));
+      else if(code!==0)reject(Error(command+' failed ('+code+'); see '+log));
       else resolveRun(output.trim());
     });
   });

@@ -123,15 +123,20 @@ if [[ "${AGENT_DRIVER_SKIP_BROWSER_INSTALL:-0}" != "1" ]]; then
   say "전용 Chromium 실행 확인"
   if ! (cd "$INSTALL_DIR" && with_selected_node "$node_bin" --input-type=module -e '
     import {chromium} from "playwright";
-    const browser=await chromium.launch({headless:true,timeout:15000});
+    const browser=await chromium.launch({headless:true,timeout:60000}).catch(error=>{
+      console.error(error.name==="TimeoutError"
+        ? "[agent-driver] Chromium 준비 시간이 60초를 초과했습니다. PC 부하를 확인하고 다시 시도하세요."
+        : "[agent-driver] Chromium 시작에 실패했습니다. 시스템 라이브러리와 설치 환경을 확인하세요.");
+      process.exit(1);
+    });
     try {
       const page=await browser.newPage();
-      await page.goto("data:text/html,<title>agent-driver-browser-check</title>",{timeout:5000});
+      await page.goto("data:text/html,<title>agent-driver-browser-check</title>",{timeout:15000});
       if(await page.title()!=="agent-driver-browser-check")throw Error("BROWSER_SMOKE_TITLE_MISMATCH");
     } finally {await browser.close();}
-  ') >/dev/null 2>&1; then
+  ') >/dev/null; then
     printf -v browser_deps_command '%q %q install-deps chromium' "$node_bin" "$INSTALL_DIR/node_modules/playwright/cli.js"
-    fail "Chromium을 실행하지 못했습니다. Ubuntu/WSL 시스템 라이브러리가 부족할 수 있습니다. 필요한 경우 '${browser_deps_command}'를 직접 실행한 뒤 설치를 다시 시도하세요. 이 명령은 시스템 패키지 설치 권한을 요청할 수 있습니다."
+    fail "Chromium 실행 확인에 실패했습니다. 시간 초과이면 PC 부하를 줄인 후 다시 시도하세요. 시스템 라이브러리 문제인 경우 '${browser_deps_command}'를 직접 실행한 뒤 설치를 다시 시도하세요. 이 명령은 시스템 패키지 설치 권한을 요청할 수 있습니다."
   fi
 fi
 
