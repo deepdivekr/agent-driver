@@ -35,6 +35,37 @@ Relevant suites: `runtime-control-action-audit`, `runtime-settings-ui`, `runtime
 
 ## Verification record
 
+### Follow-up: typography and billing direction
+
+- All three Control Center pages use locally bundled Pretendard Variable v1.3.9,
+  with the original OFL license. No font CDN request is made. Desktop/mobile browser
+  tests inspect the actual platform font for Korean headings, not just the CSS name.
+- Left-edge accent bars are removed from shared navigation, Work control notes,
+  coding reconciliation cards and legacy office notices/history. Navigation uses
+  a neutral full border and background; reconciliation keeps a full dashed warning
+  border. Task progress connectors and labelled status badges retain their meaning.
+- Saved and unsaved subscription selection cannot fall through to an ambient API
+  key. Legacy mixed client lists cannot reach an injected API fallback either.
+  Explicit API mode remains supported; opted-in API-to-auth handoff retains each
+  receiving client's saved model, and cannot bounce back to API after auth failure.
+- CLI credentials of unknown billing type are excluded from automatic subscription
+  successors. A user's explicit primary external client retains its own configuration.
+- Returning to the Work board now fetches the current persisted list instead of
+  depending on the next SSE tick.
+- Preserved failed runs: remote CI `36088969838` and local full evidence
+  `runtime-tests-2026-09-25T03-02-08-031Z.json` each recorded 545/547 PASS,
+  with different failures. The remote board test raced the live list update;
+  both runs exposed a missing variable in an isolated rendering test. Local C01
+  additionally returned `paused_dependency` under the full run; its unchanged
+  isolated rerun passed (2/2 including input integrity,
+  `runtime-tests-2026-09-25T03-36-43-456Z.json`). These are not labelled full local success.
+- The first new font endpoint test used Fetch's unsupported Host override and failed
+  to inject a wrong host. It now uses a native HTTP request and checks the same 403
+  requirement. The failed 59/60 run remains in the local evidence.
+- Corrected billing/font/UI/settings/subscription/handoff/import subset:
+  **61/61 PASS**, including input integrity, evidence
+  `tests/evidence/runtime-tests-2026-09-25T03-36-32-682Z.json`.
+
 - Targeted Control Center regression: **73/73 PASS**, including input fingerprint stability. Evidence: `tests/evidence/runtime-tests-2026-09-25T02-58-47-535Z.json`.
 - TypeScript build and whitespace/diff validation passed.
 

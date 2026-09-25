@@ -60,6 +60,7 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   assert.equal((await read()).paused,false);
   await x.page.locator('#back').click();
   await x.page.locator('[data-layout="list"]').click();
+  await x.page.locator('.tile').waitFor();
   assert.equal(await x.page.locator('.tile').count(),1);
   await x.page.locator('#search').fill('없는 업무');
   assert.equal(await x.page.locator('.tile').count(),0);

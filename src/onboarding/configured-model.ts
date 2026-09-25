@@ -14,10 +14,9 @@ export class ConfiguredStructuredModel implements StructuredModel{
   private resolve(){
     const saved=readModelSettings(this.path),environment=effectiveModelEnvironment(saved,this.base);
     const api=()=>this.factories.api?.(environment)??structuredModelFromEnvironment(environment);
-    if(saved?.selection.mode==='api')return api();
-    // Preserve legacy host configuration until the human first saves a selection.
-    let fallbackModel:StructuredModel|undefined;if(!saved)try{fallbackModel=api();}catch{}
-    const options={environment,...(this.sampling?{sampling:this.sampling}:{}),...(fallbackModel?{fallbackModel,fallbackKind:'api_key' as const}:{}),...(this.onHandoff?{onHandoff:this.onHandoff}:{})};
+    if(saved?.selection.mode==='api'||!saved&&environment.AGENT_DRIVER_LLM_CLIENT==='api')return api();
+    // An ambient key is not permission to switch subscription work to paid API calls.
+    const options={environment,...(this.sampling?{sampling:this.sampling}:{}),...(this.onHandoff?{onHandoff:this.onHandoff}:{})};
     return this.factories.subscription?.(options)??subscriptionAwareModelFromHostEnvironment(options,environment);
   }
   async status(){const saved=readModelSettings(this.path);return {...publicModelSettings(saved,this.base),...await subscriptionAwareModelFromHostEnvironment({...(this.sampling?{sampling:this.sampling}:{})},this.environment()).status()};}
@@ -32,7 +31,7 @@ export class ConfiguredStructuredModel implements StructuredModel{
         const connected=['mcp','codex','claude','opencode'];
         const subscribed={...env,AGENT_DRIVER_LLM_CLIENT:saved.selection.client==='auto'?connected.join(','):[saved.selection.client,...connected.filter(client=>client!==saved.selection.client)].join(',')};
         const onHandoff=(event:ClientRouteEvent)=>this.onHandoff?.(event);
-        const options={environment:subscribed,...(this.sampling?{sampling:this.sampling}:{}),onHandoff};
+        const options={environment:subscribed,subscriptionOnly:true,...(this.sampling?{sampling:this.sampling}:{}),onHandoff};
         const alternative=this.factories.subscription?.(options)??subscriptionAwareModelFromHostEnvironment(options,subscribed);
         try{const value=await alternative.call(purpose,instructions,input,schema),target=alternative.calls.findLast(item=>item.status==='accepted');
           if(target&&['mcp_sampling','codex','claude','opencode','cursor'].includes(target.provider??''))this.onHandoff?.({...handoffContext(input),source:'api',target:target.provider==='mcp_sampling'?'mcp':target.provider as ClientRouteEvent['target'],source_model:call?.model??saved.selection.api_model,target_model:target.model,reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});

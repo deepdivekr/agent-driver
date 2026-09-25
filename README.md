@@ -102,7 +102,9 @@ This config works when the client and the server run in the same Ubuntu/WSL envi
 
 ## Control Center walkthrough
 
-`agent-driver connect` opens the **Agent Office Control Center** (the installer runs it for you). It uses the same visual language as the agent-driver run trace: a dark ground, mono-first labels, and one color per decision path. **Amber** is Jev or the step running now, **lilac** is the LLM, **blue** is plain code, **rose** is a person, and **green** means verified. The UI is **English by default**. The flag button in the top-right switches to Korean, and each browser remembers its choice. The page loads no frameworks, web fonts or images, so it stays light on memory and CPU. Longer explanations sit behind a **?** button.
+> Screenshot note: the walkthrough captures predate the locally bundled Pretendard font and the switch from left-edge accents to full borders. Current source applies those styling updates; the setup flow is unchanged.
+
+`agent-driver connect` opens the **Agent Office Control Center** (the installer runs it for you). It uses the same visual language as the agent-driver run trace: a dark ground, mono-first labels, and one color per decision path. **Amber** is Jev or the step running now, **lilac** is the LLM, **blue** is plain code, **rose** is a person, and **green** means verified. The UI is **English by default**. The flag button in the top-right switches to Korean, and each browser remembers its choice. The page uses one locally bundled Pretendard variable font, with no remote font CDN, UI framework, or screen previews. Selected controls use borders and background color instead of left-edge accent bars. Longer explanations sit behind a **?** button.
 
 > These screenshots come from the **real Control Center** on this branch, captured in order on the Ubuntu 24.04 machine used for the terminal run above. The task shown was actually defined by the logged-in Claude Code subscription.
 

@@ -113,6 +113,8 @@ const EN:Record<string,string>={
 'Codex 모델':'Codex model','Claude Code 모델':'Claude Code model','OpenCode 모델':'OpenCode model','클라이언트 기본값':'Client default','모델 목록은 연결된 앱에서 확인합니다. 기본값은 앱 업데이트를 따릅니다.':'Model lists come from the connected apps. Defaults follow app updates.',
 '공급자':'Provider','OpenAI 호환 서버':'OpenAI-compatible server','추론 강도':'Reasoning effort','API 주소':'API base URL','모델':'Model','모델 선택':'Choose a model','현재 모델 목록 새로고침':'Refresh model list','목록에 없는 모델 ID':'Model ID not in the list','직접 입력 시 목록 선택보다 우선':'Overrides the list when filled','API 키':'API key','키 입력':'Enter key',
 'API 사용 요금을 확인했습니다.':'I understand API usage is billed.','API 인증·한도 오류 시 연결된 구독 앱으로 이어가기':'On API auth or quota errors, continue with a connected subscription app','저장된 키 관리':'Manage saved keys','저장된 API 키 삭제':'Delete saved API key',
+'구독 한도를 소진해도 유료 API로 자동 전환하지 않습니다.':'Subscription limits never trigger an automatic switch to a paid API.',
+'업무 목록을 읽지 못했습니다.':'Could not load the work list.',
 '업무 내용을 선택한 AI로 보내 정의·계획하도록 허용':'Allow sending work content to the selected AI to define and plan it',
 '한 줄 업무와 가져온 자료의 요약을 선택한 구독 앱이나 API 모델로 보냅니다. 끄면 업무는 저장되지만 AI 정의 단계에서 멈춥니다. 로컬 runtime-config.json의 work.model_data_approved에 기록됩니다.':'Sends one-line work and summaries of imported material to the selected subscription app or API model. With it off, work is saved but stops at the AI definition step. Stored as work.model_data_approved in the local runtime-config.json.',
 'Jev 연결':'Connect Jev','빠른 반복 판단에 사용합니다. 연결하지 않아도 LLM으로 진행합니다.':'Used for fast repeated judgments. Without it, the LLM decides.','사용 방식':'Mode','자동':'Auto','사용하지 않음':'Off','API 키로 연결':'Connect with API key','TypeSafe / Jev API 키':'TypeSafe / Jev API key','저장된 Jev 키 삭제':'Delete saved Jev key',

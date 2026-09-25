@@ -21,7 +21,7 @@ export class ControlSettings{
   async handle(request:IncomingMessage,response:ServerResponse,suffix:string,host:string){
     if(suffix!=='settings'&&!suffix.startsWith('settings/'))return false;
     const nonce=randomBytes(18).toString('base64url');
-    const send=(status:number,body:unknown,html=false)=>{response.writeHead(status,{'content-type':html?'text/html; charset=utf-8':'application/json; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY','content-security-policy':`default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`});response.end(html?String(body):JSON.stringify(body));};
+    const send=(status:number,body:unknown,html=false)=>{response.writeHead(status,{'content-type':html?'text/html; charset=utf-8':'application/json; charset=utf-8','cache-control':'no-store','referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY','content-security-policy':`default-src 'none'; connect-src 'self'; font-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`});response.end(html?String(body):JSON.stringify(body));};
     try{
       if(request.method==='GET'){
         if(suffix==='settings')send(200,settingsHtml(nonce),true);

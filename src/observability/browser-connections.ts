@@ -21,7 +21,7 @@ export class BrowserConnections {
   async handle(request:IncomingMessage,response:ServerResponse,suffix:string,host:string){
     if(!suffix.startsWith('connections'))return false;
     const nonce=randomBytes(18).toString('base64url');
-    const send=(code:number,body:unknown,html=false)=>{response.writeHead(code,{'Content-Type':html?'text/html; charset=utf-8':'application/json; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':`default-src 'none'; connect-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`});response.end(html?String(body):JSON.stringify(body));};
+    const send=(code:number,body:unknown,html=false)=>{response.writeHead(code,{'Content-Type':html?'text/html; charset=utf-8':'application/json; charset=utf-8','Cache-Control':'no-store','Referrer-Policy':'no-referrer','X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Content-Security-Policy':`default-src 'none'; connect-src 'self'; font-src 'self'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`});response.end(html?String(body):JSON.stringify(body));};
     if(suffix==='connections'&&request.method==='GET'){send(200,connectionHtml(nonce),true);return true;}
     if(suffix==='connections/status'&&request.method==='GET'){
       const vm=this.config.swarm?.visual.owned_vm;send(200,{sites:authSites(this.store,this.config).map(site=>({...site,label:knownLoginSites[site.site as keyof typeof knownLoginSites]?.label??site.site})),vnc:vm?`127.0.0.1:${vm.vnc_port}`:null,profile_preserved:!!vm,login_guaranteed:false});return true;

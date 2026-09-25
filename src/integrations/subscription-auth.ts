@@ -267,7 +267,7 @@ export class McpSamplingStructuredModel implements StructuredModel{
 }
 
 export interface SubscriptionAwareModelOptions {
-  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';onHandoff?:(event:ClientRouteEvent)=>void;
+  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';subscriptionOnly?:boolean;onHandoff?:(event:ClientRouteEvent)=>void;
 }
 export class SubscriptionAwareStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];private statuses=new Map<SubscriptionClientId,{value:SubscriptionClientStatus;observed_at:number}>();
@@ -280,10 +280,12 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
   }
   async status(){
     const clients=await Promise.all((Object.keys(probeSpec) as SubscriptionClientId[]).map(id=>this.clientStatus(id)));
-    return {mcp_sampling:this.options.sampling?.client.available()?'ready':'unavailable',clients,fallback:this.options.fallbackModel?(this.options.fallbackKind??'configured'):'not_configured',credentials_exposed:false};
+    return {mcp_sampling:this.options.sampling?.client.available()?'ready':'unavailable',clients,fallback:this.options.fallbackModel&&(this.options.environment??process.env).AGENT_DRIVER_LLM_CLIENT==='api'?(this.options.fallbackKind??'configured'):'not_configured',credentials_exposed:false};
   }
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
-    const environment=this.options.environment??process.env,preferred=environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor','api'];
+    const environment=this.options.environment??process.env,preferred=environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor'];
+    // Legacy callers can select API explicitly, but no client chain may fall into it.
+    const apiOnly=preferred.length===1&&preferred[0]==='api';
     let failed:{client:HandoffClient;model:string;reason:HandoffReason}|null=null;
     const transferred=(target:HandoffClient,targetModel:string)=>{if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target,source_model:failed.model,target_model:targetModel,reason:failed.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
     for(const id of preferred){
@@ -292,12 +294,15 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
         if(['codex','claude','opencode','cursor'].includes(id)){
           const client=id as Exclude<SubscriptionClientId,'hermes'>,state=await this.clientStatus(client);
           if(state?.status!=='ready'||!state.structured_bridge){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:state?.status==='expired'||state?.status==='signed_out'?'auth_expired':'provider_unavailable'};continue;}
+          // Unknown CLI credentials may be API-backed (e.g. OpenCode); never adopt
+          // them as an automatic subscription successor. Explicit primary use is separate.
+          if((failed||this.options.subscriptionOnly)&&state.auth==='unknown')continue;
           const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let accepted=false,model=client+'-subscription',failureKind:ModelCall['failure_kind']='invalid_output';
           try{const result=await invokeCli(client,environment,this.options.runner??nativeProcessRunner,instructions,input,schema);model=result.model;accepted=true;transferred(client,model);return result.value;}
           catch(error){this.statuses.delete(client);const reason=classifyClientFailure(error);failureKind=reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='provider_unavailable'?'provider_unavailable':'incomplete';failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason};throw error;}
           finally{this.calls.push({purpose,provider:client,auth:'subscription',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
         }
-        if(id==='api'&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);transferred('api',last.model);return value;}
+        if(id==='api'&&apiOnly&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);return value;}
       }catch(error){if(!failed&&id==='mcp')failed={client:'mcp',model:'client_default',reason:classifyClientFailure(error)};continue;}
     }
     if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target:null,source_model:failed.model,target_model:null,reason:failed.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
