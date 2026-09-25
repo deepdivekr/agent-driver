@@ -19,6 +19,8 @@ Connect Agent Office to **Claude Code, Codex, Cursor, OpenCode, or Hermes** and 
 
 > **v0.1.0 support scope:** Ubuntu 24.04 x86_64, and Windows 11 with WSL2 Ubuntu 24.04. Per-feature evidence and the limits of experimental features are listed in the [release readiness record](docs/release-readiness-v0.1.0.md).
 
+> **Release note:** The Agent Office screens shown below are from this branch. The one-line installer is pinned to the existing `v0.1.0` tag and does not yet include these UI changes. They need a separately validated release tag before the screenshots match a fresh stable install.
+
 ---
 
 ## Contents
@@ -173,9 +175,9 @@ After **Done** you land on **Work**. It shows every task, grouped the way the ru
 - **Needs you** (rose)
 - **Running** (amber)
 - **Queued** (gray)
-- **Verified** (green)
+- **Closed work** (completed runs or deliberately stopped work; each item retains its own status)
 
-The sidebar keeps a count for each group. Type a task in one line and press **Submit**. Tick **Guided** to answer the questions that change the result before anything runs. The board shows cards with the pack family and run id. **List** switches to compact rows, and search filters as you type.
+The sidebar keeps a count for each group. Type a task in one line and press **Submit**. Tick **Guided** to answer the questions that change the result before anything runs. The board shows cards with the pack family and Work ID. **List** switches to compact rows, and search filters as you type. A completed run is not, by itself, verification that every Work completion condition was met.
 
 | Board | List |
 |---|---|
@@ -185,13 +187,13 @@ The sidebar keeps a count for each group. Type a task in one line and press **Su
 
 Opening a task shows the same layout as the run-trace storyboard:
 
-- the state badge and the amber run id `#6AB12F3B`
+- the state badge, Work ID, and (when one exists) the current Run ID
 - the request line with a blinking cursor
 - the selected pack pill with its effect scope (`research.search · read-only`)
 
-In this run, the one-line request was defined by Claude Code into a titled task with four completion checks. The left column is the **Run trace**: one node per stage with its objective and owner. Verified stages turn amber, the running stage gets a halo, and a stage waiting on a person turns rose.
+In this example, Claude Code defined a one-line request into a titled task with four completion checks. The left column is the **Run trace**: one node per stage with its objective and owner. Verified stages turn amber, the running stage gets a halo, and a stage waiting on a person turns rose. The pictured stages are all queued; this capture demonstrates the layout, not completed execution or verification. It predates the correction that labels Work and Run IDs separately.
 
-![Work detail: run id #6AB12F3B, request line with cursor, pack research.search · read-only, Run trace with four completion-check stages, and the rose Human control panel](docs/assets/readme/cc-10-work-detail.png)
+![Earlier Work detail preview: request line, research.search · read-only, four queued completion-check stages, and the Human control panel](docs/assets/readme/cc-10-work-detail.png)
 
 ### ③ Human control: pause or redirect a stage
 
@@ -221,9 +223,9 @@ Already-verified results are never rewritten. A read-only run path that can't be
 
 ### Site login, only when needed
 
-Site logins aren't part of setup. When a task reaches a URL that needs a login, only that worker pauses, and the site appears here.
+Site logins aren't part of setup. When a task reaches a URL that needs a login, only that worker pauses, and the site appears here. The image below shows the empty state only; it does not demonstrate a login or handoff. Its initial loading notice was fixed after this capture.
 
-![Site login page: "No site needs a login right now"](docs/assets/readme/cc-12-site-login.png)
+![Earlier site-login empty state: no site needs a login; no login flow is shown](docs/assets/readme/cc-12-site-login.png)
 
 <details>
 <summary>Korean UI and mobile layout</summary>

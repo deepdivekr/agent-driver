@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,readFile,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {loadHostConfig,workModelDataApproved} from '../dist/interface/config.js';
@@ -24,4 +24,21 @@ test('fresh onboarding config asks for AI data consent, then defines Work after 
   const defined=await api.call('runtime_work_define',{work_id:first.work_id});
   assert.equal(defined.status,'ready');assert.equal(calls,1);
   await setWorkModelDataApproval(paths.runtimeConfig,false);assert.equal(workModelDataApproved(config),false);
+  const revoked=await api.call('runtime_work_start',{request_id:'news-after-revocation',prompt:'내일 AI 뉴스 5건을 정리해줘'});
+  assert.equal(revoked.status,'needs_model');assert.equal(revoked.reason,'MODEL_DATA_APPROVAL_REQUIRED');assert.equal(calls,1);
+});
+
+test('Work approval revocation overrides legacy approvals and a missing config fails closed',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'driver-work-revoke-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const paths=await prepareLocalConnection(root),path=paths.runtimeConfig,config=loadHostConfig(path);
+  const raw=JSON.parse(await readFile(path,'utf8'));
+  raw.coding={projects:[{id:'sample',root,allow_write:false,allow_commit:false,verify:[]}],model_data_approved:true};
+  await writeFile(path,JSON.stringify(raw));
+  assert.equal(workModelDataApproved(config),true,'legacy consent remains compatible until explicitly changed');
+  await writeFile(path,JSON.stringify({...raw,work:{model_data_approved:false}}));
+  assert.equal(workModelDataApproved(config),false,'explicit Work revocation wins over stale in-memory and legacy approval');
+  await writeFile(path,JSON.stringify({coding:{model_data_approved:true}}));
+  assert.equal(workModelDataApproved(config),false,'an invalid live config must not authorize model data access');
+  await rm(path);
+  assert.equal(workModelDataApproved(config),false,'unreadable live consent must not fall back to stale approval');
 });

@@ -4,7 +4,7 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
-'전체':'All','확인 필요':'Needs you','진행 중':'Running','대기':'Queued','완료':'Done','검증 완료':'Verified','가져오기':'Import','사이트 로그인':'Site login','연결 및 설정':'Connections & settings','메뉴':'Menu',
+'전체':'All','확인 필요':'Needs you','진행 중':'Running','대기':'Queued','완료':'Done','검증 완료':'Verified','종료된 업무':'Closed work','가져오기':'Import','사이트 로그인':'Site login','연결 및 설정':'Connections & settings','메뉴':'Menu',
 '닫기':'Close','설명':'About','설명 보기':'Show explanation','저장':'Save','다음':'Next','다시 확인':'Check again','다시 시도':'Retry','보드':'Board','목록':'List','보기 방식':'View','업무 검색':'Search work',
 '전체 업무':'All work','업무 상세':'Work detail','업무 현황':'Work','새 업무 맡기기':'Assign new work','한 줄로 어떤 업무를 맡길까요?':'What should the agent do? One line is enough.','업무 접수':'Submit',
 '심화 · 결과에 중요한 조건을 먼저 선택':'Guided · choose the conditions that matter first','기존 업무 가져오기':'Import existing work','업무 불러오는 중…':'Loading work…',

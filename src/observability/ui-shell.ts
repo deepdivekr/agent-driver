@@ -49,7 +49,7 @@ export function sidebarHtml(page:ShellPage){
 <a class="nav" href="./?view=attention" data-view="attention">확인 필요<span class="n warn" data-count="attention"></span></a>
 <a class="nav" href="./?view=active" data-view="active">진행 중<span class="n" data-count="active"></span></a>
 <a class="nav" href="./?view=waiting" data-view="waiting">대기<span class="n" data-count="waiting"></span></a>
-<a class="nav" href="./?view=done" data-view="done">검증 완료<span class="n" data-count="done"></span></a>
+<a class="nav" href="./?view=done" data-view="done">종료된 업무<span class="n" data-count="done"></span></a>
 <div class="sec">tools</div>
 <a class="nav" href="./?import=1" data-nav="import">가져오기</a>
 <a class="nav" id="connections" href="connections"${current('connections')}>사이트 로그인</a>

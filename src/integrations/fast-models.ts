@@ -14,17 +14,15 @@ function best(ids:readonly string[],pattern:RegExp,alias:(id:string)=>boolean=()
 const openAiFast=(ids:readonly string[],prefix='')=>best(ids,new RegExp(`^${prefix}gpt-(\\d+(?:\\.\\d+)?)-luna$`,'u'))??best(ids,new RegExp(`^${prefix}gpt-(\\d+(?:\\.\\d+)?)-mini$`,'u'));
 const anthropicFast=(ids:readonly string[],prefix='')=>best(ids,new RegExp(`^${prefix}claude-haiku-(\\d+(?:[.-]\\d+)?)(?:-\\d{8})?$`,'u'),id=>!/-\d{8}$/u.test(id));
 
-/** Picks the newest luna-class model a live catalog offers; falls back to the pinned default when it is listed or no list is known. */
+/** Picks the newest luna-class model a live catalog offers; never invents an unavailable model. */
 export function preferredFastModel(provider:ApiProvider,ids:readonly string[]):string{
   const picked=provider==='openai'?openAiFast(ids):provider==='anthropic'?anthropicFast(ids):provider==='openrouter'?openAiFast(ids,'openai/')??anthropicFast(ids,'anthropic/'):null;
   if(picked)return picked;
   const fallback=FAST_MODEL_DEFAULTS[provider];
-  return ids.length===0||ids.includes(fallback)?fallback:provider==='openai_compatible'?ids[0]!:fallback;
+  return ids.length===0||ids.includes(fallback)?fallback:'';
 }
-const fastPattern=/(?:^|\/)(?:gpt-\d+(?:\.\d+)?-(?:luna|mini)|claude-haiku-[\d.-]+)$/u;
-/** Keeps a deliberate non-fast choice; moves an empty, unlisted or older fast-tier choice to the newest fast model. */
+/** A saved choice is deliberate; catalog refresh only recommends a fast model before one is chosen. */
 export function selectedFastModel(provider:ApiProvider,ids:readonly string[],current:string){
-  const preferred=preferredFastModel(provider,ids);
-  if(!current||(ids.length>0&&!ids.includes(current))||fastPattern.test(current))return preferred||current;
-  return current;
+  if(ids.length>0&&current===FAST_MODEL_DEFAULTS[provider]&&!ids.includes(current))return preferredFastModel(provider,ids);
+  return current||preferredFastModel(provider,ids);
 }

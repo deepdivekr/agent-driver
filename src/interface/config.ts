@@ -124,6 +124,11 @@ export function loadHostConfig(path:string):HostConfig {
 }
 /** Work-definition consent is read from disk on each use so a running MCP server or Control Center sees a new approval without restart. */
 export function workModelDataApproved(config:Pick<HostConfig,'path'|'swarm'|'packs'|'coding'|'work'>):boolean{
-  if(config.swarm?.model_data_approved||config.packs?.model_data_approved||config.coding?.model_data_approved)return true;
-  try{const raw=JSON.parse(readFileSync(config.path,'utf8')) as {work?:unknown};return WorkConfigSchema.optional().parse(raw.work)?.model_data_approved===true;}catch{return config.work?.model_data_approved===true;}
+  try{
+    const raw=HostConfigSchema.parse(JSON.parse(readFileSync(config.path,'utf8')));
+    // Explicit Work consent (including revocation) takes precedence over older Pack/Swarm/Coding approvals.
+    if(raw.work!==undefined)return raw.work.model_data_approved===true;
+    // Preserve existing installations that approved model access before the Work-specific switch existed.
+    return Boolean(raw.swarm?.model_data_approved||raw.packs?.model_data_approved||raw.coding?.model_data_approved);
+  }catch{return false;}
 }
