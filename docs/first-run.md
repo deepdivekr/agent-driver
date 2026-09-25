@@ -9,7 +9,7 @@ Agent Driver의 설치 경험은 사용자가 Pack, registry, GitHub 경로, MCP
 직접 설치할 때는 Ubuntu/WSL 터미널에서 다음 한 줄을 실행한다.
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.0/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.1/install.sh | bash'
 ```
 
 bootstrap은 홈 디렉터리 안에 고정 Node/npm 런타임과 저장소를 준비하고, 의존성·빌드·Chromium·절대경로 launcher를 설치한 다음 `agent-driver connect`를 실행한다. 기존 비관리 경로, symlink, 수정된 checkout은 덮어쓰지 않는다. 관제센터 주소가 터미널에 표시되고, 브라우저를 열 수 있는 환경에서는 화면도 자동으로 열린다. 이후 관제센터에서 client 설치·인증·MCP 등록·모델 설정을 이어간다.

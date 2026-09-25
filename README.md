@@ -9,7 +9,7 @@
 <sub>Repository and CLI name: <code>agent-driver</code></sub>
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.1.0-informational)
+![Version](https://img.shields.io/badge/version-v0.1.1-informational)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%2024.04%20%7C%20WSL2-orange)
 ![MCP](https://img.shields.io/badge/MCP-stdio-8A2BE2)
 
@@ -17,9 +17,9 @@
 
 Connect Agent Office to **Claude Code, Codex, Cursor, OpenCode, or Hermes** and let them research the web, fill forms, collect files, and drive coding work. Browser work runs in a separate browser, not the one you're using. Every step is written to local SQLite so an interrupted task can resume where it stopped. Nothing touches your own mouse or open tabs.
 
-> **v0.1.0 support scope:** Ubuntu 24.04 x86_64, and Windows 11 with WSL2 Ubuntu 24.04. Per-feature evidence and the limits of experimental features are listed in the [release readiness record](docs/release-readiness-v0.1.0.md).
+> **v0.1.1 support scope:** Ubuntu 24.04 x86_64, and Windows 11 with WSL2 Ubuntu 24.04. Per-feature evidence and experimental limits are listed in the [release readiness record](docs/release-readiness-v0.1.1.md).
 
-> **Release note:** The Agent Office screens shown below are from this branch. The one-line installer is pinned to the existing `v0.1.0` tag and does not yet include these UI changes. They need a separately validated release tag before the screenshots match a fresh stable install.
+> **v0.1.1:** The installer includes Agent Office, bundled Pretendard, the Control Center fixes, and the guard against automatic subscription-to-paid-API fallback. [Release notes](docs/releases/v0.1.1.md).
 
 ---
 
@@ -48,10 +48,10 @@ Paste this into Claude Code, Codex, or another agent:
 Run this once in an Ubuntu or WSL2 Ubuntu terminal:
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.0/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.1/install.sh | bash'
 ```
 
-Here is a real run of that command on a clean Ubuntu 24.04 x86_64 machine. It finished in **16 seconds** with exit code 0:
+This historical v0.1.0 installation capture shows the same setup stages on Ubuntu 24.04 x86_64. It finished in **16 seconds** with exit code 0; it is not a v0.1.1 timing measurement:
 
 ![Terminal: running the one-line installer on Ubuntu 24.04, from Node.js setup to "control_center_ready"](docs/assets/readme/terminal-install.png)
 
@@ -68,6 +68,10 @@ Here is a real run of that command on a clean Ubuntu 24.04 x86_64 machine. It fi
 | Control Center | Starts on `127.0.0.1` with a one-time capability URL and opens in your browser when possible. |
 
 The installer never runs `sudo` or installs system packages. It won't overwrite unmanaged folders, symlinks, or modified installs. To review the script before running it, download [install.sh](install.sh) first.
+
+### Update an existing install
+
+Finish active work, stop the Agent Driver MCP connections and Control Center process, then run the same command above. The installer updates only its managed source directory; settings and Work data under `~/.agent-driver` remain in place. Reconnect MCP afterward so it loads the new code. Already-running processes are not upgraded or terminated automatically.
 
 ### Verify the connection
 
@@ -244,7 +248,7 @@ Site logins aren't part of setup. When a task reaches a URL that needs a login, 
 
 ### Task Packs
 
-A Task Pack bundles a task's inputs, execution order, and how its result is verified. v0.1.0 ships nine pack families:
+A Task Pack bundles a task's inputs, execution order, and how its result is verified. v0.1.1 ships nine pack families:
 
 | Task | Example | Pack family |
 |---|---|---|
@@ -274,7 +278,7 @@ Counted from a live `tools/list` call against the install above:
 | **Tasks and recovery** | `runtime_task_*`, `runtime_recovery_*` (7) | Take in a task, start, cancel, resume, and prepare recovery with a generation check |
 | **Ops** | health, storage, events, artifacts, capabilities, decision, channel, activity (13) | Check health and storage, prune, read and ack events, list artifacts, report activity, and check Decision Plane status |
 
-`runtime_browser_session_open` and `runtime_browser_session_status` are placeholders in v0.1.0. They return a typed "not implemented" error.
+`runtime_browser_session_open` and `runtime_browser_session_status` remain placeholders in v0.1.1. They return a typed "not implemented" error.
 
 ### Coding work
 
