@@ -29,10 +29,11 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   await x.page.locator('#submit-work').click();
   await x.page.locator('#retry-define').waitFor();
   assert.equal(await x.page.locator('#allow-ai-data').count(),0);
-  assert.equal(await x.page.locator('#jev-cost').isDisabled(),true);
+  assert.equal(await x.page.locator('#jev-cost').count(),0,'new Work delegates to Pack settings without a second cost choice');
+  assert.equal(await x.page.locator('.jev-policy').innerText(),'Task Pack 설정 사용');
   assert.equal(await x.page.locator('#jev-toggle').isDisabled(),true);
   // Even a stale/scripted change event must not turn an unavailable action on.
-  await x.page.locator('#jev-cost').evaluate(el=>{el.checked=true;el.dispatchEvent(new Event('change',{bubbles:true}));});
+  await x.page.locator('#jev-toggle').evaluate(el=>el.dispatchEvent(new Event('click',{bubbles:true})));
   assert.equal(await x.page.locator('#jev-toggle').isDisabled(),true);
   release();
   await x.page.locator('#allow-ai-data').waitFor();
@@ -41,6 +42,11 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   const workId=new URL(x.page.url()).searchParams.get('work');
   const read=async()=>await (await fetch(x.server.url+'work/detail?id='+encodeURIComponent(workId))).json();
   assert.equal((await read()).work_status,'ready');
+  assert.equal((await read()).jev.enabled,null);
+  assert.equal(await x.page.locator('#jev-toggle').isDisabled(),false);
+  await x.page.locator('#jev-toggle').click();
+  await x.page.getByRole('button',{name:'Jev 켜기',exact:true}).waitFor();
+  assert.equal((await read()).jev.enabled,false,'explicit opt-out must persist');
   assert.equal(await x.page.locator('#jev-toggle').isDisabled(),true);
   await x.page.locator('#jev-cost').check();
   await x.page.evaluate(()=>loadDetail());
