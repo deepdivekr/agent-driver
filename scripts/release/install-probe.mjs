@@ -13,7 +13,10 @@ const paths=await prepareLocalConnection(stateRoot);
 if(mode==='seed'){
   await approveNonInterferingConnection(stateRoot);
   const raw=JSON.parse(await readFile(paths.runtimeConfig,'utf8'));
-  raw.work={model_data_approved:true};
+  // v0.1.0 predates the explicit Work consent section; use its existing
+  // swarm consent contract when seeding an old-version database.
+  if(expectedVersion==='0.1.0')delete raw.work;
+  else raw.work={model_data_approved:true};
   raw.swarm={enabled:true,model_data_approved:true};
   await writeFile(paths.runtimeConfig,JSON.stringify(raw)+'\n',{mode:0o600});
 }
