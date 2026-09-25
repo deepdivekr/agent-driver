@@ -64,6 +64,13 @@ export async function prepareLocalConnection(root=connectionRoot()){
   try{await writeFile(paths.runtimeConfig,JSON.stringify(runtimeConfig,null,2)+'\n',{mode:0o600,flag:'wx'});}catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
   return paths;
 }
+/** Records the human's AI data consent in the local runtime-config.json `work` section; other host settings are preserved verbatim. */
+export async function setWorkModelDataApproval(configPath:string,approved:boolean,now=new Date()){
+  const current=JSON.parse(readFileSync(configPath,'utf8')) as Record<string,unknown>;
+  requireCondition(current&&typeof current==='object'&&!Array.isArray(current)&&current.schema_version===1,'RUNTIME_CONFIG_INVALID');
+  const next={...current,work:approved?{model_data_approved:true,approved_at:now.toISOString()}:{model_data_approved:false}};
+  await writePrivateJson(configPath,next);return next.work;
+}
 export function readLocalConnection(root=connectionRoot()):LocalConnectionState|null {
   const path=localConnectionPaths(root).state;if(!existsSync(path))return null;
   return localConnectionState.parse(JSON.parse(readFileSync(path,'utf8')));

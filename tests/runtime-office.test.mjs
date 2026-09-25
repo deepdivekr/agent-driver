@@ -10,6 +10,7 @@ import {PackStore} from '../dist/packs/store.js';
 import {SwarmRuntime} from '../dist/swarm/runtime.js';
 import {readControlCenter,startControlCenter} from '../dist/observability/control-center.js';
 import {readOffice} from '../dist/observability/office.js';
+const koPage=async(browser,options)=>{const page=await browser.newPage(options);await page.addInitScript(()=>{try{localStorage.setItem('office-lang','ko')}catch{}});return page;};
 
 async function setup(t){const root=await mkdtemp(join(tmpdir(),'driver-office-')),path=join(root,'host.json');await writeFile(path,JSON.stringify({schema_version:1,project_id:'office-project',caller_ref:'local-agent',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',terminal:{executable:process.execPath,version:'2.1.126',tools:[]},packs:{sources:[],targets:[],models:'off',model_data_approved:false},swarm:{enabled:true,model_data_approved:true}}));const config=loadHostConfig(path),store=new PackStore(config.dbPath);store.registerProject(config.project);t.after(async()=>{store.close();await rm(root,{recursive:true,force:true})});return {config,store,swarm:new SwarmRuntime(store,config)};}
 function fixture(){const now=new Date().toISOString(),source={id:'source',role:'Researcher',objective:'Read public sources',stage:'source_read',source_urls:[],executor:'sub_agent',depends_on:[],required_capabilities:[],effect:'read_only',completion_evidence:['source checked'],max_steps:5,timeout_ms:60000},write={...source,id:'write',role:'Writer',objective:'Create a card news item',stage:'synthesis',depends_on:['source'],completion_evidence:['card news'],source_urls:[]},plan={format:1,plan_id:'11111111-1111-4111-8111-111111111111',goal:'Create a card news item',summary:'Research and write',workers:[source,write],planner:{kind:'llm',model:'fixture',input_sha256:'a'.repeat(64)},max_concurrency:2,research_mode:null,execution_profile:null,created_at:now,execution_authority:false,approval_granted:false};return {format:1,run_id:'22222222-2222-4222-8222-222222222222',request_id:'office-case',plan,revision:0,status:'running',workers:Object.fromEntries(plan.workers.map(worker=>[worker.id,{id:worker.id,status:'pending',attempts:0,lease_token:null,lease_expires_at_ms:null,result:null,quality:null}])),mode:null,started_at_ms:Date.now(),target_deadline_at_ms:null,hard_deadline_at_ms:null,synthesis_reserve_ms:0,reviews:[],decision_events:[],created_at:now,updated_at:now,execution_authority:false,approval_granted:false};}
@@ -29,7 +30,7 @@ test('minimal Work detail edits a future stage without losing draft, desktop and
   const x=await setup(t),run=begin(x),server=await startControlCenter(x.config,{poll_ms:25}),browser=await chromium.launch({headless:true});
   t.after(async()=>{await browser.close();await server.close()});
   for(const width of [1280,390]){
-    const page=await browser.newPage({viewport:{width,height:900}}),errors=[];
+    const page=await koPage(browser,{viewport:{width,height:900}}),errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(server.url+'?work=swarm:'+run.run_id);
     await page.getByRole('heading',{name:'진행 단계'}).waitFor();
@@ -57,7 +58,7 @@ test('board uses a short Work title and detail retains the full instruction',asy
   x.store.beginSwarmRun(x.config.project.id,run.request_id,run.plan.plan_id,run,x.config.fingerprint);
   const server=await startControlCenter(x.config),browser=await chromium.launch({headless:true});
   t.after(async()=>{await browser.close();await server.close()});
-  const page=await browser.newPage({viewport:{width:1280,height:800}});
+  const page=await koPage(browser,{viewport:{width:1280,height:800}});
   await page.goto(server.url);
   await page.locator('.tile strong').waitFor();
   const short=await page.locator('.tile strong').textContent();
@@ -76,7 +77,7 @@ test('editing a pending step rejects already started descendants',async t=>{cons
 test('minimal Work desk shows live stage truth without visual previews or invented completion',async t=>{
   const x=await setup(t),run=begin(x),server=await startControlCenter(x.config),browser=await chromium.launch({headless:true});
   t.after(async()=>{await browser.close();await server.close()});
-  const page=await browser.newPage({viewport:{width:1280,height:850}});
+  const page=await koPage(browser,{viewport:{width:1280,height:850}});
   await page.goto(server.url);
   await page.locator('.tile').waitFor();
   assert.equal(await page.locator('.tile').count(),1);
@@ -92,7 +93,7 @@ test('minimal Work desk shows live stage truth without visual previews or invent
 test('one-line dashboard intake opens the new Work without a preview or horizontal overflow',async t=>{
   const x=await setup(t),fake={calls:[],async call(){return {title:'도쿄 호텔 검색',desired_outcome:'조건에 맞는 숙소 후보를 찾는다',completion_checks:[{id:'candidates',result:'숙소 후보를 확인한다',evidence:'출처와 조회 시각'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
   const server=await startControlCenter(x.config,{workModel:fake}),browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close()});
-  const page=await browser.newPage({viewport:{width:390,height:850}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
+  const page=await koPage(browser,{viewport:{width:390,height:850}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(server.url);
   await page.getByPlaceholder('한 줄로 어떤 업무를 맡길까요?').fill('도쿄 호텔 찾아줘');
   await page.getByRole('button',{name:'업무 접수'}).click();
@@ -106,7 +107,7 @@ test('one-line dashboard intake opens the new Work without a preview or horizont
 test('dashboard can retry the same durable Work after a model interruption',async t=>{
   const x=await setup(t);let calls=0;const fake={calls:[],async call(){if(++calls===1)throw Error('model offline');return {title:'복구된 업무',desired_outcome:'자료를 확인한다',completion_checks:[{id:'readback',result:'자료 확인',evidence:'출처와 시각'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
   const server=await startControlCenter(x.config,{workModel:fake}),browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close()});
-  const page=await browser.newPage();await page.goto(server.url);
+  const page=await koPage(browser);await page.goto(server.url);
   await page.getByPlaceholder('한 줄로 어떤 업무를 맡길까요?').fill('자료 확인해줘');
   await page.getByRole('button',{name:'업무 접수'}).click();
   await page.getByRole('button',{name:'업무 정의 재시도'}).waitFor();

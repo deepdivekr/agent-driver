@@ -92,7 +92,7 @@ const clientExecutable=resolveSubscriptionClientExecutable;
 const expiredPattern=/\b(?:expired|expiration|refresh token (?:is )?invalid|session (?:is )?no longer valid)\b/iu;
 const probeSpec:Record<SubscriptionClientId,{args:string[]|null;parse:(text:string)=>Omit<SubscriptionClientStatus,'id'|'structured_bridge'>;structured:boolean}>={
   codex:{args:['login','status'],structured:true,parse:text=>/Logged in using ChatGPT/iu.test(text)?{status:'ready',auth:'subscription',reason:'client_reported_ready'}:expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:/not logged in|login required/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
-  claude:{args:['auth','status'],structured:true,parse:text=>{try{const value=JSON.parse(text) as {loggedIn?:unknown;authMethod?:unknown;subscriptionType?:unknown;error?:unknown;status?:unknown};if(value.loggedIn===true)return {status:'ready',auth:value.authMethod==='claude.ai'||typeof value.subscriptionType==='string'?'subscription':'oauth',reason:'client_reported_ready'};if(value.loggedIn===false){const detail=[value.error,value.status].filter(item=>typeof item==='string').join(' ');return expiredPattern.test(detail)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}}catch{}return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}},
+  claude:{args:['auth','status'],structured:true,parse:text=>{try{const value=JSON.parse(text) as {loggedIn?:unknown;authMethod?:unknown;subscriptionType?:unknown;error?:unknown;status?:unknown};if(value.loggedIn===true){const subscription=value.authMethod==='claude.ai'||value.authMethod===undefined&&typeof value.subscriptionType==='string'&&['pro','max','team','enterprise'].includes(value.subscriptionType.toLowerCase());return {status:subscription?'ready':'unknown',auth:subscription?'subscription':'unknown',reason:subscription?'client_reported_ready':'client_auth_not_subscription'};}if(value.loggedIn===false){const detail=[value.error,value.status].filter(item=>typeof item==='string').join(' ');return expiredPattern.test(detail)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}}catch{}return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}},
   opencode:{args:['auth','list','--format','json'],structured:true,parse:text=>{try{const value=JSON.parse(text) as unknown;const count=Array.isArray(value)?value.length:value&&typeof value==='object'?Object.keys(value).length:0;return count>0?{status:'ready',auth:'unknown',reason:'client_reported_ready'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}catch{return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}}},
   cursor:{args:null,structured:false,parse:()=>({status:'unavailable',auth:'unknown',reason:'status_contract_unavailable'})},
   hermes:{args:['proxy','status'],structured:false,parse:text=>/\[[^\]]+\][^\r\n]*logged in/iu.test(text)&&!/not logged in/iu.test(text)?{status:'ready',auth:'oauth',reason:'oauth_proxy_ready'}:/not logged in/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'proxy_upstreams_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
@@ -267,7 +267,7 @@ export class McpSamplingStructuredModel implements StructuredModel{
 }
 
 export interface SubscriptionAwareModelOptions {
-  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';onHandoff?:(event:ClientRouteEvent)=>void;
+  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';subscriptionOnly?:boolean;onHandoff?:(event:ClientRouteEvent)=>void;
 }
 export class SubscriptionAwareStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];private statuses=new Map<SubscriptionClientId,{value:SubscriptionClientStatus;observed_at:number}>();
@@ -280,10 +280,12 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
   }
   async status(){
     const clients=await Promise.all((Object.keys(probeSpec) as SubscriptionClientId[]).map(id=>this.clientStatus(id)));
-    return {mcp_sampling:this.options.sampling?.client.available()?'ready':'unavailable',clients,fallback:this.options.fallbackModel?(this.options.fallbackKind??'configured'):'not_configured',credentials_exposed:false};
+    return {mcp_sampling:this.options.sampling?.client.available()?'ready':'unavailable',clients,fallback:this.options.fallbackModel&&(this.options.environment??process.env).AGENT_DRIVER_LLM_CLIENT==='api'?(this.options.fallbackKind??'configured'):'not_configured',credentials_exposed:false};
   }
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
-    const environment=this.options.environment??process.env,preferred=environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor','api'];
+    const environment=this.options.environment??process.env,preferred=environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor'];
+    // Legacy callers can select API explicitly, but no client chain may fall into it.
+    const apiOnly=preferred.length===1&&preferred[0]==='api';
     let failed:{client:HandoffClient;model:string;reason:HandoffReason}|null=null;
     const transferred=(target:HandoffClient,targetModel:string)=>{if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target,source_model:failed.model,target_model:targetModel,reason:failed.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
     for(const id of preferred){
@@ -292,12 +294,15 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
         if(['codex','claude','opencode','cursor'].includes(id)){
           const client=id as Exclude<SubscriptionClientId,'hermes'>,state=await this.clientStatus(client);
           if(state?.status!=='ready'||!state.structured_bridge){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:state?.status==='expired'||state?.status==='signed_out'?'auth_expired':'provider_unavailable'};continue;}
+          // Unknown CLI credentials may be API-backed (e.g. OpenCode); never adopt
+          // them as an automatic subscription successor. Explicit primary use is separate.
+          if(state.auth==='unknown'&&(client!=='opencode'||failed||this.options.subscriptionOnly)){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:'provider_unavailable'};continue;}
           const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let accepted=false,model=client+'-subscription',failureKind:ModelCall['failure_kind']='invalid_output';
           try{const result=await invokeCli(client,environment,this.options.runner??nativeProcessRunner,instructions,input,schema);model=result.model;accepted=true;transferred(client,model);return result.value;}
           catch(error){this.statuses.delete(client);const reason=classifyClientFailure(error);failureKind=reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='provider_unavailable'?'provider_unavailable':'incomplete';failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason};throw error;}
           finally{this.calls.push({purpose,provider:client,auth:'subscription',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
         }
-        if(id==='api'&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);transferred('api',last.model);return value;}
+        if(id==='api'&&apiOnly&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);return value;}
       }catch(error){if(!failed&&id==='mcp')failed={client:'mcp',model:'client_default',reason:classifyClientFailure(error)};continue;}
     }
     if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target:null,source_model:failed.model,target_model:null,reason:failed.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});

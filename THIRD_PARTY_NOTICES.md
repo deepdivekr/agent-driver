@@ -6,6 +6,13 @@ The public source export does not vendor `node_modules`, browser binaries, VM im
 
 ## Direct public-package dependencies
 
+### Bundled typeface
+
+The Control Center includes the unmodified Pretendard Variable v1.3.9 WOFF2
+by Kil Hyung-jin, under SIL Open Font License 1.1 (not Apache-2.0).
+See [the font license](assets/fonts/OFL.txt) and [source provenance](assets/fonts/README.md).
+It is served locally; opening the Control Center does not contact a font CDN.
+
 This inventory was checked against the installed package metadata and lockfile on 2026-09-23. It is not a replacement for the license text shipped by each package.
 
 | Package | Version | License | Upstream |

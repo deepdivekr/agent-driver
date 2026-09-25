@@ -1,6 +1,6 @@
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
-import {type HostConfig} from '../interface/config.js';
+import {type HostConfig,workModelDataApproved} from '../interface/config.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {requireCondition} from '../core/contracts.js';
 import {type WorkMode,type WorkProposal,validateWorkProposal,workAnswerSchema,workDefineSchema,workJevSchema,workListSchema,workPauseSchema,workProposalSchema,workStartSchema,workStatusSchema} from './contracts.js';
@@ -29,7 +29,7 @@ export class WorkRuntime {
     const owner=this.store.claimWorkDefinition(project,work_id);
     if(!owner)return this.public(this.store.intakeWork(project,work_id));
     try{
-      requireCondition(Boolean(this.config.swarm?.model_data_approved||this.config.packs?.model_data_approved||this.config.coding?.model_data_approved),'MODEL_DATA_APPROVAL_REQUIRED');
+      if(!workModelDataApproved(this.config))return this.public(this.store.failWorkDefinition(project,work_id,owner),'MODEL_DATA_APPROVAL_REQUIRED');
       const previous=work.spec as WorkProposal|null;
       const input={work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:previous,user_directions:this.store.workDirections(project,work_id),connected_sources:this.config.packs?.sources.map(source=>source.id)??[],connected_targets:this.config.packs?.targets.map(target=>target.id)??[],coding_projects:this.config.coding?.projects.map(item=>item.id)??[]};
       const rawProposal=await this.model.call('design',WORK_DEFINITION_INSTRUCTIONS+'\nIf user_directions are present, the latest explicit user direction supersedes the original output form. Revise outcome and completion checks accordingly; preserve unrelated verified requirements.',input,z.toJSONSchema(workProposalSchema));

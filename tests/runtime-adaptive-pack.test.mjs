@@ -106,7 +106,7 @@ test('runtime fixture adaptive flow skips absent Jev and goes directly from LLM 
 test('runtime contract adaptive Luna adapter preserves model low effort and rejects incomplete output without leaking credentials',async()=>{
   const key='fixture-private-key-only-for-test';let request;
   const model=adaptiveLlmFromHostEnvironment({OPENAI_API_KEY:key},async(_url,options)=>{request=JSON.parse(options.body);return new Response(JSON.stringify({status:'completed',output:[{type:'message',content:[{type:'output_text',text:JSON.stringify(spec)}]}],usage:{input_tokens:123,output_tokens:45,total_tokens:168}}));});
-  assert.deepEqual(await model.call('design','instructions',{},{}),spec);assert.equal(request.model,'gpt-5.6-luna');assert.equal(request.reasoning.effort,'low');assert.equal(request.store,false);assert.deepEqual(request.tools,[]);assert.equal(model.calls[0].input_tokens,123);assert.equal(model.calls[0].total_tokens,168);assert.equal(JSON.stringify(model.calls).includes(key),false);
+  assert.deepEqual(await model.call('design','instructions',{},{}),spec);assert.equal(request.model,'gpt-6-luna');assert.equal(request.reasoning.effort,'low');assert.equal(request.store,false);assert.deepEqual(request.tools,[]);assert.equal(model.calls[0].input_tokens,123);assert.equal(model.calls[0].total_tokens,168);assert.equal(JSON.stringify(model.calls).includes(key),false);
   const failed=adaptiveLlmFromHostEnvironment({OPENAI_API_KEY:key},async()=>new Response(JSON.stringify({status:'incomplete',output:[]})));
   await assert.rejects(failed.call('design','instructions',{},{}),/ADAPTIVE_LLM_UNAVAILABLE/);assert.equal(failed.calls[0].status,'failed');
   const message=(phase,text)=>({type:'message',phase,content:[{type:'output_text',text:JSON.stringify(text)}]});

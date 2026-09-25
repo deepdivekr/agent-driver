@@ -6,6 +6,7 @@ import {type HostConfig} from '../interface/config.js';
 import {requireCondition} from '../core/contracts.js';
 import {normalizeCompatibleBaseUrl,type ApiProvider} from '../integrations/model-provider.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
+import {FAST_MODEL_DEFAULTS} from '../integrations/fast-models.js';
 
 const modelId=z.string().min(1).max(200).refine(value=>!/[\s\x00-\x1f]/u.test(value)&&!/^(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})$/u.test(value));
 const key=z.string().min(16).max(4096).refine(value=>!/[\s\x00-\x1f]/u.test(value));
@@ -49,7 +50,7 @@ export function publicModelSettings(saved:ModelSettings|null,base:NodeJS.Process
   const defaultProvider=(base.AGENT_DRIVER_API_PROVIDER??'openai') as ApiProvider;
   const present=Boolean(env.AGENT_DRIVER_API_KEY||(defaultProvider==='openai'?env.OPENAI_API_KEY:defaultProvider==='anthropic'?env.ANTHROPIC_API_KEY:defaultProvider==='openrouter'?env.OPENROUTER_API_KEY:undefined));
   const verified=Boolean(saved?.api_verification&&saved.api_verification.fingerprint===modelSettingsFingerprint(saved,base));
-  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:base.AGENT_DRIVER_LLM_CLIENT==='api'?'api':'subscription',client:'auto',client_models:{codex:null,claude:null,opencode:null},api_to_subscription:false,api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??'gpt-5.6-luna',api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
+  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:base.AGENT_DRIVER_LLM_CLIENT==='api'?'api':'subscription',client:'auto',client_models:{codex:null,claude:null,opencode:null},api_to_subscription:false,api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??FAST_MODEL_DEFAULTS[defaultProvider],api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
     api_key_present:present,api_key_stored:Boolean(saved?.api_key??saved?.openai_key),openai_key_present:present,openai_key_stored:Boolean(saved?.api_key??saved?.openai_key),jev_key_present:Boolean(env.TYPESAFE_API_KEY),jev_key_stored:Boolean(saved?.jev_key),
     api_connection:verified?'ready':'unchecked',api_verified_at:verified?saved!.api_verification!.verified_at:null,
     applies_to:'next_model_call',in_flight_calls:'unchanged',external_worker_models:'client_managed',credentials_exposed:false,storage:'local_private_file'};

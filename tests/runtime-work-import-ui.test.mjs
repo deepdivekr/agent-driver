@@ -97,7 +97,7 @@ test('Jev point and its reason use readable, escaped text in both import preview
   const detailFragment=script.slice(script.indexOf('function renderDetail'),script.indexOf('function render(){'));
   const app={innerHTML:'',querySelectorAll:()=>[]};
   const detail={id:'11111111-1111-4111-8111-111111111111',title:'메시지 검토',goal:'메시지 확인',prompt:'메시지 확인',work_status:'ready',run_status:null,spec:{completion_checks:[]},stages:[],progress_percent:null,control:null,work_control:null,jev:{enabled:false,can_change:true},jev_recommendations:[recommendation],jev_recommendation_status:'complete',runs:[],completion_note:''};
-  const detailContext={app,detail,editing:null,esc,labels:{},attention:()=>false,updateConnection:()=>{},document:{getElementById:id=>id==='back'?{onclick:null}:null},showBoard:()=>{},setMessage:()=>{}};
+  const detailContext={app,detail,editing:null,jevCostAcknowledged:false,esc,labels:{},attention:()=>false,updateConnection:()=>{},document:{getElementById:id=>id==='back'?{onclick:null}:null},showBoard:()=>{},setMessage:()=>{}};
   vm.runInNewContext(helper+detailFragment+'\nrenderDetail();',detailContext);
   assert.match(app.innerHTML,/새 메시지가 긴급한지 판단<\/b> · 예\/아니오 확인/u);
   assert.match(app.innerHTML,/왜 Jev일까요\? 메시지마다 표현이 달라져/u);

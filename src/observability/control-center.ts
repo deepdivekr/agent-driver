@@ -1,3 +1,4 @@
+import {serveUiAsset} from './ui-assets.js';
 import {randomBytes} from 'node:crypto';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {redact} from '../terminal/contracts.js';
@@ -74,7 +75,7 @@ export function readControlCenter(store:PackStore,config:HostConfig,now=Date.now
   return {format:1,project_id:project,generated_at:new Date(now).toISOString(),health,runs,activities,website_connections,latest_revision:latestRevision+JSON.stringify(website_connections),coverage:{agent_driver_only:true,outside_runtime:'unobserved'},read_only:true};
 }
 
-function headers(nonce?:string){return {'cache-control':'no-store','content-security-policy':`default-src 'none'; connect-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src ${nonce?`'nonce-${nonce}'`:`'none'`}; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,'referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};}
+function headers(nonce?:string){return {'cache-control':'no-store','content-security-policy':`default-src 'none'; connect-src 'self'; font-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src ${nonce?`'nonce-${nonce}'`:`'none'`}; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,'referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};}
 function reply(response:ServerResponse,status:number,body:string,type='text/plain; charset=utf-8',nonce?:string){response.writeHead(status,{'content-type':type,...headers(nonce)});response.end(body);}
 export async function startControlCenter(config:HostConfig,options:{port?:number;poll_ms?:number;capability_token?:string;workModel?:StructuredModel;coding?:CodingRuntimeOptions}={}):Promise<ControlCenterServer>{
   if(options.capability_token!==undefined&&!/^[a-f0-9]{48}$/u.test(options.capability_token))throw Error('CONTROL_CENTER_CAPABILITY_INVALID');
@@ -85,6 +86,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const server=createServer(async (request:IncomingMessage,response:ServerResponse)=>{
     if(request.headers.host!==host){reply(response,403,'forbidden');return;}
     const url=new URL(request.url??'/','http://127.0.0.1'),base=`/${token}/`;if(!url.pathname.startsWith(base)){reply(response,404,'not found');return;}const suffix=url.pathname.slice(base.length);
+    if(await serveUiAsset(request,response,suffix))return;
     if(await settings.handle(request,response,suffix,host))return;
     if(await connections.handle(request,response,suffix,host))return;
     if(['work/coding/attach','work/coding/turn','work/coding/stop','work/coding/reconcile'].includes(suffix)){

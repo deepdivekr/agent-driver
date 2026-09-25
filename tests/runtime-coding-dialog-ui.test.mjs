@@ -9,6 +9,7 @@ import {loadHostConfig} from '../dist/interface/config.js';
 import {PackStore} from '../dist/packs/store.js';
 import {readWorkBoard,readWorkDetail} from '../dist/observability/work-view.js';
 import {workHtml} from '../dist/observability/work-ui.js';
+const koPage=async(browser,options)=>{const page=await browser.newPage(options);await page.addInitScript(()=>{try{localStorage.setItem('office-lang','ko')}catch{}});return page;};
 
 const git={head:'a'.repeat(40),state_sha256:'b'.repeat(64),changed_paths:[]};
 const session='11111111-1111-4111-8111-111111111111';
@@ -92,7 +93,7 @@ test('desktop and mobile Work conversation preserves full reply and sends only a
   const browser=await chromium.launch({headless:true});
   t.after(()=>browser.close());
   for(const width of [1280,390]){
-    const page=await browser.newPage({viewport:{width,height:900}}),calls=[],errors=[];
+    const page=await koPage(browser,{viewport:{width,height:900}}),calls=[],errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     const reply='Codex completed the requested change.\n'+'Detailed explanation. '.repeat(400);
     const detail={id:'work-1',title:'기능 구현',goal:'테스트 가능한 기능',prompt:'테스트 가능한 기능 구현',work_status:'running',run_status:'waiting_user',spec:{completion_checks:[]},stages:[],progress_percent:null,control:null,work_control:null,swarm:false,coding:false,agent_count:0,verified_steps:0,total_steps:0,progress_basis:'업무 완료 확인 전',pack:'coding.orchestrate',coding_attach:{eligible:false},coding_dialog:{id:'dialog-1',project_ref:'demo',session_id:session,model:'gpt-test',status:'waiting_user',revision:5,can_turn:true,can_stop:true,needs_reconcile:false,turns:[{id:'turn-1',ordinal:0,instruction:'첫 작업',status:'completed',reply,reply_redacted:false,advice:'다음은 테스트 결과를 확인해보세요.',advice_at:'2026-09-24T00:00:02.000Z',session_id:session,model:'gpt-test',reason:null,created_at:'2026-09-24T00:00:00.000Z',completed_at:'2026-09-24T00:00:01.000Z'}]},jev:null,imported_plan:null,imported_coding:null,client_handoffs:[],runs:[],events:[],completion_note:'업무 완료는 별도로 확인해야 합니다.'};
@@ -131,7 +132,7 @@ test('desktop and mobile Work conversation preserves full reply and sends only a
 
 test('reviewed Git reconciliation is a separate local action and never replays the failed turn',async t=>{
   const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
-  const page=await browser.newPage(),posts=[];
+  const page=await koPage(browser),posts=[];
   const dialog={id:'dialog-1',project_ref:'demo',session_id:session,model:'gpt-test',status:'reconciliation_required',revision:5,can_turn:false,can_stop:false,needs_reconcile:true,turns:[{id:'turn-1',ordinal:0,instruction:'구현해줘',status:'uncertain',reply:null,advice:null,reason:'결과 확인 필요',created_at:'2026-09-24T00:00:00.000Z'}]};
   const detail={id:'work-1',title:'기능 구현',goal:'테스트 가능한 기능',prompt:'테스트 가능한 기능 구현',work_status:'running',run_status:'reconciliation_required',spec:{completion_checks:[]},stages:[],progress_percent:null,control:null,work_control:null,swarm:false,coding:false,agent_count:0,verified_steps:0,total_steps:0,progress_basis:'업무 완료 확인 전',pack:'coding.orchestrate',coding_attach:{eligible:false},coding_dialog:dialog,jev:null,imported_plan:null,imported_coding:null,client_handoffs:[],runs:[],events:[],completion_note:'결과 확인 필요'};
   await page.route('https://office.test/**',route=>{

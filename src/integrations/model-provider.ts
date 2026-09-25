@@ -1,4 +1,5 @@
 import {hashJson,type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
+import {FAST_MODEL_DEFAULTS} from './fast-models.js';
 import {requireCondition} from '../core/contracts.js';
 
 export type ApiProvider='openai'|'anthropic'|'openrouter'|'openai_compatible';
@@ -26,7 +27,7 @@ export function apiProviderConfigFromEnvironment(environment:NodeJS.ProcessEnv=p
   requireCondition(['openai','anthropic','openrouter','openai_compatible'].includes(provider),'MODEL_PROVIDER_INVALID');
   const apiKey=environment.AGENT_DRIVER_API_KEY??(provider==='openai'?environment.OPENAI_API_KEY:provider==='anthropic'?environment.ANTHROPIC_API_KEY:provider==='openrouter'?environment.OPENROUTER_API_KEY:undefined);
   requireCondition(typeof apiKey==='string'&&apiKey.trim().length>=16&&!/[\s\x00-\x1f]/u.test(apiKey),'MODEL_PROVIDER_CREDENTIAL_UNAVAILABLE');
-  const model=environment.AGENT_DRIVER_API_MODEL??(provider==='openai'?'gpt-5.6-luna':'');
+  const model=environment.AGENT_DRIVER_API_MODEL??FAST_MODEL_DEFAULTS[provider];
   const reasoning=(environment.AGENT_DRIVER_API_REASONING??'low') as ApiProviderConfig['reasoning'];
   requireCondition(modelPattern.test(model)&&['low','medium','high'].includes(reasoning),'MODEL_PROVIDER_SELECTION_INVALID');
   const baseUrl=provider==='openai_compatible'?normalizeCompatibleBaseUrl(environment.AGENT_DRIVER_API_BASE_URL??''):undefined;

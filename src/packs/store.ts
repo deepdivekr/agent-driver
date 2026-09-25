@@ -471,7 +471,7 @@ export class PackStore extends TerminalStore {
   }
   officeWorkSummaries(project:string,limit=100){
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=200,'WORK_LIMIT_INVALID');
-    return this.connection.prepare(`SELECT w.id,w.title,w.goal,w.created_at,w.updated_at,i.mode,i.status AS intake_status,i.revision AS intake_revision,i.paused,
+    return this.connection.prepare(`SELECT w.id,w.title,w.goal,w.created_at,w.updated_at,i.mode,i.status AS intake_status,json_extract(i.spec,'$.route.pack_family') AS pack_family,i.revision AS intake_revision,i.paused,
       r.source_kind,r.source_id,fr.status AS pack_status,json_extract(sr.snapshot,'$.status') AS swarm_status,COALESCE(cr.status,cd.status) AS coding_status,COALESCE(sr.revision,cr.revision,cd.revision) AS run_revision,
       COALESCE(sr.updated_at,cr.updated_at,cd.updated_at,i.updated_at,w.updated_at) AS display_updated_at FROM office_work w
       LEFT JOIN office_intake i ON i.work_id=w.id AND i.project_id=w.project_id
@@ -480,7 +480,7 @@ export class PackStore extends TerminalStore {
       LEFT JOIN swarm_run sr ON r.source_kind='swarm' AND sr.id=r.source_id AND sr.project_id=w.project_id
       LEFT JOIN coding_run cr ON r.source_kind='coding' AND cr.id=r.source_id AND cr.project_id=w.project_id
       LEFT JOIN coding_dialog cd ON r.source_kind='coding_dialog' AND cd.id=r.source_id AND cd.project_id=w.project_id
-      WHERE w.project_id=? ORDER BY COALESCE(r.created_at,w.updated_at) DESC,w.id DESC LIMIT ?`).all(project,limit) as Array<{id:string;title:string;goal:string;created_at:string;updated_at:string;mode:string|null;intake_status:string|null;intake_revision:number|null;paused:number|null;source_kind:string|null;source_id:string|null;pack_status:string|null;swarm_status:string|null;coding_status:string|null;run_revision:number|null;display_updated_at:string}>;
+      WHERE w.project_id=? ORDER BY COALESCE(r.created_at,w.updated_at) DESC,w.id DESC LIMIT ?`).all(project,limit) as Array<{id:string;title:string;goal:string;created_at:string;updated_at:string;mode:string|null;intake_status:string|null;pack_family:string|null;intake_revision:number|null;paused:number|null;source_kind:string|null;source_id:string|null;pack_status:string|null;swarm_status:string|null;coding_status:string|null;run_revision:number|null;display_updated_at:string}>;
   }
   intakeWorkOptional(project:string,id:string):IntakeWork|null{
     const row=this.connection.prepare('SELECT work_id FROM office_intake WHERE project_id=? AND work_id=?').get(project,id);
