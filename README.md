@@ -147,16 +147,16 @@ Pick a subscription you're already logged in to, or an API key. Client status sh
 
 The value is re-read on every call, so a running MCP server picks up a change without a restart. It isn't part of the config fingerprint, so toggling it never invalidates a bound run. With it off, one-line tasks are still saved, but they stop at **AI connection needed** and show an **Allow AI and retry** button.
 
-**API mode always starts on a small, fast model.** Switching the provider reloads the list and selects that provider's luna-class model:
+**API mode offers a small, fast model when one is available; it preserves your saved choice.** Switching providers reloads that provider's catalog.
 
-| Provider | Default | With a key, **Refresh** picks |
-|---|---|---|
-| OpenAI | `gpt-6-luna` | the newest `gpt-*-luna` (else `*-mini`) |
-| Anthropic | `claude-haiku-4-5` | the newest `claude-haiku-*` (alias over a dated snapshot) |
-| OpenRouter | `openai/gpt-6-luna` | the newest `openai/gpt-*-luna`, else `anthropic/claude-haiku-*` |
-| OpenAI-compatible | first listed model | — |
+| Provider | Initial suggestion (before live discovery) |
+|---|---|
+| OpenAI | `gpt-6-luna` |
+| Anthropic | `claude-haiku-4-5` |
+| OpenRouter | `openai/gpt-6-luna` |
+| OpenAI-compatible | Choose a model from your server or enter its ID |
 
-Refresh moves an older fast-tier choice up to the newest one (for example `gpt-5.6-luna` → `gpt-6-luna`), but it keeps a larger model you picked on purpose. A key is saved only after a live connection check passes. Agent Office never switches a subscription to paid API use on its own. [Handoff scope](docs/client-handoff.md)
+Refresh updates the catalog, not a deliberately selected model. If the built-in initial suggestion is unavailable, a listed fast-tier model can replace it. If no suitable suggestion is available, choose a model explicitly; the first arbitrary model is not selected. A key is saved only after a live connection check passes. Agent Office never switches a subscription to paid API use on its own. [Handoff scope](docs/client-handoff.md)
 
 | API mode: Anthropic → `claude-haiku-4-5` | Explanations open in a modal |
 |---|---|

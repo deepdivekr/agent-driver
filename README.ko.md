@@ -147,16 +147,16 @@ agent-driver mcp
 
 이 값은 호출할 때마다 새로 읽기 때문에, 실행 중인 MCP 서버도 재시작 없이 바로 반영합니다. 설정 fingerprint에는 포함하지 않으므로, 켜고 끄더라도 진행 중인 실행이 무효가 되지 않습니다. 끄면 한 줄 업무는 저장되지만 **AI connection needed** 상태에서 멈추고, 상세 화면에 **Allow AI and retry** 버튼이 나타납니다.
 
-**API 모드는 항상 작고 빠른 모델로 시작합니다.** 공급자를 바꾸면 모델 목록을 다시 불러오고, 그 공급자의 luna급 모델을 자동으로 고릅니다.
+**API 모드는 가능한 경우 작은 빠른 모델을 제안하며, 저장한 선택은 유지합니다.** 공급자를 바꾸면 해당 공급자의 목록을 다시 불러옵니다.
 
-| 공급자 | 기본 모델 | 키 입력 후 **Refresh**하면 |
-|---|---|---|
-| OpenAI | `gpt-6-luna` | 가장 새로운 `gpt-*-luna` (없으면 `*-mini`) |
-| Anthropic | `claude-haiku-4-5` | 가장 새로운 `claude-haiku-*` (날짜 snapshot보다 alias 우선) |
-| OpenRouter | `openai/gpt-6-luna` | 가장 새로운 `openai/gpt-*-luna`, 없으면 `anthropic/claude-haiku-*` |
-| OpenAI 호환 서버 | 목록의 첫 모델 | — |
+| 공급자 | 실시간 목록 확인 전 초기 제안 |
+|---|---|
+| OpenAI | `gpt-6-luna` |
+| Anthropic | `claude-haiku-4-5` |
+| OpenRouter | `openai/gpt-6-luna` |
+| OpenAI 호환 서버 | 서버의 모델을 직접 선택하거나 ID 입력 |
 
-새로고침하면 이전 세대의 빠른 모델은 최신 모델로 바뀝니다(예: `gpt-5.6-luna` → `gpt-6-luna`). 일부러 고른 큰 모델은 그대로 둡니다. 키는 연결 확인을 통과해야 저장되고, 구독에서 API 과금으로 자동 전환하지 않습니다. [인계 범위](docs/client-handoff.md)
+새로고침은 목록을 갱신하며 사용자가 선택한 모델을 임의로 바꾸지 않습니다. 내장 초기 제안이 실제 목록에 없으면 사용 가능한 빠른 모델을 제안할 수 있습니다. 적합한 제안이 없으면 사용자가 선택하며, 목록의 첫 모델을 임의로 고르지 않습니다. 키는 연결 확인을 통과해야 저장되고, 구독에서 API 과금으로 자동 전환하지 않습니다. [인계 범위](docs/client-handoff.md)
 
 | API 모드: Anthropic → `claude-haiku-4-5` | 설명은 모달로 |
 |---|---|
