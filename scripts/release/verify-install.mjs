@@ -34,7 +34,10 @@ try{
   let source='https://github.com/deepdivekr/agent-driver.git';
   if(!published){
     source=join(base,'source');
-    await run('git',['clone','--quiet','--no-hardlinks',repo,source]);
+    // Public release tags may already exist on later CI runs. Do not import
+    // the current tag into this disposable candidate mirror or overwrite it.
+    await run('git',['clone','--quiet','--no-hardlinks','--no-tags',repo,source]);
+    await run('git',['-C',source,'fetch','--quiet','origin','refs/tags/v0.1.0:refs/tags/v0.1.0']);
     const ref=await run('git',['rev-parse','HEAD']);
     await run('git',['-C',source,'checkout','--quiet','--detach',ref]);
     await run('git',['-C',source,'tag',tag,ref]);
