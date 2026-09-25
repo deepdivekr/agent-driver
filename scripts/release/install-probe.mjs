@@ -21,6 +21,18 @@ if(mode==='seed'){
   await writeFile(paths.runtimeConfig,JSON.stringify(raw)+'\n',{mode:0o600});
 }
 const config=loadHostConfig(paths.runtimeConfig);
+const settings=await load('dist/onboarding/model-settings.js');
+const settingsFile=settings.modelSettingsPath(config);
+if(mode==='seed'){
+  const selection={...settings.publicModelSettings(null,{}).selection,mode:'subscription',client:'codex',client_models:{codex:'release-fixture-model',claude:null,opencode:null},jev:'off'};
+  settings.saveModelSettings(settingsFile,{revision:0,selection,onboarding_step:4},{});
+  await writeFile(join(stateRoot,'release-model-settings.json'),JSON.stringify({sha256:createHash('sha256').update(await readFile(settingsFile)).digest('hex')}));
+}else{
+  const saved=JSON.parse(await readFile(join(stateRoot,'release-model-settings.json'),'utf8'));
+  assert.equal(createHash('sha256').update(await readFile(settingsFile)).digest('hex'),saved.sha256);
+  assert.equal(settings.readModelSettings(settingsFile).selection.client_models.codex,'release-fixture-model');
+  assert.equal(settings.readModelSettings(settingsFile).selection.jev,'off');
+}
 const model={calls:[],async call(){return {title:'Upgrade preservation check',desired_outcome:'Keep this synthetic Work across an installer update',completion_checks:[{id:'keep',result:'Keep the Work record',evidence:'Same Work ID and stored prompt after upgrade'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
 const api=new RuntimeApi(config,{swarmModel:model});
 try{
@@ -45,6 +57,8 @@ try{
   assert.equal(client.getServerVersion().version,expectedVersion);
   const {tools}=await client.listTools();
   assert.ok(tools.some(t=>t.name==='runtime_work_status'));
+  for(const name of ['runtime_work_migration_discover','runtime_work_remote_targets','runtime_work_remote_propose','runtime_work_import_scan'])assert.ok(tools.some(t=>t.name===name),name);
+  assert.ok(tools.every(t=>!t.name.startsWith('runtime_workflow_')));
   const health=await client.callTool({name:'runtime_health',arguments:{}});
   assert.notEqual(health.isError,true);
 }finally{await client.close();}
@@ -66,4 +80,4 @@ try{
   assert.equal(await page.evaluate(()=>[...document.fonts].some(f=>f.family==='Pretendard Variable'&&f.status==='loaded')),true);
   assert.deepEqual(errors,[]);
 }finally{await browser?.close();await server.close();}
-console.log(JSON.stringify({version:expectedVersion,mcp:'PASS',work_preserved:'PASS',font:'PASS',browser:'PASS',external_model_calls:0}));
+console.log(JSON.stringify({version:expectedVersion,mcp:'PASS',common_tools:'PASS',work_preserved:'PASS',model_preferences:'PASS',font:'PASS',browser:'PASS',external_model_calls:0}));

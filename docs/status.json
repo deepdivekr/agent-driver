@@ -1,0 +1,9 @@
+{
+  "RQ-707": {"status":"done","evidence":["scripts/release/check-public-boundary.mjs","tests/runtime-license.test.mjs","PUBLICATION.md"],"note":"Allowlisted common transfer only; 398 non-ignored files scanned without credential findings. Pattern checks are not a complete privacy guarantee."},
+  "RQ-708": {"status":"partial","note":"Common source integrated and TypeScript build passed; finish candidate regression before claiming verification."},
+  "RQ-709": {"status":"done","evidence":["package.json","install.sh","README.md","README.ko.md","docs/releases/v0.2.0.md"],"note":"v0.2.0 pinned consistently; new-Work Jev call/skip proposal excluded."},
+  "RQ-710": {"status":"partial","note":"Full quick regression running; dependency audit reports zero vulnerabilities. Preserve failures and await full result."},
+  "RQ-711": {"status":"not_run","note":"Run real installer probes on committed candidate after quick regressions."},
+  "RQ-712": {"status":"not_run","note":"Publish only after privacy, regression and installation gates pass."},
+  "RQ-713": {"status":"partial","note":"Confirmed new Work defaults to OFF and suppresses Pack judgments; correct permission wiring without a new Work planning layer, then verify migration and Pack/Swarm paths."}
+}

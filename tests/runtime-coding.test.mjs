@@ -9,7 +9,7 @@ import {RuntimeApi} from '../dist/interface/api.js';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {nativeProcessRunner} from '../dist/integrations/subscription-auth.js';
 import {readWorkBoard,readWorkDetail} from '../dist/observability/work-view.js';
-import {modelSettingsPath,saveModelSettings} from '../dist/onboarding/model-settings.js';
+import {modelSettingsPath,scopedModelSettingsPath,saveModelSettings} from '../dist/onboarding/model-settings.js';
 import {writeLocalHandoff} from '../dist/coding/local-checkpoint.js';
 
 const proposal={title:'코딩 업무',desired_outcome:'등록된 프로젝트의 구현과 검토를 마친다',completion_checks:[{id:'change',result:'코드 변경을 확인한다',evidence:'Git diff와 검증 명령'},{id:'review',result:'독립 검토를 마친다',evidence:'Claude 검토 결과'}],assumptions:[],route:{kind:'pack',pack_family:'coding.orchestrate'},requested_effect:'local_file_write',recurrence:{kind:'once',rule:null},questions:[]};
@@ -170,6 +170,17 @@ test('Claude auth expiry hands a read-only review to the selected Codex model wi
   const detail=readWorkDetail(x.api.store,x.config,work.work_id);assert.equal(detail.client_handoffs.length,1);
   const fallback=x.calls.find(item=>item.executable==='/fake/codex'&&item.args.includes('--output-schema'));
   assert.ok(fallback);assert.deepEqual(fallback.args.slice(0,2),['--model','gpt-5.6-luna']);
+});
+
+test('runtime fixture coding override controls executor models and Claude to Codex handoff without changing global settings',async t=>{
+ const x=await setup(t,{claudeFailure:true}),path=modelSettingsPath(x.config),selection={mode:'subscription',client:'claude',client_models:{codex:'global-codex',claude:'global-claude',opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'global-api',api_base_url:'',reasoning:'low',jev:'off'};
+ saveModelSettings(path,{revision:0,onboarding_step:2,selection},{});const before=await readFile(path,'utf8');
+ saveModelSettings(scopedModelSettingsPath(path,'coding'),{revision:0,onboarding_step:2,inherit_global:false,selection:{...selection,client_models:{codex:'coding-codex',claude:'coding-claude',opencode:null}}},{});
+ const work=await x.api.call('runtime_work_start',{request_id:'override-work',prompt:'demo 프로젝트 구현 후 Claude로 검토해줘'}),run=await x.api.call('runtime_coding_start',{request_id:'override-run',work_id:work.work_id,project_ref:'demo'});
+ const implemented=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:run.revision});assert.equal(implemented.stages[0].receipt.model,'coding-codex');
+ const reviewed=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:implemented.revision});assert.equal(reviewed.status,'completed');assert.equal(reviewed.stages[1].receipt.model,'coding-codex');
+ assert.deepEqual(reviewed.client_handoffs.map(h=>[h.source_model,h.target_model]),[['coding-claude','coding-codex']]);
+ for(const call of x.calls.filter(c=>c.args.includes('--model')))assert.equal(call.args[call.args.indexOf('--model')+1],call.executable==='/fake/claude'?'coding-claude':'coding-codex');assert.equal(await readFile(path,'utf8'),before);
 });
 
 test('Codex write failure after a possible effect requires reconciliation and never launches Claude to replay it',async t=>{

@@ -5,7 +5,8 @@ import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {classifyClientFailure} from '../integrations/client-handoff.js';
 import {nativeProcessRunner,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
-import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
+import {modelSettingsPath,scopedModelConfiguration} from '../onboarding/model-settings.js';
+import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {type PackStore} from '../packs/store.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {redact} from '../terminal/contracts.js';
@@ -29,11 +30,12 @@ export class CodingDialogRuntime {
   private closed=false;
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,readonly options:CodingRuntimeOptions={}){
     this.runner=options.runner??nativeProcessRunner;
+    this.model=model instanceof ConfiguredStructuredModel?model.forScope('coding'):model;
   }
   private get catalog():CodexSessionCatalog{return this.options.sessionCatalog??(this.ownCatalog??=new NativeCodexSessionCatalog(this.executable()));}
   private executable(){return this.options.executables?.codex??resolveSubscriptionClientExecutable('codex');}
   private project(ref:string){const item=this.config.coding?.projects.find(project=>project.id===ref);requireCondition(item,'CODING_PROJECT_NOT_REGISTERED');requireCondition(realpathSync(item.root)===item.root,'CODING_PROJECT_ROOT_CHANGED');return item;}
-  private selectedModel(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config))).AGENT_DRIVER_CODEX_MODEL??'client_default';}
+  private selectedModel(){return scopedModelConfiguration(modelSettingsPath(this.config),'coding').environment.AGENT_DRIVER_CODEX_MODEL??'client_default';}
   private async git(root:string,args:string[],timeout_ms=10_000){
     const result=await this.runner.run({executable:process.platform==='win32'?'git.exe':'/usr/bin/git',args:['-C',root,...args],cwd:root,timeout_ms});
     requireCondition(result.code===0,'CODING_GIT_CHECK_FAILED');return result.stdout;

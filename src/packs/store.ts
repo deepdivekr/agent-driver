@@ -25,7 +25,9 @@ export interface OfficeEvent {id:number;run_id:string;worker_id:string|null;kind
 export interface IntakeWork {
   id:string;project_id:string;request_id:string;prompt:string;mode:'quick'|'guided';status:string;
   revision:number;spec:unknown|null;questions:unknown[];answers:Record<string,string>;
-  paused:boolean;jev_enabled:boolean;jev_cost_consent_at:string|null;created_at:string;updated_at:string;
+  // null delegates judgment selection to the Task Pack and global connection policy.
+  // A boolean is an explicit local permission override, never a Work planner decision.
+  paused:boolean;jev_enabled:boolean|null;jev_cost_consent_at:string|null;created_at:string;updated_at:string;
 }
 export interface WorkImportRecord {id:string;project_id:string;kind:'pasted'|'project';status:'draft'|'accepted';body:unknown;source_digest:string;accepted_work_id:string|null;created_at:string;updated_at:string;}
 export interface CodingRun {id:string;project_id:string;request_id:string;work_id:string;project_ref:string;project_root:string;config_fingerprint:string;plan:CodingPlan;status:string;revision:number;paused:boolean;created_at:string;updated_at:string;}
@@ -53,6 +55,8 @@ const codingDialogInlineSecret=/(?:password|token|secret|api[_-]?key)\s*[:=]\s*\
 const sha256Text=(value:string)=>createHash('sha256').update(value).digest('hex');
 export class PackStore extends TerminalStore {
   get decisionMemory(){return new DecisionMemory(this.connection);}
+  /** Internal Hermes/remote persistence access. Never exported as a caller SQL tool. */
+  get hermesState(){return this.connection;}
   constructor(path:string){super(path);this.connection.exec(`
     CREATE TABLE IF NOT EXISTS family_run(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,request_id TEXT NOT NULL,binding TEXT NOT NULL,recipe TEXT NOT NULL,status TEXT NOT NULL,result TEXT NOT NULL,task_id TEXT,UNIQUE(project_id,request_id));
     CREATE TABLE IF NOT EXISTS family_spec(project_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,binding TEXT NOT NULL,recipe TEXT NOT NULL,PRIMARY KEY(project_id,prompt_hash));
@@ -80,6 +84,7 @@ export class PackStore extends TerminalStore {
     CREATE TABLE IF NOT EXISTS office_work_revision(work_id TEXT NOT NULL REFERENCES office_work(id),revision INTEGER NOT NULL,kind TEXT NOT NULL,spec TEXT NOT NULL,answers TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(work_id,revision));
     CREATE TABLE IF NOT EXISTS office_import(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,body TEXT NOT NULL,source_digest TEXT NOT NULL,accepted_work_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS office_import_work ON office_import(project_id,accepted_work_id);
+    CREATE TABLE IF NOT EXISTS office_import_acceptance(import_id TEXT PRIMARY KEY REFERENCES office_import(id),project_id TEXT NOT NULL,request_hash TEXT NOT NULL);
     CREATE TABLE IF NOT EXISTS office_import_coding_approval(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,project_ref TEXT NOT NULL,plan_approved_at TEXT,stage_run_id TEXT,stage_id TEXT,stage_revision INTEGER,stage_approved_at TEXT);
     CREATE TABLE IF NOT EXISTS office_run(project_id TEXT NOT NULL,work_id TEXT NOT NULL REFERENCES office_work(id),source_kind TEXT NOT NULL,source_id TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(project_id,source_kind,source_id));
     CREATE TABLE IF NOT EXISTS office_step_instruction(project_id TEXT NOT NULL,run_id TEXT NOT NULL,worker_id TEXT NOT NULL,version INTEGER NOT NULL,instruction TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(project_id,run_id,worker_id,version));
@@ -111,6 +116,12 @@ export class PackStore extends TerminalStore {
     const intakeColumns=new Set((this.connection.prepare('PRAGMA table_info(office_intake)').all() as Array<{name:string}>).map(column=>column.name));
     if(!intakeColumns.has('jev_enabled'))this.connection.exec('ALTER TABLE office_intake ADD COLUMN jev_enabled INTEGER NOT NULL DEFAULT 0');
     if(!intakeColumns.has('jev_cost_consent_at'))this.connection.exec('ALTER TABLE office_intake ADD COLUMN jev_cost_consent_at TEXT');
+    if(!intakeColumns.has('jev_override'))this.transaction(()=>{
+      this.connection.exec('ALTER TABLE office_intake ADD COLUMN jev_override INTEGER CHECK(jev_override IN (0,1))');
+      // Preserve existing OFF/ON values, including imports without cost consent.
+      // Newly inserted Work rows leave this NULL and use the Pack's decisions.
+      this.connection.exec('UPDATE office_intake SET jev_override=jev_enabled');
+    });
   }
   packRuns(project:string,limit=30):PackRun[]{
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=100,'PACK_RUN_LIMIT_INVALID');
@@ -322,7 +333,7 @@ export class PackStore extends TerminalStore {
   intakeWork(project:string,id:string):IntakeWork{
     const row=this.connection.prepare('SELECT * FROM office_intake WHERE project_id=? AND work_id=?').get(project,id);
     requireCondition(row,'WORK_NOT_FOUND');
-    return {id:String(row.work_id),project_id:project,request_id:String(row.request_id),prompt:String(row.prompt),mode:String(row.mode) as IntakeWork['mode'],status:String(row.status),revision:Number(row.revision),spec:JSON.parse(String(row.spec)),questions:JSON.parse(String(row.questions)),answers:JSON.parse(String(row.answers)),paused:Boolean(row.paused),jev_enabled:Boolean(row.jev_enabled),jev_cost_consent_at:row.jev_cost_consent_at===null?null:String(row.jev_cost_consent_at),created_at:String(row.created_at),updated_at:String(row.updated_at)};
+    return {id:String(row.work_id),project_id:project,request_id:String(row.request_id),prompt:String(row.prompt),mode:String(row.mode) as IntakeWork['mode'],status:String(row.status),revision:Number(row.revision),spec:JSON.parse(String(row.spec)),questions:JSON.parse(String(row.questions)),answers:JSON.parse(String(row.answers)),paused:Boolean(row.paused),jev_enabled:row.jev_override===null?null:Boolean(row.jev_override),jev_cost_consent_at:row.jev_cost_consent_at===null?null:String(row.jev_cost_consent_at),created_at:String(row.created_at),updated_at:String(row.updated_at)};
   }
   intakeWorks(project:string,limit=100):IntakeWork[]{
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=200,'WORK_LIMIT_INVALID');
@@ -332,9 +343,13 @@ export class PackStore extends TerminalStore {
   createWorkImport(project:string,kind:'pasted'|'project',body:unknown,sourceDigest:string):WorkImportRecord{
     requireCondition(/^[a-f0-9]{64}$/u.test(sourceDigest),'WORK_IMPORT_DIGEST_INVALID');
     const serialized=JSON.stringify(body);requireCondition(serialized.length<=100_000,'WORK_IMPORT_TOO_LARGE');
-    const id=randomUUID(),at=new Date().toISOString();
-    this.connection.prepare('INSERT INTO office_import VALUES (?,?,?,?,?,?,?,?,?)').run(id,project,kind,'draft',serialized,sourceDigest,null,at,at);
-    return this.workImport(project,id);
+    return this.transaction(()=>{
+      const previous=this.connection.prepare("SELECT id FROM office_import WHERE project_id=? AND kind=? AND source_digest=? AND body=? ORDER BY accepted_work_id IS NOT NULL DESC,created_at LIMIT 1").get(project,kind,sourceDigest,serialized);
+      if(previous)return this.workImport(project,String(previous.id));
+      const id=randomUUID(),at=new Date().toISOString();
+      this.connection.prepare('INSERT INTO office_import VALUES (?,?,?,?,?,?,?,?,?)').run(id,project,kind,'draft',serialized,sourceDigest,null,at,at);
+      return this.workImport(project,id);
+    });
   }
   workImport(project:string,id:string):WorkImportRecord{
     const row=this.connection.prepare('SELECT * FROM office_import WHERE project_id=? AND id=?').get(project,id);
@@ -380,19 +395,21 @@ export class PackStore extends TerminalStore {
     const result=this.connection.prepare('UPDATE office_import_coding_approval SET stage_run_id=NULL,stage_id=NULL,stage_revision=NULL,stage_approved_at=NULL WHERE project_id=? AND work_id=? AND project_ref=? AND stage_run_id=? AND stage_id=? AND stage_revision=? AND stage_approved_at IS NOT NULL').run(project,run.work_id,run.project_ref,runId,stage.stage_id,expectedRevision);
     requireCondition(result.changes===1,'WORK_IMPORT_CODING_STAGE_APPROVAL_REQUIRED');
   }
-  acceptWorkImport(project:string,importId:string,prompt:string,spec:unknown,jevEnabled=false,costAcknowledged=false):IntakeWork{
+  importAcceptanceHash(project:string,importId:string){return this.connection.prepare('SELECT request_hash FROM office_import_acceptance WHERE project_id=? AND import_id=?').get(project,importId)?.request_hash??null;}
+  acceptWorkImport(project:string,importId:string,prompt:string,spec:unknown,jevEnabled=false,costAcknowledged=false,approvalHash?:string):IntakeWork{
     return this.transaction(()=>{
       const record=this.workImport(project,importId);
-      if(record.accepted_work_id)return this.intakeWork(project,record.accepted_work_id);
+      if(record.accepted_work_id){if(approvalHash)requireCondition(this.importAcceptanceHash(project,importId)===approvalHash,'WORK_IMPORT_APPROVAL_CONFLICT');return this.intakeWork(project,record.accepted_work_id);}
       requireCondition(record.status==='draft','WORK_IMPORT_NOT_DRAFT');
       if(jevEnabled)requireCondition(costAcknowledged,'JEV_API_COST_CONSENT_REQUIRED');
       requireCondition(prompt.trim().length>0&&prompt.length<=8000&&!/[\r\n]/u.test(prompt),'WORK_IMPORT_PROMPT_INVALID');
       const id=randomUUID(),at=new Date().toISOString(),title=typeof spec==='object'&&spec!==null&&'title' in spec?String(spec.title):'가져온 업무',goal=typeof spec==='object'&&spec!==null&&'desired_outcome' in spec?String(spec.desired_outcome):prompt;
       this.connection.prepare('INSERT INTO office_work VALUES (?,?,?,?,?,?)').run(id,project,title,goal,at,at);
-      this.connection.prepare('INSERT INTO office_intake(work_id,project_id,request_id,prompt_hash,mode,status,revision,prompt,spec,questions,answers,jev_enabled,jev_cost_consent_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,`import-${importId}`,snapshotHash(prompt),'quick','ready',1,prompt,JSON.stringify(spec),'[]','{}',Number(jevEnabled),jevEnabled?at:null,at,at);
+      this.connection.prepare('INSERT INTO office_intake(work_id,project_id,request_id,prompt_hash,mode,status,revision,prompt,spec,questions,answers,jev_enabled,jev_override,jev_cost_consent_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,`import-${importId}`,snapshotHash(prompt),'quick','ready',1,prompt,JSON.stringify(spec),'[]','{}',Number(jevEnabled),Number(jevEnabled),jevEnabled?at:null,at,at);
       this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,0,'received','null','{}',at);
       this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,1,'imported',JSON.stringify(spec),'{}',at);
       this.connection.prepare("UPDATE office_import SET status='accepted',accepted_work_id=?,updated_at=? WHERE id=? AND project_id=? AND status='draft'").run(id,at,importId,project);
+      if(approvalHash)this.connection.prepare('INSERT INTO office_import_acceptance VALUES(?,?,?)').run(importId,project,approvalHash);
       return this.intakeWork(project,id);
     });
   }
@@ -464,7 +481,7 @@ export class PackStore extends TerminalStore {
       requireCondition(['ready','running'].includes(work.status),'WORK_NOT_READY');
       if(enabled)requireCondition(costAcknowledged,'JEV_API_COST_CONSENT_REQUIRED');
       const at=new Date().toISOString(),revision=work.revision+1;
-      this.connection.prepare('UPDATE office_intake SET jev_enabled=?,jev_cost_consent_at=CASE WHEN ?=1 THEN ? ELSE jev_cost_consent_at END,revision=?,updated_at=? WHERE project_id=? AND work_id=? AND revision=?').run(Number(enabled),Number(enabled),at,revision,at,project,id,expectedRevision);
+      this.connection.prepare('UPDATE office_intake SET jev_enabled=?,jev_override=?,jev_cost_consent_at=CASE WHEN ?=1 THEN ? ELSE jev_cost_consent_at END,revision=?,updated_at=? WHERE project_id=? AND work_id=? AND revision=?').run(Number(enabled),Number(enabled),Number(enabled),at,revision,at,project,id,expectedRevision);
       this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,revision,enabled?'jev_enabled':'jev_disabled',JSON.stringify(work.spec),JSON.stringify(work.answers),at);
       return this.intakeWork(project,id);
     });

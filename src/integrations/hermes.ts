@@ -8,8 +8,18 @@ import {requireCondition} from '../core/contracts.js';
 import {type PackApprovalDispatcher} from '../packs/runtime.js';
 import {type PackStore} from '../packs/store.js';
 import {type PreparedApproval} from '../taskpack/protocol.js';
+import {workTools} from '../work/contracts.js';
+import {codingTools} from '../coding/contracts.js';
+import {swarmTools} from '../swarm/contracts.js';
+import {observabilityTools} from '../observability/contracts.js';
 
 export const HERMES_AGENT_DRIVER_TOOLS=Object.freeze([
+  ...Object.keys(workTools),...Object.keys(codingTools),...Object.keys(swarmTools),...Object.keys(observabilityTools),
+  'runtime_work_import_prompt','runtime_work_import_paste','runtime_work_import_status','runtime_work_import_scan',
+  'runtime_work_migration_discover','runtime_work_migration_preview','runtime_work_migration_status',
+  'runtime_work_remote_targets','runtime_work_remote_discover','runtime_work_remote_propose','runtime_work_remote_refresh','runtime_work_remote_status',
+  'runtime_task_intake','runtime_task_start','runtime_task_resume','runtime_recovery_status','runtime_recovery_prepare',
+  'runtime_events_read','runtime_events_ack','runtime_storage_status','runtime_storage_plan','runtime_storage_prune','runtime_storage_recover_reservations',
   'runtime_health','runtime_decision_status','runtime_capabilities_list','runtime_capability_describe',
   'runtime_pack_catalog','runtime_pack_plan','runtime_pack_run','runtime_pack_status',
   'runtime_pack_execute_approved','runtime_pack_watch_tick','runtime_pack_watch_pause','runtime_pack_events',

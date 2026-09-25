@@ -21,6 +21,10 @@ import {codingDialogAttachSchema,codingDialogTurnSchema} from '../coding/contrac
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {modelSettingsPath} from '../onboarding/model-settings.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
+import {HermesWorkRuntime,type HermesWorkOptions} from '../work/hermes.js';
+import {HermesMigrationRuntime} from '../work/hermes-migration.js';
+import {RemoteOffice} from '../work/remote.js';
+import {type RemoteTransport} from '../integrations/remote-openclaw.js';
 
 export type ControlRunKind='swarm'|'pack'|'task'|'terminal';
 export type ControlLane='queued'|'running'|'done'|'attention';
@@ -77,10 +81,13 @@ export function readControlCenter(store:PackStore,config:HostConfig,now=Date.now
 
 function headers(nonce?:string){return {'cache-control':'no-store','content-security-policy':`default-src 'none'; connect-src 'self'; font-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src ${nonce?`'nonce-${nonce}'`:`'none'`}; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,'referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};}
 function reply(response:ServerResponse,status:number,body:string,type='text/plain; charset=utf-8',nonce?:string){response.writeHead(status,{'content-type':type,...headers(nonce)});response.end(body);}
-export async function startControlCenter(config:HostConfig,options:{port?:number;poll_ms?:number;capability_token?:string;workModel?:StructuredModel;coding?:CodingRuntimeOptions}={}):Promise<ControlCenterServer>{
+export async function startControlCenter(config:HostConfig,options:{port?:number;poll_ms?:number;capability_token?:string;workModel?:StructuredModel;coding?:CodingRuntimeOptions;hermes?:HermesWorkOptions;remote?:RemoteTransport}={}):Promise<ControlCenterServer>{
   if(options.capability_token!==undefined&&!/^[a-f0-9]{48}$/u.test(options.capability_token))throw Error('CONTROL_CENTER_CAPABILITY_INVALID');
   const token=options.capability_token??randomBytes(24).toString('hex'),store=new PackStore(config.dbPath);try{store.registerProject(config.project);}catch(error){store.close();throw error;}const presence=store.startPresence(config.project.id,'dashboard',{transport:'loopback-read-only'}),clients=new Set<ServerResponse>(),lightClients=new Set<ServerResponse>(),poll=options.poll_ms??500;let host='',done:()=>void=()=>undefined,stopped=false;const closed=new Promise<void>(resolve=>done=resolve);
   const connections=new BrowserConnections(store,config),settings=new ControlSettings(config);
+  const hermesWork=new HermesWorkRuntime(store,config,options.hermes);
+  const migrations=new HermesMigrationRuntime(store,config);
+  const remoteOffice=new RemoteOffice(store,config,options.remote);
   const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config));
   const workRuntime=new WorkRuntime(store,config,workModel),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);
   const server=createServer(async (request:IncomingMessage,response:ServerResponse)=>{
@@ -89,6 +96,29 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(await serveUiAsset(request,response,suffix))return;
     if(await settings.handle(request,response,suffix,host))return;
     if(await connections.handle(request,response,suffix,host))return;
+    if(['work/remote/targets','work/remote/register','work/remote/discover','work/remote/link','work/remote/action'].includes(suffix)){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>24000)throw Error('REMOTE_REQUEST_TOO_LARGE')}
+        const input=JSON.parse(body),result=suffix.endsWith('/targets')?remoteOffice.targets():suffix.endsWith('/register')?remoteOffice.register(input):suffix.endsWith('/discover')?await remoteOffice.discover(input):suffix.endsWith('/link')?await remoteOffice.link(input):await remoteOffice.action(input);
+        reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'REMOTE_REQUEST_INVALID'}),'application/json; charset=utf-8')}return;
+    }
+    if(['work/migration/discover','work/migration/preview','work/migration/status','work/migration/apply','work/migration/undo'].includes(suffix)){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>30_000)throw Error('MIGRATION_REQUEST_TOO_LARGE');}
+        const input:unknown=JSON.parse(body),result=suffix.endsWith('/discover')?await migrations.discover(input):suffix.endsWith('/preview')?await migrations.preview(input):suffix.endsWith('/status')?migrations.status(input):suffix.endsWith('/apply')?await migrations.apply(input):migrations.undo(input);
+        reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'MIGRATION_REQUEST_INVALID'}),'application/json; charset=utf-8');}return;
+    }
+    if(suffix==='work/hermes/action'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>24_000)throw Error('WORK_REQUEST_TOO_LARGE');}
+        const result=hermesWork.action(JSON.parse(body));reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'HERMES_ACTION_INVALID'}),'application/json; charset=utf-8');}return;
+    }
     if(['work/coding/attach','work/coding/turn','work/coding/stop','work/coding/reconcile'].includes(suffix)){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
@@ -226,5 +256,6 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   });
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??0,'127.0.0.1',resolve)});const address=server.address();if(address===null||typeof address==='string'){store.stopPresence(config.project.id,presence);store.close();throw Error('CONTROL_CENTER_BIND_FAILED');}host=`127.0.0.1:${address.port}`;const heartbeat=setInterval(()=>{try{store.heartbeatPresence(config.project.id,presence);}catch{}},2_000);heartbeat.unref();
   let lastBoard='',lastKeep=Date.now();const lightTick=setInterval(()=>{if(!lightClients.size)return;try{const board=readWorkBoard(store,config),payload=JSON.stringify({works:board.works,auth_attention_count:board.auth_attention_count});if(payload!==lastBoard){lastBoard=payload;for(const client of lightClients)if(!client.destroyed)client.write(`event: board\ndata: ${JSON.stringify(board)}\n\n`);}if(Date.now()-lastKeep>=15_000){lastKeep=Date.now();for(const client of lightClients)if(!client.destroyed)client.write(': keep-alive\n\n');}}catch{for(const client of lightClients)client.end();lightClients.clear();}},Math.max(1000,poll));lightTick.unref();
-  const close=async()=>{if(stopped)return;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);settings.close();codingRuntime.close();codingDialog.close();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
+  const hermesTick=setInterval(()=>hermesWork.tick(),1000);hermesTick.unref();
+  const close=async()=>{if(stopped)return;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);clearInterval(hermesTick);settings.close();codingRuntime.close();codingDialog.close();await hermesWork.close();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
 }

@@ -45,7 +45,7 @@ export class SwarmRuntime{
   private async plane(runId:string,actor?:{runId:string;workerId:string}){
     const office=this.store.officeWork(this.config.project.id,'swarm',runId) as {id:string}|null;
     const boundWork=office?this.store.intakeWorkOptional(this.config.project.id,office.id):null;
-    if(boundWork&&!boundWork.jev_enabled)return null;
+    if(boundWork?.jev_enabled===false)return null;
     const provider=this.providers.decision;if(!provider)return null;
     const root=join(dirname(this.config.dbPath),'decisions'),registry=new DecisionProfileRegistry(join(root,'registry')),fallback=swarmDecisionProfile(),scope=this.config.environment==='fixture'?'fixture' as const:'production' as const;
     let profile:ReturnType<typeof swarmDecisionProfile>;

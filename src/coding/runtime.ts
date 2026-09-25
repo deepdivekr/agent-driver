@@ -8,7 +8,8 @@ import {type HostConfig} from '../interface/config.js';
 import {nativeProcessRunner,probeSubscriptionClient,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
 import {SubscriptionAwareStructuredModel} from '../integrations/subscription-auth.js';
 import {classifyClientFailure,type HandoffReason} from '../integrations/client-handoff.js';
-import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
+import {modelSettingsPath,scopedModelConfiguration} from '../onboarding/model-settings.js';
+import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {type PackStore} from '../packs/store.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {redact} from '../terminal/contracts.js';
@@ -29,12 +30,12 @@ export class CodingRuntime {
   readonly runner:SafeProcessRunner;
   private readonly active=new Set<AbortController>();
   private readonly pending=new Set<Promise<unknown>>();
-  constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,readonly options:CodingRuntimeOptions={}){this.runner=options.runner??nativeProcessRunner;}
+  constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,readonly options:CodingRuntimeOptions={}){this.runner=options.runner??nativeProcessRunner;this.model=model instanceof ConfiguredStructuredModel?model.forScope('coding'):model;}
   close(){for(const controller of this.active)controller.abort();}
   async drain(){await Promise.allSettled([...this.pending]);}
   private project(ref:string){const item=this.config.coding?.projects.find(project=>project.id===ref);requireCondition(item,'CODING_PROJECT_NOT_REGISTERED');requireCondition(realpathSync(item.root)===item.root,'CODING_PROJECT_ROOT_CHANGED');return item;}
   private executable(actor:'codex'|'claude'){return this.options.executables?.[actor]??resolveSubscriptionClientExecutable(actor);}
-  private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
+  private modelEnvironment(){return scopedModelConfiguration(modelSettingsPath(this.config),'coding').environment;}
   private selectedModel(actor:'codex'|'claude'){return this.modelEnvironment()[`AGENT_DRIVER_${actor.toUpperCase()}_MODEL`]??'client_default';}
   private async git(root:string,args:string[],timeout_ms=10_000){
     const result=await this.runner.run({executable:process.platform==='win32'?'git.exe':'/usr/bin/git',args:['-C',root,...args],cwd:root,timeout_ms});

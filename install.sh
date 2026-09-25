@@ -14,7 +14,7 @@ need() { command -v "$1" >/dev/null 2>&1 || fail "$1 명령이 필요합니다."
 [[ -n "${HOME:-}" && "$HOME" == /* && "$HOME" != "/" ]] || fail "안전한 HOME 경로를 확인할 수 없습니다."
 
 readonly REPOSITORY_URL="${AGENT_DRIVER_REPOSITORY_URL:-$DEFAULT_REPOSITORY}"
-readonly REPOSITORY_REF="${AGENT_DRIVER_VERSION:-v0.1.1}"
+readonly REPOSITORY_REF="${AGENT_DRIVER_VERSION:-v0.2.0}"
 readonly INSTALL_DIR="${AGENT_DRIVER_INSTALL_DIR:-$HOME/.local/share/agent-driver}"
 readonly BIN_DIR="${AGENT_DRIVER_BIN_DIR:-$HOME/.local/bin}"
 readonly RUNTIME_DIR="${AGENT_DRIVER_RUNTIME_DIR:-$HOME/.local/share/agent-driver-runtime}"

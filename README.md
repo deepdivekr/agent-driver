@@ -9,7 +9,7 @@
 <sub>Repository and CLI name: <code>agent-driver</code></sub>
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
-![Version](https://img.shields.io/badge/version-v0.1.1-informational)
+![Version](https://img.shields.io/badge/version-v0.2.0-informational)
 ![Platform](https://img.shields.io/badge/platform-Ubuntu%2024.04%20%7C%20WSL2-orange)
 ![MCP](https://img.shields.io/badge/MCP-stdio-8A2BE2)
 
@@ -17,9 +17,13 @@
 
 Connect Agent Office to **Claude Code, Codex, Cursor, OpenCode, or Hermes** and let them research the web, fill forms, collect files, and drive coding work. Browser work runs in a separate browser, not the one you're using. Every step is written to local SQLite so an interrupted task can resume where it stopped. Nothing touches your own mouse or open tabs.
 
-> **v0.1.1 support scope:** Ubuntu 24.04 x86_64, and Windows 11 with WSL2 Ubuntu 24.04. Per-feature evidence and experimental limits are listed in the [release readiness record](docs/release-readiness-v0.1.1.md).
+> **v0.2.0 support scope:** Ubuntu 24.04 x86_64, and Windows 11 with WSL2 Ubuntu 24.04. Per-feature evidence and experimental limits are listed in the [release readiness record](docs/release-readiness-v0.2.0.md).
 
-> **v0.1.1:** The installer includes Agent Office, bundled Pretendard, the Control Center fixes, and the guard against automatic subscription-to-paid-API fallback. [Release notes](docs/releases/v0.1.1.md).
+> **v0.2.0:** Import existing Hermes work, manage remote OpenClaw conversations where they already run, and choose separate coding models. Project imports suggest at most one evidence-backed Jev optimization; Jev remains optional. [Release notes](docs/releases/v0.2.0.md).
+
+From **Work → Import**, choose a pasted workflow, a local project, [Hermes work](docs/work-migration.md), or [remote OpenClaw](docs/remote-office.md). Review before connecting; importing never starts a task or activates a schedule. Hermes needs a compatible local installation. Remote OpenClaw needs SSH access from the environment running Office, and stays on its existing server.
+
+For coding-specific models, open **Connections and settings → AI → Coding**. Global settings remain the default. [Model settings](docs/control-settings.md) · [Handoff behavior](docs/continuity-and-execution-ownership.md) · [Optional Jev recommendation](docs/jev-import-recommendation.md).
 
 ---
 
@@ -48,10 +52,10 @@ Paste this into Claude Code, Codex, or another agent:
 Run this once in an Ubuntu or WSL2 Ubuntu terminal:
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.1.1/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.2.0/install.sh | bash'
 ```
 
-This historical v0.1.0 installation capture shows the same setup stages on Ubuntu 24.04 x86_64. It finished in **16 seconds** with exit code 0; it is not a v0.1.1 timing measurement:
+This historical v0.1.0 installation capture shows the same setup stages on Ubuntu 24.04 x86_64. It finished in **16 seconds** with exit code 0; it is not a v0.2.0 timing measurement:
 
 ![Terminal: running the one-line installer on Ubuntu 24.04, from Node.js setup to "control_center_ready"](docs/assets/readme/terminal-install.png)
 
@@ -172,6 +176,10 @@ Refresh updates the catalog, not a deliberately selected model. If the built-in 
 
 Jev handles short, repeated decisions, such as which element to click or whether a result looks right. With no key, the LLM makes those decisions.
 
+Task Packs define when Jev is called. A new Work uses those existing decision points
+when global connection settings permit; the Work-planning LLM does not create another
+Jev on/off policy. Explicit per-Work opt-outs remain off.
+
 ![Jev step with mode "Auto"; all four tabs show check marks](docs/assets/readme/cc-06-jev.png)
 
 ### ① Work: board and list
@@ -248,7 +256,7 @@ Site logins aren't part of setup. When a task reaches a URL that needs a login, 
 
 ### Task Packs
 
-A Task Pack bundles a task's inputs, execution order, and how its result is verified. v0.1.1 ships nine pack families:
+A Task Pack bundles a task's inputs, execution order, and how its result is verified. v0.2.0 ships nine pack families:
 
 | Task | Example | Pack family |
 |---|---|---|
@@ -278,7 +286,7 @@ Counted from a live `tools/list` call against the install above:
 | **Tasks and recovery** | `runtime_task_*`, `runtime_recovery_*` (7) | Take in a task, start, cancel, resume, and prepare recovery with a generation check |
 | **Ops** | health, storage, events, artifacts, capabilities, decision, channel, activity (13) | Check health and storage, prune, read and ack events, list artifacts, report activity, and check Decision Plane status |
 
-`runtime_browser_session_open` and `runtime_browser_session_status` remain placeholders in v0.1.1. They return a typed "not implemented" error.
+`runtime_browser_session_open` and `runtime_browser_session_status` remain placeholders in v0.2.0. They return a typed "not implemented" error.
 
 ### Coding work
 

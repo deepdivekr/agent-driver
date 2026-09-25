@@ -8,6 +8,7 @@ import {RuntimeApi} from '../dist/interface/api.js';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {nativeProcessRunner} from '../dist/integrations/subscription-auth.js';
 import {startControlCenter} from '../dist/observability/control-center.js';
+import {modelSettingsPath,scopedModelSettingsPath,saveModelSettings} from '../dist/onboarding/model-settings.js';
 
 const sessionId='11111111-1111-4111-8111-111111111111';
 const proposal={title:'대화형 코딩',desired_outcome:'등록된 프로젝트의 요청 사항을 Codex CLI와 대화하며 구현',completion_checks:[{id:'check',result:'변경 사항을 직접 확인한다',evidence:'Git diff와 검증 결과'}],assumptions:[],route:{kind:'pack',pack_family:'coding.orchestrate'},requested_effect:'local_file_write',recurrence:{kind:'once',rule:null},questions:[]};
@@ -55,6 +56,16 @@ test('explicit exact-session attach sends no prompt; one turn persists full Code
   assert.equal(second.status,'running');await x.api.codingDialog.drain();
   const later=await x.api.call('runtime_coding_dialog_status',{dialog_id:attached.dialog_id});assert.equal(later.turns.length,2);assert.equal(x.calls.length,2);
   assert.equal(x.calls.every(call=>call.args.includes(sessionId)),true);
+});
+
+test('runtime fixture coding dialog pins coding override across resume after global and coding settings change',async t=>{
+ const x=await setup(t),path=modelSettingsPath(x.config),coding=scopedModelSettingsPath(path,'coding');
+ const selection={mode:'subscription',client:'codex',client_models:{codex:'global-code',claude:null,opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'global-api',api_base_url:'',reasoning:'low',jev:'off'};
+ saveModelSettings(path,{revision:0,onboarding_step:2,selection},{});saveModelSettings(coding,{revision:0,onboarding_step:2,inherit_global:false,selection:{...selection,client_models:{...selection.client_models,codex:'coding-pinned'}}},{});
+ const attached=await x.api.call('runtime_coding_dialog_attach',{request_id:'pinned-dialog',work_id:x.work.work_id,project_ref:'demo',session_id:sessionId});assert.equal(attached.model,'coding-pinned');
+ saveModelSettings(path,{revision:1,onboarding_step:2,selection:{...selection,client_models:{...selection.client_models,codex:'global-new'}}},{});saveModelSettings(coding,{revision:1,onboarding_step:2,inherit_global:true,selection},{});
+ await x.api.call('runtime_coding_dialog_turn',{dialog_id:attached.dialog_id,expected_revision:attached.revision,request_id:'pinned-turn',instruction:'변경을 확인하고 결과를 알려줘'});await x.api.codingDialog.drain();
+ const done=await x.api.call('runtime_coding_dialog_status',{dialog_id:attached.dialog_id});assert.equal(done.model,'coding-pinned');assert.equal(done.turns[0].model,'coding-pinned');assert.equal(x.calls[0].args[x.calls[0].args.indexOf('--model')+1],'coding-pinned');
 });
 
 test('Git state drift blocks a new turn before Codex and stop prevents continuation',async t=>{

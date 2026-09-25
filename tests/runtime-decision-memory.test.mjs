@@ -116,6 +116,26 @@ test('runtime fixture swarm learning off neither stores nor injects examples on 
   assert.ok(x.requests.every(r=>!r.state.verified_previous_cases));
 });
 
+test('runtime fixture a Work-bound swarm uses its existing judgments unless the user opts out',async t=>{
+  const x=await swarmSetup(t),project=x.config.project.id;
+  const pending=x.api.store.beginWork(project,'swarm-pack-owned','Read two sources.','quick');
+  const id=pending.work?.id??pending.id;
+  // Define only the execution route; no Work-level Jev plan is generated.
+  const db=x.api.store.hermesState;
+  db.prepare("UPDATE office_intake SET status='ready',spec=? WHERE work_id=?").run(JSON.stringify({route:{kind:'swarm',pack_family:null}}),id);
+  const plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan;
+  const first=await run(x,plan.plan_id,'swarm-pack-owned');
+  assert.equal(first.status,'completed');assert.ok(x.requests.length>0);
+  assert.equal(x.api.store.intakeWork(project,id).jev_enabled,null);
+  const work=x.api.store.intakeWork(project,id);
+  x.api.store.setWorkJev(project,id,work.revision,false,false);
+  const before=x.requests.length;
+  const r=await x.api.call('runtime_swarm_run',{request_id:'swarm-opt-out',plan_id:plan.plan_id,work_id:id});
+  const batch=await x.api.call('runtime_swarm_tick',{run_id:r.run_id});
+  for(const d of batch.dispatches)await x.api.call('runtime_swarm_report',{run_id:r.run_id,worker_id:d.worker_id,lease_token:d.lease_token,report:report(d.worker_id)});
+  assert.equal(x.api.swarm.status(r.run_id).status,'completed');assert.equal(x.requests.length,before);
+});
+
 test('runtime fixture swarm memory audits a resolved model change before accepting its confident answer',async t=>{
   const x=await swarmSetup(t,{modelDrift:true}),plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan;
   await run(x,plan.plan_id,'first-run');x.reopen();const second=await run(x,plan.plan_id,'second-run');assert.equal(second.status,'completed');
