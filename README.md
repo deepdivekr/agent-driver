@@ -110,11 +110,9 @@ This config works when the client and the server run in the same Ubuntu/WSL envi
 
 ## Control Center walkthrough
 
-> Screenshot note: the walkthrough captures predate the locally bundled Pretendard font and the switch from left-edge accents to full borders. Current source applies those styling updates; the setup flow is unchanged.
-
 `agent-driver connect` opens the **Agent Office Control Center** (the installer runs it for you). It uses the same visual language as the agent-driver run trace: a dark ground, mono-first labels, and one color per decision path. **Amber** is Jev or the step running now, **lilac** is the LLM, **blue** is plain code, **rose** is a person, and **green** means verified. The UI is **English by default**. The flag button in the top-right switches to Korean, and each browser remembers its choice. The page uses one locally bundled Pretendard variable font, with no remote font CDN, UI framework, or screen previews. Selected controls use borders and background color instead of left-edge accent bars. Longer explanations sit behind a **?** button.
 
-> These screenshots come from the **real Control Center** on this branch, captured in order on the Ubuntu 24.04 machine used for the terminal run above. The task shown was actually defined by the logged-in Claude Code subscription.
+> Every screenshot below is the **real v0.2.0 Control Center**, captured in order on 2026-09-26 on the Ubuntu 24.04 machine used for the terminal run above, starting from an empty `~/.agent-driver`. The task shown was defined by Claude Code on that machine's subscription login.
 
 ### Setup, step 1 of 4: agents
 
@@ -140,9 +138,11 @@ You approve the dedicated work folder and local execution once. The runtime is *
 
 ### Step 3 of 4: AI
 
-Pick a subscription you're already logged in to, or an API key. Client status shows as compact chips. Here Claude Code is **Connected**, and its live model list (Sonnet, Opus, Haiku) has loaded.
+Pick a subscription you're already logged in to, or an API key. Client status shows as compact chips, and the Claude Code model list (Sonnet, Opus, Haiku) loads from the CLI.
 
-![AI step, subscription: Claude Code chip "Connected", Claude Code model Sonnet (latest), and the checked consent "Allow sending work content to the selected AI to define and plan it"](docs/assets/readme/cc-04-ai-subscription.png)
+Claude Code counts as a subscription when the CLI reports a `claude login` session or a long-lived token from `claude setup-token`, on Anthropic's own API with no API key in use. An API key, `apiKeyHelper`, Bedrock or Vertex login is never treated as a subscription, so it cannot be billed by mistake. The machine in these captures uses a `setup-token` token.
+
+![AI step, subscription: settings scope Global, Claude Code chip "Connected", Claude Code model Sonnet (latest), and the checked consent "Allow sending work content to the selected AI to define and plan it"](docs/assets/readme/cc-04-ai-subscription.png)
 
 **Sending task text to an AI takes one explicit consent.** Saving the checkbox writes it to your local `~/.agent-driver/runtime-config.json`:
 
@@ -172,6 +172,10 @@ Refresh updates the catalog, not a deliberately selected model. If the built-in 
 |---|---|
 | ![AI step, API mode: provider Anthropic, model claude-haiku-4-5, API key field, billing and fallback checkboxes](docs/assets/readme/cc-05-ai-api.png) | ![Help modal explaining what the AI consent sends and where it's stored](docs/assets/readme/cc-07-help-modal.png) |
 
+**Coding work can use its own model.** Set **Settings scope** to **Coding work only**. With **Use global AI settings** ticked, coding follows the global choice. Untick it to pick a separate connection and CLI models for coding planning and advice. The coding itself is still done by the Codex or Claude CLI, and sessions that are already attached keep their model.
+
+![AI step, Coding work only scope: "Use global AI settings" checked, with the notes on what the coding override changes](docs/assets/readme/cc-15-ai-coding.png)
+
 ### Step 4 of 4: Jev (optional)
 
 Jev handles short, repeated decisions, such as which element to click or whether a result looks right. With no key, the LLM makes those decisions.
@@ -180,7 +184,7 @@ Task Packs define when Jev is called. A new Work uses those existing decision po
 when global connection settings permit; the Work-planning LLM does not create another
 Jev on/off policy. Explicit per-Work opt-outs remain off.
 
-![Jev step with mode "Auto"; all four tabs show check marks](docs/assets/readme/cc-06-jev.png)
+![Jev step with mode "Auto"; the Agents and Local runtime tabs show check marks](docs/assets/readme/cc-06-jev.png)
 
 ### ① Work: board and list
 
@@ -195,7 +199,7 @@ The sidebar keeps a count for each group. Type a task in one line and press **Su
 
 | Board | List |
 |---|---|
-| ![Board: a research.search card "Weekly AI agent news roundup table", badge "Ready", in the Queued column](docs/assets/readme/cc-08-board.png) | ![List view: the same task as a compact row under Queued](docs/assets/readme/cc-09-list.png) |
+| ![Board: a research.search card "Find 5 recent AI agent news stories in a sourced table", badge "Ready", in the Queued column](docs/assets/readme/cc-08-board.png) | ![List view: the same task as a compact row under Queued](docs/assets/readme/cc-09-list.png) |
 
 ### ② Work detail: the run trace
 
@@ -205,9 +209,9 @@ Opening a task shows the same layout as the run-trace storyboard:
 - the request line with a blinking cursor
 - the selected pack pill with its effect scope (`research.search · read-only`)
 
-In this example, Claude Code defined a one-line request into a titled task with four completion checks. The left column is the **Run trace**: one node per stage with its objective and owner. Verified stages turn amber, the running stage gets a halo, and a stage waiting on a person turns rose. The pictured stages are all queued; this capture demonstrates the layout, not completed execution or verification. It predates the correction that labels Work and Run IDs separately.
+In this example, Claude Code defined a one-line request into a titled task with three completion checks. The header shows the Work ID (`#3C8CA8CA`) and, separately, that no run has started yet. The left column is the **Run trace**: one node per completion check with its owner. A run path that does not report independently verified stage progress says **No per-stage verification** instead of drawing a progress bar. Verified stages turn amber, the running stage gets a halo, and a stage waiting on a person turns rose. The pictured checks are all queued; this capture shows the layout, not completed execution or verification.
 
-![Earlier Work detail preview: request line, research.search · read-only, four queued completion-check stages, and the Human control panel](docs/assets/readme/cc-10-work-detail.png)
+![Work detail: Ready badge, Work #3C8CA8CA with run not started, request line, research.search · read-only, three queued completion checks, and the Human control panel with Pause and Jev decisions](docs/assets/readme/cc-10-work-detail.png)
 
 ### ③ Human control: pause or redirect a stage
 
@@ -218,7 +222,7 @@ The rose **Human control** panel is where a person steps in. From there you can:
 - answer the questions from a guided task
 - retry a definition
 - attach an existing Codex session and send it one instruction at a time
-- turn Jev on for this task (with cost consent)
+- turn Jev on for this task (with cost consent), or turn it off for this task when the Task Pack would use it
 - see run history and client handoffs
 
 Already-verified results are never rewritten. A read-only run path that can't be safely changed midway says so, rather than pretending to stop.
@@ -232,14 +236,16 @@ Already-verified results are never rewritten. A read-only run path that can't be
 | **Another AI's automation** | Paste the provided prompt into your current AI, then paste its JSON reply back. It's checked as an **unverified draft**: secrets are rejected and each claim links to evidence. Your existing automation is not changed. |
 | **Workflow project** | Reads part of a local or WSL project path, read-only. No code runs. |
 | **Improve an existing bot** | Starts from an existing bot and drafts improvements. |
+| **Hermes work** | Lists conversations and schedules from a compatible local Hermes profile. You review the draft before importing; the same Hermes profile keeps running the work, and importing alone calls no model and runs nothing. [Details](docs/work-migration.md) |
+| **Remote OpenClaw** | Finds conversations and schedules on a server that already runs OpenClaw, over the SSH key of the environment running Office. OpenClaw stays on that server; you send each next instruction from Work detail. Connecting alone runs nothing. [Details](docs/remote-office.md) |
 
-![Import: route buttons, the copyable migration prompt and the JSON paste box](docs/assets/readme/cc-11-import.png)
+![Import: five route buttons (Another AI's automation, Workflow project, Improve an existing bot, Hermes, Remote OpenClaw), the copyable migration prompt and the JSON paste box](docs/assets/readme/cc-11-import.png)
 
 ### Site login, only when needed
 
-Site logins aren't part of setup. When a task reaches a URL that needs a login, only that worker pauses, and the site appears here. The image below shows the empty state only; it does not demonstrate a login or handoff. Its initial loading notice was fixed after this capture.
+Site logins aren't part of setup. When a task reaches a URL that needs a login, only that worker pauses, and the site appears here. The image below shows the empty state only; it does not demonstrate a login or handoff.
 
-![Earlier site-login empty state: no site needs a login; no login flow is shown](docs/assets/readme/cc-12-site-login.png)
+![Site-login empty state: no site needs a login; no login flow is shown](docs/assets/readme/cc-12-site-login.png)
 
 <details>
 <summary>Korean UI and mobile layout</summary>
