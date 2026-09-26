@@ -4,7 +4,7 @@ import {type PackStore} from '../packs/store.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {validateWorkProposal,type WorkProposal} from './contracts.js';
-import {parseWorkImportDraft,UNIVERSAL_WORK_MIGRATION_PROMPT,type WorkImportDraft} from './import-draft.js';
+import {parseWorkImportDraft,UNIVERSAL_WORK_MIGRATION_PROMPT,UNIVERSAL_WORK_MIGRATION_PROMPT_EN,type WorkImportDraft} from './import-draft.js';
 import {scanProject,type ProjectScan} from './project-scan.js';
 import {importJevRecommendationSchema,IMPORT_JEV_SELECTION_INSTRUCTIONS,validatedImportJevRecommendations} from './jev-import-recommendation.js';
 
@@ -68,7 +68,7 @@ export function importedCodingReadiness(store:PackStore,config:HostConfig,workId
 
 export class WorkImportRuntime{
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel){}
-  prompt(){return {prompt:UNIVERSAL_WORK_MIGRATION_PROMPT,format:'JSON',secrets:'do_not_include',next_action:'paste_result_for_preview'};}
+  prompt(){return {prompt:UNIVERSAL_WORK_MIGRATION_PROMPT,prompt_en:UNIVERSAL_WORK_MIGRATION_PROMPT_EN,format:'JSON',secrets:'do_not_include',next_action:'paste_result_for_preview'};}
   paste(raw:unknown){
     const input=workImportPasteSchema.parse(raw),draft=parseWorkImportDraft(input.text);
     const record=this.store.createWorkImport(this.config.project.id,'pasted',draft,snapshotHash(draft));

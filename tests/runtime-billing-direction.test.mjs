@@ -78,6 +78,31 @@ test('runtime contract Claude API-key login is not mistaken for subscription aut
   }
 });
 
+test('runtime contract Claude setup-token subscription is ready only on first party with no API key source',async()=>{
+  const cases=[
+    [{authMethod:'oauth_token',subscriptionType:null,apiProvider:'firstParty',apiKeySource:null},'ready'],
+    [{authMethod:'claude.ai',subscriptionType:'max',apiProvider:'firstParty',apiKeySource:null},'ready'],
+    [{authMethod:'oauth_token',subscriptionType:null,apiProvider:'firstParty',apiKeySource:'ANTHROPIC_API_KEY'},'unknown'],
+    [{authMethod:'claude.ai',subscriptionType:'pro',apiProvider:'firstParty',apiKeySource:'apiKeyHelper'},'unknown'],
+    [{authMethod:'third_party',subscriptionType:null,apiProvider:'bedrock',apiKeySource:null},'unknown'],
+    [{authMethod:'oauth_token',subscriptionType:null,apiProvider:'vertex',apiKeySource:null},'unknown'],
+  ];
+  for(const [auth,expected] of cases){
+    let invoked=0;const model=new SubscriptionAwareStructuredModel({
+      environment:{...environment,AGENT_DRIVER_LLM_CLIENT:'claude'},
+      runner:{async run(r){
+        if(r.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,...auth}),stderr:''};
+        if(r.executable==='/fixture/claude'){invoked++;return {code:0,stdout:JSON.stringify({structured_output:{choice:'ok'}}),stderr:''};}
+        return runner.run(r);
+      }},
+    });
+    const status=(await model.status()).clients.find(c=>c.id==='claude');
+    assert.equal(status.status,expected,JSON.stringify(auth));
+    if(expected==='unknown'){await assert.rejects(model.call('correct','Choose.',{},schema),/STRUCTURED_MODEL_UNAVAILABLE/);assert.equal(invoked,0,JSON.stringify(auth));}
+    else assert.equal(status.auth,'subscription');
+  }
+});
+
 test('runtime contract exhausted API transfers to saved auth model once, never returns to API',async t=>{
   for(const authWorks of [true,false]){
     const path=await fixture(t);saveModelSettings(path,{revision:0,onboarding_step:2,selection:{...selection,mode:'api'},api_action:'replace',api_key:key},{});

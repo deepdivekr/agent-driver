@@ -22,10 +22,27 @@ test('Control Center renders English by default and the flag button switches to 
   assert.doesNotMatch(await page.locator('aside').innerText(),hangul);
   assert.doesNotMatch(await page.locator('#intake').innerText(),hangul);
   assert.equal(await page.locator('#lang-toggle [data-lang-code]').textContent(),'EN');
+  await page.goto(server.url+'?import=1');
+  await page.getByRole('button',{name:'Hermes work',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Remote OpenClaw',exact:true}).waitFor();
+  await page.waitForFunction(()=>document.getElementById('migration-prompt')?.value);
+  assert.match(await page.locator('#migration-prompt').inputValue(),/^I want to move one automation/u);
+  assert.doesNotMatch(await page.locator('#migration-prompt').inputValue(),hangul);
+  for(const route of ['hermes','remote']){
+    await page.locator(`[data-import-route="${route}"]`).click();
+    assert.doesNotMatch(await page.locator('main').innerText(),hangul,route);
+  }
+  await page.goto(server.url);
+  await page.getByRole('button',{name:'Submit',exact:true}).waitFor();
   await page.locator('#lang-toggle').click();
   await page.getByRole('button',{name:'업무 접수',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.lang),'ko');
   assert.equal(await page.locator('#lang-toggle [data-lang-code]').textContent(),'KO');
+  await page.goto(server.url+'settings');
+  await page.getByRole('heading',{name:'연결 및 설정',exact:true}).waitFor();
+  await page.goto(server.url+'?import=1');
+  await page.waitForFunction(()=>document.getElementById('migration-prompt')?.value);
+  assert.match(await page.locator('#migration-prompt').inputValue(),/^내가 이 플랫폼에서/u);
   await page.goto(server.url+'settings');
   await page.getByRole('heading',{name:'연결 및 설정',exact:true}).waitFor();
   await page.locator('#lang-toggle').click();

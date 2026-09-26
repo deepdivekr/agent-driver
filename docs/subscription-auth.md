@@ -42,7 +42,7 @@ MCP client sampling
 |---|---|---|---|
 | MCP client | MCP capability handshake | `sampling/createMessage`, tools 없음, context 없음 | 연결된 client가 sampling을 지원할 때 최우선 |
 | Codex CLI | `codex login status` | ephemeral, read-only sandbox, output schema | ChatGPT 구독 로그인 사용 |
-| Claude Code | `claude auth status` | print/json schema, tools·hooks·MCP 없음, session 저장 없음 | claude.ai 구독 로그인 사용 |
+| Claude Code | `claude auth status` | print/json schema, tools·hooks·MCP 없음, session 저장 없음 | `claude login`(`authMethod: claude.ai`) 또는 `claude setup-token` 토큰(`oauth_token`)을 구독으로 인정. `apiProvider`가 `firstParty`가 아니거나 `apiKeySource`가 있으면(API 키·`apiKeyHelper`·Bedrock·Vertex) 구독으로 보지 않음 |
 | OpenCode | `opencode auth list --format json` | `run --format json`, 임시 프로젝트의 모든 permission deny | OpenCode에 연결된 API/OAuth 공급자와 선택 모델 사용 |
 | Cursor Agent | 현재 검증된 명령 없음 | 미지원 | 설치된 공식 status/login 계약을 확인하기 전에는 추측 실행하지 않음 |
 | Hermes | `hermes proxy status` | Agent Driver MCP sampling | proxy OAuth 상태는 진단만 하며 auth store를 읽지 않음 |

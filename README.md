@@ -112,7 +112,7 @@ This config works when the client and the server run in the same Ubuntu/WSL envi
 
 `agent-driver connect` opens the **Agent Office Control Center** (the installer runs it for you). It uses the same visual language as the agent-driver run trace: a dark ground, mono-first labels, and one color per decision path. **Amber** is Jev or the step running now, **lilac** is the LLM, **blue** is plain code, **rose** is a person, and **green** means verified. The UI is **English by default**. The flag button in the top-right switches to Korean, and each browser remembers its choice. The page uses one locally bundled Pretendard variable font, with no remote font CDN, UI framework, or screen previews. Selected controls use borders and background color instead of left-edge accent bars. Longer explanations sit behind a **?** button.
 
-> Every screenshot below is the **real v0.2.0 Control Center**, captured on 2026-09-26 on the Ubuntu 24.04 machine used for the terminal run above. The setup steps start from an empty `~/.agent-driver`. The Work screens use the task that the logged-in Claude Code subscription defined on 2026-09-24 under v0.1.0; it carried over the v0.2.0 upgrade with its Work ID, request and completion checks intact.
+> Every screenshot below is the **real v0.2.0 Control Center**, captured in order on 2026-09-26 on the Ubuntu 24.04 machine used for the terminal run above, starting from an empty `~/.agent-driver`. The task shown was defined by Claude Code on that machine's subscription login.
 
 ### Setup, step 1 of 4: agents
 
@@ -140,9 +140,9 @@ You approve the dedicated work folder and local execution once. The runtime is *
 
 Pick a subscription you're already logged in to, or an API key. Client status shows as compact chips, and the Claude Code model list (Sonnet, Opus, Haiku) loads from the CLI.
 
-The Claude Code chip reads **Not confirmed** in this capture. It is not an error in the page: this machine's Claude Code is signed in with a long-lived token from `claude setup-token`, which reports `authMethod: oauth_token`. v0.2.0 counts Claude as a subscription only when the CLI reports a `claude.ai` login, so it never bills an API-key session by mistake. On a machine signed in with `claude login`, the chip reads **Connected**.
+Claude Code counts as a subscription when the CLI reports a `claude login` session or a long-lived token from `claude setup-token`, on Anthropic's own API with no API key in use. An API key, `apiKeyHelper`, Bedrock or Vertex login is never treated as a subscription, so it cannot be billed by mistake. The machine in these captures uses a `setup-token` token.
 
-![AI step, subscription: settings scope Global, Claude Code chip "Not confirmed", Claude Code model Sonnet (latest), and the checked consent "Allow sending work content to the selected AI to define and plan it"](docs/assets/readme/cc-04-ai-subscription.png)
+![AI step, subscription: settings scope Global, Claude Code chip "Connected", Claude Code model Sonnet (latest), and the checked consent "Allow sending work content to the selected AI to define and plan it"](docs/assets/readme/cc-04-ai-subscription.png)
 
 **Sending task text to an AI takes one explicit consent.** Saving the checkbox writes it to your local `~/.agent-driver/runtime-config.json`:
 
@@ -199,7 +199,7 @@ The sidebar keeps a count for each group. Type a task in one line and press **Su
 
 | Board | List |
 |---|---|
-| ![Board: a research.search card "Weekly AI agent news roundup table", badge "Ready", in the Queued column](docs/assets/readme/cc-08-board.png) | ![List view: the same task as a compact row under Queued](docs/assets/readme/cc-09-list.png) |
+| ![Board: a research.search card "Find 5 recent AI agent news stories in a sourced table", badge "Ready", in the Queued column](docs/assets/readme/cc-08-board.png) | ![List view: the same task as a compact row under Queued](docs/assets/readme/cc-09-list.png) |
 
 ### ② Work detail: the run trace
 
@@ -209,9 +209,9 @@ Opening a task shows the same layout as the run-trace storyboard:
 - the request line with a blinking cursor
 - the selected pack pill with its effect scope (`research.search · read-only`)
 
-In this example, Claude Code defined a one-line request into a titled task with four completion checks. The header shows the Work ID (`#6AB12F3B`) and, separately, that no run has started yet. The left column is the **Run trace**: one node per completion check with its owner. A run path that does not report independently verified stage progress says **No per-stage verification** instead of drawing a progress bar. Verified stages turn amber, the running stage gets a halo, and a stage waiting on a person turns rose. The pictured checks are all queued; this capture shows the layout, not completed execution or verification.
+In this example, Claude Code defined a one-line request into a titled task with three completion checks. The header shows the Work ID (`#3C8CA8CA`) and, separately, that no run has started yet. The left column is the **Run trace**: one node per completion check with its owner. A run path that does not report independently verified stage progress says **No per-stage verification** instead of drawing a progress bar. Verified stages turn amber, the running stage gets a halo, and a stage waiting on a person turns rose. The pictured checks are all queued; this capture shows the layout, not completed execution or verification.
 
-![Work detail: Ready badge, Work #6AB12F3B with run not started, request line, research.search · read-only, four queued completion checks, and the Human control panel with Pause and Jev decisions](docs/assets/readme/cc-10-work-detail.png)
+![Work detail: Ready badge, Work #3C8CA8CA with run not started, request line, research.search · read-only, three queued completion checks, and the Human control panel with Pause and Jev decisions](docs/assets/readme/cc-10-work-detail.png)
 
 ### ③ Human control: pause or redirect a stage
 
