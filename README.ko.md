@@ -110,11 +110,9 @@ agent-driver mcp
 
 ## 관제센터 단계별 안내
 
-> 화면 참고: 아래 안내 캡처는 프리텐다드 적용과 좌측 색띠 제거 전입니다. 현재 소스는 선택 상태를 테두리·배경색으로 표시하며, 연결 절차는 같습니다.
-
 설치기가 자동으로 실행하는 `agent-driver connect`가 **Agent Office 관제센터**를 엽니다. 관제센터는 agent-driver run trace와 같은 디자인 언어를 씁니다. 어두운 바탕에 mono 중심 라벨을 쓰고, 판단 경로마다 색이 하나씩 정해져 있습니다. **앰버**는 Jev와 지금 진행 중인 단계, **라일락**은 LLM, **파랑**은 코드, **로즈**는 사람, **초록**은 검증 완료입니다. 화면은 **영어가 기본**이고, 우측 상단의 국기 버튼을 누르면 한국어로 바뀝니다. 선택한 언어는 브라우저마다 기억됩니다. 프리텐다드 가변 글꼴 하나를 로컬에서 불러오며, 외부 글꼴 CDN·UI 프레임워크·화면 미리보기는 사용하지 않습니다. 선택 상태는 좌측 색띠 대신 테두리와 배경색으로 구분하고, 긴 설명은 **?** 버튼을 누르면 열립니다.
 
-> 아래 화면은 모두 이 브랜치의 **실제 관제센터**입니다. 위 터미널 실행과 같은 Ubuntu 24.04 머신에서 순서대로 캡처했고, 업무 상세에 나오는 업무는 로그인된 Claude Code 구독이 실제로 정의한 것입니다. 영어 화면이 기본이고, 한국어 화면은 맨 아래에 있습니다.
+> 아래 화면은 모두 **v0.2.0 실제 관제센터**입니다. 2026-09-26에 위 터미널 실행과 같은 Ubuntu 24.04 머신에서 캡처했습니다. 설정 단계는 빈 `~/.agent-driver`에서 시작했습니다. 업무 화면의 업무는 2026-09-24 v0.1.0에서 로그인된 Claude Code 구독이 정의한 것으로, v0.2.0으로 업그레이드한 뒤에도 Work ID·요청·완료 조건이 그대로 남았습니다. 영어 화면이 기본이고, 한국어 화면은 맨 아래에 있습니다.
 
 ### 설정 1/4: 에이전트
 
@@ -140,9 +138,11 @@ agent-driver mcp
 
 ### 3/4: AI
 
-로그인된 구독이나 API 키 중 하나를 고릅니다. 클라이언트 상태는 작은 칩으로 표시됩니다. 여기서는 Claude Code가 **Connected** 상태이고, 실제 모델 목록(Sonnet, Opus, Haiku)을 불러왔습니다.
+로그인된 구독이나 API 키 중 하나를 고릅니다. 클라이언트 상태는 작은 칩으로 표시되고, Claude Code 모델 목록(Sonnet, Opus, Haiku)은 CLI에서 불러옵니다.
 
-![AI 단계, 구독: Claude Code 칩 "Connected", Claude Code 모델 Sonnet, AI 전송 동의 체크](docs/assets/readme/cc-04-ai-subscription.png)
+이 캡처에서 Claude Code 칩은 **Not confirmed**입니다. 화면 오류가 아닙니다. 캡처한 머신의 Claude Code는 `claude setup-token`으로 만든 장기 토큰으로 로그인되어 있어 `authMethod: oauth_token`으로 보고됩니다. v0.2.0은 API 키 세션에 실수로 과금하지 않도록 CLI가 `claude.ai` 로그인을 보고할 때만 구독으로 인정합니다. `claude login`으로 로그인한 머신에서는 **Connected**로 표시됩니다.
+
+![AI 단계, 구독: 설정 대상 Global, Claude Code 칩 "Not confirmed", Claude Code 모델 Sonnet, AI 전송 동의 체크](docs/assets/readme/cc-04-ai-subscription.png)
 
 **업무 내용을 AI로 보내려면 명시적인 동의가 한 번 필요합니다.** 체크박스를 켜고 저장하면 로컬 `~/.agent-driver/runtime-config.json`에 기록됩니다.
 
@@ -172,6 +172,10 @@ agent-driver mcp
 |---|---|
 | ![AI 단계, API 모드: 공급자 Anthropic, 모델 claude-haiku-4-5, 키 입력, 요금·전환 체크박스](docs/assets/readme/cc-05-ai-api.png) | ![AI 전송 동의가 무엇을 보내고 어디에 기록되는지 설명하는 모달](docs/assets/readme/cc-07-help-modal.png) |
 
+**코딩 업무는 별도 모델을 쓸 수 있습니다.** **Settings scope**를 **Coding work only**로 바꿉니다. **Use global AI settings**가 켜져 있으면 전역 설정을 따르고, 끄면 코딩 계획·조언용 연결과 CLI 모델을 따로 고릅니다. 실제 코드 작업은 여전히 Codex·Claude CLI가 하며, 이미 연결된 세션은 기존 모델을 유지합니다.
+
+![AI 단계, Coding work only: "Use global AI settings" 체크와 코딩 전용 설정 안내](docs/assets/readme/cc-15-ai-coding.png)
+
 ### 4/4: Jev (선택)
 
 어떤 요소를 클릭할지, 결과가 맞는지 같은 짧고 반복되는 판단을 빠르게 처리합니다. 키가 없으면 LLM이 대신 판단합니다.
@@ -180,7 +184,7 @@ Jev를 호출할 지점과 조건은 Task Pack에 있습니다. 신규 Work는 �
 범위에서 이를 사용하며, Work를 설계하는 LLM이 별도의 Jev ON/OFF 정책을 만들지 않습니다.
 사용자가 개별 업무에서 명시적으로 끈 설정은 유지합니다.
 
-![Jev 단계: 사용 방식 Auto, 네 단계 모두 체크 표시](docs/assets/readme/cc-06-jev.png)
+![Jev 단계: 사용 방식 Auto, Agents·Local runtime 탭 체크 표시](docs/assets/readme/cc-06-jev.png)
 
 ### ① 업무: 보드와 목록
 
@@ -205,9 +209,9 @@ Jev를 호출할 지점과 조건은 Task Pack에 있습니다. 신규 Work는 �
 - 커서가 깜박이는 요청 줄
 - pack pill과 영향 범위(`research.search · read-only`)
 
-이 예시에서는 한 줄 요청을 Claude Code가 정의해 제목과 완료 조건 4개를 만들었습니다. 왼쪽 **Run trace**에는 단계마다 노드가 있고, 목표와 담당이 함께 표시됩니다. 검증된 단계는 앰버, 진행 중인 단계는 후광, 사람을 기다리는 단계는 로즈로 표시됩니다. 사진의 네 단계는 모두 대기 중이므로 완료·검증 사례가 아니라 화면 구성 예시입니다. Work와 Run ID를 분리해 표기하기 전의 캡처입니다.
+이 예시에서는 한 줄 요청을 Claude Code가 정의해 제목과 완료 조건 4개를 만들었습니다. 머리글에는 Work ID(`#6AB12F3B`)와, 따로 아직 실행이 시작되지 않았다는 표시가 있습니다. 왼쪽 **Run trace**에는 완료 조건마다 노드가 있고 담당이 함께 표시됩니다. 단계별 검증 진행을 독립적으로 보고하지 않는 실행 경로는 진행 막대 대신 **No per-stage verification**이라고 표시합니다. 검증된 단계는 앰버, 진행 중인 단계는 후광, 사람을 기다리는 단계는 로즈로 표시됩니다. 사진의 조건은 모두 대기 중이므로 완료·검증 사례가 아니라 화면 구성 예시입니다.
 
-![이전 업무 상세 화면: 요청 줄, research.search · read-only, 대기 중인 완료 조건 4개와 Human control 패널](docs/assets/readme/cc-10-work-detail.png)
+![업무 상세: Ready 배지, Work #6AB12F3B·실행 전, 요청 줄, research.search · read-only, 대기 중인 완료 조건 4개, Pause와 Jev 판단이 있는 Human control 패널](docs/assets/readme/cc-10-work-detail.png)
 
 ### ③ Human control: 멈추거나 방향 바꾸기
 
@@ -218,7 +222,7 @@ Jev를 호출할 지점과 조건은 Task Pack에 있습니다. 신규 Work는 �
 - 심화 업무의 조건 선택
 - 정의 재시도
 - 기존 Codex 세션을 이어받아 지시를 하나씩 보내기
-- 비용 동의 후 이 업무에서 Jev 켜기
+- 비용 동의 후 이 업무에서 Jev 켜기, 또는 Task Pack이 Jev를 쓰는 업무에서 이 업무만 끄기
 - 실행 이력과 클라이언트 인계 확인
 
 이미 검증된 결과는 다시 쓰지 않습니다. 중간에 안전하게 바꿀 수 없는 실행 경로라면, 멈춘 척하지 않고 그 사실을 그대로 알려줍니다.
@@ -232,14 +236,16 @@ Jev를 호출할 지점과 조건은 Task Pack에 있습니다. 신규 Work는 �
 | **Another AI's automation** | 제공되는 프롬프트를 기존 AI에 붙여넣고, 받은 JSON을 다시 넣습니다. 결과는 **검증 전 초안**으로 다루며, 비밀값은 거부하고 주장마다 근거를 연결합니다. 기존 자동화는 바꾸지 않습니다. |
 | **Workflow project** | 로컬·WSL 프로젝트 경로의 일부를 읽기 전용으로 분석합니다. 코드는 실행하지 않습니다. |
 | **Improve an existing bot** | 기존 봇을 출발점으로 개선안을 만듭니다. |
+| **Hermes 업무** | 호환 로컬 Hermes 프로필의 대화·예약을 찾아 보여줍니다. 초안을 확인한 뒤 가져오며, 실행은 같은 Hermes 프로필이 계속 맡습니다. 가져오기만으로는 모델 호출도 실행도 일어나지 않습니다. [자세히](docs/work-migration.md) |
+| **원격 OpenClaw** | Office가 실행되는 환경의 SSH 키로, OpenClaw가 이미 돌고 있는 서버의 대화·예약을 찾습니다. OpenClaw는 그 서버에 그대로 있고, 다음 지시는 업무 상세에서 보냅니다. 연결만으로는 아무것도 실행하지 않습니다. [자세히](docs/remote-office.md) |
 
-![가져오기: 방법 선택, 복사용 프롬프트, JSON 붙여넣기](docs/assets/readme/cc-11-import.png)
+![가져오기: 방법 버튼 다섯 개(다른 AI의 자동화, 워크플로 프로젝트, 기존 봇 개선, Hermes, 원격 OpenClaw), 복사용 프롬프트, JSON 붙여넣기](docs/assets/readme/cc-11-import.png)
 
 ### 사이트 로그인 (필요할 때만)
 
-사이트 로그인은 첫 설정에 포함되지 않습니다. 업무가 로그인이 필요한 URL을 만나면 그 worker만 멈추고, 해당 사이트가 이 화면에 나타납니다. 아래 사진은 로그인 필요 사이트가 없는 빈 상태만 보여주며, 실제 로그인·인계 검증 장면은 아닙니다. 사진에 보이는 초기 로딩 안내는 이후 수정했습니다.
+사이트 로그인은 첫 설정에 포함되지 않습니다. 업무가 로그인이 필요한 URL을 만나면 그 worker만 멈추고, 해당 사이트가 이 화면에 나타납니다. 아래 사진은 로그인 필요 사이트가 없는 빈 상태만 보여주며, 실제 로그인·인계 검증 장면은 아닙니다.
 
-![이전 사이트 로그인 빈 상태: 로그인이 필요한 사이트 없음](docs/assets/readme/cc-12-site-login.png)
+![사이트 로그인 빈 상태: 로그인이 필요한 사이트 없음](docs/assets/readme/cc-12-site-login.png)
 
 ### 한국어 화면과 모바일
 
