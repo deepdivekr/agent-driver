@@ -2,9 +2,32 @@
 
 **A local MCP server that helps AI agents run work on your computer and resume after interruptions.**
 
-**English** · [한국어](README.ko.md) · [v0.3.0 release notes](docs/releases/v0.3.0.md)
+**English** · [한국어](README.ko.md) · [v0.3.1 release notes](docs/releases/v0.3.1.md)
 
-The repository and command are named `agent-driver`. Connect it to Codex, Claude Code, Cursor, OpenCode, Hermes, or another MCP client.
+Connect it to Codex, Claude Code, Cursor, OpenCode, Hermes, or another MCP client.
+Install and run it as `agent-office`. The old `agent-driver` command remains a compatibility alias.
+
+## A look inside
+
+**Work overview** — submit a request, find your work, and see what needs attention.
+
+![Agent Office Work overview](docs/images/work-overview.png)
+
+<details>
+<summary>Work details and AI connection</summary>
+
+**Work detail** — review the goal, completion checks, planned steps and execution handoff; pause before dispatch.
+
+![Work detail and controls](docs/images/work-detail.png)
+
+**AI connection** — choose a subscription client, API provider or compatible local endpoint.
+
+![AI connection settings](docs/images/ai-connection.png)
+
+</details>
+
+Actual v0.3.1 interface, shown in Korean with isolated sample work. English is also available.
+These screenshots show setup and queued work, not completed live-agent runs.
 
 ## Supported environments
 
@@ -22,12 +45,12 @@ Out-of-the-box control of every desktop app is not supported.
 
 Ask your agent:
 
-> Install github.com/deepdivekr/agent-driver and connect it over MCP. Use Agent Office for my browser and file work.
+> Install github.com/deepdivekr/agent-office and connect it over MCP. Use Agent Office for my browser and file work.
 
 Or run this from **Ubuntu or WSL Ubuntu**, in any directory:
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.3.0/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-office/v0.3.1/install.sh | bash'
 ```
 
 You can [review the installer](install.sh) first.
@@ -51,10 +74,10 @@ Fallback stays within the authorized environment. [Browser setup](docs/browser-e
 To reopen the Control Center, run this in the same Ubuntu environment:
 
 ```bash
-~/.local/bin/agent-driver connect
+~/.local/bin/agent-office connect
 ```
 
-For manual MCP registration, use `agent-driver mcp`.
+For manual MCP registration, use `agent-office mcp`.
 Windows clients should use the WSL command shown in the Control Center.
 [First-run guide](docs/first-run.md) · [MCP configuration](docs/agent-interface.md)
 
@@ -106,7 +129,8 @@ Importing alone does not start work or activate schedules.
 
 Finish active work, disconnect MCP clients, and close the Control Center before rerunning the installer.
 If the shared server is still running, follow the [stop and reconnect guide](docs/mcp-resource-lifecycle.md).
-Settings and Work data stay under `~/.agent-driver`.
+New installs use `~/.local/share/agent-office` and keep settings and Work data in `~/.agent-office`.
+Existing `~/.agent-driver` data is reused in place; old installations are not deleted.
 Installations with private workflow code need a [compatibility review](docs/local-workflow-compatibility.md).
 
 - Aside and Neo adapters are currently **read-only**. Form writes and guest-VM transports are not supported.
@@ -114,13 +138,13 @@ Installations with private workflow code need a [compatibility review](docs/loca
 - Queued Work does not allocate a VM per task. Active browsers and model CLIs consume additional resources.
 - Keep local connection tokens, API keys, and private workflow data out of shared files.
 
-[Release validation](docs/release-readiness-v0.3.0.md) · [AI settings](docs/control-settings.md) · [Browser routing](docs/browser-executor-routing.md) · [Memory and process lifecycle](docs/mcp-resource-lifecycle.md)
+[Release validation](docs/release-readiness-v0.3.1.md) · [AI settings](docs/control-settings.md) · [Browser routing](docs/browser-executor-routing.md) · [Memory and process lifecycle](docs/mcp-resource-lifecycle.md)
 
 ## Development and license
 
 ```bash
-git clone https://github.com/deepdivekr/agent-driver.git
-cd agent-driver
+git clone https://github.com/deepdivekr/agent-office.git
+cd agent-office
 npm ci
 npm test
 ```

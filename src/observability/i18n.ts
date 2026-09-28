@@ -188,7 +188,7 @@ const RULES:Array<[string,string]>=[
 ['^(\\d+) / (\\d+) 단계 · (\\d+)명 작업 중$','$1 / $2 stages · $3 working'],['^완료 조건 · (.+)$','check · $1'],['^현재 담당: (.+)$','Owner: $1'],['^실행기: (.+)$','Executor: $1'],['^(.+) 단계에 새 지침$','New instruction for $1'],
 ['^(.+)에 MCP 등록$','Register MCP in $1'],['^(.+) 설치$','Install $1'],['^(.+) 모델$','$1 model'],['^(\\d+)개 모델 확인 · (.+)$','$1 models · $2'],['^현재 확인: (.+)$','Checked: $1'],['^(\\S+) (\\d+)개$','$1 $2'],
 ['^키 입력 후 새로고침하면 최신 목록을 불러옵니다 · 기본 (.+)$','Enter a key and refresh for the latest list · default $1'],['^(.+) · 저장된 모델$','$1 · saved model'],
-['^(.+) MCP 등록 완료 · ([\\d.]+)초$','$1 MCP registered · $2s'],['^(.+)에 agent-driver mcp 등록 요청$','Requested agent-driver mcp registration in $1'],['^(.+) 설치 확인 완료 · ([\\d.]+)초$','$1 install confirmed · $2s'],
+['^(.+) MCP 등록 완료 · ([\\d.]+)초$','$1 MCP registered · $2s'],['^(.+)에 agent-office mcp 등록 요청$','Requested agent-office mcp registration in $1'],['^(.+) 설치 확인 완료 · ([\\d.]+)초$','$1 install confirmed · $2s'],
 ['^(.+) 공식 설치 프로그램 다운로드 시작$','$1: downloading official installer'],['^(.+) 설치 파일 검증 완료 · (.+)바이트$','$1: installer verified · $2 bytes'],['^(.+) 설치 프로그램 실행 시작$','$1: running installer'],['^(.+) 설치 프로그램 종료 코드 (.+) · (.+)초$','$1: installer exit code $2 · $3s'],['^(.+) 실행 파일 탐지 중$','$1: locating executable'],
 ['^지시 (\\d+) · (.+)$','Instruction $1 · $2'],['^프로젝트 (.+) · 세션 (.+) · 모델 (.+) · (.+)$','Project $1 · session $2 · model $3 · $4'],
 ['^다음 단계: (.+)$','Next stage: $1'],['^대상: (.+)$','Target: $1'],['^원본: (.+)$','Source: $1'],['^승인 경계: (.+)$','Approval boundary: $1'],['^근거: (.+)$','Evidence: $1'],['^단계: (.+)$','Step: $1'],['^미확인: (.+)$','Unknown: $1'],

@@ -1,0 +1,26 @@
+{
+  "source_version": "0.3.1",
+  "ui_base_commit": "9da560090d5aaf66a08649741944cd9fb915b20e",
+  "captured_at": "2026-09-28T21:25:27.171Z",
+  "sample_data": true,
+  "live_task_run": false,
+  "paid_model_calls": 0,
+  "viewport": {
+    "width": 1280,
+    "overview_height": 600,
+    "detail_height": 960,
+    "settings_height": 960
+  },
+  "language": "ko",
+  "screens": [
+    "work-overview.png",
+    "work-detail.png",
+    "ai-connection.png"
+  ],
+  "checks": [
+    "four queued/paused sample Works",
+    "pause/resume changes state",
+    "API key blank; no settings saved",
+    "no page errors"
+  ]
+}

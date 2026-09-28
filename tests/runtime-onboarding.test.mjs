@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,readFile,rm,stat} from 'node:fs/promises';
+import {mkdir,mkdtemp,readFile,rm,stat,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {approveNonInterferingConnection,approvedMcpConfigPath,connectionRoot,localConnectionPaths,localConnectionScreen,readLocalConnection} from '../dist/onboarding/connection.js';
@@ -11,7 +11,7 @@ async function root(t){const value=await mkdtemp(join(tmpdir(),'agent-driver-con
 test('first-run connection has exactly one available non-interfering approval and creates the private default MCP config',async t=>{
   const stateRoot=await root(t),connected=await approveNonInterferingConnection(stateRoot,new Date('2026-09-21T12:00:00.000Z')),paths=localConnectionPaths(stateRoot);
   assert.equal(localConnectionScreen.title,'로컬 실행');assert.deepEqual(localConnectionScreen.modes.filter(mode=>mode.available).map(mode=>mode.id),['non_interfering']);
-  assert.equal(connected.state.mode,'non_interfering');assert.equal(connected.state.computer.host_desktop_access,'none');assert.equal(connected.state.computer.host_file_bridge,'explicit_transfer_only');assert.equal(connected.state.mcp.command,'agent-driver mcp');assert.equal(connected.state.jev.status,'optional');
+  assert.equal(connected.state.mode,'non_interfering');assert.equal(connected.state.computer.host_desktop_access,'none');assert.equal(connected.state.computer.host_file_bridge,'explicit_transfer_only');assert.equal(connected.state.mcp.command,'agent-office mcp');assert.equal(connected.state.jev.status,'optional');
   assert.equal(approvedMcpConfigPath(stateRoot),paths.runtimeConfig);assert.equal(readLocalConnection(stateRoot)?.connection_id,connected.state.connection_id);
   const config=JSON.parse(await readFile(paths.runtimeConfig,'utf8'));assert.deepEqual(config,{schema_version:1,project_id:'agent-driver-local',caller_ref:'local-agent',account_ref:'owner',worktree:'workspace',data_dir:'data',environment:'production',recovery_policy:'auto_resume'});
   assert.equal((await stat(paths.state)).mode&0o077,0);assert.equal((await stat(paths.runtimeConfig)).mode&0o077,0);
@@ -30,4 +30,24 @@ test('loopback connection screen exposes no shared-screen consent and accepts on
 test('connection root accepts only an explicit absolute per-user location',()=>{
   assert.equal(connectionRoot({AGENT_DRIVER_CONNECTION_ROOT:'/tmp/agent-driver-user'}),'/tmp/agent-driver-user');
   assert.throws(()=>connectionRoot({AGENT_DRIVER_CONNECTION_ROOT:'relative'}),/CONNECTION_ROOT_ABSOLUTE_REQUIRED/);
+});
+
+test('office root is new by default, preserves legacy data, and rejects ambiguous roots',async t=>{
+  const home=await root(t),office=join(home,'.agent-office'),legacy=join(home,'.agent-driver');
+  assert.equal(connectionRoot({},home),office);
+  await mkdir(legacy);
+  assert.equal(connectionRoot({},home),office,'Old process-lock directory alone is not Work data');
+  const prior=await approveNonInterferingConnection(legacy);
+  const saved=JSON.parse(await readFile(prior.paths.state,'utf8'));
+  saved.mcp.command='agent-driver mcp';
+  await writeFile(prior.paths.state,JSON.stringify(saved));
+  assert.equal(connectionRoot({},home),legacy);
+  assert.equal(readLocalConnection(legacy).mcp.command,'agent-driver mcp');
+  assert.equal((await approveNonInterferingConnection(legacy)).state.connection_id,prior.state.connection_id);
+  await approveNonInterferingConnection(office);
+  assert.throws(()=>connectionRoot({},home),/CONNECTION_ROOT_AMBIGUOUS/);
+  assert.equal(connectionRoot({AGENT_OFFICE_CONNECTION_ROOT:office},home),office);
+  assert.equal(connectionRoot({AGENT_DRIVER_CONNECTION_ROOT:legacy},home),legacy);
+  assert.throws(()=>connectionRoot({AGENT_OFFICE_CONNECTION_ROOT:office,AGENT_DRIVER_CONNECTION_ROOT:legacy},home),/CONNECTION_ROOT_CONFLICT/);
+  assert.equal(connectionRoot({AGENT_OFFICE_CONNECTION_ROOT:legacy,AGENT_DRIVER_CONNECTION_ROOT:legacy},home),legacy);
 });

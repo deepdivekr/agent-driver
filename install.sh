@@ -4,23 +4,23 @@ umask 077
 
 readonly AGENT_DRIVER_NODE_VERSION="22.22.0"
 readonly AGENT_DRIVER_NPM_VERSION="11.11.0"
-readonly DEFAULT_REPOSITORY="https://github.com/deepdivekr/agent-driver.git"
+readonly DEFAULT_REPOSITORY="https://github.com/deepdivekr/agent-office.git"
 
-say() { printf '[agent-driver] %s\n' "$1"; }
-fail() { printf '[agent-driver] 설치 중단: %s\n' "$1" >&2; exit 1; }
+say() { printf '[agent-office] %s\n' "$1"; }
+fail() { printf '[agent-office] 설치 중단: %s\n' "$1" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || fail "$1 명령이 필요합니다."; }
 
 [[ "$(uname -s)" == "Linux" ]] || fail "현재 자동 설치는 Ubuntu/Linux와 WSL만 지원합니다."
 [[ -n "${HOME:-}" && "$HOME" == /* && "$HOME" != "/" ]] || fail "안전한 HOME 경로를 확인할 수 없습니다."
 
-readonly REPOSITORY_URL="${AGENT_DRIVER_REPOSITORY_URL:-$DEFAULT_REPOSITORY}"
-readonly REPOSITORY_REF="${AGENT_DRIVER_VERSION:-v0.3.0}"
-readonly INSTALL_DIR="${AGENT_DRIVER_INSTALL_DIR:-$HOME/.local/share/agent-driver}"
-readonly BIN_DIR="${AGENT_DRIVER_BIN_DIR:-$HOME/.local/bin}"
-readonly RUNTIME_DIR="${AGENT_DRIVER_RUNTIME_DIR:-$HOME/.local/share/agent-driver-runtime}"
+readonly REPOSITORY_URL="${AGENT_OFFICE_REPOSITORY_URL:-${AGENT_DRIVER_REPOSITORY_URL:-$DEFAULT_REPOSITORY}}"
+readonly REPOSITORY_REF="${AGENT_OFFICE_VERSION:-${AGENT_DRIVER_VERSION:-v0.3.1}}"
+readonly INSTALL_DIR="${AGENT_OFFICE_INSTALL_DIR:-${AGENT_DRIVER_INSTALL_DIR:-$HOME/.local/share/agent-office}}"
+readonly BIN_DIR="${AGENT_OFFICE_BIN_DIR:-${AGENT_DRIVER_BIN_DIR:-$HOME/.local/bin}}"
+readonly RUNTIME_DIR="${AGENT_OFFICE_RUNTIME_DIR:-${AGENT_DRIVER_RUNTIME_DIR:-$HOME/.local/share/agent-office-runtime}}"
 
 if [[ "$REPOSITORY_URL" != "$DEFAULT_REPOSITORY" ]]; then
-  [[ "${AGENT_DRIVER_ALLOW_LOCAL_FIXTURE:-0}" == "1" && "$REPOSITORY_URL" == file:///* ]] || fail "공식 Agent Driver 저장소만 자동 설치할 수 있습니다."
+  [[ "${AGENT_DRIVER_ALLOW_LOCAL_FIXTURE:-0}" == "1" && "$REPOSITORY_URL" == file:///* ]] || fail "공식 Agent Office 저장소만 자동 설치할 수 있습니다."
 fi
 
 safe_home_path() {
@@ -87,13 +87,18 @@ with_selected_node() { env PATH="$AGENT_DRIVER_TOOL_PATH" "$@"; }
 
 if [[ -e "$INSTALL_DIR" ]]; then
   [[ -d "$INSTALL_DIR/.git" && -f "$INSTALL_DIR/.git/agent-driver-managed" ]] || fail "기존 비관리 디렉터리를 덮어쓰지 않습니다: $INSTALL_DIR"
-  [[ "$(git -C "$INSTALL_DIR" remote get-url origin)" == "$REPOSITORY_URL" ]] || fail "기존 설치의 원격 저장소가 다릅니다."
   [[ -z "$(git -C "$INSTALL_DIR" status --porcelain --untracked-files=normal)" ]] || fail "기존 설치에 수정된 파일이 있어 업데이트하지 않습니다."
-  say "Agent Driver 소스 업데이트"
+  current_repository="$(git -C "$INSTALL_DIR" remote get-url origin)"
+  if [[ "$current_repository" == "https://github.com/deepdivekr/agent-driver.git" && "$REPOSITORY_URL" == "$DEFAULT_REPOSITORY" ]]; then
+    git -C "$INSTALL_DIR" remote set-url origin "$DEFAULT_REPOSITORY"
+  else
+    [[ "$current_repository" == "$REPOSITORY_URL" ]] || fail "기존 설치의 원격 저장소가 다릅니다."
+  fi
+  say "Agent Office 소스 업데이트"
   git -C "$INSTALL_DIR" fetch --quiet --depth 1 origin "$REPOSITORY_REF"
   git -C "$INSTALL_DIR" checkout --quiet --detach FETCH_HEAD
 else
-  say "Agent Driver 내려받기"
+  say "Agent Office 내려받기"
   git clone --quiet --filter=blob:none --depth 1 --branch "$REPOSITORY_REF" --single-branch "$REPOSITORY_URL" "$INSTALL_DIR"
   [[ -d "$INSTALL_DIR/.git" ]] || fail "저장소를 내려받지 못했습니다."
   printf 'format=1\nrepository=%s\n' "$REPOSITORY_URL" > "$INSTALL_DIR/.git/agent-driver-managed"
@@ -115,7 +120,7 @@ fi
 
 say "의존성 설치"
 (cd "$INSTALL_DIR" && with_selected_node "$npm_bin" ci --no-audit --no-fund)
-say "Agent Driver 빌드"
+say "Agent Office 빌드"
 (cd "$INSTALL_DIR" && with_selected_node "$npm_bin" run build)
 if [[ "${AGENT_DRIVER_SKIP_BROWSER_INSTALL:-0}" != "1" ]]; then
   say "전용 Chromium 준비"
@@ -140,11 +145,23 @@ if [[ "${AGENT_DRIVER_SKIP_BROWSER_INSTALL:-0}" != "1" ]]; then
   fi
 fi
 
-launcher="$BIN_DIR/agent-driver"
-temporary_launcher="$BIN_DIR/.agent-driver.$$.tmp"
+launcher="$BIN_DIR/agent-office"
+temporary_launcher="$BIN_DIR/.agent-office.$$.tmp"
+[[ ! -L "$launcher" ]] || fail "기존 agent-office 심볼릭 링크를 덮어쓰지 않습니다."
+printf -v expected_launcher '#!/usr/bin/env bash\nexec %q %q "$@"' "$node_bin" "$INSTALL_DIR/dist/cli.js"
+if [[ -e "$launcher" ]]; then
+  [[ -f "$launcher" && "$(cat -- "$launcher")" == "$expected_launcher" ]] || fail "다른 agent-office 실행 파일을 덮어쓰지 않습니다."
+fi
 printf '#!/usr/bin/env bash\nexec %q %q "$@"\n' "$node_bin" "$INSTALL_DIR/dist/cli.js" > "$temporary_launcher"
 chmod 0700 "$temporary_launcher"
 mv -- "$temporary_launcher" "$launcher"
+
+# Keep the old command as an alias only when it is not already owned by an installation.
+if [[ ! -e "$BIN_DIR/agent-driver" && ! -L "$BIN_DIR/agent-driver" ]]; then
+  printf '#!/usr/bin/env bash\nexec %q "$@"\n' "$launcher" > "$BIN_DIR/.agent-driver.$$.tmp"
+  chmod 0700 "$BIN_DIR/.agent-driver.$$.tmp"
+  mv -- "$BIN_DIR/.agent-driver.$$.tmp" "$BIN_DIR/agent-driver"
+fi
 
 say "설치 완료: $launcher"
 if [[ ":${PATH}:" != *":${BIN_DIR}:"* ]]; then

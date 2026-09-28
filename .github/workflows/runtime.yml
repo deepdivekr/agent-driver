@@ -78,7 +78,7 @@ jobs:
           fi
           test -f "docs/releases/$tag.md"
           mkdir -p release-assets
-          git archive --format=tar.gz --prefix="agent-driver-$version/" "$GITHUB_SHA" > "release-assets/agent-driver-$version.tar.gz"
+          git archive --format=tar.gz --prefix="agent-office-$version/" "$GITHUB_SHA" > "release-assets/agent-office-$version.tar.gz"
           cp install.sh release-assets/install.sh
-          (cd release-assets && sha256sum "agent-driver-$version.tar.gz" install.sh > SHA256SUMS)
+          (cd release-assets && sha256sum "agent-office-$version.tar.gz" install.sh > SHA256SUMS)
           gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --title "Agent Office $tag" --notes-file "docs/releases/$tag.md" --latest release-assets/*

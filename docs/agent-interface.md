@@ -17,7 +17,7 @@ terminal start/status/submit_prompt/resume/interrupt는 명시적으로 설정�
 Ubuntu/WSL Bash, 저장소 디렉터리에서 실행한다. 아래의 첫 터미널은 합성 앱을 제공하므로 계속 켜 둔다. lab 디렉터리는 새 경로여야 하며 기존 설정/기록을 덮어쓰지 않는다.
 
 ```bash
-cd agent-driver
+cd agent-office
 npm ci
 npx playwright install chromium
 npm run build
@@ -27,14 +27,14 @@ node dist/cli.js fixture serve --data-dir .runtime/lab-01
 두 번째 터미널에서도 같은 저장소로 이동한다.
 
 ```bash
-cd agent-driver
+cd agent-office
 node dist/cli.js doctor --config .runtime/lab-01/host.json --json
 node dist/cli.js capabilities list --config .runtime/lab-01/host.json --json
 node dist/cli.js intake --config .runtime/lab-01/host.json --prompt '이름 봄, 메모 점심 회의 초안을 저장해'
 node dist/cli.js mcp --config .runtime/lab-01/host.json
 ```
 
-마지막 명령은 MCP 클라이언트가 시작할 프로세스다. 일반 대화형 프롬프트를 읽지 않으며 JSON-RPC만 처리한다. Hermes는 `agent-driver hermes configure`가 현재 Node executable과 절대 `dist/cli.js` 경로를 보존적으로 등록한다. Phase 36에서 공식 Hermes CLI의 실제 stdio 연결·도구 발견을 검증했으며, Telegram end-to-end 실행은 유효한 secret과 model auth를 갖춘 별도 user-environment 검증이다.
+마지막 명령은 MCP 클라이언트가 시작할 프로세스다. 일반 대화형 프롬프트를 읽지 않으며 JSON-RPC만 처리한다. Hermes는 `agent-office hermes configure`가 현재 Node executable과 절대 `dist/cli.js` 경로를 보존적으로 등록한다. Phase 36에서 공식 Hermes CLI의 실제 stdio 연결·도구 발견을 검증했으며, Telegram end-to-end 실행은 유효한 secret과 model auth를 갖춘 별도 user-environment 검증이다.
 
 원문 한 줄만 전달하면 `NEEDS_EXTRACTION`과 좁은 인수 질문을 돌려준다. 호출 agent가 자신의 모델로 추출한 `name`, `note` 값과 UTF-16 `[start,end)` 원문 범위를 proposal로 전달하면 범위를 검증한다. 결과는 항상 `dispatch_allowed=false`; 범위 일치는 사용자 의도의 의미적 정답을 보장하지 않는다. 창작/다중 작업/모호한 지시/빠진 값은 호출 agent가 확인하며 지원 부분만 임의 실행하지 않는다. 사용자는 state/question을 작성하지 않는다. 이 설명은 위 합성 fixture의 인수 추출에 한정한다. 현재 Work 접수와 AI 연결에는 MCP sampling·API 및 선택형 Jev가 별도로 제공되며, 이 fixture의 `dispatch_allowed=false`가 해당 기능의 부재를 뜻하지 않는다.
 

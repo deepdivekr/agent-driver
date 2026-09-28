@@ -37,10 +37,10 @@ async function installEnvironment(base,source){
 
 test('runtime native bootstrap installs, builds, exposes an absolute wrapper and reruns without user-home or network effects',async t=>{
   const base=await mkdtemp(join(tmpdir(),'agent-driver-bootstrap-'));t.after(()=>rm(base,{recursive:true,force:true}));const source=await fixtureSource(base),environment=await installEnvironment(base,source);
-  environment.AGENT_DRIVER_SKIP_CONNECT='0';const first=must(run('bash',[installer],{env:environment}));assert.match(first.stdout,/Agent Driver 내려받기/u);assert.match(first.stdout,/설치 완료/u);assert.match(first.stdout,/관제센터 시작\nfixture:connect/u);
+  environment.AGENT_DRIVER_SKIP_CONNECT='0';const first=must(run('bash',[installer],{env:environment}));assert.match(first.stdout,/Agent Office 내려받기/u);assert.match(first.stdout,/설치 완료/u);assert.match(first.stdout,/관제센터 시작\nfixture:connect/u);
   const launcher=join(environment.AGENT_DRIVER_BIN_DIR,'agent-driver'),result=must(run(launcher,['hello','world'],{env:environment}));assert.equal(result.stdout.trim(),'fixture:hello,world');
   const installed=await realpath(environment.AGENT_DRIVER_INSTALL_DIR);assert.ok(installed.startsWith(await realpath(environment.HOME)+ '/'));
-  const second=must(run('bash',[installer],{env:environment}));assert.match(second.stdout,/Agent Driver 소스 업데이트/u);assert.equal((await readFile(join(environment.AGENT_DRIVER_INSTALL_DIR,'.git','agent-driver-managed'),'utf8')).startsWith('format=1\n'),true);
+  const second=must(run('bash',[installer],{env:environment}));assert.match(second.stdout,/Agent Office 소스 업데이트/u);assert.equal((await readFile(join(environment.AGENT_DRIVER_INSTALL_DIR,'.git','agent-driver-managed'),'utf8')).startsWith('format=1\n'),true);
 });
 
 test('runtime native bootstrap uses its selected Node for npm when PATH contains an unusable node',async t=>{
@@ -53,6 +53,27 @@ test('runtime native bootstrap uses its selected Node for npm when PATH contains
   assert.match(installed.stdout,/설치 완료/u);
   assert.doesNotMatch(installed.stderr,/wrong node selected/u);
   assert.equal(must(run(join(environment.AGENT_DRIVER_BIN_DIR,'agent-driver'),['version-check'],{env:environment})).stdout.trim(),'fixture:version-check');
+});
+
+test('runtime native office installation uses new defaults and preserves an existing legacy command',async t=>{
+  const base=await mkdtemp(join(tmpdir(),'office-defaults-'));t.after(()=>rm(base,{recursive:true,force:true}));
+  const source=await fixtureSource(base),environment=await installEnvironment(base,source);
+  delete environment.AGENT_DRIVER_INSTALL_DIR;
+  delete environment.AGENT_DRIVER_RUNTIME_DIR;
+  const bin=environment.AGENT_DRIVER_BIN_DIR;
+  await mkdir(bin,{recursive:true});
+  const legacy=join(bin,'agent-driver'),original='#!/bin/sh\nprintf old-installation\n';
+  await writeFile(legacy,original);await chmod(legacy,0o700);
+  must(run('bash',[installer],{env:environment}));
+  assert.equal(must(run(join(bin,'agent-office'),['mcp'],{env:environment})).stdout.trim(),'fixture:mcp');
+  assert.equal(await readFile(legacy,'utf8'),original);
+  assert.equal(JSON.parse(await readFile(join(environment.HOME,'.local/share/agent-office/package.json'),'utf8')).name,'fixture-agent-driver');
+  assert.ok((await stat(join(environment.HOME,'.local/share/agent-office-runtime'))).isDirectory());
+  await writeFile(join(bin,'agent-office'),'#!/bin/sh\nprintf unrelated\n');
+  const conflict=run('bash',[installer],{env:environment});
+  assert.notEqual(conflict.status,0);
+  assert.match(conflict.stderr,/다른 agent-office 실행 파일/u);
+  assert.equal(await readFile(join(bin,'agent-office'),'utf8'),'#!/bin/sh\nprintf unrelated\n');
 });
 
 test('runtime native bootstrap verifies Chromium launch and keeps system package changes manual',async t=>{
@@ -87,6 +108,6 @@ test('runtime native bootstrap rejects paths outside HOME before creating their 
 
 test('runtime contract bootstrap pins official source and toolchain, verifies Node checksum and never requests sudo or evaluates text',async()=>{
   const text=await readFile(installer,'utf8'),pkg=JSON.parse(await readFile(join(root,'package.json'),'utf8'));
-  assert.match(text,/https:\/\/github\.com\/deepdivekr\/agent-driver\.git/u);assert.ok(text.includes('AGENT_DRIVER_VERSION:-v'+pkg.version));assert.match(text,/22\.22\.0/u);assert.match(text,/11\.11\.0/u);assert.match(text,/SHASUMS256\.txt/u);assert.match(text,/sha256sum --check/u);assert.match(text,/playwright install chromium/u);
+  assert.match(text,/https:\/\/github\.com\/deepdivekr\/agent-office\.git/u);assert.ok(text.includes('AGENT_DRIVER_VERSION:-v'+pkg.version));assert.match(text,/22\.22\.0/u);assert.match(text,/11\.11\.0/u);assert.match(text,/SHASUMS256\.txt/u);assert.match(text,/sha256sum --check/u);assert.match(text,/playwright install chromium/u);
   assert.doesNotMatch(text,/\bsudo\b/u);assert.doesNotMatch(text,/\beval\b/u);assert.doesNotMatch(text,/curl[^\n]*\|\s*(?:ba)?sh/u);
 });

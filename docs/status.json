@@ -1,4 +1,9 @@
 {
+  "RQ-804": {"status":"done","evidence":["README.md","README.ko.md","install.sh","package.json"],"note":"Repository rename verified; current links updated without changing old tags."},
+  "RQ-805": {"status":"done","evidence":["docs/images/capture.json","docs/images/work-overview.png","docs/images/work-detail.png","docs/images/ai-connection.png"],"note":"Current candidate UI captured with four isolated sample Works; pause/resume verified; API key blank, no settings saved or paid model calls. All three images visually inspected."},
+  "RQ-806": {"status":"done","evidence":["README.md","README.ko.md","docs/first-run.md"],"note":"Three captioned actual UI screenshots; canonical commands and new/default versus legacy data paths distinguished."},
+  "RQ-807": {"status":"partial","note":"Initial documentation tests passed; final release validation and GitHub publication pending."},
+  "RQ-808": {"status":"partial","note":"Canonical CLI/path implementation added; affected tests and real fresh/legacy installations pending."},
   "RQ-799": {
     "status": "done",
     "evidence": [
