@@ -21,7 +21,7 @@ const executableId=request=>request.executable.split('/').at(-1);
 test('runtime subscription auth probes client-owned status only and returns no identity or credential material',async()=>{
   const seen=[];const runner={async run(request){seen.push(request);
     if(executableId(request)==='codex')return {code:0,stdout:'Logged in using ChatGPT\n',stderr:''};
-    if(executableId(request)==='claude')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',subscriptionType:'pro',email:'private@example.test',projectsDirectory:'/secret'}),stderr:''};
+    if(executableId(request)==='claude')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty',subscriptionType:'pro',email:'private@example.test',projectsDirectory:'/secret'}),stderr:''};
     if(executableId(request)==='opencode')return {code:0,stdout:JSON.stringify([{provider:'openrouter',credential:'never-return'}]),stderr:''};
     if(executableId(request)==='agent')return {code:0,stdout:'Not authenticated\n',stderr:''};
     return {code:0,stdout:'[nous] Nous Portal — not logged in\n',stderr:''};
@@ -91,7 +91,7 @@ test('runtime local connection UI starts Claude-owned browser login and never re
   let finishLogin;let claudeReady=false;const seen=[];
   const runner={async run(request){seen.push(request);const command=executableId(request)+' '+request.args.join(' ');
     if(command==='codex login status')return {code:1,stdout:'Not logged in',stderr:''};
-    if(command==='claude auth status')return {code:0,stdout:JSON.stringify({loggedIn:claudeReady,authMethod:claudeReady?'claude.ai':null,email:'private@example.test'}),stderr:''};
+    if(command==='claude auth status')return {code:0,stdout:JSON.stringify({loggedIn:claudeReady,authMethod:claudeReady?'claude.ai':null,apiProvider:'firstParty',email:'private@example.test'}),stderr:''};
     if(command==='hermes proxy status')return {code:0,stdout:'[nous] Nous Portal — not logged in',stderr:''};
     if(command==='claude auth login --claudeai'){request.onStdout?.('Continue in browser as private@example.test with token secret-value');return new Promise(resolve=>{finishLogin=()=>{claudeReady=true;resolve({code:0,stdout:'private@example.test',stderr:'secret-value'});};});}
     throw Error('unexpected '+command);
@@ -119,7 +119,7 @@ test('runtime subscription model uses MCP client sampling first without tools or
 test('runtime subscription model falls from failed Codex to Claude while preserving no-tools structured contracts',async()=>{
   const invocations=[];const runner={async run(request){invocations.push(request);
     if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT\n',stderr:''};
-    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',subscriptionType:'max'}),stderr:''};
+    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty',subscriptionType:'max'}),stderr:''};
     if(request.args.join(' ')==='status')return {code:1,stdout:'',stderr:''};
     if(request.args.join(' ')==='proxy status')return {code:1,stdout:'',stderr:''};
     if(executableId(request)==='codex'&&request.args[0]==='exec')return {code:1,stdout:'',stderr:'private provider failure'};
@@ -166,17 +166,17 @@ test('runtime Codex schema transport removes nested URI annotations without muta
 
 test('Claude exact JSON fences are accepted, but surrounding prose and multiple blocks are rejected',async()=>{
   for(const [result,accepted] of [['```json\n{"choice":"A"}\n```',true],['Here is JSON\n```json\n{"choice":"A"}\n```',false],['```json\n{}\n```\n```json\n{}\n```',false]]){
-    const runner={async run(request){return {code:0,stdout:JSON.stringify(request.args.join(' ')==='auth status'?{loggedIn:true,authMethod:'claude.ai'}:{is_error:false,result}),stderr:''};}};
+    const runner={async run(request){return {code:0,stdout:JSON.stringify(request.args.join(' ')==='auth status'?{loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}:{is_error:false,result}),stderr:''};}};
     const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'claude'}),runner});
     if(accepted)assert.deepEqual(await model.call('design','Choose.',{},schema),{choice:'A'});
-    else await assert.rejects(model.call('design','Choose.',{},schema),/STRUCTURED_MODEL_UNAVAILABLE/);
+    else await assert.rejects(model.call('design','Choose.',{},schema),/CLIENT_STRUCTURED_OUTPUT_INVALID/);
   }
 });
 
 test('runtime URI transport compatibility is Codex-only and leaves Claude structured schema unchanged',async()=>{
   const original={type:'object',properties:{url:{type:'string',format:'uri'}},additionalProperties:false,required:['url']};let transported;
   const runner={async run(request){
-    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai'}),stderr:''};
+    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};
     transported=JSON.parse(request.args[request.args.indexOf('--json-schema')+1]);
     return {code:0,stdout:JSON.stringify({is_error:false,structured_output:{url:'https://example.test/'}}),stderr:''};
   }};

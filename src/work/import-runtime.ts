@@ -4,6 +4,7 @@ import {type PackStore} from '../packs/store.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {validateWorkProposal,type WorkProposal} from './contracts.js';
+import {planFromImport} from './plan.js';
 import {parseWorkImportDraft,UNIVERSAL_WORK_MIGRATION_PROMPT,type WorkImportDraft} from './import-draft.js';
 import {scanProject,type ProjectScan} from './project-scan.js';
 import {importJevRecommendationSchema,IMPORT_JEV_SELECTION_INSTRUCTIONS,validatedImportJevRecommendations} from './jev-import-recommendation.js';
@@ -126,7 +127,8 @@ export class WorkImportRuntime{
     }
     if(input.completion)checks=[{id:'confirmed_result',result:input.completion,evidence:'실행 결과와 독립된 테스트 또는 검토 영수증'}];
     if(!goal||!checks.length)throw Error('WORK_IMPORT_GOAL_OR_COMPLETION_REQUIRED');
-    const spec=validateWorkProposal({title,desired_outcome:goal,completion_checks:checks,assumptions,route,requested_effect:effect,recurrence,questions:[]},'quick');
+    const plan=planFromImport(record,goal,effect);
+    const spec=validateWorkProposal({title,desired_outcome:goal,completion_checks:checks,assumptions,route,requested_effect:effect,recurrence,questions:[],plan},'quick');
     const work=this.store.acceptWorkImport(this.config.project.id,record.id,cleanedOneLine(prompt||goal),spec,input.jev_enabled,input.cost_acknowledged,snapshotHash(input));
     const projectBody=record.kind==='project'&&isProjectBody(record.body)?record.body:null;
     return {work_id:work.id,import_id:record.id,status:work.status,jev:{enabled:work.jev_enabled,cost_consent_at:work.jev_cost_consent_at},activation:false,execution:false,deduplicated:false,next_action:route.pack_family==='coding.orchestrate'?(projectRef?'review_project_then_approve_coding_plan':'register_project_with_write_permission_then_review_coding_work'):'connected_agent_plan_from_imported_work',project_ref:projectRef,schedule_active:false,...(projectBody?{observed_files_unchanged:true,scan_scope:{files_read:projectBody.scan.files_read,bytes_read:projectBody.scan.bytes_read,truncated:projectBody.scan.limits.truncated}}:{})};

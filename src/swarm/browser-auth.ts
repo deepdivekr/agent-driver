@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {readFile,readdir} from 'node:fs/promises';
 import {isAbsolute,join} from 'node:path';
-import {chromium,type Browser,type Page} from 'playwright';
+import {type Browser,type Page} from 'playwright';
 import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {type PackStore} from '../packs/store.js';
@@ -55,7 +55,7 @@ export async function connectOwnedBrowser(config:HostConfig):Promise<Browser>{
     if(parts[parts.indexOf('-name')+1]===`agent-driver-${vm!.id}`&&parts.includes(`file=${join(root,'browser.qcow2')},if=virtio,format=qcow2`)&&parts.some(part=>part.includes(`hostfwd=tcp:127.0.0.1:${vm!.devtools_port}-:`)))owned=true;
   }
   requireCondition(owned,'AUTH_OWNED_VM_NOT_RUNNING');
-  return chromium.connectOverCDP(`http://127.0.0.1:${vm!.devtools_port}`,{timeout:10_000});
+  return (await import('playwright')).chromium.connectOverCDP(`http://127.0.0.1:${vm!.devtools_port}`,{timeout:10_000});
 }
 
 export class BrowserLoginBroker {

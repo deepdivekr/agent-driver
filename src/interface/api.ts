@@ -1,4 +1,5 @@
 import {PackStore} from '../packs/store.js';
+import {FileExplorer} from '../files/explorer.js';
 import {FamilyRuntime} from '../packs/runtime.js';
 import {LocalApprovalDispatcher} from '../packs/local-approval.js';
 import {ensureTerminalHost} from '../terminal/manager.js';
@@ -28,12 +29,13 @@ import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {McpSamplingStructuredModel,SubscriptionAwareStructuredModel} from '../integrations/subscription-auth.js';
 import {LlmSwarmDecisionFallback,LlmSwarmPlanner,SWARM_DECISION_CATALOG,SwarmRuntime,swarmTools,type SwarmRuntimeProviders} from '../swarm/index.js';
 import {runtimeActivityReport} from '../observability/contracts.js';
-import {safeControlText} from '../observability/control-center.js';
+import {safeControlText} from '../observability/safe-text.js';
 import {sanitizeSwarmEndpoint} from '../swarm/dashboard.js';
 import {SwarmVisualExecutor} from '../swarm/visual-executor.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {WorkRuntime} from '../work/runtime.js';
+import {SEMANTIC_DECISION_CATALOG} from '../decision-plane/semantic.js';
 import {WorkImportRuntime} from '../work/import-runtime.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
 import {CodingDialogRuntime} from '../coding/conversation.js';
@@ -41,6 +43,13 @@ import {codingTools} from '../coding/contracts.js';
 import {HermesMigrationRuntime,migrationPreview} from '../work/hermes-migration.js';
 import {RemoteOffice,remotePropose,remoteDiscover} from '../work/remote.js';
 import {z} from 'zod';
+import {WindowsWorkflowRuntime,type WindowsRuntimeOptions} from '../desktop/windows-runtime.js';
+import {CuaFieldDriver} from '../desktop/cua-field-driver.js';
+import {CuaDesktopDriver} from '../desktop/cua-desktop-driver.js';
+import {WorkflowCompatibility} from '../integrations/workflow-compatibility.js';
+import {WINDOWS_DECISION_CATALOG} from '../desktop/windows-decision.js';
+import {browserCatalog,BROWSER_DECISION_CATALOG,inspectBrowserTargets} from '../browser/executor-routing.js';
+import {RoutedSwarmBrowser} from '../swarm/routed-browser.js';
 
 export type SwarmBrowserCommand={action:'navigate';url:string}|{action:'observe'}|{action:'scroll';direction:'up'|'down'};
 export interface SwarmVisualAdapter{
@@ -50,10 +59,13 @@ export interface SwarmVisualAdapter{
   close():Promise<void>;
 }
 type SwarmDispatch=Awaited<ReturnType<SwarmRuntime['tick']>>['dispatches'][number];
-export interface RuntimeApiOptions {channelTransport?:JevSystemOneTransport;approval?:PackApprovalDispatcher;swarmModel?:StructuredModel;swarmJev?:JevSystemOneTransport;swarmProviders?:SwarmRuntimeProviders;swarmVisual?:SwarmVisualAdapter;coding?:CodingRuntimeOptions;}
+export interface RuntimeApiOptions {channelTransport?:JevSystemOneTransport;approval?:PackApprovalDispatcher;swarmModel?:StructuredModel;swarmJev?:JevSystemOneTransport;swarmProviders?:SwarmRuntimeProviders;swarmVisual?:SwarmVisualAdapter;coding?:CodingRuntimeOptions;windows?:WindowsRuntimeOptions;}
 
 export class RuntimeApi{
+  readonly workflowCompatibility:WorkflowCompatibility;
   readonly store:PackStore;
+  readonly files:FileExplorer;
+  readonly windows:WindowsWorkflowRuntime;
   readonly packs:FamilyRuntime;
   readonly work:WorkRuntime;
   readonly imports:WorkImportRuntime;
@@ -68,9 +80,14 @@ export class RuntimeApi{
   private model:StructuredModel;
   private explicitProviders:boolean;
   constructor(readonly config:HostConfig,readonly options:RuntimeApiOptions={}){
+    this.workflowCompatibility=new WorkflowCompatibility(config);
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
+    this.files=this.store.localFileExplorer(config.project.id,dirname(config.dbPath));
     this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
-    this.work=new WorkRuntime(this.store,config,this.model);
+    const windowsDriver=options.windows?.driver??(config.windowsExecutor?(config.windowsExecutor.kind==='cua-desktop'?new CuaDesktopDriver(config.windowsExecutor,this.store.desktopState):new CuaFieldDriver(config.windowsExecutor,this.store.desktopState)):undefined);
+    this.windows=new WindowsWorkflowRuntime(this.store,config,{...options.windows,
+      ...(windowsDriver?{driver:windowsDriver}:{}),llm:options.windows?.llm??this.model});
+    this.work=new WorkRuntime(this.store,config,this.model,()=>{const native=this.windows.catalog();return {browser_executors:browserCatalog(this.config),windows:{connection:native.native_executor,dynamic_planning:native.dynamic_planning,profiles_required:false}};});
     this.imports=new WorkImportRuntime(this.store,config,this.model);
     this.migrations=new HermesMigrationRuntime(this.store,config);
     this.remote=new RemoteOffice(this.store,config);
@@ -80,7 +97,10 @@ export class RuntimeApi{
     let jev=options.swarmJev;if(!jev&&config.swarm?.enabled)jev=optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport??undefined;
     this.explicitProviders=options.swarmProviders!==undefined;
     this.swarm=new SwarmRuntime(this.store,config,options.swarmProviders??{planner:new LlmSwarmPlanner(this.model),llm_fallback:new LlmSwarmDecisionFallback(this.model),...(jev?{decision:{id:'typesafe-jev',systemOne:(request,settings)=>jev!.systemOne(request,settings)}}:{})});
-    this.visual=config.swarm?.enabled&&config.swarm.visual.enabled?(options.swarmVisual??new SwarmVisualExecutor(this.store,config)):null;
+    this.visual=config.swarm?.enabled&&config.swarm.visual.enabled?(options.swarmVisual??(config.browserExecutors?new RoutedSwarmBrowser(this.store,config,()=>{
+      const saved=readModelSettings(modelSettingsPath(config)),approved=config.swarm?.model_data_approved===true,allowed=approved&&saved?.selection.jev!=='off';
+      return {jev:allowed?(options.swarmJev??optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport??undefined):undefined,llm:approved?this.model:undefined};
+    }):new SwarmVisualExecutor(this.store,config))):null;
   }
   attachClientSampling(sampling:McpSamplingStructuredModel){
     if(this.explicitProviders)return;
@@ -90,10 +110,14 @@ export class RuntimeApi{
   }
   private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
   close(){
-    if(this.closed)return;this.closed=true;this.packs.close();this.coding.close();this.codingDialog.close();
-    this.closing=(async()=>{await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
+    if(this.closed)return;this.closed=true;this.packs.close();this.coding.close();this.codingDialog.close();this.windows.close();
+    this.closing=(async()=>{await this.workflowCompatibility.drain();await this.windows.drain();await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
   }
-  async drain(){await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.closing)await this.closing;}
+  async drain(){
+    // Start admission fences together, before yielding to any one runtime.
+    await Promise.all([this.workflowCompatibility.drain(),this.windows.drain(),this.packs.drain(),this.coding.drain(),this.codingDialog.drain(),this.remote.drain()]);
+    if(this.closing)await this.closing;
+  }
   private async releaseFinishedVisuals(runId:string){
     if(!this.visual)return;
     const status=this.swarm.status(runId);
@@ -129,6 +153,9 @@ export class RuntimeApi{
   private scoped(taskId:string){const task=this.store.task(taskId);requireCondition(task.project_id===this.config.project.id,'TASK_SCOPE_MISMATCH');return task;}
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');
+    if(name.startsWith('runtime_workflow_'))return this.workflowCompatibility.call(name,args);
+    if(name.startsWith('runtime_windows_'))return this.windows.call(name,args);
+    if(name.startsWith('runtime_files_'))return this.files.call(name,args);
       if(name.startsWith('runtime_work_')){
         switch(name){
           case 'runtime_work_remote_targets':z.object({}).strict().parse(args);return this.remote.targets().map(t=>({id:t.id,name:t.name,provider:'openclaw'}));
@@ -151,7 +178,8 @@ export class RuntimeApi{
         case 'runtime_work_start':return this.work.start(args);
         case 'runtime_work_define':return this.work.define(args);
         case 'runtime_work_answer':return this.work.answer(args);
-        case 'runtime_work_status':return this.work.status(args);
+        case 'runtime_work_status':{const result=this.work.status(args);return {...result,windows_runs:this.windows.forWork(z.object({work_id:z.string().uuid()}).passthrough().parse(args).work_id)};}
+        case 'runtime_work_context':return this.packs.context(args);
         case 'runtime_work_list':return this.work.list(args);
         case 'runtime_work_pause':return this.work.pause(args);
         default:throw Error('UNKNOWN_TOOL');
@@ -233,6 +261,7 @@ export class RuntimeApi{
     const ledger = this.store.storage(this.config), reservation = writes.includes(name) ? ledger.reserve('request_admission', 1048576) : null;
     let failed = false;
     try {switch(name){
+      case 'runtime_browser_executors':return {executors:input.probe?await inspectBrowserTargets(this.config,input.target_id as string|undefined):browserCatalog(this.config).filter(t=>!input.target_id||t.id===input.target_id),permissions_granted:false};
       case 'runtime_activity_report':{
         const report=runtimeActivityReport.parse(input),endpoint=report.activity.endpoint?sanitizeSwarmEndpoint(report.activity.endpoint):null;
         if(report.activity.surface_id)requireCondition(this.config.observability?.surfaces.some(surface=>surface.id===report.activity.surface_id),'CONTROL_SURFACE_UNDELEGATED');
@@ -241,7 +270,7 @@ export class RuntimeApi{
       }
       case 'runtime_storage_status':return ledger.status();
       case 'runtime_decision_status':{
-        const root=join(dirname(this.config.dbPath),'decisions'),registry=new DecisionProfileRegistry(join(root,'registry')),scope=this.config.environment==='fixture'?'fixture' as const:'production' as const,entries=[{catalog:ROW_DECISION_CATALOG,journal:'family.jsonl'},{catalog:ONE_LINE_DECISION_CATALOG,journal:'intake.jsonl'},{catalog:ADAPTIVE_DECISION_CATALOG,journal:'adaptive.jsonl'},{catalog:SWARM_DECISION_CATALOG,journal:'swarm.jsonl'}],decisions=[];
+        const root=join(dirname(this.config.dbPath),'decisions'),registry=new DecisionProfileRegistry(join(root,'registry')),scope=this.config.environment==='fixture'?'fixture' as const:'production' as const,entries=[{catalog:ROW_DECISION_CATALOG,journal:'family.jsonl'},{catalog:ONE_LINE_DECISION_CATALOG,journal:'intake.jsonl'},{catalog:ADAPTIVE_DECISION_CATALOG,journal:'adaptive.jsonl'},{catalog:SWARM_DECISION_CATALOG,journal:'swarm.jsonl'},{catalog:WINDOWS_DECISION_CATALOG,journal:'windows.jsonl'},{catalog:SEMANTIC_DECISION_CATALOG,journal:'semantic.jsonl'},{catalog:BROWSER_DECISION_CATALOG,journal:'browser.jsonl'}],decisions=[];
         for(const entry of entries)try{const profile=await registry.status(entry.catalog,scope),audit=await auditDecisionJournal(join(root,entry.journal)),report=decisionOperationsReport(entry.catalog,'jev-latest',audit);decisions.push({catalog_id:entry.catalog.id,profile,events:report.events,judgments:report.judgments,labeled:report.labels.valid,journal_errors:report.journal_errors.length,provider:report.provider,by_decision:report.by_decision});}catch(error){decisions.push({catalog_id:entry.catalog.id,profile:{status:'invalid'},error:error instanceof Error&&/^DECISION_[A-Z_]+$/u.test(error.message)?error.message:'DECISION_STATUS_UNAVAILABLE'});}
         return {scope,decisions,memory:this.store.decisionMemory.summary(this.config.project.id),mutation_allowed:false,profile_promotion_exposed:false};
       }

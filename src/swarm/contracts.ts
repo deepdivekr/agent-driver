@@ -1,4 +1,5 @@
 import {z} from 'zod';
+import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 
 export const SWARM_ENGINE_VERSION='swarm_mode_v1';
 export const MAX_SWARM_WORKERS=300;
@@ -29,6 +30,7 @@ export const swarmWorkerSchema=z.object({
   stage:swarmWorkerStageSchema.default('discovery'),
   source_urls:z.array(z.string().url().max(2000)).max(32).default([]),
   executor:z.enum(['sub_agent','pack','browser','terminal']),
+  browser:browserPreferenceSchema.optional(),
   depends_on:z.array(id).max(64).default([]),
   required_capabilities:z.array(id).max(32).default([]),
   effect:swarmEffectSchema,

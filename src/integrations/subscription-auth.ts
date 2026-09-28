@@ -1,11 +1,12 @@
 import {spawn} from 'node:child_process';
-import {constants as fsConstants,accessSync,readFileSync,readdirSync} from 'node:fs';
+import {constants as fsConstants,accessSync,readFileSync,readdirSync,statSync} from 'node:fs';
 import {mkdtemp,rm,writeFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {delimiter,isAbsolute,join} from 'node:path';
 import {hashJson,type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {requireCondition} from '../core/contracts.js';
-import {classifyClientFailure,handoffContext,type ClientRouteEvent,type HandoffClient,type HandoffReason} from './client-handoff.js';
+import {classifyClientFailure,handoffContext,isInvalidClientOutput,isNonRetryableClientFailure,recordClientRoute,type ClientRouteEvent,type HandoffClient,type HandoffReason} from './client-handoff.js';
+import {decisionClientCapabilities,supportsStructuredJudgment} from './client-capabilities.js';
 
 export type SubscriptionClientId='codex'|'claude'|'opencode'|'cursor'|'hermes';
 export interface SubscriptionClientStatus {
@@ -90,12 +91,12 @@ export const resolveSubscriptionClientExecutable=(id:SubscriptionClientId,enviro
 };
 const clientExecutable=resolveSubscriptionClientExecutable;
 const expiredPattern=/\b(?:expired|expiration|refresh token (?:is )?invalid|session (?:is )?no longer valid)\b/iu;
-const probeSpec:Record<SubscriptionClientId,{args:string[]|null;parse:(text:string)=>Omit<SubscriptionClientStatus,'id'|'structured_bridge'>;structured:boolean}>={
-  codex:{args:['login','status'],structured:true,parse:text=>/Logged in using ChatGPT/iu.test(text)?{status:'ready',auth:'subscription',reason:'client_reported_ready'}:expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:/not logged in|login required/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
-  claude:{args:['auth','status'],structured:true,parse:text=>{try{const value=JSON.parse(text) as {loggedIn?:unknown;authMethod?:unknown;subscriptionType?:unknown;error?:unknown;status?:unknown};if(value.loggedIn===true){const subscription=value.authMethod==='claude.ai'||value.authMethod===undefined&&typeof value.subscriptionType==='string'&&['pro','max','team','enterprise'].includes(value.subscriptionType.toLowerCase());return {status:subscription?'ready':'unknown',auth:subscription?'subscription':'unknown',reason:subscription?'client_reported_ready':'client_auth_not_subscription'};}if(value.loggedIn===false){const detail=[value.error,value.status].filter(item=>typeof item==='string').join(' ');return expiredPattern.test(detail)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}}catch{}return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}},
-  opencode:{args:['auth','list','--format','json'],structured:true,parse:text=>{try{const value=JSON.parse(text) as unknown;const count=Array.isArray(value)?value.length:value&&typeof value==='object'?Object.keys(value).length:0;return count>0?{status:'ready',auth:'unknown',reason:'client_reported_ready'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}catch{return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}}},
-  cursor:{args:null,structured:false,parse:()=>({status:'unavailable',auth:'unknown',reason:'status_contract_unavailable'})},
-  hermes:{args:['proxy','status'],structured:false,parse:text=>/\[[^\]]+\][^\r\n]*logged in/iu.test(text)&&!/not logged in/iu.test(text)?{status:'ready',auth:'oauth',reason:'oauth_proxy_ready'}:/not logged in/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'proxy_upstreams_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
+const probeSpec:Record<SubscriptionClientId,{args:string[]|null;parse:(text:string)=>Omit<SubscriptionClientStatus,'id'|'structured_bridge'>}>={
+  codex:{args:['login','status'],parse:text=>/Logged in using ChatGPT/iu.test(text)?{status:'ready',auth:'subscription',reason:'client_reported_ready'}:expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:/not logged in|login required/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
+  claude:{args:['auth','status'],parse:text=>{try{const value=JSON.parse(text) as {loggedIn?:unknown;authMethod?:unknown;apiProvider?:unknown;subscriptionType?:unknown;error?:unknown;status?:unknown};if(value.loggedIn===true){const subscription=value.apiProvider==='firstParty'&&(value.authMethod==='claude.ai'||value.authMethod===undefined&&typeof value.subscriptionType==='string'&&['pro','max','team','enterprise'].includes(value.subscriptionType.toLowerCase()));return {status:subscription?'ready':'unknown',auth:subscription?'subscription':'unknown',reason:subscription?'client_reported_ready':'client_auth_not_subscription'};}if(value.loggedIn===false){const detail=[value.error,value.status].filter(item=>typeof item==='string').join(' ');return expiredPattern.test(detail)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}}catch{}return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}},
+  opencode:{args:['auth','list','--format','json'],parse:text=>{try{const value=JSON.parse(text) as unknown;const count=Array.isArray(value)?value.length:value&&typeof value==='object'?Object.keys(value).length:0;return count>0?{status:'ready',auth:'unknown',reason:'client_reported_ready'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}catch{return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}}},
+  cursor:{args:null,parse:()=>({status:'unavailable',auth:'unknown',reason:'status_contract_unavailable'})},
+  hermes:{args:['proxy','status'],parse:text=>/\[[^\]]+\][^\r\n]*logged in/iu.test(text)&&!/not logged in/iu.test(text)?{status:'ready',auth:'oauth',reason:'oauth_proxy_ready'}:/not logged in/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'proxy_upstreams_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
 };
 const loginSpec:Record<SubscriptionClientId,Partial<Record<SubscriptionAuthFlowKind,string[]>>>= {
   codex:{browser:['login'],device:['login','--device-auth']},
@@ -104,18 +105,42 @@ const loginSpec:Record<SubscriptionClientId,Partial<Record<SubscriptionAuthFlowK
   cursor:{},
   hermes:{browser:['portal','login']},
 };
-export async function probeSubscriptionClient(id:SubscriptionClientId,environment:NodeJS.ProcessEnv=process.env,runner:SafeProcessRunner=nativeProcessRunner){
-  const spec=probeSpec[id]!;
-  if(spec.args===null)return {id,status:'unavailable',auth:'unknown',structured_bridge:spec.structured,reason:'status_contract_unavailable'} satisfies SubscriptionClientStatus;
+// Only read-only probes are joined. Model turns are deliberately never deduplicated.
+const probePools=new WeakMap<SafeProcessRunner,{pending:Map<string,Promise<SubscriptionClientStatus>>;revisions:Map<SubscriptionClientId,number>}>();
+function probePool(runner:SafeProcessRunner){
+  let pool=probePools.get(runner);if(!pool){pool={pending:new Map(),revisions:new Map()};probePools.set(runner,pool);}return pool;
+}
+function invalidateClient(id:SubscriptionClientId,runner:SafeProcessRunner){
+  const pool=probePool(runner);pool.revisions.set(id,(pool.revisions.get(id)??0)+1);
+}
+function clientBinding(id:SubscriptionClientId,environment:NodeJS.ProcessEnv,runner:SafeProcessRunner,includeRevision=true){
+  let executable:string|null=null,binary:unknown=null;
+  try{executable=clientExecutable(id,environment);if(isAbsolute(executable)){const stat=statSync(executable);binary={size:stat.size,mtime:stat.mtimeMs,ino:stat.ino};}}catch{}
+  const keys=['PATH','HOME','USERPROFILE','CODEX_HOME','WSL_DISTRO_NAME','WSL_INTEROP',`AGENT_DRIVER_${id.toUpperCase()}_EXECUTABLE`];
+  return hashJson({id,executable,binary,environment:Object.fromEntries(keys.map(key=>[key,environment[key]??null])),revision:includeRevision?probePool(runner).revisions.get(id)??0:0});
+}
+async function runSubscriptionProbe(id:SubscriptionClientId,environment:NodeJS.ProcessEnv,runner:SafeProcessRunner):Promise<SubscriptionClientStatus>{
+  const spec=probeSpec[id]!,structured_bridge=supportsStructuredJudgment(id);
+  if(spec.args===null)return {id,status:'unavailable',auth:'unknown',structured_bridge,reason:'status_contract_unavailable'};
   try{
     const result=await runner.run({executable:clientExecutable(id,environment),args:spec.args,timeout_ms:7_000});
     const parsed=spec.parse(result.stdout+'\n'+result.stderr);
-    if(result.code!==0&&parsed.status==='unknown')return {id,status:'unknown',auth:'unknown',structured_bridge:spec.structured,reason:'status_command_failed'} satisfies SubscriptionClientStatus;
-    return {id,...parsed,structured_bridge:spec.structured} satisfies SubscriptionClientStatus;
+    if(result.code!==0&&(parsed.status==='unknown'||parsed.status==='ready'))return {id,status:'unknown',auth:'unknown',structured_bridge,reason:'status_command_failed'};
+    return {id,...parsed,structured_bridge};
   }catch(error){
     const reason=error instanceof Error&&error.message==='WSL_NATIVE_CLIENT_EXECUTABLE_NOT_FOUND'?'wsl_native_client_not_found':'client_not_available';
-    return {id,status:'unavailable',auth:'unknown',structured_bridge:spec.structured,reason} satisfies SubscriptionClientStatus;
+    return {id,status:'unavailable',auth:'unknown',structured_bridge,reason};
   }
+}
+export async function probeSubscriptionClient(id:SubscriptionClientId,environment:NodeJS.ProcessEnv=process.env,runner:SafeProcessRunner=nativeProcessRunner){
+  const snapshot={...environment},pool=probePool(runner),binding=clientBinding(id,snapshot,runner);
+  let pending=pool.pending.get(binding);
+  if(!pending){
+    pending=runSubscriptionProbe(id,snapshot,runner).finally(()=>{if(pool.pending.get(binding)===pending)pool.pending.delete(binding);});
+    pool.pending.set(binding,pending);
+  }
+  // Callers must not be able to mutate another caller's connection observation.
+  return {...await pending};
 }
 export async function probeSubscriptionClients(environment:NodeJS.ProcessEnv=process.env,runner:SafeProcessRunner=nativeProcessRunner){
   return Promise.all((Object.keys(probeSpec) as SubscriptionClientId[]).map(id=>probeSubscriptionClient(id,environment,runner)));
@@ -133,49 +158,75 @@ function safeLoginArtifacts(text:string){
 
 /** Owns only official CLI processes. It never opens or reads a client's credential store. */
 export class SubscriptionAuthFlowController {
-  private readonly active=new Map<SubscriptionClientId,{view:SubscriptionAuthFlowView;abort:AbortController;output:string}>();
+  private readonly active=new Map<SubscriptionClientId,{view:SubscriptionAuthFlowView;abort:AbortController;output:string;binding:string}>();
+  private readonly starts=new Map<SubscriptionClientId,Promise<SubscriptionAuthFlowView>>();
+  private closed=false;
   constructor(readonly environment:NodeJS.ProcessEnv=process.env,readonly runner:SafeProcessRunner=nativeProcessRunner){}
-  view(id:SubscriptionClientId){return structuredClone(this.active.get(id)?.view??idleFlow(id));}
+  view(id:SubscriptionClientId){
+    const entry=this.active.get(id);
+    if(entry&&entry.view.reason!=='connection_changed'&&entry.binding!==clientBinding(id,this.environment,this.runner,false)){
+      entry.abort.abort();invalidateClient(id,this.runner);
+      entry.view={client_id:id,flow:entry.view.flow,state:'unavailable',reason:'connection_changed',credentials_exposed:false};
+    }
+    return structuredClone(entry?.view??idleFlow(id));
+  }
   async connections(){
     const statuses=await probeSubscriptionClients(this.environment,this.runner);
     return statuses.map(status=>({...status,supported_login_flows:loginFlows(status.id),connection:this.view(status.id)} satisfies SubscriptionClientConnection));
   }
-  async start(id:SubscriptionClientId,flow:SubscriptionAuthFlowKind){
+  start(id:SubscriptionClientId,flow:SubscriptionAuthFlowKind):Promise<SubscriptionAuthFlowView>{
+    if(this.closed)return Promise.resolve({client_id:id,flow,state:'unavailable',reason:'connection_controller_closed',credentials_exposed:false});
+    const pending=this.starts.get(id);if(pending)return pending.then(view=>structuredClone(view));
+    const started=this.begin(id,flow).finally(()=>{if(this.starts.get(id)===started)this.starts.delete(id);});
+    this.starts.set(id,started);return started;
+  }
+  private async begin(id:SubscriptionClientId,flow:SubscriptionAuthFlowKind):Promise<SubscriptionAuthFlowView>{
     const args=loginSpec[id][flow];
     if(!args)return {client_id:id,flow,state:'unavailable',reason:'login_contract_unavailable',credentials_exposed:false} satisfies SubscriptionAuthFlowView;
-    const current=this.active.get(id);
+    this.view(id);const current=this.active.get(id);
     if(current&&['starting','waiting'].includes(current.view.state))return this.view(id);
-    const status=await probeSubscriptionClient(id,this.environment,this.runner);
+    const environment={...this.environment},binding=clientBinding(id,environment,this.runner);
+    const status=await probeSubscriptionClient(id,environment,this.runner);
+    if(this.closed)return {client_id:id,flow,state:'unavailable',reason:'connection_controller_closed',credentials_exposed:false};
+    if(binding!==clientBinding(id,this.environment,this.runner))return {client_id:id,flow,state:'unavailable',reason:'connection_changed',credentials_exposed:false};
     if(status.status==='ready')return {client_id:id,flow,state:'completed',reason:'existing_session_reused',credentials_exposed:false} satisfies SubscriptionAuthFlowView;
     if(status.status!=='signed_out'&&status.status!=='expired')return {client_id:id,flow,state:'unavailable',reason:status.reason,credentials_exposed:false} satisfies SubscriptionAuthFlowView;
-    const abort=new AbortController(),entry:{view:SubscriptionAuthFlowView;abort:AbortController;output:string}={view:{client_id:id,flow,state:'starting',reason:'official_cli_starting',credentials_exposed:false},abort,output:''};
+    const abort=new AbortController(),entry={view:{client_id:id,flow,state:'starting',reason:'official_cli_starting',credentials_exposed:false} as SubscriptionAuthFlowView,abort,output:'',binding:clientBinding(id,environment,this.runner,false)};
     this.active.set(id,entry);
+    const currentEntry=()=>{this.view(id);return !this.closed&&!abort.signal.aborted&&this.active.get(id)===entry;};
     const observe=(text:string)=>{
+      if(!currentEntry())return;
       entry.output=(entry.output+text).slice(-16_384);const artifacts=safeLoginArtifacts(entry.output);
       entry.view={client_id:id,flow,state:'waiting',reason:flow==='device'?'waiting_for_device_confirmation':'waiting_for_browser_confirmation',...artifacts,credentials_exposed:false};
     };
-    void this.runner.run({executable:clientExecutable(id,this.environment),args,timeout_ms:10*60_000,signal:abort.signal,onStdout:observe,onStderr:observe}).then(async result=>{
+    invalidateClient(id,this.runner);
+    void Promise.resolve().then(()=>{requireCondition(currentEntry(),'CLIENT_LOGIN_CANCELLED');return this.runner.run({executable:clientExecutable(id,environment),args,timeout_ms:10*60_000,signal:abort.signal,onStdout:observe,onStderr:observe});}).then(async result=>{
+      if(!currentEntry())return;
       if(result.code!==0){entry.view={client_id:id,flow,state:'failed',reason:'official_cli_login_failed',credentials_exposed:false};return;}
-      const verified=await probeSubscriptionClient(id,this.environment,this.runner);
+      invalidateClient(id,this.runner);
+      const verified=await probeSubscriptionClient(id,environment,this.runner);
+      if(!currentEntry())return;
       entry.view={client_id:id,flow,state:verified.status==='ready'?'completed':'failed',reason:verified.status==='ready'?'client_reported_ready':'login_completed_but_status_not_ready',credentials_exposed:false};
-    }).catch(()=>{if(!abort.signal.aborted)entry.view={client_id:id,flow,state:'failed',reason:'official_cli_login_failed',credentials_exposed:false};});
+    }).catch(()=>{if(currentEntry())entry.view={client_id:id,flow,state:'failed',reason:'official_cli_login_failed',credentials_exposed:false};});
     await Promise.resolve();return this.view(id);
   }
-  close(){for(const entry of this.active.values())entry.abort.abort();this.active.clear();}
+  close(){this.closed=true;for(const [id,entry] of this.active){entry.abort.abort();invalidateClient(id,this.runner);}this.active.clear();}
 }
 
+function parseJson(text:string):unknown{try{return JSON.parse(text);}catch{throw Error('CLIENT_STRUCTURED_OUTPUT_INVALID');}}
 function parseStrictJson(text:string){
-  const trimmed=text.trim();requireCondition(trimmed.startsWith('{')&&trimmed.endsWith('}'),'CLIENT_STRUCTURED_OUTPUT_INVALID');return JSON.parse(trimmed) as unknown;
+  const trimmed=text.trim();requireCondition(trimmed.startsWith('{')&&trimmed.endsWith('}'),'CLIENT_STRUCTURED_OUTPUT_INVALID');return parseJson(trimmed);
 }
 function codexOutput(stdout:string){
-  const events=stdout.split(/\r?\n/u).filter(Boolean).map(line=>JSON.parse(line) as {type?:unknown;item?:{type?:unknown;text?:unknown}});
+  const events=stdout.split(/\r?\n/u).filter(Boolean).map(line=>parseJson(line) as {type?:unknown;item?:{type?:unknown;text?:unknown}});
+  requireCondition(events.every(event=>event!==null&&typeof event==='object'&&!Array.isArray(event)),'CLIENT_STRUCTURED_OUTPUT_INVALID');
   const messages=events.filter(event=>event.type==='item.completed'&&event.item?.type==='agent_message'&&typeof event.item.text==='string');
   requireCondition(messages.length>0,'CLIENT_STRUCTURED_OUTPUT_INVALID');return parseStrictJson(String(messages.at(-1)!.item!.text));
 }
 function claudeOutput(stdout:string){
-  const envelope=JSON.parse(stdout) as {structured_output?:unknown;result?:unknown;is_error?:unknown};
-  requireCondition(envelope.is_error!==true,'CLIENT_STRUCTURED_OUTPUT_INVALID');
-  if(envelope.structured_output!==undefined)return envelope.structured_output;
+  const envelope=parseJson(stdout) as {structured_output?:unknown;result?:unknown;is_error?:unknown}|null;
+  requireCondition(envelope!==null&&typeof envelope==='object'&&!Array.isArray(envelope)&&envelope.is_error!==true,'CLIENT_STRUCTURED_OUTPUT_INVALID');
+  if(envelope.structured_output!==undefined){requireCondition(envelope.structured_output!==null&&typeof envelope.structured_output==='object'&&!Array.isArray(envelope.structured_output),'CLIENT_STRUCTURED_OUTPUT_INVALID');return envelope.structured_output;}
   requireCondition(typeof envelope.result==='string','CLIENT_STRUCTURED_OUTPUT_INVALID');
   // Some CLI versions wrap the single JSON result in a Markdown fence. Strip
   // only an exact whole-message wrapper; never extract JSON from mixed prose.
@@ -183,7 +234,7 @@ function claudeOutput(stdout:string){
   return parseStrictJson(fenced?.[1]??text);
 }
 function cursorOutput(stdout:string){
-  const envelope=JSON.parse(stdout) as {type?:unknown;result?:unknown};
+  const envelope=parseJson(stdout) as {type?:unknown;result?:unknown};
   requireCondition(envelope.type==='result'&&typeof envelope.result==='string','CLIENT_STRUCTURED_OUTPUT_INVALID');return parseStrictJson(envelope.result);
 }
 function opencodeOutput(stdout:string){
@@ -254,15 +305,16 @@ export class McpSamplingStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];
   constructor(readonly client:McpSamplingClient){}
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
-    const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let model='mcp-client',accepted=false;
+    const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let model='mcp-client',accepted=false,failureKind:ModelCall['failure_kind']='provider_unavailable';
     try{
       requireCondition(this.client.available(),'MCP_SAMPLING_UNAVAILABLE');
       const response=await this.client.createMessage({messages:[{role:'user',content:{type:'text',text:prompt(instructions,input,schema)}}],systemPrompt:'You are a bounded structured-decision provider. Return JSON only. You have no execution or approval authority.',includeContext:'none',maxTokens:purpose==='correct'?1_500:5_000,temperature:0},{timeout:60_000});
+      requireCondition(response!==null&&typeof response==='object'&&typeof response.model==='string'&&/^[^\s\x00-\x1f]{1,200}$/u.test(response.model)&&!/^(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})$/u.test(response.model),'MCP_SAMPLING_INVALID');
       model=response.model;const blocks=Array.isArray(response.content)?response.content:[response.content];
       requireCondition(blocks.length===1&&blocks[0]?.type==='text'&&typeof blocks[0].text==='string'&&response.stopReason!=='maxTokens','MCP_SAMPLING_INVALID');
       const value=parseStrictJson(blocks[0].text);accepted=true;return value;
-    }catch{throw Error('MCP_SAMPLING_UNAVAILABLE');}
-    finally{this.calls.push({purpose,provider:'mcp_sampling',auth:'client_subscription',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:'invalid_output'})});}
+    }catch(error){if(isInvalidClientOutput(error)){failureKind='invalid_output';throw Error('MCP_SAMPLING_INVALID');}throw Error('MCP_SAMPLING_UNAVAILABLE');}
+    finally{this.calls.push({purpose,provider:'mcp_sampling',auth:'client_subscription',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
   }
 }
 
@@ -270,42 +322,55 @@ export interface SubscriptionAwareModelOptions {
   environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';subscriptionOnly?:boolean;onHandoff?:(event:ClientRouteEvent)=>void;
 }
 export class SubscriptionAwareStructuredModel implements StructuredModel{
-  readonly calls:ModelCall[]=[];private statuses=new Map<SubscriptionClientId,{value:SubscriptionClientStatus;observed_at:number}>();
+  readonly calls:ModelCall[]=[];private statuses=new Map<SubscriptionClientId,{value:SubscriptionClientStatus;observed_at:number;binding:string}>();
   constructor(readonly options:SubscriptionAwareModelOptions={}){}
-  private async clientStatus(id:SubscriptionClientId){
-    const cached=this.statuses.get(id);
-    if(cached&&Date.now()-cached.observed_at<30_000)return cached.value;
-    const status=await probeSubscriptionClient(id,this.options.environment??process.env,this.options.runner??nativeProcessRunner);
-    this.statuses.set(id,{value:status,observed_at:Date.now()});return status;
+  private async clientStatus(id:SubscriptionClientId,environment=this.options.environment??process.env){
+    const runner=this.options.runner??nativeProcessRunner,binding=clientBinding(id,environment,runner),cached=this.statuses.get(id);
+    if(cached&&cached.binding===binding&&Date.now()-cached.observed_at<30_000)return {...cached.value};
+    const status=await probeSubscriptionClient(id,environment,runner);
+    // Never cache failed probes. Login completion, an executable change or a
+    // failed invocation invalidates even a positive observation across models.
+    if(status.status==='ready'&&binding===clientBinding(id,environment,runner))this.statuses.set(id,{value:status,observed_at:Date.now(),binding});
+    else this.statuses.delete(id);
+    return status;
   }
   async status(){
     const clients=await Promise.all((Object.keys(probeSpec) as SubscriptionClientId[]).map(id=>this.clientStatus(id)));
-    return {mcp_sampling:this.options.sampling?.client.available()?'ready':'unavailable',clients,fallback:this.options.fallbackModel&&(this.options.environment??process.env).AGENT_DRIVER_LLM_CLIENT==='api'?(this.options.fallbackKind??'configured'):'not_configured',credentials_exposed:false};
+    return {mcp_sampling:this.options.sampling?.client.available()?'ready':'unavailable',clients,capabilities:clients.map(client=>decisionClientCapabilities(client.id)),fallback:this.options.fallbackModel&&(this.options.environment??process.env).AGENT_DRIVER_LLM_CLIENT==='api'?(this.options.fallbackKind??'configured'):'not_configured',credentials_exposed:false};
   }
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
-    const environment=this.options.environment??process.env,preferred=environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor'];
+    // A successor must receive the same task and constraints, not a caller's
+    // mutated object after an awaited connection/model operation.
+    input=structuredClone(input);schema=structuredClone(schema);
+    const environment={...this.options.environment??process.env},runner=this.options.runner??nativeProcessRunner,preferred=[...new Set(environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor'])];
     // Legacy callers can select API explicitly, but no client chain may fall into it.
     const apiOnly=preferred.length===1&&preferred[0]==='api';
     let failed:{client:HandoffClient;model:string;reason:HandoffReason}|null=null;
-    const transferred=(target:HandoffClient,targetModel:string)=>{if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target,source_model:failed.model,target_model:targetModel,reason:failed.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
+    const transferred=(target:HandoffClient,targetModel:string)=>{if(failed)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:failed.client,target,source_model:failed.model,target_model:targetModel,reason:failed.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
     for(const id of preferred){
-      try{
-        if(id==='mcp'&&this.options.sampling){const value=await this.options.sampling.call(purpose,instructions,input,schema);this.calls.push(this.options.sampling.calls.at(-1)!);transferred('mcp',this.options.sampling.calls.at(-1)?.model??'client_default');return value;}
+        if(id==='mcp'&&this.options.sampling){
+          // Keep per-turn evidence separate while concurrent sampling is in flight.
+          const sampling=new McpSamplingStructuredModel(this.options.sampling.client);let value:unknown;
+          try{requireCondition(supportsStructuredJudgment('mcp',sampling.client.available()),'MCP_SAMPLING_UNAVAILABLE');value=await sampling.call(purpose,instructions,input,schema);}
+          catch(error){if(isNonRetryableClientFailure(error))throw error;failed??={client:'mcp',model:'client_default',reason:classifyClientFailure(error)};continue;}
+          finally{this.calls.push(...sampling.calls);this.options.sampling.calls.push(...sampling.calls);}
+          transferred('mcp',sampling.calls.at(-1)!.model);return value;
+        }
         if(['codex','claude','opencode','cursor'].includes(id)){
-          const client=id as Exclude<SubscriptionClientId,'hermes'>,state=await this.clientStatus(client);
-          if(state?.status!=='ready'||!state.structured_bridge){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:state?.status==='expired'||state?.status==='signed_out'?'auth_expired':'provider_unavailable'};continue;}
+          const client=id as Exclude<SubscriptionClientId,'hermes'>,binding=clientBinding(client,environment,runner),state=await this.clientStatus(client,environment);
+          if(state?.status!=='ready'||!state.structured_bridge||!supportsStructuredJudgment(client)){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:state?.status==='expired'||state?.status==='signed_out'?'auth_expired':'provider_unavailable'};continue;}
           // Unknown CLI credentials may be API-backed (e.g. OpenCode); never adopt
           // them as an automatic subscription successor. Explicit primary use is separate.
           if(state.auth==='unknown'&&(client!=='opencode'||failed||this.options.subscriptionOnly)){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:'provider_unavailable'};continue;}
-          const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let accepted=false,model=client+'-subscription',failureKind:ModelCall['failure_kind']='invalid_output';
-          try{const result=await invokeCli(client,environment,this.options.runner??nativeProcessRunner,instructions,input,schema);model=result.model;accepted=true;transferred(client,model);return result.value;}
-          catch(error){this.statuses.delete(client);const reason=classifyClientFailure(error);failureKind=reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='provider_unavailable'?'provider_unavailable':'incomplete';failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason};throw error;}
-          finally{this.calls.push({purpose,provider:client,auth:'subscription',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
+          const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let accepted=false,model=environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',value:unknown,failureKind:ModelCall['failure_kind']='invalid_output';
+          try{requireCondition(binding===clientBinding(client,environment,runner),'CLIENT_CONNECTION_CHANGED');const result=await invokeCli(client,environment,runner,instructions,input,schema);model=result.model;value=result.value;accepted=true;}
+          catch(error){this.statuses.delete(client);invalidateClient(client,runner);const reason=classifyClientFailure(error);failureKind=reason==='invalid_output'?'invalid_output':reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='provider_unavailable'?'provider_unavailable':'incomplete';if(isNonRetryableClientFailure(error))throw error;failed??={client,model,reason};continue;}
+          finally{this.calls.push({purpose,provider:client,auth:state.auth==='subscription'?'subscription':'unknown',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
+          transferred(client,model);return value;
         }
         if(id==='api'&&apiOnly&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);return value;}
-      }catch(error){if(!failed&&id==='mcp')failed={client:'mcp',model:'client_default',reason:classifyClientFailure(error)};continue;}
     }
-    if(failed)this.options.onHandoff?.({...handoffContext(input),source:failed.client,target:null,source_model:failed.model,target_model:null,reason:failed.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
+    if(failed)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:failed.client,target:null,source_model:failed.model,target_model:null,reason:failed.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
     throw Error('STRUCTURED_MODEL_UNAVAILABLE');
   }
 }

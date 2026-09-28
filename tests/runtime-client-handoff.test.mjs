@@ -13,7 +13,7 @@ import {clientHandoffSchema} from '../dist/integrations/client-handoff.js';
 const key='fixture-provider-key-not-real-12345';
 const selection={mode:'subscription',client:'codex',client_models:{codex:'gpt-5.6-luna',claude:'sonnet',opencode:'openrouter/test-model'},api_to_subscription:false,api_provider:'openai',api_model:'gpt-5.6-luna',api_base_url:'',reasoning:'low',jev:'off'};
 const schema={type:'object',properties:{choice:{type:'string'}},required:['choice'],additionalProperties:false};
-async function fixture(t){const root=await mkdtemp(join(tmpdir(),'driver-handoff-'));t.after(()=>rm(root,{recursive:true,force:true}));return {root,path:join(root,'.connection','models.json'),database:join(root,'store.sqlite')};}
+async function fixture(t,dispose=()=>{}){const root=await mkdtemp(join(tmpdir(),'driver-handoff-'));t.after(async()=>{await dispose();await rm(root,{recursive:true,force:true});});return {root,path:join(root,'.connection','models.json'),database:join(root,'store.sqlite')};}
 
 test('selected subscription client is first, while every connected fallback retains its own saved model',async t=>{
   const x=await fixture(t);saveModelSettings(x.path,{revision:0,onboarding_step:2,selection},{});
@@ -24,10 +24,10 @@ test('selected subscription client is first, while every connected fallback reta
 });
 
 test('Codex quota failure transfers one no-tools judgment to Claude saved model and survives database restart',async t=>{
-  const x=await fixture(t),events=[],calls=[];let store=new PackStore(x.database);
+  let store;const x=await fixture(t,()=>store?.close()),events=[],calls=[];store=new PackStore(x.database);
   const runner={async run(request){calls.push(request);
     if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
-    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai'}),stderr:''};
+    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};
     if(request.executable==='/fixture/codex')return {code:1,stdout:'',stderr:'Weekly usage limit reached'};
     if(request.executable==='/fixture/claude')return {code:0,stdout:JSON.stringify({is_error:false,structured_output:{choice:'B'}}),stderr:''};
     throw Error('UNEXPECTED_CLIENT');
@@ -39,7 +39,7 @@ test('Codex quota failure transfers one no-tools judgment to Claude saved model 
   assert.ok(calls.find(call=>call.executable==='/fixture/claude'&&call.args.includes('--model')&&call.args.includes('sonnet')));
   assert.deepEqual(events.map(event=>[event.source,event.target,event.source_model,event.target_model,event.reason,event.effect_state,event.status]),[['codex','claude','gpt-5.6-luna','sonnet','quota_exhausted','none','transferred']]);
   assert.equal(model.calls[0].failure_kind,'quota_exhausted');
-  store.close();store=new PackStore(x.database);t.after(()=>store.close());
+  store.close();store=new PackStore(x.database);
   const durable=store.clientHandoffs('fixture-project','work-1');assert.equal(durable.length,1);assert.equal(durable[0].run_id,'run-1');assert.equal(durable[0].stage_id,'stage-1');assert.doesNotMatch(JSON.stringify(durable),/Weekly usage|fixture-provider-key/u);
   assert.deepEqual(clientHandoffSchema.parse(durable[0]),durable[0]);
 });

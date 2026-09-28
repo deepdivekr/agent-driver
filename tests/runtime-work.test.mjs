@@ -13,8 +13,8 @@ async function setup(t,model){
   const path=join(root,'host.json');
   await writeFile(path,JSON.stringify({schema_version:1,project_id:'work-test',caller_ref:'local-agent',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off',model_data_approved:false},swarm:{enabled:true,model_data_approved:true}}));
   const config=loadHostConfig(path),api=new RuntimeApi(config,{swarmModel:model});
-  t.after(async()=>{api.close();await api.drain();await rm(root,{recursive:true,force:true});});
-  return {config,api};
+  const resources=[];t.after(async()=>{for(const close of resources.reverse())await close();api.close();await api.drain();await rm(root,{recursive:true,force:true});});
+  return {config,api,onClose:close=>resources.push(close)};
 }
 function proposal(questions=[]){return {title:'AI 소식 정리',desired_outcome:'매일 AI 관련 최신 소식 요약을 전달한다',completion_checks:[{id:'sources',result:'새 소식을 확인한다',evidence:'방문한 출처와 관측 시각'},{id:'delivery',result:'요약을 전달한다',evidence:'전송 영수증'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'recurring',rule:'매일'},questions};}
 function model(reply=proposal()){return {calls:[],async call(){if(reply instanceof Error)throw reply;return structuredClone(reply);}};}
@@ -24,7 +24,7 @@ test('one-line Work is durable before model success and request IDs are idempote
   const first=await x.api.call('runtime_work_start',{request_id:'daily-ai',prompt:'매일 AI 소식 알려줘'});
   assert.equal(first.status,'needs_model');
   assert.equal(first.revision,0);
-  const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());
+  const reopened=new PackStore(x.config.dbPath);x.onClose(()=>reopened.close());
   assert.equal(reopened.intakeWork(x.config.project.id,first.work_id).prompt,'매일 AI 소식 알려줘');
   const repeat=await x.api.call('runtime_work_start',{request_id:'daily-ai',prompt:'매일 AI 소식 알려줘'});
   assert.equal(repeat.work_id,first.work_id);
@@ -44,7 +44,7 @@ test('quick mode removes optional questions; guided mode persists options and an
   const answered=await x.api.call('runtime_work_answer',{work_id:guided.work_id,revision:guided.revision,answers:{format:'cards'}});
   assert.equal(answered.status,'ready');assert.equal(answered.answers.format,'cards');assert.equal(lastInput.answers.format,'cards');
   await assert.rejects(x.api.call('runtime_work_answer',{work_id:guided.work_id,revision:guided.revision,answers:{format:'summary'}}),/WORK_REVISION_CONFLICT|WORK_NOT_AWAITING_DETAILS/u);
-  const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());
+  const reopened=new PackStore(x.config.dbPath);x.onClose(()=>reopened.close());
   assert.equal(reopened.intakeWork(x.config.project.id,guided.work_id).status,'ready');
   assert.deepEqual(reopened.workRevisions(x.config.project.id,guided.work_id).map(x=>x.kind),['received','defined','answered','defined']);
 });
@@ -99,7 +99,7 @@ test('Work pause fences later runs without pretending to stop an active Pack',as
 
 test('light Work HTTP serves bounded board/detail and protects human controls',async t=>{
   const x=await setup(t,model()),work=await x.api.call('runtime_work_start',{request_id:'http-work',prompt:'매일 AI 소식 알려줘'});
-  const server=await startControlCenter(x.config,{poll_ms:25});t.after(()=>server.close());
+  const server=await startControlCenter(x.config,{poll_ms:25});x.onClose(()=>server.close());
   const boardResponse=await fetch(new URL('work/board',server.url)),body=await boardResponse.text(),board=JSON.parse(body);
   assert.equal(board.works.length,1);assert.ok(Buffer.byteLength(body)<3000);assert.equal(board.works[0].id,work.work_id);
   const detail=await (await fetch(new URL('work/detail?id='+work.work_id,server.url))).json();
@@ -114,7 +114,7 @@ test('light Work HTTP serves bounded board/detail and protects human controls',a
 test('dashboard accepts one-line Work through the same durable intake and compiles guided answers',async t=>{
   const question={id:'format',prompt:'결과 형식은?',options:[{id:'summary',label:'요약문',meaning:'짧은 글'},{id:'cards',label:'카드뉴스',meaning:'시각 카드'}],recommended_id:'summary',required:false};
   const fake=model(proposal([question]));
-  const x=await setup(t,fake),server=await startControlCenter(x.config,{workModel:fake});t.after(()=>server.close());
+  const x=await setup(t,fake),server=await startControlCenter(x.config,{workModel:fake});x.onClose(()=>server.close());
   const url=new URL('work/start',server.url),headers={origin:new URL(server.url).origin,'content-type':'application/json','x-agent-driver':'human-office'};
   const input={request_id:'desk-guided-1',prompt:'매일 AI 소식 알려줘',intake_mode:'guided'};
   assert.equal((await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-agent-driver':'human-office'},body:JSON.stringify(input)})).status,403);
@@ -127,6 +127,6 @@ test('dashboard accepts one-line Work through the same durable intake and compil
   assert.equal(duplicate.work_id,work.work_id);assert.equal(duplicate.deduplicated,true);
   const answer=await fetch(new URL('work/answer',server.url),{method:'POST',headers,body:JSON.stringify({work_id:work.work_id,revision:work.revision,answers:{format:'cards'}})});
   assert.equal(answer.status,200);assert.equal((await answer.json()).status,'ready');
-  const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());
+  const reopened=new PackStore(x.config.dbPath);x.onClose(()=>reopened.close());
   assert.equal(reopened.intakeWork(x.config.project.id,work.work_id).answers.format,'cards');
 });

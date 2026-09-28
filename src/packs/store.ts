@@ -1,4 +1,6 @@
 import {createHash,randomUUID} from 'node:crypto';
+import {dirname} from 'node:path';
+import {FileExplorer} from '../files/explorer.js';
 import {TerminalStore} from '../terminal/store.js';
 import {requireCondition} from '../core/contracts.js';
 import {snapshotHash} from '../taskpack/contracts.js';
@@ -6,6 +8,7 @@ import {type Recipe} from './contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {redact} from '../terminal/contracts.js';
 import {DecisionMemory} from '../decision-plane/memory.js';
+import {BrowserExecutorJournal} from '../browser/executor-journal.js';
 import {type CodingPlan} from '../coding/contracts.js';
 import {type LocalGitCheckpoint} from '../coding/local-checkpoint.js';
 import {sanitizeCodingReply} from '../coding/reply-safety.js';
@@ -54,9 +57,14 @@ const codingDialogCredential=/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-
 const codingDialogInlineSecret=/(?:password|token|secret|api[_-]?key)\s*[:=]\s*\S+/iu;
 const sha256Text=(value:string)=>createHash('sha256').update(value).digest('hex');
 export class PackStore extends TerminalStore {
+  private readonly fileExplorers=new Map<string,FileExplorer>();
+  localFileExplorer(project:string,dataDir=dirname(this.databasePath)){const key=project+'\0'+dataDir;let files=this.fileExplorers.get(key);if(!files){files=new FileExplorer(this.connection,project,dataDir);this.fileExplorers.set(key,files);}return files;}
   get decisionMemory(){return new DecisionMemory(this.connection);}
   /** Internal Hermes/remote persistence access. Never exported as a caller SQL tool. */
   get hermesState(){return this.connection;}
+  /** Internal Windows workflow journal; no SQL is exposed to MCP callers. */
+  get desktopState(){return this.connection;}
+  browserExecutors(){return new BrowserExecutorJournal(this.connection);}
   constructor(path:string){super(path);this.connection.exec(`
     CREATE TABLE IF NOT EXISTS family_run(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,request_id TEXT NOT NULL,binding TEXT NOT NULL,recipe TEXT NOT NULL,status TEXT NOT NULL,result TEXT NOT NULL,task_id TEXT,UNIQUE(project_id,request_id));
     CREATE TABLE IF NOT EXISTS family_spec(project_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,binding TEXT NOT NULL,recipe TEXT NOT NULL,PRIMARY KEY(project_id,prompt_hash));
@@ -82,6 +90,8 @@ export class PackStore extends TerminalStore {
     CREATE TABLE IF NOT EXISTS office_intake(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,request_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,mode TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL,prompt TEXT NOT NULL,spec TEXT NOT NULL,questions TEXT NOT NULL,answers TEXT NOT NULL,define_owner TEXT,define_lease_until_ms INTEGER NOT NULL DEFAULT 0,paused INTEGER NOT NULL DEFAULT 0,jev_enabled INTEGER NOT NULL DEFAULT 0,jev_cost_consent_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(project_id,request_id));
     CREATE INDEX IF NOT EXISTS office_intake_project_updated ON office_intake(project_id,updated_at);
     CREATE TABLE IF NOT EXISTS office_work_revision(work_id TEXT NOT NULL REFERENCES office_work(id),revision INTEGER NOT NULL,kind TEXT NOT NULL,spec TEXT NOT NULL,answers TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(work_id,revision));
+    CREATE TABLE IF NOT EXISTS office_context_delivery(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,work_id TEXT NOT NULL REFERENCES office_work(id),actor TEXT NOT NULL,run_id TEXT,plan_revision INTEGER NOT NULL,sha256 TEXT NOT NULL,input_bytes INTEGER NOT NULL,repeated_bytes INTEGER NOT NULL,segments TEXT NOT NULL,input_tokens INTEGER,token_observation TEXT NOT NULL,resume_result TEXT NOT NULL,stage_attempts INTEGER,legacy_prompt_bytes INTEGER,actual_prompt_bytes INTEGER,created_at TEXT NOT NULL);
+    CREATE INDEX IF NOT EXISTS office_context_delivery_work ON office_context_delivery(project_id,work_id,created_at);
     CREATE TABLE IF NOT EXISTS office_import(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,kind TEXT NOT NULL,status TEXT NOT NULL,body TEXT NOT NULL,source_digest TEXT NOT NULL,accepted_work_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS office_import_work ON office_import(project_id,accepted_work_id);
     CREATE TABLE IF NOT EXISTS office_import_acceptance(import_id TEXT PRIMARY KEY REFERENCES office_import(id),project_id TEXT NOT NULL,request_hash TEXT NOT NULL);
@@ -456,6 +466,44 @@ export class PackStore extends TerminalStore {
     this.intakeWork(project,id);
     return this.connection.prepare("SELECT spec FROM office_work_revision WHERE work_id=? AND kind='direction_changed' ORDER BY revision DESC LIMIT 20").all(id).reverse().map(row=>JSON.parse(String(row.spec)) as {run_id:string;step_id:string;instruction:string;created_at:string});
   }
+  recordWorkContextDelivery(project:string,workId:string,actor:string,runId:string|null,planRevision:number,sha256:string,inputBytes:number,segments:Array<{id:string;sha256:string;bytes:number}>){
+    this.intakeWork(project,workId);
+    return this.transaction(()=>{
+      const previous=this.connection.prepare('SELECT segments FROM office_context_delivery WHERE project_id=? AND work_id=? ORDER BY rowid DESC LIMIT 1').get(project,workId);
+      const oldSegments=previous?JSON.parse(String(previous.segments)) as Array<{id:string;sha256:string;bytes:number}>:[];
+      const repeatedBytes=segments.reduce((sum,item)=>sum+(oldSegments.some(prior=>prior.id===item.id&&prior.sha256===item.sha256)?item.bytes:0),0);
+      const id=randomUUID(),createdAt=new Date().toISOString();
+      this.connection.prepare('INSERT INTO office_context_delivery VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,workId,actor,runId,planRevision,sha256,inputBytes,repeatedBytes,JSON.stringify(segments),null,'unobserved','unobserved',null,null,null,createdAt);
+      return {id,actor,run_id:runId,plan_revision:planRevision,input_bytes:inputBytes,repeated_bytes:repeatedBytes,input_tokens:null,token_observation:'unobserved' as const,resume_result:'unobserved' as const,created_at:createdAt};
+    });
+  }
+  finishWorkContextDelivery(project:string,id:string,result:'stage_succeeded'|'stage_failed'|'uncertain',stageAttempts:number){
+    requireCondition(Number.isInteger(stageAttempts)&&stageAttempts>=1,'WORK_CONTEXT_ATTEMPTS_INVALID');
+    const changed=this.connection.prepare("UPDATE office_context_delivery SET resume_result=?,stage_attempts=? WHERE project_id=? AND id=? AND resume_result='unobserved'").run(result,stageAttempts,project,id).changes;
+    requireCondition(changed===1,'WORK_CONTEXT_DELIVERY_NOT_PENDING');
+  }
+  recordWorkContextPromptSizes(project:string,id:string,legacyBytes:number,actualBytes:number){
+    requireCondition(Number.isInteger(legacyBytes)&&legacyBytes>=0&&Number.isInteger(actualBytes)&&actualBytes>=0,'WORK_CONTEXT_PROMPT_SIZE_INVALID');
+    const changed=this.connection.prepare('UPDATE office_context_delivery SET legacy_prompt_bytes=?,actual_prompt_bytes=? WHERE project_id=? AND id=? AND actual_prompt_bytes IS NULL').run(legacyBytes,actualBytes,project,id).changes;
+    requireCondition(changed===1,'WORK_CONTEXT_DELIVERY_NOT_PENDING');
+  }
+  workContextDeliveries(project:string,workId:string){
+    this.intakeWork(project,workId);
+    return this.connection.prepare('SELECT id,actor,run_id,plan_revision,sha256,input_bytes,repeated_bytes,input_tokens,token_observation,resume_result,stage_attempts,legacy_prompt_bytes,actual_prompt_bytes,created_at FROM office_context_delivery WHERE project_id=? AND work_id=? ORDER BY rowid DESC LIMIT 50').all(project,workId) as Array<{id:string;actor:string;run_id:string|null;plan_revision:number;sha256:string;input_bytes:number;repeated_bytes:number;input_tokens:number|null;token_observation:string;resume_result:string;stage_attempts:number|null;legacy_prompt_bytes:number|null;actual_prompt_bytes:number|null;created_at:string}>;
+  }
+  workContextAggregate(project:string,workId:string){
+    this.intakeWork(project,workId);
+    const row=this.connection.prepare(`SELECT COUNT(*) AS deliveries,COALESCE(SUM(input_bytes),0) AS total_context_bytes,COALESCE(SUM(repeated_bytes),0) AS repeated_segment_bytes,
+      COALESCE(SUM(CASE WHEN resume_result='stage_succeeded' THEN 1 ELSE 0 END),0) AS succeeded,
+      COALESCE(SUM(CASE WHEN resume_result='stage_failed' THEN 1 ELSE 0 END),0) AS failed,
+      COALESCE(SUM(CASE WHEN resume_result='uncertain' THEN 1 ELSE 0 END),0) AS uncertain,
+      COALESCE(SUM(CASE WHEN resume_result='unobserved' THEN 1 ELSE 0 END),0) AS unobserved,
+      COALESCE(SUM(CASE WHEN stage_attempts>1 THEN 1 ELSE 0 END),0) AS rework_stages,
+      COALESCE(SUM(CASE WHEN legacy_prompt_bytes IS NOT NULL AND actual_prompt_bytes IS NOT NULL THEN 1 ELSE 0 END),0) AS comparison_samples,
+      COALESCE(SUM(legacy_prompt_bytes),0) AS legacy_bytes,COALESCE(SUM(actual_prompt_bytes),0) AS actual_bytes
+      FROM office_context_delivery WHERE project_id=? AND work_id=?`).get(project,workId);
+    return Object.fromEntries(Object.entries(row??{}).map(([key,value])=>[key,Number(value)])) as Record<string,number>;
+  }
   setIntakePaused(project:string,id:string,expectedRevision:number,paused:boolean){
     return this.transaction(()=>{
       const work=this.intakeWork(project,id);
@@ -490,7 +538,7 @@ export class PackStore extends TerminalStore {
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=200,'WORK_LIMIT_INVALID');
     return this.connection.prepare(`SELECT w.id,w.title,w.goal,w.created_at,w.updated_at,i.mode,i.status AS intake_status,json_extract(i.spec,'$.route.pack_family') AS pack_family,i.revision AS intake_revision,i.paused,
       r.source_kind,r.source_id,fr.status AS pack_status,json_extract(sr.snapshot,'$.status') AS swarm_status,COALESCE(cr.status,cd.status) AS coding_status,COALESCE(sr.revision,cr.revision,cd.revision) AS run_revision,
-      COALESCE(sr.updated_at,cr.updated_at,cd.updated_at,i.updated_at,w.updated_at) AS display_updated_at FROM office_work w
+      MAX(w.updated_at,COALESCE(sr.updated_at,cr.updated_at,cd.updated_at,i.updated_at,w.updated_at)) AS display_updated_at FROM office_work w
       LEFT JOIN office_intake i ON i.work_id=w.id AND i.project_id=w.project_id
       LEFT JOIN office_run r ON r.rowid=(SELECT recent.rowid FROM office_run recent WHERE recent.project_id=w.project_id AND recent.work_id=w.id ORDER BY recent.created_at DESC,recent.rowid DESC LIMIT 1)
       LEFT JOIN family_run fr ON r.source_kind='pack' AND fr.id=r.source_id AND fr.project_id=w.project_id

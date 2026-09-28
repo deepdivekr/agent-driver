@@ -1,5 +1,7 @@
 import {z} from 'zod';
 import {basePackFamilyId} from '../taskpacks/base-pack-catalog.js';
+import {evidenceChecksSchema} from './evidence.js';
+import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 
 export const key=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 export const field=z.string().min(1).max(120).refine(s=>!['__proto__','constructor','prototype'].includes(s));
@@ -45,7 +47,7 @@ export type Source=z.infer<typeof sourceSchema>;
 export type Target=z.infer<typeof targetSchema>;
 export const sourceRequest=z.object({id:key,parameters:z.record(key,z.string().max(400)).default({})}).strict();
 export const filterSchema=z.object({field,op:z.enum(['eq','contains','gte','lte']),value:scalar}).strict();
-const common={version:z.literal(1),request:z.string().trim().min(1).max(8000)};
+const common={version:z.literal(1),request:z.string().trim().min(1).max(8000),browser:browserPreferenceSchema.optional()};
 const collection={sources:z.array(sourceRequest).min(1).max(24),filters:z.array(filterSchema).max(30).default([]),deduplicate_by:z.array(field).max(10).default([])};
 const sort=z.object({field,direction:z.enum(['asc','desc'])}).strict();
 const judgment=z.object({question:z.string().min(1).max(1200),labels:z.record(key,z.string().min(1).max(500))}).strict();
@@ -54,20 +56,20 @@ const relevance=judgment.extend({accept_labels:z.array(key).min(1).max(20)}).str
 });
 const mutation={target:key,values:rowSchema,expected_before_sha256:z.string().regex(/^[a-f0-9]{64}$/).nullable()};
 export const recipeSchema=z.discriminatedUnion('family',[
-  z.object({...common,family:z.literal('research.search'),...collection,query:z.string().max(500),search_fields:z.array(field).min(1).max(20),relevance:relevance.nullable().default(null),sort:sort.nullable(),limit:z.number().int().min(1).max(1000)}).strict(),
-  z.object({...common,family:z.literal('portal.collect'),...collection,format:z.enum(['json','csv'])}).strict(),
+  z.object({...common,family:z.literal('research.search'),...collection,query:z.string().max(500),search_fields:z.array(field).min(1).max(20),relevance:relevance.nullable().default(null),sort:sort.nullable(),limit:z.number().int().min(1).max(1000),verification:evidenceChecksSchema.optional()}).strict(),
+  z.object({...common,family:z.literal('portal.collect'),...collection,format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict(),
   z.object({...common,family:z.literal('form.draft-submit'),...mutation}).strict(),
   z.object({...common,family:z.literal('record.update'),...mutation}).strict(),
   z.object({...common,family:z.literal('choose.stage'),...mutation}).strict(),
   z.object({...common,family:z.literal('inbox.triage'),...collection,judgment,draft_by_label:z.record(key,z.string().max(4000))}).strict(),
   z.object({...common,family:z.literal('monitor.watch'),...collection,interval_seconds:z.number().int().min(60).max(2592000),mode:z.enum(['any_change','minimum_decreases']),value_field:field.nullable(),comparison_fields:z.array(field).min(1).max(20)}).strict(),
-  z.object({...common,family:z.literal('file.pipeline'),...collection,columns:z.array(field).min(1).max(100),numeric_columns:z.array(field).max(100),sort:sort.nullable(),format:z.enum(['json','csv'])}).strict(),
+  z.object({...common,family:z.literal('file.pipeline'),...collection,columns:z.array(field).min(1).max(100),numeric_columns:z.array(field).max(100),sort:sort.nullable(),format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict(),
 ]);
 export type Recipe=z.infer<typeof recipeSchema>;
 export type MutationRecipe=Extract<Recipe,{family:'form.draft-submit'|'record.update'|'choose.stage'}>;
 export const packTools={
   runtime_pack_catalog:{schema:z.object({}).strict(),implemented:true,readOnly:true},
-  runtime_pack_plan:{schema:z.object({prompt:common.request}).strict(),implemented:true,readOnly:true},
+  runtime_pack_plan:{schema:z.object({prompt:common.request,work_id:z.string().uuid().optional()}).strict(),implemented:true,readOnly:true},
   runtime_pack_run:{schema:z.object({request_id:key,work_id:z.string().uuid().optional(),recipe:recipeSchema}).strict(),implemented:true,readOnly:false},
   runtime_pack_status:{schema:z.object({run_id:key}).strict(),implemented:true,readOnly:true},
   runtime_pack_execute_approved:{schema:z.object({run_id:key}).strict(),implemented:true,readOnly:false},

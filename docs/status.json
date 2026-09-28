@@ -1,9 +1,1139 @@
 {
-  "RQ-707": {"status":"done","evidence":["scripts/release/check-public-boundary.mjs","tests/runtime-license.test.mjs","PUBLICATION.md"],"note":"Allowlisted common transfer only; 398 non-ignored files scanned without credential findings. Pattern checks are not a complete privacy guarantee."},
-  "RQ-708": {"status":"done","evidence":["docs/release-readiness-v0.2.0.md","tests/runtime-hermes-migration.test.mjs","tests/runtime-remote-office.test.mjs","tests/runtime-coding-model-settings.test.mjs","tests/runtime-continuity-context.test.mjs"],"note":"Common features passed the PR's 625/625 check snapshot; model and remote-service fixtures are not live-provider certification."},
-  "RQ-709": {"status":"done","evidence":["package.json","install.sh","README.md","README.ko.md","docs/releases/v0.2.0.md"],"note":"v0.2.0 pinned consistently; new-Work Jev call/skip proposal excluded."},
-  "RQ-710": {"status":"partial","note":"PR snapshot 46f94fe passed 625/625 checks and audit; recheck the final browser-startup correction. Earlier UI/readiness failures remain recorded."},
-  "RQ-711": {"status":"partial","note":"GitHub fresh/v0.1.0/v0.1.1 installer probes passed. Local WSL startup exceeded the old 15-second check; validate the corrected bounded startup in the final snapshot."},
-  "RQ-712": {"status":"partial","note":"PR #28 is open; merge and verify public tag/assets only after the final snapshot passes release gates."},
-  "RQ-713": {"status":"done","evidence":["src/packs/store.ts","src/packs/runtime.ts","src/swarm/runtime.ts","tests/runtime-work-migration.test.mjs","tests/runtime-decision-memory.test.mjs","tests/runtime-import-single-jev-browser.test.mjs"],"note":"Task Packs own judgment points. New Work delegates without a second LLM Jev policy; global OFF, explicit opt-outs, import consent and legacy values are preserved. Focused 56/56 checks and PR regression passed."}
+  "RQ-799": {
+    "status": "partial",
+    "evidence": [
+      "prompts/phase-89-public-release.md"
+    ],
+    "note": "Finish public scope and remote/source audit before publication."
+  },
+  "RQ-800": {
+    "status": "not_run",
+    "evidence": [],
+    "note": "Prepare concise bilingual README and aligned v0.3.0 installer/release notes."
+  },
+  "RQ-801": {
+    "status": "not_run",
+    "evidence": [],
+    "note": "Freeze candidate then run quick and clean-install/upgrade gates without soak."
+  },
+  "RQ-802": {
+    "status": "not_run",
+    "evidence": [],
+    "note": "Publish only after required candidate checks pass."
+  },
+  "RQ-803": {
+    "status": "partial",
+    "evidence": [
+      "prompts/phase-89-public-release.md"
+    ],
+    "note": "Preserve existing receipts and private installation; append final release evidence."
+  },
+  "RQ-795": {
+    "status": "done",
+    "evidence": [
+      "docs/browser-executor-setup.md",
+      "docs/handoff/phase-88.md"
+    ],
+    "note": "Official Aside installation/account/CLI guidance checked. Local browser installation is needed for the shipped local adapter; remote CLI support is distinct and not connected by Agent Office."
+  },
+  "RQ-796": {
+    "status": "done",
+    "evidence": [
+      "src/onboarding/browser-setup.ts",
+      "src/observability/browser-setup-ui.ts",
+      "src/observability/control-settings.ts"
+    ],
+    "note": "Optional install/auth guidance, real connection check, consent-based registration, default Chromium download/smoke and observed setup tail added. Aside/Neo own installation/login remain in their official app; no mandatory optional browser or new model invocation."
+  },
+  "RQ-797": {
+    "status": "done",
+    "evidence": [
+      "tests/runtime-browser-setup.test.mjs",
+      "docs/browser-executor-setup.md"
+    ],
+    "note": "Revision-bound registration, private backup, unrelated/VM policy preservation, default owned-headless Playwright and unchanged environment/account boundaries tested. Policy changes require MCP reconnect, not hot migration of active Work."
+  },
+  "RQ-798": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-88.md"
+    ],
+    "note": "Build, affected 52/52 and shared UI/onboarding 11/11 checks passed (61 cases plus two integrity checks); desktop/mobile controls and native default Chromium verified. Optional-app UI responses are fixtures. Initial failures retained; actual Aside connection became unavailable and Neo did not connect. No full Phase88 suite, soak, publication or stable optional-browser live-task claim.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T12-54-10-412Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T12-57-18-987Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T12-48-28-884Z.json"
+    ]
+  },
+  "RQ-792": {
+    "status": "done",
+    "evidence": [
+      "src/interface/mcp-service.ts",
+      "src/interface/mcp-service-manager.ts",
+      "src/interface/mcp-process.ts",
+      "src/interface/mcp-proxy.ts",
+      "tests/runtime-mcp-service.test.mjs"
+    ],
+    "note": "Reusable loopback service, nonce startup lock, separate session sampling/elicitation, 32-session bound and three full processes per OS user. Default stdio is a lightweight bridge; direct HTTP has no per-client process. Not a distributed cross-OS global cap."
+  },
+  "RQ-793": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-87.md"
+    ],
+    "note": "Windows and WSL Codex HTTP registration applied with backups and unchanged unrelated settings; Windows protocol/catalog/health/private catalog passed. Private workflows retained; old values in 65 tables preserved. Older HTTP client needs service start after host shutdown; existing conversations may require reopening Codex.",
+    "private_evidence": [
+      "tests/evidence/phase87-shared-mcp.json"
+    ]
+  },
+  "RQ-794": {
+    "status": "done",
+    "evidence": [
+      "tests/runtime-mcp-service.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "32 concurrent/repeated launches reused one server; 12 clients, isolation, auth/Host/Origin/body/session bounds, idle busy protection, stable dead-owner restart and direct cap passed. Shared 12-client PSS 102.9 MiB is read-only workload evidence, not soak or VM performance.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T12-16-11-253Z.json",
+      "tests/evidence/phase87-shared-mcp.json"
+    ]
+  },
+  "RQ-788": {
+    "status": "done",
+    "evidence": [
+      "scripts/runtime/mcp-memory.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Inspected 52 open-pipe MCP processes and measured owned before/after candidates; age did not prove orphans. Explicit user cleanup: 52 initially and two later old connections stopped; unrelated services preserved.",
+    "private_evidence": [
+      "tests/evidence/phase87-mcp-memory.json",
+      "tests/evidence/phase87-shared-mcp.json"
+    ]
+  },
+  "RQ-789": {
+    "status": "done",
+    "evidence": [
+      "src/cli.ts",
+      "src/observability/safe-text.ts",
+      "src/taskpack/owned-playwright.ts",
+      "tests/runtime-mcp-lifecycle.test.mjs"
+    ],
+    "note": "Command/browser imports load on demand; all 102 tools remain. Owned direct MCP health PSS fell from 142.0 to 86.9 MiB; no startup-speed claim."
+  },
+  "RQ-790": {
+    "status": "done",
+    "evidence": [
+      "src/interface/mcp-lifetime.ts",
+      "src/interface/mcp.ts",
+      "tests/runtime-mcp-lifecycle.test.mjs",
+      "tests/runtime-mcp-service.test.mjs"
+    ],
+    "note": "All tools/ticks fenced and drained; EOF/signals/broken pipes/oversized input clean resources and presence. Separate sessions retain approval/sampling authority. SIGKILL and power loss cannot perform graceful cleanup."
+  },
+  "RQ-791": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/mcp-resource-lifecycle.md",
+      "docs/handoff/phase-87.md"
+    ],
+    "note": "Final quick suite 990/990 including input integrity, exit zero; long soak excluded. Earlier failures preserved and fixed. Local candidate connected; no publication or completion of unrelated release gates claimed.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T12-16-11-253Z.json",
+      "tests/evidence/phase87-shared-mcp.json"
+    ]
+  },
+  "RQ-784": {
+    "status": "done",
+    "evidence": [
+      "src/integrations/workflow-compatibility.ts",
+      "src/interface/config.ts",
+      "src/interface/api.ts",
+      "src/interface/mcp.ts",
+      "tests/runtime-workflow-compatibility.test.mjs"
+    ],
+    "note": "Bounded legacy policy is preserved, unconnected workflows are explicit, and host-pinned local modules validate their own contracts. Live host fingerprint and module changes fence calls. Private domain implementations are not published; the bridge is trusted local code, not a sandbox or a grant to run arbitrary new Work."
+  },
+  "RQ-785": {
+    "status": "done",
+    "evidence": [
+      "src/integrations/workflow-upgrade.ts",
+      "src/cli.ts",
+      "tests/runtime-workflow-compatibility.test.mjs"
+    ],
+    "note": "Private exact-byte backup, fingerprint-bound plan/apply/rollback, atomic replacement, drift and redirect checks, idempotent retry and CLI tests passed. No database rollback, automatic workflow execution or live installed-runtime replacement is performed."
+  },
+  "RQ-786": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Actual existing adapter catalog and historical receipt via new MCP, exact configuration rollback, old MCP reconnect and unchanged selected DB rows passed on disposable copies (4/4). Initial test-copy profile-binding failure is preserved. No production configuration, scheduling, messaging or browser action occurred; actual workflow execution was intentionally not tested.",
+    "private_evidence": [
+      "tests/evidence/phase86-workflow-compatibility.json",
+      "tests/evidence/phase86-workflow-compatibility-initial-failure.json",
+      "tests/evidence/runtime-tests-2026-09-28T11-01-46-114Z.json"
+    ]
+  },
+  "RQ-787": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/local-workflow-compatibility.md",
+      "docs/handoff/phase-86.md"
+    ],
+    "note": "Affected 49/49 passed. Quick suite without soak finished 971/972: old publication assertion banned the generic tool prefix. Private-code exclusion was retained and strengthened; final host-scope fence plus corrected publication check passed 56/56. Full suite was not rerun after those final changes. Build and diff checks passed; installed/runtime publication boundaries documented.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T10-43-07-778Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T10-47-40-454Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T11-01-46-114Z.json"
+    ]
+  },
+  "RQ-778": {
+    "status": "done",
+    "evidence": [
+      "src/browser/executor-contracts.ts",
+      "src/interface/config.ts",
+      "docs/browser-executor-routing.md"
+    ],
+    "note": "Engine, host placement, profile reference and read-only capability are independent; registration does not imply native verification."
+  },
+  "RQ-779": {
+    "status": "partial",
+    "evidence": [
+      "src/browser/mcp-executor.ts",
+      "src/browser/playwright-executor.ts",
+      "tests/runtime-browser-mcp.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Real read-only adapters are connected; Neo native verification is blocked by its installation, and Neo/Aside approval-bound form actions/guest transports are not implemented. Resume after browser repair and with a reviewed mutation/guest contract.",
+    "private_evidence": [
+      "tests/evidence/phase85-browser-routing.json"
+    ]
+  },
+  "RQ-780": {
+    "status": "done",
+    "evidence": [
+      "src/browser/executor-routing.ts",
+      "src/packs/runtime.ts",
+      "src/swarm/routed-browser.ts",
+      "src/work/contracts.ts",
+      "tests/runtime-browser-executors.test.mjs"
+    ],
+    "note": "Work/Pack/Swarm read routes use registered eligible engines and existing optional model policies. Live candidates are probed; exact verified Pack bindings skip model selection. Environment-specific profiles remain provisional, not performance-calibrated."
+  },
+  "RQ-781": {
+    "status": "done",
+    "evidence": [
+      "src/browser/executor-routing.ts",
+      "src/browser/executor-journal.ts",
+      "tests/runtime-browser-executors.test.mjs"
+    ],
+    "note": "Durable read checkpoints and bounded same-environment handoff preserve completed steps and require fresh destination observation; auth gates and uncertain effects cannot trigger replay. Native Neo mid-task recovery is not claimed."
+  },
+  "RQ-782": {
+    "status": "partial",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "scripts/browser-executor-acceptance.mjs",
+      "scripts/browser-vm-acceptance.mjs",
+      "scripts/browser-public-read-acceptance.mjs"
+    ],
+    "note": "Actual Windows Aside, WSL-to-Aside, unavailable-Neo startup fallback and clean Ubuntu VM Playwright reads passed; first VM and Neo failures retained. Resume native Neo after installation repair and Windows VM after licensed guest/bridge setup. Timings are acceptance observations, not fair engine rankings.",
+    "private_evidence": [
+      "tests/evidence/phase85-browser-routing.json"
+    ]
+  },
+  "RQ-783": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/release-readiness-phase85.md",
+      "docs/handoff/phase-85.md",
+      "docs/browser-executor-routing.md"
+    ],
+    "note": "Full quick rerun passed 959/959 before the narrow launch-error/guest-parent patch; follow-ups passed 28/28 and 143/143 targeted checks. Full suite not rerun after that patch. Neo-optional release audit found installed legacy workflows config incompatible with candidate and native approval/connection gaps still open; no installation replacement or publication. Failures and evidence levels preserved.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T09-40-22-587Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T09-49-57-328Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T10-17-43-075Z.json"
+    ]
+  },
+  "RQ-776": {
+    "status": "done",
+    "evidence": [
+      "docs/handoff/phase-84.md"
+    ],
+    "note": "Local Windows Codex config now registers the official Aside CLI MCP with explicit local host; global agent instructions preserve Neo priority and allow Aside only on availability failure. This is agent-level routing, not a product executor implementation, release or installed-runtime update."
+  },
+  "RQ-777": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-84.md"
+    ],
+    "note": "Real stdio initialization/tools listing and public developer-doc page open/snapshot/title/close passed in 5186ms for the REPL call. Existing tabs preserved and no extra tab left. Codex parsed the configuration. New named tools may require a fresh session; direct CLI works locally. No paid agent execution or private-site login verified.",
+    "private_evidence": [
+      "tests/evidence/phase84-aside-local.json"
+    ]
+  },
+  "RQ-772": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/window-recovery.ts",
+      "src/desktop/cua-desktop-driver.ts",
+      "src/desktop/cua-contracts.ts",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Common failed-capture recovery verifies exact identity, separates minimize/activation grants, claims bounded durable recovery, invalidates old observations and independently verifies new evidence. Covered readable native window needs no foreground activation; minimized native window restored once. This does not implement arbitrary modal dismissal or app restart.",
+    "private_evidence": [
+      "tests/evidence/phase83-native.json"
+    ]
+  },
+  "RQ-773": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/windows-runtime.ts",
+      "tests/runtime-visual-fallback.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Navigation-only pre-dispatch drift gets one fresh correction per call and two per persisted step through existing Pack Jev/LLM policy. Human draft edits, approval races, completed progress and uncertain effects remain fenced. Post-dispatch observation cannot activate/restore windows. Initial auto-overwrite regression fixed and retained.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T08-18-02-081Z.json"
+    ]
+  },
+  "RQ-774": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/desktop-recovery.md"
+    ],
+    "note": "Owned native cover and minimize passed; no user-window faults or messages. Covered UIA 2317ms, supplemental OCR 3971ms, zero activation. Minimized restore 2595ms, whole path 15670ms, repeat 3220ms. Missing/responding metadata, modal refusal and reobservation are contract tests, not all-app native certification. Native cover setup FAIL preserved.",
+    "private_evidence": [
+      "tests/evidence/phase83-native.json",
+      "tests/evidence/runtime-tests-2026-09-28T08-18-02-081Z.json"
+    ]
+  },
+  "RQ-775": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/release-readiness-phase83.md",
+      "docs/handoff/phase-83.md"
+    ],
+    "note": "Current candidate quick 942/942 passed with stable fingerprints; actual fresh and upgrades from 0.1.0/0.1.1 passed using disposable snapshot edaebf9, original HEAD unchanged. Production dependency audit zero findings. Readiness decision is NO-GO for install-and-use stable Windows desktop: native setup/grant UI, action-time approval wiring, broader recovery/perception and cross-host foreground ownership remain. No release, installed-host replacement or long soak.",
+    "private_evidence": [
+      "tests/evidence/phase83-acceptance.json",
+      "tests/evidence/release-install/2026-09-28T08-19-09.097Z.json"
+    ]
+  },
+  "RQ-771": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/cua-desktop-driver.ts",
+      "src/desktop/cua-connection.ts",
+      "src/desktop/windows-runtime.ts",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-82.md"
+    ],
+    "note": "Common foreground-authorized recovery restores a minimized exact window once and reacquires evidence; preserves background, Work pause/revision/model/scope, independent readback and no uncertain-effect replay. Real installed app restored in 1492ms, 12135ms including detection and OCR; second read 2311ms with no restoration. Existing KakaoTalk was already restored and final native observation passed without input or focus changes. All affected regressions 218/218 passed, stable fingerprints. Source/staging only; no installed-host replacement or release.",
+    "private_evidence": [
+      "tests/evidence/phase82-window-restore.json",
+      "tests/evidence/runtime-tests-2026-09-28T07-49-27-267Z.json"
+    ]
+  },
+  "RQ-768": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "scripts/runtime/windows-real-visual.mjs"
+    ],
+    "note": "Bounded real-app observation completed. Existing KakaoTalk was minimized, so no restore/focus/input occurred. Separate owned Character Map instances exposed current UIA and local OCR candidates; only owned windows were closed. No private message or existing draft changed.",
+    "private_evidence": [
+      "tests/evidence/phase82-real-visual.json"
+    ]
+  },
+  "RQ-769": {
+    "status": "partial",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-82.md"
+    ],
+    "note": "Native Character Map Work/LLM plan, four UIA inputs/readbacks and same-Work repeat passed: 58184ms first versus 20039ms repeat, zero repeat model calls. Real local OCR and minimized-window recovery now pass; KakaoTalk currently renders and is observed. Actual OCR-only navigation/readback/repetition remains unverified; resume a harmless currently observed visual action with a positive result, not another app-specific adapter. No message send or draft edit; live Jev accuracy not tested.",
+    "private_evidence": [
+      "tests/evidence/phase82-real-visual.json",
+      "tests/evidence/phase82-window-restore.json"
+    ]
+  },
+  "RQ-770": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "tests/report.json",
+      "docs/handoff/phase-82.md"
+    ],
+    "note": "Repaired minimized capture diagnostics, dropped checkbox state, invented first context, truthful observation waits, verified UIA repeat guard and omitted candidate evidence. Full quick 900/900 passed before final candidate enrichment; final build plus all affected consumer tests 158/158 passed with stable fingerprints, followed by real native acceptance and OCR probe. Historical failures preserved; long soak excluded; source/staging only, not an installed-host upgrade or release.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T07-17-11-467Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T07-24-50-898Z.json",
+      "tests/evidence/phase82-real-visual.json"
+    ]
+  },
+  "RQ-763": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/windows-visual.ts",
+      "src/desktop/windows-visual-script.ts",
+      "src/desktop/windows-decision.ts",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Current window/capture-bound OCR candidates preserve honest provenance, unknown enabled state and unavailable confidence. Screenshots are not DOM/UIA; pixels and coordinates remain host-only. Scaled DPI-unaware capture is refused before input.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T06-15-54-000Z.json",
+      "tests/evidence/phase81-visual-native.json"
+    ]
+  },
+  "RQ-764": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/cua-desktop-driver.ts",
+      "src/desktop/work-procedure.ts",
+      "src/desktop/windows-runtime.ts",
+      "src/desktop/windows-workflows.ts",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "UIA-first common visual text-navigation supplementation and explicit mixed-view observation use the existing Pack-owned optional Jev/LLM route without app-specific adapters. Actual subscription Work/procedure/decision and native CUA/OCR passed; live Jev not evaluated.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T06-15-54-000Z.json",
+      "tests/evidence/phase81-visual-native.json"
+    ]
+  },
+  "RQ-765": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/cua-desktop-driver.ts",
+      "src/desktop/windows-runtime.ts",
+      "tests/runtime-visual-fallback.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Current authorized image-bound navigation, duplicate rejection, post-observation Work/model/pause fences and independent positive readback implemented. Non-performance remains durable and uncertain effects are not replayed. Visual typing/external-effect targets remain unsupported.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T06-15-54-000Z.json",
+      "tests/evidence/phase81-visual-native.json"
+    ]
+  },
+  "RQ-766": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/windows-visual.ts",
+      "src/desktop/windows-visual-script.ts",
+      "src/desktop/cua-desktop-driver.ts",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Identical fresh frames skip OCR, changed regions use bounded extraction with full fallback, and independently verified same-Work targets can skip model selection. Native repeat had zero model calls; whole-window capture remains. Caches bounded/expired, child exits after idle, stale coordinates never reused.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T06-15-54-000Z.json",
+      "tests/evidence/phase81-visual-native.json"
+    ]
+  },
+  "RQ-767": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "tests/report.json",
+      "docs/handoff/phase-81.md"
+    ],
+    "note": "Final build and quick 890/890 PASS, 0 BLOCKED_ENV/NOT_RUN, stable input fingerprints; no long soak. Real subscription/native first and repeat passed, followed by final-build fixture-model native correctness and expected DPI-refusal acceptance. Initial failures preserved separately. Controlled canvas is not all-app coverage; no message send, installed-host replacement or release.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T06-15-54-000Z.json",
+      "tests/evidence/phase81-visual-native.json"
+    ]
+  },
+  "RQ-758": {
+    "status": "done",
+    "evidence": [
+      "src/work/runtime.ts",
+      "src/interface/mcp.ts",
+      "src/packs/runtime.ts",
+      "docs/windows-task-pack.md"
+    ],
+    "note": "Removed the unintended global self-chat restriction and mandatory handwritten-profile dispatch. Profiles are examples; exact user-requested targets and host effect permissions remain. Existing self-chat example is restricted only when the user actually asks for self-chat."
+  },
+  "RQ-759": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/work-procedure.ts",
+      "src/desktop/windows-runtime.ts",
+      "tests/runtime-work-desktop.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Configured LLM plans from actual connected capabilities; immutable Work/input/capability-bound procedures use the existing run journal and Work status. Live Codex subscription created the Work and procedure in Windows. No model-policy ownership moved out of Packs.",
+    "private_evidence": [
+      "tests/evidence/phase80-native.json"
+    ]
+  },
+  "RQ-760": {
+    "status": "partial",
+    "evidence": [
+      "src/desktop/cua-desktop-driver.ts",
+      "src/desktop/cua-contracts.ts",
+      "src/interface/api.ts",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Application-neutral owned CUA UIA click/replace-text and positive readback path implemented; Phase 81 adds common local-OCR text navigation without per-app code. Icon-only and visual-only editable controls plus host connection/effect-approval UI remain; resume those generic capabilities/host UX, not a new Kakao-specific adapter.",
+    "private_evidence": [
+      "tests/evidence/phase80-native.json",
+      "tests/evidence/phase81-visual-native.json"
+    ]
+  },
+  "RQ-761": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/windows-runtime.ts",
+      "src/desktop/cua-desktop-driver.ts",
+      "tests/runtime-work-desktop.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Only independently verified same-Work procedures are reused; changed state reobserves/replans, exact current draft fields avoid duplicate judgments, unknown effects cannot be replanned/replayed. Repeat native planning 1530ms with no new model call; full repeated-input proof is a fixture, not a second native action benchmark.",
+    "private_evidence": [
+      "tests/evidence/phase80-native.json"
+    ]
+  },
+  "RQ-762": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-80.md"
+    ],
+    "note": "Focused 137/137, full quick 869/869 and final retention-inclusive quick 870/870 passed; all suites report 0 BLOCKED_ENV/NOT_RUN. Harmless native draft/cache acceptance passed with two real subscription model calls; earlier fixture/build/native failures remain preserved separately. Build, diff check and 56-RQ ledger passed. Generic visual/host-approval UX remains partial under RQ-760, not hidden by green regression. No deployment, release or message send.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T04-19-54-694Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T04-22-41-692Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T04-29-36-612Z.json",
+      "tests/evidence/phase80-native.json"
+    ]
+  },
+  "RQ-754": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/cua-chat-session.ts",
+      "src/desktop/cua-connection.ts",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Real requested room opened with owned CUA and exact title checked. Narrow host adapter prepared and independently verified the corrected draft. Default field/self-chat boundaries unchanged. This is not a public registered chat Pack adapter or generic app coverage.",
+    "private_evidence": [
+      "tests/evidence/phase79-native-chat.json"
+    ]
+  },
+  "RQ-755": {
+    "status": "partial",
+    "evidence": [
+      "src/desktop/cua-chat-session.ts",
+      "tests/runtime-cua-chat.test.mjs"
+    ],
+    "note": "Exact Work reference/room/text scope, current input checks, action-time confirmation contract and durable no-replay claims implemented and tested. Native send/readback and public Pack Run integration remain unverified; resume only after human confirmation and fresh send-control readiness."
+  },
+  "RQ-756": {
+    "status": "partial",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Focused 117/117 and quick 849/849 passed. Native append mismatch retained as FAIL, exact replacement/readback passed. External send NOT_RUN (0 calls): waiting action-time user confirmation; gray send control/remote delivery not verified. No long soak or fabricated Jev call.",
+    "private_evidence": [
+      "tests/evidence/phase79-native-chat.json",
+      "tests/evidence/runtime-tests-2026-09-28T03-36-46-133Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T03-37-22-384Z.json"
+    ]
+  },
+  "RQ-757": {
+    "status": "done",
+    "evidence": [
+      "docs/handoff/phase-79.md",
+      "docs/owned-windows-executor.md",
+      "tests/report.json"
+    ],
+    "note": "Documented scoped prototype, measured operations, preserved failures and native-vs-contract evidence; no private chat data published. Ledger verified 51 RQs and diff check passed; owned processes closed, user draft preserved. No commit or release."
+  },
+  "RQ-750": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/windows-procedure.ts",
+      "tests/runtime-windows-repeat.test.mjs"
+    ],
+    "note": "Verified locators and semantic conditions persist with typed schemas, scope/version/hash validation, seven-day expiry and a 512-row cap. No live input tokens, replacement values or approvals are stored as reusable procedures."
+  },
+  "RQ-751": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/cua-field-driver.ts",
+      "src/desktop/windows-focused-reader.ts",
+      "src/desktop/windows-focused-script.ts",
+      "tests/runtime-windows-repeat.test.mjs",
+      "docs/owned-windows-executor.md"
+    ],
+    "note": "Real Windows input/readback passed with one CUA snapshot and targeted read-only UIA probes, including cache reuse across app/MCP restarts. Fresh permission/token checks and uncertain-effect fences remain; CUA query projection is not misrepresented as a cheaper native tree walk."
+  },
+  "RQ-752": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/windows-runtime.ts",
+      "src/desktop/windows-decision.ts",
+      "tests/runtime-windows-workflows.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Pack/global policy, consent, saved models and Work opt-out govern optional first-run design, repeated Jev judgments and LLM correction/repair. Verified fixture repeat skips LLM design; exact native fields skip both models. Catalog/question version 2 prevents silent old-calibration reuse; native live semantic calibration is not claimed.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T02-52-06-696Z.json"
+    ]
+  },
+  "RQ-753": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-78.md",
+      "docs/owned-windows-executor.md"
+    ],
+    "note": "Full quick 826/826 PASS, zero BLOCKED_ENV/NOT_RUN, no long soak. Six real Windows input/readback runs and one expected closed-target refusal passed; final same-build baseline 6191ms versus persisted focused repeat 3070ms. Fresh rebind after refusal passed in 2697ms. All owned processes exited. Initial build/fixture failures retained; ledger records 47 RQs. Semantic model-cache tests use fixtures, not a native Jev speed claim.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T02-52-53-765Z.json",
+      "tests/evidence/phase78-windows-repeat-native.json"
+    ]
+  },
+  "RQ-746": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/cua-connection.ts",
+      "src/desktop/cua-contracts.ts",
+      "src/interface/api.ts",
+      "docs/owned-windows-executor.md",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Windows host config creates an owned CUA 0.30.2 stdio child with reviewed bounded manifest, pinned digest/version, safe environment and cleanup. Actual MCP acceptance used no Codex Computer Use. No all-app or WSL broker claim.",
+    "private_evidence": [
+      "tests/evidence/phase77-owned-cua-native.json"
+    ]
+  },
+  "RQ-747": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/native-field-driver.ts",
+      "src/desktop/cua-field-driver.ts",
+      "tests/runtime-cua-driver.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Backend-neutral field contract, structured native snapshots, exact Work/window/input binding, one-use durable grants and independent readback. CR normalization requires an explicit reviewed single-line TextPattern profile; default is exact.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T02-00-16-591Z.json"
+    ]
+  },
+  "RQ-748": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/owned-windows-executor.md"
+    ],
+    "note": "Two real product MCP -> owned CUA -> Windows UIA draft tests passed, 10.477s and 9.004s execution. Final total 12.215s with setup/cleanup; no new LLM/Jev calls. Earlier timeout, missing-window and raw-CR failures retained. This verifies a workflow step, not all Work completion checks or all apps.",
+    "private_evidence": [
+      "tests/evidence/phase77-owned-cua-native.json"
+    ]
+  },
+  "RQ-749": {
+    "status": "done",
+    "evidence": [
+      "tests/runtime-cua-driver.test.mjs",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-77.md"
+    ],
+    "note": "Full quick 807/807 PASS (806 cases plus input integrity), zero BLOCKED_ENV/NOT_RUN; no long soak. Native product MCP input/readback and owned-child cleanup passed. Initial failures preserved. Ledger verifies 43 RQs; no publish or deployment.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T02-02-15-882Z.json",
+      "tests/evidence/phase77-owned-cua-native.json"
+    ]
+  },
+  "RQ-741": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/window2-field-driver.ts",
+      "docs/handoff/phase-76.md"
+    ],
+    "note": "Host-injected public window2 adapter connected to RuntimeApi in Windows. Scope is one reviewed local draft field, not a bundled standalone executor or all-app support. Native input acceptance remains NOT_RUN."
+  },
+  "RQ-742": {
+    "status": "done",
+    "evidence": [
+      "tests/runtime-window2-driver.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "70/70 focused checks passed (69 cases plus input integrity), including 18 new adapter cases. Initial 10 failures from undefined values in command hashing were fixed and preserved. Native ports and decision models in this suite are fixtures.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T01-26-17-525Z.json"
+    ]
+  },
+  "RQ-743": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-76.md",
+      "docs/handoff/phase-77.md"
+    ],
+    "note": "Phase 76's native input remains historically NOT_RUN after physical Escape; its real Codex subscription Work intake was 17.494s. On the renewed Phase 77 request, independent product MCP -> owned CUA native input and readback passed twice. No Codex Computer Use or new model call was used for those steps.",
+    "private_evidence": [
+      "tests/evidence/phase76-native-acceptance.json",
+      "tests/evidence/phase77-owned-cua-native.json"
+    ]
+  },
+  "RQ-744": {
+    "status": "partial",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/windows-task-pack.md"
+    ],
+    "note": "Phase 76 observed a signed-in KakaoTalk window but did not prove the recipient or message readback; no draft/send in that phase. The earlier mandatory app-specific-adapter prescription is superseded by Phase 80: resume through common Work-driven observation, executor selection and verification, with exact requested recipient/effect permission. Shared visual fallback and send approval/readback remain to be verified.",
+    "private_evidence": [
+      "tests/evidence/phase76-native-acceptance.json"
+    ]
+  },
+  "RQ-745": {
+    "status": "done",
+    "evidence": [
+      "docs/windows-task-pack.md",
+      "docs/handoff/phase-76.md",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Recorded actual connection, Work/model telemetry, interrupted input acceptance and fixture/native distinction. No public release; no personal screenshots, raw UI trees or credentials added to source.",
+    "private_evidence": [
+      "tests/evidence/phase76-native-acceptance.json"
+    ]
+  },
+  "RQ-737": {
+    "status": "done",
+    "evidence": [
+      "docs/jev-use-case-coverage.md"
+    ],
+    "note": "Compared twelve use cases with concrete code paths and current primary TypeSafe/Beacon guidance. Added source-grounded verification, bounded verbatim reference selection and explicit semantic replay; retained existing browser/intake/swarm/memory mechanisms without inventing full skill routing, code search or automatic entity merge."
+  },
+  "RQ-738": {
+    "status": "done",
+    "evidence": [
+      "src/decision-plane/semantic.ts",
+      "src/packs/evidence.ts",
+      "src/packs/runtime.ts",
+      "tests/runtime-semantic-evidence.test.mjs",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Authoritative collection Packs passed exact-first source-grounded citation/extraction, bounded Jev/LLM decisions, raw-row preservation, consent, saved models and revision fences in full quick. Fixture model outputs; no live accuracy, latency or calibration claim.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-08-49-440Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-739": {
+    "status": "done",
+    "evidence": [
+      "src/work/reference-selection.ts",
+      "src/work/context.ts",
+      "src/work/contracts.ts",
+      "src/packs/runtime.ts",
+      "tests/runtime-semantic-evidence.test.mjs",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Authoritative MCP Work context and Pack wiring passed bounded verbatim reference selection, mandatory continuity-core preservation, input-change rejection and opt-outs. This is not whole-trace compaction or automatic replacement of coding handoff.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-740": {
+    "status": "done",
+    "evidence": [
+      "src/decision-plane/regression.ts",
+      "tests/fixtures/semantic-evidence-regression.json",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-75.md",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "After authoritative merge, all 22 semantic cases and full quick 766/766 passed, including previously Windows-blocked file-symlink boundaries. Real fresh/upgrade install and MCP/browser checks passed. Earlier failures preserved; native Windows executor and live semantic quality remain separate.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-08-49-440Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json",
+      "tests/evidence/release-install/2026-09-28T00-51-43.424Z.json"
+    ]
+  },
+  "RQ-733": {
+    "status": "done",
+    "evidence": [
+      "src/desktop/windows-workflows.ts",
+      "docs/windows-task-pack.md"
+    ],
+    "note": "Ten Windows workflow profiles specialize the existing nine families. Each declares inputs, stages, Jev role, completion evidence and effect boundary. Profiles do not certify installed app support."
+  },
+  "RQ-734": {
+    "status": "partial",
+    "evidence": [
+      "src/desktop/windows-runtime.ts",
+      "src/desktop/windows-decision.ts",
+      "tests/runtime-windows-workflows.test.mjs",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-74.md",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Phase 77 now connects an owned CUA Windows executor for reviewed local draft fields, with actual MCP input/readback and full quick passing. Other app profiles remain partial; resume with app-specific recipient and completion evidence, not generic all-app claims.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-27T22-29-22-673Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-735": {
+    "status": "done",
+    "evidence": [
+      "src/interface/api.ts",
+      "src/interface/catalog.ts",
+      "src/interface/mcp.ts",
+      "src/work/runtime.ts",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Six Windows MCP tools and Work/Pack discovery are merged and tested through the common Decision Plane and existing model settings. Actual fresh-installed stdio catalog passed. Missing native adapter truthfully reports waiting_connection; tool availability is not app certification.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-27T22-37-08-111Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json",
+      "tests/evidence/release-install/2026-09-28T00-51-43.424Z.json"
+    ]
+  },
+  "RQ-736": {
+    "status": "partial",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-74.md",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Workflow contracts pass and Phase 77's independent CUA local-field acceptance is real. The original self-chat acceptance was not verified; Phase 79 separately observed a requested room/draft without sending. Phase 80 supersedes the mandatory per-app/self-chat follow-up: use common Work-driven capabilities and the user's actual target. Generic visual selection and new-message readback/permission remain to verify through our owned runtime.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-27T21-43-25-501Z.json",
+      "tests/evidence/runtime-tests-2026-09-27T22-29-22-673Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-724": {
+    "status": "done",
+    "evidence": [
+      "docs/handoff/phase-72-candidate-limitations.md",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Authoritative source now includes preserved WSL dispatch/path changes and Windows Phase 73-75. Full quick verifies exactly nine Pack families, selected-family/Work binding, coding versus Pack executor routing and honest Windows waiting_connection status. Workflow profiles do not add a tenth family.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-725": {
+    "status": "done",
+    "evidence": [
+      "docs/handoff/phase-72-candidate-limitations.md",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Full quick passed project/paste imports, read-only scanning, separate import/LLM execution consent, source-change rejection, deduplication, bot enhancement approvals and imported Work continuity. Fixtures verify local contracts; remote production services were not changed or invoked.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-726": {
+    "status": "done",
+    "evidence": [
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Ubuntu-24.04 and UNC source access recovered; 8 GiB limit effective and 6.8 GiB available at resume. No unrelated service restart performed. Historical interrupted logs and both source trees backed up; cause of prior outage remains unproven."
+  },
+  "RQ-727": {
+    "status": "done",
+    "evidence": [
+      "docs/handoff/phase-72-candidate-limitations.md",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Authoritative merged build and 766/766 quick checks passed; long soak excluded. Real candidate fresh installation and v0.1.0/v0.1.1 upgrades passed npm/build/Chromium/stdio MCP/font/Work-and-model-setting preservation. Installation used a disposable committed snapshot of the dirty candidate, not stale public HEAD.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json",
+      "tests/evidence/release-install/2026-09-28T00-51-43.424Z.json"
+    ]
+  },
+  "RQ-728": {
+    "status": "done",
+    "evidence": [
+      "docs/handoff/phase-72-candidate-limitations.md",
+      "docs/handoff/phase-73.md",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Local readiness summary and preserved evidence distinguish contract, native and user-environment checks. Source archives, failed runs and 874 prior Windows report cases retained. Product-native Windows executor and live model-quality acceptance remain explicitly incomplete. No public release, push or production deployment.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json",
+      "tests/evidence/release-install/2026-09-28T00-51-43.424Z.json"
+    ]
+  },
+  "RQ-729": {
+    "status": "done",
+    "evidence": [
+      "src/integrations/client-capabilities.ts",
+      "src/integrations/subscription-auth.ts",
+      "tests/runtime-client-continuity.test.mjs",
+      "docs/atlas-continuity.md",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Versioned bounded-judgment capability contracts merged into authoritative source and passed Linux full quick. Saved models, client-owned auth and API-to-subscription-only fallback remain enforced. Does not claim live conversation migration or authenticated-provider acceptance.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-730": {
+    "status": "done",
+    "evidence": [
+      "src/integrations/subscription-auth.ts",
+      "tests/runtime-client-continuity.test.mjs",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Authoritative Linux regression passed single-flight probes, failure eviction, executable/auth-home invalidation and cancellation during preflight/login. Test processes are isolated fixtures; no cross-process login lease or live provider certification claimed.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-27T14-57-37-367Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-731": {
+    "status": "done",
+    "evidence": [
+      "src/integrations/client-handoff.ts",
+      "src/onboarding/configured-model.ts",
+      "src/coding/runtime.ts",
+      "tests/runtime-client-continuity.test.mjs",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Authoritative Linux regression passed frozen model/input/schema binding, output validation, receipt failure handling and persisted handoff recovery. Invalid or uncertain output cannot be labeled a successful transfer or replayed as a provider outage.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-27T15-02-54-348Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-732": {
+    "status": "done",
+    "evidence": [
+      "docs/atlas-continuity.md",
+      "docs/handoff/phase-73.md",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Authoritative source merge, full quick, installed MCP and fresh/upgrade gates completed after WSL recovery. Historical Windows failures and results preserved; source provenance documented. Isolated contract tests and real SQLite/process paths do not certify live authenticated providers.",
+    "private_evidence": [
+      "tests/evidence/phase73-initial.json",
+      "tests/evidence/phase73-summary.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json",
+      "tests/evidence/release-install/2026-09-28T00-51-43.424Z.json"
+    ]
+  },
+  "RQ-719": {
+    "status": "done",
+    "evidence": [
+      "src/files/explorer.ts",
+      "tests/runtime-local-files.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Narrow reusable folder grants, incremental bounded scans and protected files. Audit fixed root filtering before history limits and added contextual human revocation. Windows native tests; not a hostile same-user filesystem sandbox.",
+    "private_evidence": [
+      "tests/evidence/phase71-purpose-audit.json"
+    ]
+  },
+  "RQ-720": {
+    "status": "done",
+    "evidence": [
+      "src/files/explorer.ts",
+      "src/interface/mcp.ts",
+      "docs/local-file-explorer.md",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Observed metadata/content remains separate from inferred categories; per-Work summaries survive other Work scans and rolling scan eviction. No new provider call or independent Jev policy. App history and Office/PDF extraction remain outside this increment.",
+    "private_evidence": [
+      "tests/evidence/phase71-purpose-audit.json"
+    ]
+  },
+  "RQ-721": {
+    "status": "done",
+    "evidence": [
+      "src/files/explorer.ts",
+      "src/observability/files-http.ts",
+      "tests/runtime-local-files.test.mjs",
+      "tests/runtime-files-http.test.mjs",
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Human-only Work-bound approval, stale/conflict/pause guards, durable no-replay claims and hash-checked undo passed. Exact Work/plan binding no longer relies on paginated reports. Revoked permission blocks further mutation while historical receipts remain available.",
+    "private_evidence": [
+      "tests/evidence/phase71-purpose-audit.json"
+    ]
+  },
+  "RQ-722": {
+    "status": "done",
+    "evidence": [
+      "src/work/runtime.ts",
+      "src/work/context.ts",
+      "src/observability/work-file-ui.ts",
+      "src/observability/work-view.ts",
+      "src/interface/api.ts",
+      "tests/runtime-files-http.test.mjs"
+    ],
+    "note": "No standalone file manager/nav. Work board/status/detail and compact handoff now include approval, uncertainty and file-effect receipts; outcome verification remains separate. Connected agent performs dispatch; definition alone is not an autonomous worker."
+  },
+  "RQ-723": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-71.md",
+      "docs/local-file-tools-audit.md",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Linux core/boundary/recovery checks and full quick passed; real Neo Control Center exercised scoped synthetic Windows-folder grant, pause/resume, move, undo and revoke through the WSL runtime. Hash readback and recent-file preservation passed; fresh/upgrade install passed. No personal-file or paid-model acceptance.",
+    "private_evidence": [
+      "tests/evidence/phase71-purpose-audit.json",
+      "tests/evidence/phase71-work-file-tools.json",
+      "tests/evidence/phase71-first-regression.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json",
+      "tests/evidence/release-install/2026-09-28T00-51-43.424Z.json",
+      "tests/evidence/phase72-resume/files-ui.json"
+    ]
+  },
+  "RQ-714": {
+    "status": "done",
+    "evidence": [
+      "src/work/plan.ts",
+      "src/work/contracts.ts",
+      "src/work/import-runtime.ts",
+      "tests/runtime-work-migration.test.mjs"
+    ],
+    "note": "Work plan v1 preserves imported dependencies and provenance; legacy records are projected without rewriting the original."
+  },
+  "RQ-715": {
+    "status": "done",
+    "evidence": [
+      "src/work/context.ts",
+      "src/coding/runtime.ts",
+      "src/interface/api.ts",
+      "tests/runtime-coding.test.mjs"
+    ],
+    "note": "Compact continuity contract is exposed through MCP and used by coding stages; existing checkpoint files remain recovery references."
+  },
+  "RQ-716": {
+    "status": "done",
+    "evidence": [
+      "src/work/context.ts",
+      "src/coding/local-checkpoint.ts",
+      "tests/runtime-work-migration.test.mjs"
+    ],
+    "note": "Bounded evidence map and up to five selected excerpts; source text is untrusted and source hashes are retained."
+  },
+  "RQ-717": {
+    "status": "done",
+    "evidence": [
+      "src/packs/store.ts",
+      "src/work/context.ts",
+      "src/observability/work-ui.ts",
+      "tests/runtime-coding.test.mjs"
+    ],
+    "note": "Context bytes, repeated segments, coding-stage outcomes, retries and legacy/new prompt sizes are stored; unreported token counts stay unobserved."
+  },
+  "RQ-718": {
+    "status": "done",
+    "evidence": [
+      "docs/work-context-contract.md",
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-70.md",
+      "docs/handoff/phase-72-resume.md"
+    ],
+    "note": "Recovered authoritative WSL full quick passed 766/766 checks, including desktop/mobile Work, context and coding UI cases. Legacy non-UUID Work detail regression fixed with a dedicated regression; earlier failures retained. No deployment or live model-quality claim.",
+    "private_evidence": [
+      "tests/evidence/runtime-tests-2026-09-26T03-01-28-899Z.json",
+      "tests/evidence/runtime-tests-2026-09-26T02-53-45-052Z.json",
+      "tests/evidence/runtime-tests-2026-09-26T03-06-46-535Z.json",
+      "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json"
+    ]
+  },
+  "RQ-707": {
+    "status": "done",
+    "evidence": [
+      "scripts/release/check-public-boundary.mjs",
+      "tests/runtime-license.test.mjs",
+      "PUBLICATION.md"
+    ],
+    "note": "Allowlisted common transfer only; 398 non-ignored files scanned without credential findings. Pattern checks are not a complete privacy guarantee."
+  },
+  "RQ-708": {
+    "status": "done",
+    "evidence": [
+      "docs/release-readiness-v0.2.0.md",
+      "tests/runtime-hermes-migration.test.mjs",
+      "tests/runtime-remote-office.test.mjs",
+      "tests/runtime-coding-model-settings.test.mjs",
+      "tests/runtime-continuity-context.test.mjs"
+    ],
+    "note": "Common features passed the PR's 625/625 check snapshot; model and remote-service fixtures are not live-provider certification."
+  },
+  "RQ-709": {
+    "status": "done",
+    "evidence": [
+      "package.json",
+      "install.sh",
+      "README.md",
+      "README.ko.md",
+      "docs/releases/v0.2.0.md"
+    ],
+    "note": "v0.2.0 pinned consistently; new-Work Jev call/skip proposal excluded."
+  },
+  "RQ-710": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Final candidate and merged main both passed 625/625 checks (624 cases plus input integrity); audit and publication boundary passed. Earlier UI/readiness/installer failures remain recorded, not relabeled as passes.",
+    "private_evidence": [
+      "tests/evidence/release-v0.2.0-public.json",
+      "tests/evidence/runtime-tests-2026-09-25T13-35-14-508Z.json",
+      "tests/evidence/runtime-tests-2026-09-25T13-50-26-323Z.json"
+    ]
+  },
+  "RQ-711": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "Merged main and the additional local WSL rerun both passed real fresh installation and upgrades from v0.1.0/v0.1.1 with browser/MCP and Work/model-settings preservation. Local tested candidate d69c8e6 has the same source tree as released main afd0371. Model calls were fixtures; no paid or live-business tests were performed.",
+    "private_evidence": [
+      "tests/evidence/release-v0.2.0-public.json",
+      "tests/evidence/release-install/2026-09-25T13-57-06.098Z.json"
+    ]
+  },
+  "RQ-712": {
+    "status": "done",
+    "evidence": [
+      "docs/validation/v0.3.0-history.json"
+    ],
+    "note": "PR #28 merged as afd03710b3a1d50f2500cc6ca00065a9b78eaa05. v0.2.0 tag points to this SHA, main tree matches tested candidate b2e334f4195ccb394059fd6d92a12294a6deca4c. Public source archive, installer and SHA256SUMS exist; installer bytes and published checksums match.",
+    "private_evidence": [
+      "tests/evidence/release-v0.2.0-public.json"
+    ]
+  },
+  "RQ-713": {
+    "status": "done",
+    "evidence": [
+      "src/packs/store.ts",
+      "src/packs/runtime.ts",
+      "src/swarm/runtime.ts",
+      "tests/runtime-work-migration.test.mjs",
+      "tests/runtime-decision-memory.test.mjs",
+      "tests/runtime-import-single-jev-browser.test.mjs"
+    ],
+    "note": "Task Packs own judgment points. New Work delegates without a second LLM Jev policy; global OFF, explicit opt-outs, import consent and legacy values are preserved. Focused 56/56 checks and PR regression passed."
+  }
 }

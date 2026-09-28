@@ -1,0 +1,629 @@
+{
+  "schema_version": 1,
+  "scope": "Historical local evidence digest index, not a replacement for release CI. Raw records remain private; failures are retained. Null means not summarized, not PASS.",
+  "records": [
+    {
+      "path": "tests/evidence/release-v0.2.0-public.json",
+      "available": true,
+      "sha256": "dcc0610b480a3441ff2344724389d9fee8ceea1101791fbb5169682becfe26d9",
+      "bytes": 1467,
+      "status": "PASS",
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-25T13-35-14-508Z.json",
+      "available": true,
+      "sha256": "8ced35af38b8ce6cd7709629bddbddbec6feee0144c0343a88ec357603d720b9",
+      "bytes": 96308,
+      "status": null,
+      "counts": {
+        "PASS": 56
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-25T13-50-26-323Z.json",
+      "available": true,
+      "sha256": "15155cc734e39d650c600b45fde28ff7ed9b382d89ca80c672ca3411507d93c5",
+      "bytes": 71900,
+      "status": null,
+      "counts": {
+        "PASS": 7
+      }
+    },
+    {
+      "path": "tests/evidence/release-install/2026-09-25T13-57-06.098Z.json",
+      "available": true,
+      "sha256": "f4f5cec089f99540478e75458f473244ffabd3de6bd07269ccc18abe8fa43164",
+      "bytes": 2858,
+      "status": "PASS",
+      "counts": {
+        "PASS": 3
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-26T03-01-28-899Z.json",
+      "available": true,
+      "sha256": "2eb0757149812e3f44c8598a2ceeee4ea016c0967d032bca6e494be0852a20f9",
+      "bytes": 109588,
+      "status": null,
+      "counts": {
+        "PASS": 84
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-26T02-53-45-052Z.json",
+      "available": true,
+      "sha256": "73bf8eb6d258b6eda811155c89229c8349b51bb6ed7d5f8a99f9b54262a54fe8",
+      "bytes": 73234,
+      "status": null,
+      "counts": {
+        "FAIL": 1,
+        "PASS": 7
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-26T03-06-46-535Z.json",
+      "available": true,
+      "sha256": "588fc9c4db1bb20507284f3f6c7001fbab6708181469aa154f95a1f91c381e8c",
+      "bytes": 69942,
+      "status": null,
+      "counts": {
+        "PASS": 2
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T00-46-23-400Z.json",
+      "available": true,
+      "sha256": "51b32030e082a39f84a069ddadbeb1c41ba156142d14a2b0e330df1844549cf3",
+      "bytes": 458773,
+      "status": null,
+      "counts": {
+        "PASS": 766
+      }
+    },
+    {
+      "path": "tests/evidence/phase71-purpose-audit.json",
+      "available": true,
+      "sha256": "6e6c16924cc82ba3dfb0e80c85ec6aee431c58f03298d65f3b2573ddd599c66c",
+      "bytes": 55561,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/phase71-work-file-tools.json",
+      "available": true,
+      "sha256": "3529fed66125e80ceeaeb57535c492ebfdb6981dda03f683630c2d52986b5df1",
+      "bytes": 9350,
+      "status": null,
+      "counts": {
+        "PASS": 25
+      }
+    },
+    {
+      "path": "tests/evidence/phase71-first-regression.json",
+      "available": true,
+      "sha256": "6032f83dd6bba12978d5573410206f727a083b8399e98f8bdafd9af849f2307c",
+      "bytes": 6166,
+      "status": "FAIL",
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/release-install/2026-09-28T00-51-43.424Z.json",
+      "available": true,
+      "sha256": "0e17d8f0e6dfcd8504c4653ef8ea7bbb6a602e1fcca8e0b35ba42008aaf832fe",
+      "bytes": 2908,
+      "status": "PASS",
+      "counts": {
+        "PASS": 3
+      }
+    },
+    {
+      "path": "tests/evidence/phase72-resume/files-ui.json",
+      "available": true,
+      "sha256": "b11a643ce146875f17d730f5cdce80216d7492207918169db73f50f6ad968544",
+      "bytes": 3651,
+      "status": "PASS",
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-27T14-57-37-367Z.json",
+      "available": true,
+      "sha256": "5b92c24d2f5dde974193e2970119821d571bc7f9cd96d77d525ae4b4355df3fe",
+      "bytes": 110130,
+      "status": null,
+      "counts": {
+        "PASS": 80
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-27T15-02-54-348Z.json",
+      "available": true,
+      "sha256": "baa233a23ec827cf39bca81f9cd431b51b40632b5c4bb8574aebb05aee8c4dea",
+      "bytes": 111166,
+      "status": null,
+      "counts": {
+        "PASS": 82
+      }
+    },
+    {
+      "path": "tests/evidence/phase73-initial.json",
+      "available": true,
+      "sha256": "473b11b5ec8a550bd73099682d97e881f884b4fd51af21722ca2b497870d1ac6",
+      "bytes": 14971,
+      "status": null,
+      "counts": {
+        "PASS": 31,
+        "FAIL": 2
+      }
+    },
+    {
+      "path": "tests/evidence/phase73-summary.json",
+      "available": true,
+      "sha256": "a99e3cffdacf501c6e7024db1ba5c506edad51b28b2d5b53de4306caf0a3ed95",
+      "bytes": 2879,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-27T22-29-22-673Z.json",
+      "available": true,
+      "sha256": "6e6d9aeb331e568a288f295df017d0a426450b6e1197ba98177a7fa3b6ec12fe",
+      "bytes": 103956,
+      "status": null,
+      "counts": {
+        "PASS": 63,
+        "BLOCKED_ENV": 1
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-27T22-37-08-111Z.json",
+      "available": true,
+      "sha256": "d43237415480d2d11e089eb8cd7eff6b0c5b7fed319d1cd982ac8ba5095bb213",
+      "bytes": 73437,
+      "status": null,
+      "counts": {
+        "PASS": 2
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-27T21-43-25-501Z.json",
+      "available": true,
+      "sha256": "7a0f21f533d098b626f9982779db9f6100af229e75409dc39817d4ac3ef55cbb",
+      "bytes": 104459,
+      "status": null,
+      "counts": {
+        "PASS": 64,
+        "FAIL": 2
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T00-08-49-440Z.json",
+      "available": true,
+      "sha256": "54a7dff7862a784af1b153b65c047798b2c42937762eb32374db3921514a5819",
+      "bytes": 153000,
+      "status": null,
+      "counts": {
+        "PASS": 159,
+        "BLOCKED_ENV": 1
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T01-26-17-525Z.json",
+      "available": true,
+      "sha256": "ff3d83323769d2cdff08edbd1b38f1efe42e350fde9e7b3b1063fad745095f9f",
+      "bytes": 108427,
+      "status": null,
+      "counts": {
+        "PASS": 70
+      }
+    },
+    {
+      "path": "tests/evidence/phase76-native-acceptance.json",
+      "available": true,
+      "sha256": "970363d9be16513bb4c578ae3cfecbae857188d38367516a16f7e0de61b9905d",
+      "bytes": 1895,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/phase77-owned-cua-native.json",
+      "available": true,
+      "sha256": "dfa56f9efd78fac7d11520e69ef636c81d27f6e51672dce934cf258ab72a7574",
+      "bytes": 3781,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T02-00-16-591Z.json",
+      "available": true,
+      "sha256": "aa8269c2273a07d2c28a7082401242ceff16c7f44d14c7d8cb91f7ee13106ceb",
+      "bytes": 120157,
+      "status": null,
+      "counts": {
+        "PASS": 92
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T02-02-15-882Z.json",
+      "available": true,
+      "sha256": "37ad0060c106ea5780db1240f4ec56e55a3442f5ed365951c27b02b8341db755",
+      "bytes": 480285,
+      "status": null,
+      "counts": {
+        "PASS": 807
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T02-52-06-696Z.json",
+      "available": true,
+      "sha256": "aecd5851f8cc0c42f49b6a00d0d623b26a902e9c4f11f20c6fab20284a3e82d4",
+      "bytes": 130630,
+      "status": null,
+      "counts": {
+        "PASS": 111
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T02-52-53-765Z.json",
+      "available": true,
+      "sha256": "b4c55274013d500149ef4c94b86892defdb5b1871ddf0baaaa6b48982e1f551c",
+      "bytes": 490677,
+      "status": null,
+      "counts": {
+        "PASS": 826
+      }
+    },
+    {
+      "path": "tests/evidence/phase78-windows-repeat-native.json",
+      "available": true,
+      "sha256": "813023ee8bba28e71db546b313cb7fc143ae8d83a240a76c0e48708b5db3c407",
+      "bytes": 17999,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/phase79-native-chat.json",
+      "available": true,
+      "sha256": "17d801726f3ace8a1cc9329e113094252f7adae6ed1f34809266d5d5af4af7b7",
+      "bytes": 2944,
+      "status": null,
+      "counts": {
+        "PASS": 5,
+        "FAIL": 1,
+        "NOT_RUN": 1
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T03-36-46-133Z.json",
+      "available": true,
+      "sha256": "64400ee84420adc143f95c931a6b67bb30dc5d598eb4093711fbce5d09a41ce6",
+      "bytes": 133635,
+      "status": null,
+      "counts": {
+        "PASS": 117
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T03-37-22-384Z.json",
+      "available": true,
+      "sha256": "f693e7df3931a295bef90653386d381b195ed3981f230f1bb652a4841f4d02ac",
+      "bytes": 501846,
+      "status": null,
+      "counts": {
+        "PASS": 849
+      }
+    },
+    {
+      "path": "tests/evidence/phase80-native.json",
+      "available": true,
+      "sha256": "d1ca468a2c1e9be050d9b62e8a06e643610798553c9a88edeaa5ebfdfabceea4",
+      "bytes": 6187,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/phase81-visual-native.json",
+      "available": true,
+      "sha256": "a1b0c2b51042290744e4e8b176cc493d2c32e3dcadbb315fb1eec2ccf5e42930",
+      "bytes": 29823,
+      "status": null,
+      "counts": {
+        "FAIL": 7,
+        "PASS": 4
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T04-19-54-694Z.json",
+      "available": true,
+      "sha256": "ca059cab7317a553b911863b72bc30847c6be0c54e89c3f05c63271f717ac0d9",
+      "bytes": 144258,
+      "status": null,
+      "counts": {
+        "PASS": 137
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T04-22-41-692Z.json",
+      "available": true,
+      "sha256": "2b8dbc88ed862305badc89fa1cf3e1be59b3fc5f2de0bcaed726bd4b5062fd04",
+      "bytes": 512535,
+      "status": null,
+      "counts": {
+        "PASS": 869
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T04-29-36-612Z.json",
+      "available": true,
+      "sha256": "0aa0136d01339d3e80a0e3293fe3585612b93a3a215a9f5ab2c84334358af240",
+      "bytes": 513083,
+      "status": null,
+      "counts": {
+        "PASS": 870
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T06-15-54-000Z.json",
+      "available": true,
+      "sha256": "f7c51da6cf85a295a70806d920e86ce1dc544dcbe4e3f827b7cc09cb6519862c",
+      "bytes": 523740,
+      "status": null,
+      "counts": {
+        "PASS": 890
+      }
+    },
+    {
+      "path": "tests/evidence/phase82-real-visual.json",
+      "available": true,
+      "sha256": "c2fcd03f127ab2600419ffe27819c68f17e8a24fab739507c2ec6b667595459e",
+      "bytes": 40692,
+      "status": null,
+      "counts": {
+        "FAIL": 9,
+        "PASS": 6,
+        "BLOCKED_ENV": 1
+      }
+    },
+    {
+      "path": "tests/evidence/phase82-window-restore.json",
+      "available": true,
+      "sha256": "596261146189a0f72a106971d08085eb578479ba884bd2c4ed1d0a8c3771a49b",
+      "bytes": 12494,
+      "status": null,
+      "counts": {
+        "PASS": 3
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T07-17-11-467Z.json",
+      "available": true,
+      "sha256": "5982b12d3edf62625b2e6f2788eeda8032fa7e0cf720ea7ba7967ec42b366881",
+      "bytes": 528792,
+      "status": null,
+      "counts": {
+        "PASS": 900
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T07-24-50-898Z.json",
+      "available": true,
+      "sha256": "d8513e867612a17a3ca452878747043cfff583b6edde8bf26d9709253bc7b116",
+      "bytes": 156064,
+      "status": null,
+      "counts": {
+        "PASS": 158
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T07-49-27-267Z.json",
+      "available": true,
+      "sha256": "6451768e06bb224ce828f1de28f520d690a7c054969d3f3b0c86f7eb97136eca",
+      "bytes": 184816,
+      "status": null,
+      "counts": {
+        "PASS": 218
+      }
+    },
+    {
+      "path": "tests/evidence/phase83-native.json",
+      "available": true,
+      "sha256": "958ded581e0cee42f695011a9c2c1d19ffdb7322a2444cb9c2fc8b9bbf9eb646",
+      "bytes": 7583,
+      "status": null,
+      "counts": {
+        "FAIL": 1,
+        "PASS": 2
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T08-18-02-081Z.json",
+      "available": true,
+      "sha256": "089dc0c2be0de7d634abdde3a9967ea1119a13e5a0c22c89b92e874c46530ec2",
+      "bytes": 549641,
+      "status": null,
+      "counts": {
+        "PASS": 942
+      }
+    },
+    {
+      "path": "tests/evidence/phase83-acceptance.json",
+      "available": true,
+      "sha256": "2a114c8e3550e46956ad062090e2879303e3b032a72286852d945b59fa3d7c38",
+      "bytes": 1699,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/release-install/2026-09-28T08-19-09.097Z.json",
+      "available": true,
+      "sha256": "ace1ad2023c9c713306286890d44dd1016768874e5214fae2f8bc5ae9643b7d5",
+      "bytes": 2909,
+      "status": "PASS",
+      "counts": {
+        "PASS": 3
+      }
+    },
+    {
+      "path": "tests/evidence/phase84-aside-local.json",
+      "available": true,
+      "sha256": "a48ab53a5ff19b323a57ba208c21c081211ff42b05997cac7e5a1bb4d9daa76d",
+      "bytes": 1663,
+      "status": null,
+      "counts": {
+        "PASS": 3,
+        "BLOCKED_ENV": 1
+      }
+    },
+    {
+      "path": "tests/evidence/phase85-browser-routing.json",
+      "available": true,
+      "sha256": "f360102f42b99b0ea37361da6ab96ecc34eed9a7e7bbf7a134029d1d1dedc9db",
+      "bytes": 9725,
+      "status": null,
+      "counts": {
+        "FAIL": 4,
+        "PASS": 7,
+        "BLOCKED_ENV": 2,
+        "NOT_RUN": 1
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T09-40-22-587Z.json",
+      "available": true,
+      "sha256": "87dfc3f8f6e440abcd57876c3a1643ee655b223276131d4802360037e83c4a5e",
+      "bytes": 560332,
+      "status": null,
+      "counts": {
+        "PASS": 959
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T09-49-57-328Z.json",
+      "available": true,
+      "sha256": "a71b493d65191b396a17586d4e9e2096371da1a048a798f381cda2fa1a511e33",
+      "bytes": 95517,
+      "status": null,
+      "counts": {
+        "PASS": 28
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T10-17-43-075Z.json",
+      "available": true,
+      "sha256": "5faa88da9071490c7665725acb5d4989734b48d49045d6b4c1746e9fecfd8eec",
+      "bytes": 151885,
+      "status": null,
+      "counts": {
+        "PASS": 143
+      }
+    },
+    {
+      "path": "tests/evidence/phase86-workflow-compatibility.json",
+      "available": true,
+      "sha256": "5d86a8125676f8edffbfb8edf8a7e619e285c700c96a3ee8b9d95ea472003ddc",
+      "bytes": 1544,
+      "status": null,
+      "counts": {
+        "PASS": 4
+      }
+    },
+    {
+      "path": "tests/evidence/phase86-workflow-compatibility-initial-failure.json",
+      "available": true,
+      "sha256": "a9044733e964ff6d57847d6855ae61339336dfe082ac0fb5927eb7205bc367ae",
+      "bytes": 485,
+      "status": null,
+      "counts": {
+        "FAIL": 1
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T11-01-46-114Z.json",
+      "available": true,
+      "sha256": "e41d4947b599f6eaffc00a8664e8bf0b9a239efbdd7963291024f76cf920cbfd",
+      "bytes": 110389,
+      "status": null,
+      "counts": {
+        "PASS": 56
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T10-43-07-778Z.json",
+      "available": true,
+      "sha256": "3ab836066ef196c64942cb3192f1462364761ba4f86bbc65620b25e589263170",
+      "bytes": 107000,
+      "status": null,
+      "counts": {
+        "PASS": 49
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T10-47-40-454Z.json",
+      "available": true,
+      "sha256": "41ee7bc26b0d9f1d7eb341812e14a0fffe0e7b532ca0c9c96c284221c7cc8f15",
+      "bytes": 579520,
+      "status": null,
+      "counts": {
+        "PASS": 971,
+        "FAIL": 1
+      }
+    },
+    {
+      "path": "tests/evidence/phase87-mcp-memory.json",
+      "available": true,
+      "sha256": "5830285cef48284306c428059de9c3f1bd181da531f81e99246073bcbf0c886d",
+      "bytes": 2352,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/phase87-shared-mcp.json",
+      "available": true,
+      "sha256": "356e380ac7ec12a2eccd7a4fdb4c9c38fa599580f7e4b0c9db19565ca371cbc5",
+      "bytes": 1807,
+      "status": null,
+      "counts": null
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T12-16-11-253Z.json",
+      "available": true,
+      "sha256": "e366084421c29e15485d77a468768e17b88d4e5cd7baea0272ef1cee777fbff3",
+      "bytes": 579733,
+      "status": null,
+      "counts": {
+        "PASS": 990
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T12-54-10-412Z.json",
+      "available": true,
+      "sha256": "e75b3a25102f4667d56b77ff42cd9b5aaeee19b0924bfa2972c873123fe9b340",
+      "bytes": 112460,
+      "status": null,
+      "counts": {
+        "PASS": 52
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T12-57-18-987Z.json",
+      "available": true,
+      "sha256": "208164625e72501047e8ced77fb3166deda3b3f2321c5cdabfd2e4be71d9453f",
+      "bytes": 91588,
+      "status": null,
+      "counts": {
+        "PASS": 11
+      }
+    },
+    {
+      "path": "tests/evidence/runtime-tests-2026-09-28T12-48-28-884Z.json",
+      "available": true,
+      "sha256": "bdcf7771923d7ed4a15cb881e607915b955a688bbf588105b84389848f238efe",
+      "bytes": 107237,
+      "status": null,
+      "counts": {
+        "PASS": 38,
+        "FAIL": 3
+      }
+    }
+  ]
+}

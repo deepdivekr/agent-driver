@@ -1,9 +1,9 @@
-import {constants} from 'node:fs';
 import {lstat,mkdir,open,readFile,realpath,rename} from 'node:fs/promises';
 import {dirname,isAbsolute,join,resolve} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {z} from 'zod';
 import {assertProfileForCatalog,catalogHash,decisionCalibrationProfileSchema,decisionCatalogSchema,decisionHash,stableJson,type DecisionCalibrationProfile,type DecisionCatalog} from './contracts.js';
+import {openDecisionAppend} from './append-file.js';
 
 export const decisionProfileScope=z.enum(['fixture','production']);
 export type DecisionProfileScope=z.infer<typeof decisionProfileScope>;
@@ -17,11 +17,14 @@ async function readJson(path:string){await regular(path);return JSON.parse(await
 async function atomicJson(path:string,value:unknown){
   await mkdir(dirname(path),{recursive:true,mode:0o700});const temporary=join(dirname(path),`.${randomUUID()}.tmp`),handle=await open(temporary,'wx',0o600);
   try{await handle.writeFile(stableJson(value)+'\n','utf8');await handle.sync();}finally{await handle.close();}
-  await rename(temporary,path);const directory=await open(dirname(path),'r');try{await directory.sync();}finally{await directory.close();}
+  await rename(temporary,path);
+  // Node cannot fsync a directory on Windows. Keep the file flush and rename;
+  // Windows directory-entry durability after power loss is not certified here.
+  if(process.platform!=='win32'){const directory=await open(dirname(path),'r');try{await directory.sync();}finally{await directory.close();}}
 }
 async function activateWithHistory<T>(path:string,value:unknown,activate:()=>Promise<T>){
-  const line=stableJson(value)+'\n';await mkdir(dirname(path),{recursive:true,mode:0o700});const handle=await open(path,constants.O_WRONLY|constants.O_APPEND|constants.O_CREAT|constants.O_NOFOLLOW,0o600);
-  try{const stat=await handle.stat();if(!stat.isFile()||stat.nlink!==1||stat.size+Buffer.byteLength(line)>67_108_864)throw Error('DECISION_REGISTRY_UNSAFE');const result=await activate();await handle.write(line);await handle.sync();return result;}finally{await handle.close();}
+  const line=stableJson(value)+'\n';await mkdir(dirname(path),{recursive:true,mode:0o700});const handle=await openDecisionAppend(path,Buffer.byteLength(line),'DECISION_REGISTRY_UNSAFE');
+  try{const result=await activate();await handle.write(line);await handle.sync();return result;}finally{await handle.close();}
 }
 
 export class DecisionProfileRegistry {

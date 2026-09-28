@@ -13,7 +13,7 @@ const key='fixture-key-never-sent-to-provider';
 const environment={OPENAI_API_KEY:key,AGENT_DRIVER_LLM_CLIENT:'codex,claude,api',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude'};
 const runner={async run(r){
   if(r.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
-  if(r.args.join(' ')==='auth status')return {code:0,stdout:'{"loggedIn":true,"authMethod":"claude.ai"}',stderr:''};
+  if(r.args.join(' ')==='auth status')return {code:0,stdout:'{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty"}',stderr:''};
   return {code:1,stdout:'',stderr:'Weekly usage limit reached'};
 }};
 async function fixture(t){const root=await mkdtemp(join(tmpdir(),'billing-direction-'));t.after(()=>rm(root,{recursive:true,force:true}));return join(root,'models.json');}

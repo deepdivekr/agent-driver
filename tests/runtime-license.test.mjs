@@ -20,12 +20,17 @@ test('Apache license, package metadata and notices remain consistent',()=>{
   assert.ok(existsSync(resolve(root,'docs/licensing.md')));
 });
 
-if(JSON.parse(read('package.json')).name==='agent-driver')test('public package excludes private registered-workflow bindings',()=>{
+if(JSON.parse(read('package.json')).name==='agent-driver')test('public package excludes private workflow implementations while allowing an explicit local compatibility bridge',()=>{
   assert.equal(existsSync(resolve(root,'src/workflows')),false);
-  assert.doesNotMatch(read('src/interface/api.ts'),/runtime_workflow_|workflowCall/u);
+  assert.doesNotMatch(read('src/interface/api.ts'),/from ['"][^'"]*\/workflows\//u);
+  assert.match(read('src/interface/api.ts'),/WorkflowCompatibility/u);
   assert.doesNotMatch(read('src/interface/config.ts'),/workflowPolicy|received_data/u);
   assert.doesNotMatch(read('src/interface/catalog.ts'),/workflowTools/u);
-  assert.doesNotMatch(read('src/interface/mcp.ts'),/runtime_workflow_/u);
+  for(const file of ['src/interface/api.ts','src/interface/config.ts','src/interface/catalog.ts','src/interface/mcp.ts','src/integrations/workflow-compatibility.ts','src/integrations/workflow-upgrade.ts']){
+    assert.doesNotMatch(read(file),/stackn?sky|received_data|facility_code|facility_label|stack_code|stack_label/iu,file+' must remain domain-neutral');
+  }
+  assert.match(read('src/integrations/workflow-compatibility.ts'),/WORKFLOW_COMPATIBILITY_CONNECTION_REQUIRED/u);
+  assert.match(read('src/integrations/workflow-compatibility.ts'),/WORKFLOW_MODULE_CHANGED/u);
   assert.doesNotMatch(read('src/integrations/hermes.ts'),/runtime_workflow_/u);
   assert.match(read('src/interface/mcp.ts'),/version:packageVersion/u);
 });

@@ -11,11 +11,12 @@ import {effectiveModelEnvironment,modelSettingsFingerprint,modelSettingsPath,pre
 import {apiModelCatalog,claudeModelCatalog,codexModelCatalog,opencodeModelCatalog} from '../onboarding/model-catalog.js';
 import {SetupActivityStream} from '../onboarding/setup-activity.js';
 import {settingsHtml} from './settings-ui.js';
+import {BrowserSetupController} from '../onboarding/browser-setup.js';
 
 async function readBody(request:IncomingMessage){let size=0;const chunks:Buffer[]=[];for await(const chunk of request){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>20_000)throw Error('SETTINGS_INPUT_TOO_LARGE');chunks.push(bytes);}return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;}
 export class ControlSettings{
   readonly path:string;private busy=false;private providerProbe:{token:string;fingerprint:string;verification:ApiVerification;expires_at:number}|null=null;
-  constructor(readonly config:HostConfig,readonly auth:Pick<SubscriptionAuthFlowController,'connections'|'view'|'start'|'close'>=new SubscriptionAuthFlowController(),readonly environment:NodeJS.ProcessEnv=process.env,readonly fetcher:typeof fetch=fetch,readonly mcp=new McpRegistrationController(dirname(config.path),environment),readonly activity=new SetupActivityStream(dirname(config.path)),readonly bootstrap=new ClientBootstrapController(environment,undefined,fetcher)){this.path=modelSettingsPath(config);}
+  constructor(readonly config:HostConfig,readonly auth:Pick<SubscriptionAuthFlowController,'connections'|'view'|'start'|'close'>=new SubscriptionAuthFlowController(),readonly environment:NodeJS.ProcessEnv=process.env,readonly fetcher:typeof fetch=fetch,readonly mcp=new McpRegistrationController(dirname(config.path),environment),readonly activity=new SetupActivityStream(dirname(config.path)),readonly bootstrap=new ClientBootstrapController(environment,undefined,fetcher),readonly browsers=new BrowserSetupController(config,{environment})){this.path=modelSettingsPath(config);}
   private connection(){const root=dirname(this.config.path);return resolve(this.config.path)===localConnectionPaths(root).runtimeConfig?{kind:'local' as const,connected:readLocalConnection(root)!==null}: {kind:'host_configured' as const,connected:true};}
   private status(scope:ModelScope='global'){
     const saved=readModelSettings(scopedModelSettingsPath(this.path,scope)),global=publicModelSettings(readModelSettings(this.path),this.environment),base=modelScopeBase(this.path,scope,saved?.selection,this.environment);
@@ -34,6 +35,7 @@ export class ControlSettings{
         else if(suffix==='settings/status')send(200,this.status(scope));
         else if(suffix==='settings/mcp')send(200,await this.mcp.view());
         else if(suffix==='settings/bootstrap')send(200,{...this.bootstrap.view(),connections:await this.auth.connections()});
+        else if(suffix==='settings/browsers')send(200,this.browsers.view());
         else if(suffix==='settings/models'){const [codex,opencode]=await Promise.all([codexModelCatalog(),opencodeModelCatalog(this.environment)]);send(200,{codex,claude:claudeModelCatalog(),opencode});}
         else if(suffix==='settings/activity'){this.activity.attach(response);return true;}
         else if(suffix==='settings/flows')send(200,{flows:['codex','claude','opencode','cursor','hermes'].map(id=>this.auth.view(id as 'codex'|'claude'|'opencode'|'cursor'|'hermes'))});
@@ -45,6 +47,23 @@ export class ControlSettings{
       this.busy=true;
       try{
         const body=await readBody(request);
+        if(suffix.startsWith('settings/browsers/')){
+          const value=body as {engine?:unknown;revision?:unknown;consent?:unknown};
+          if(!value||!['playwright','aside','neo'].includes(String(value.engine))){send(400,{error:'BROWSER_SETUP_ENGINE_INVALID'});return true;}
+          const engine=value.engine as 'playwright'|'aside'|'neo',label=engine==='playwright'?'Playwright':engine==='aside'?'Aside':'Neo',started=Date.now();
+          let result:ReturnType<BrowserSetupController['view']>;
+          try{
+            if(suffix==='settings/browsers/check'){
+              await this.activity.record('runtime','running',`${label} 연결 점검 시작`);result=await this.browsers.check(engine);
+            }else if(suffix==='settings/browsers/install'&&engine==='playwright'){
+              await this.activity.record('runtime','running','Playwright 전용 Chromium 다운로드 시작');result=await this.browsers.installPlaywright();
+            }else if(suffix==='settings/browsers/register'&&engine!=='playwright'&&typeof value.revision==='string'){
+              result=this.browsers.register(engine,value.revision,value.consent===true);await this.activity.record('runtime','success',`${label} 실행기 등록 완료 · 새 MCP 연결부터 적용`);send(200,result);return true;
+            }else{send(400,{error:'BROWSER_SETUP_ACTION_INVALID'});return true;}
+            const ready=result.rows.find(row=>row.engine===engine)?.health==='ready';await this.activity.record('runtime',ready?'success':'warning',`${label} ${ready?'연결 점검 통과':'연결 확인 필요'} · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
+          }catch(error){await this.activity.record('runtime','error',`${label} 준비를 완료하지 못했습니다. 설치·실행 상태를 확인하세요.`);throw error;}
+          return true;
+        }
         if(suffix==='settings/models'){
           const value=body&&typeof body==='object'?body as Record<string,unknown>:{};
           if(!['openai','anthropic','openrouter','openai_compatible'].includes(String(value.provider))){send(400,{error:'MODEL_PROVIDER_INVALID'});return true;}
@@ -113,7 +132,7 @@ export class ControlSettings{
           await this.activity.record('runtime','running','전용 작업 폴더와 로컬 실행 권한을 준비하는 중입니다.');await approveNonInterferingConnection(dirname(this.config.path));await this.activity.record('runtime','success','로컬 실행 연결을 승인했습니다.');send(200,this.status());
         }else send(404,{error:'NOT_FOUND'});
       }finally{this.busy=false;}
-    }catch(error){const message=error instanceof Error&&/^(?:MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|CLIENT_INSTALL)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error','클라이언트 설치를 마치지 못했습니다. 공식 안내를 확인해 주세요.');send(message.includes('CONFLICT')||message.includes('BUSY')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
+    }catch(error){const message=error instanceof Error&&/^(?:BROWSER_SETUP|MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|CLIENT_INSTALL)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error','클라이언트 설치를 마치지 못했습니다. 공식 안내를 확인해 주세요.');send(message.includes('CONFLICT')||message.includes('BUSY')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
     return true;
   }
   close(){this.auth.close();this.activity.close();}

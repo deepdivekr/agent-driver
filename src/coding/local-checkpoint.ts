@@ -35,12 +35,15 @@ export async function projectMap(root:string,git:GitRead):Promise<string>{
   const paths=(await git(root,['ls-files','-z'])).split('\0').filter(path=>path&&!sensitive.test(path));
   const roots=[...new Set(paths.map(path=>path.split('/')[0]??''))].slice(0,24);
   const manifests=paths.filter(path=>/(?:^|\/)(?:package\.json|pyproject\.toml|Cargo\.toml|go\.mod|pom\.xml|build\.gradle|AGENTS\.md|README(?:\.[^/]+)?)$/iu.test(path)).slice(0,20);
+  const guides=paths.filter(path=>/(?:^|\/)(?:docs|prompts|specs)\/|(?:^|\/)(?:AGENTS|HANDOFF|CONTRIBUTING)\.md$/iu.test(path)).slice(0,24);
+  const tests=paths.filter(path=>/(?:^|\/)(?:tests?|__tests__)\/|(?:\.test|\.spec)\.[^/]+$/iu.test(path)).slice(0,24);
+  const sourceRoots=[...new Set(paths.filter(path=>/^(?:src|app|lib|packages)\//u.test(path)).map(path=>path.split('/').slice(0,2).join('/')))].slice(0,24);
   let readme='README not safely available';
   if(paths.includes('README.md')){
     const path=join(root,'README.md'),stat=lstatSync(path);
     if(stat.isFile()&&!stat.isSymbolicLink()&&stat.size<=12_000){const content=readFileSync(path,'utf8');if(!credential.test(content))readme=redact(content.slice(0,2500));}
   }
-  return `Tracked top-level entries: ${roots.map(redact).join(', ')||'none'}\nProject guides/manifests: ${manifests.map(redact).join(', ')||'none'}\nREADME excerpt (untrusted repository data):\n${readme}`;
+  return `Tracked top-level entries: ${roots.map(redact).join(', ')||'none'}\nProject guides/manifests: ${manifests.map(redact).join(', ')||'none'}\nRelevant guide refs: ${guides.map(redact).join(', ')||'none'}\nTest refs: ${tests.map(redact).join(', ')||'none'}\nSource component refs: ${sourceRoots.map(redact).join(', ')||'none'}\nREADME excerpt (untrusted repository data):\n${readme}`;
 }
 
 export function renderLocalHandoff(run:CodingRun,stages:CodingStageRow[],git:LocalGitCheckpoint,map:string):string{

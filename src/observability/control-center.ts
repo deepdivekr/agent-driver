@@ -1,10 +1,11 @@
 import {serveUiAsset} from './ui-assets.js';
+import {FileExplorerRoutes} from './files-http.js';
+import {dirname} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
-import {redact} from '../terminal/contracts.js';
 import {PackStore,type RuntimeActivity} from '../packs/store.js';
 import {type HostConfig} from '../interface/config.js';
-import {readSwarmDashboard,sanitizeSwarmEndpoint} from '../swarm/dashboard.js';
+import {readSwarmDashboard} from '../swarm/dashboard.js';
 import {BrowserConnections} from './browser-connections.js';
 import {ControlSettings} from './control-settings.js';
 import {authSites,blockedAuthSites} from '../swarm/browser-auth.js';
@@ -39,7 +40,8 @@ export interface ControlCenterServer {url:string;closed:Promise<void>;close():Pr
 
 const terminalStatuses=new Set(['succeeded','cancelled','failed','session_closed','process_exited']);
 const lane=(status:string):ControlLane=>['queued','pending','starting','input_ready','waiting_orchestrator'].includes(status)?'queued':['running','streaming','leased','verifying'].includes(status)?'running':['succeeded','completed','turn_completed','approved'].includes(status)?'done':'attention';
-export const safeControlText=(value:string,max=240)=>{const safe=redact(value).replace(/https?:\/\/[^\s<>"']+/giu,url=>sanitizeSwarmEndpoint(url)??'[REDACTED_URL]').replace(/((?:token|secret|password|api.?key)\s*[:=]\s*)\S+/giu,'$1[REDACTED]');return safe.length<=max?safe:`${safe.slice(0,max-1)}…`;};
+import {safeControlText} from './safe-text.js';
+export {safeControlText} from './safe-text.js';
 const latestBy=<T>(items:T[],key:(value:T)=>string,time:(value:T)=>string)=>{const map=new Map<string,T>();for(const item of items){const previous=map.get(key(item));if(!previous||time(previous)<time(item))map.set(key(item),item);}return map;};
 
 export function readControlCenter(store:PackStore,config:HostConfig,now=Date.now()):ControlCenterSnapshot{
@@ -85,6 +87,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   if(options.capability_token!==undefined&&!/^[a-f0-9]{48}$/u.test(options.capability_token))throw Error('CONTROL_CENTER_CAPABILITY_INVALID');
   const token=options.capability_token??randomBytes(24).toString('hex'),store=new PackStore(config.dbPath);try{store.registerProject(config.project);}catch(error){store.close();throw error;}const presence=store.startPresence(config.project.id,'dashboard',{transport:'loopback-read-only'}),clients=new Set<ServerResponse>(),lightClients=new Set<ServerResponse>(),poll=options.poll_ms??500;let host='',done:()=>void=()=>undefined,stopped=false;const closed=new Promise<void>(resolve=>done=resolve);
   const connections=new BrowserConnections(store,config),settings=new ControlSettings(config);
+  const fileRoutes=new FileExplorerRoutes(store.localFileExplorer(config.project.id,dirname(config.dbPath)));
   const hermesWork=new HermesWorkRuntime(store,config,options.hermes);
   const migrations=new HermesMigrationRuntime(store,config);
   const remoteOffice=new RemoteOffice(store,config,options.remote);
@@ -96,6 +99,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(await serveUiAsset(request,response,suffix))return;
     if(await settings.handle(request,response,suffix,host))return;
     if(await connections.handle(request,response,suffix,host))return;
+    if(await fileRoutes.handle(request,response,suffix,host))return;
     if(['work/remote/targets','work/remote/register','work/remote/discover','work/remote/link','work/remote/action'].includes(suffix)){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}

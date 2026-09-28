@@ -3,12 +3,10 @@ import {RuntimeApi} from './api.js';
 import {loadHostConfig} from './config.js';
 import {serveMcp} from './mcp.js';
 import {requireCondition} from '../core/contracts.js';
-import {serveFixtureLab} from './fixture-lab.js';
 import {ensureSupervisor,stopSupervisor,supervisorStatus} from '../supervisor/manager.js';
 import {Supervisor} from '../supervisor/supervisor.js';
 import {stopTerminalHost} from '../terminal/manager.js';
 import {approvedMcpConfigPath} from '../onboarding/connection.js';
-import {startControlCenter} from '../observability/control-center.js';
 export const interfaceHelp=`
 Host-configured agent interface (JSON output):
   doctor --config PATH --json
@@ -26,6 +24,8 @@ Host-configured agent interface (JSON output):
   intake --config PATH --request-file PATH
   call --config PATH --tool NAME --request-file PATH
   mcp [--config PATH]
+  mcp-service start|status --config PATH (one shared loopback MCP service)
+  mcp-service headers --config PATH (private HTTP auth-helper output; do not log)
   dashboard --config PATH [--port N] (read-only loopback Control Center)
   fixture serve --data-dir NEW_DIRECTORY (synthetic lab only)
   terminal start|submit|resume|interrupt --config PATH --request-file PATH
@@ -51,11 +51,11 @@ function options(args:string[]){
   return {values,positional};
 }
 function jsonFile(path:string){requireCondition(statSync(path).size<=65536,'REQUEST_TOO_LARGE');return JSON.parse(readFileSync(path,'utf8')) as unknown;}
-export async function runInterfaceCli(args:string[]):Promise<boolean>{
+export async function runInterfaceCli(args:string[],onMcpClosed?:()=>Promise<void>):Promise<boolean>{
   const command=args[0]!,sub=args[1];
   if(command==='fixture'){
     requireCondition(sub==='serve'&&args.length===4&&args[2]==='--data-dir'&&args[3],'INVALID_OPTIONS');
-    await serveFixtureLab(args[3]);return true;
+    await (await import('./fixture-lab.js')).serveFixtureLab(args[3]);return true;
   }
   if(!['doctor','capabilities','project','task','recovery','supervisor','intake','call','mcp','dashboard','terminal','verify','soak','ops'].includes(command)&&!(command==='events'&&['read','ack'].includes(sub??'')))return false;
   if(['verify','soak','ops'].includes(command))throw Error('NOT_IMPLEMENTED');
@@ -69,12 +69,13 @@ export async function runInterfaceCli(args:string[]):Promise<boolean>{
   const config=loadHostConfig(configPath);
   if(command==='dashboard'){
     requireCondition(parsed.positional.length===0,'UNEXPECTED_ARGUMENT');const port=o.has('--port')?Number(o.get('--port')):undefined;
-    requireCondition(port===undefined||Number.isInteger(port)&&port>=0&&port<=65535,'INVALID_PORT');const dashboard=await startControlCenter(config,{...(port===undefined?{}:{port})});
+    requireCondition(port===undefined||Number.isInteger(port)&&port>=0&&port<=65535,'INVALID_PORT');const {startControlCenter}=await import('../observability/control-center.js');const dashboard=await startControlCenter(config,{...(port===undefined?{}:{port})});
     console.log(JSON.stringify({status:'ready',url:dashboard.url,bind:'127.0.0.1',read_only:true}));
     const stop=()=>{void dashboard.close();};process.once('SIGINT',stop);process.once('SIGTERM',stop);await dashboard.closed;return true;
   }
+  if(command==='mcp')requireCondition(parsed.positional.length===0&&[...o.keys()].every(k=>k==='--config'),'INVALID_OPTIONS');
   const api=new RuntimeApi(config);
-  if(command==='mcp'){requireCondition(parsed.positional.length===0&&[...o.keys()].every(k=>k==='--config'),'INVALID_OPTIONS');await serveMcp(api);return true;}
+  if(command==='mcp'){try{await serveMcp(api,onMcpClosed);}catch(error){api.close();await api.drain();throw error;}return true;}
   try{
     let tool:string,body:unknown={};
     const requestFile=()=>{const path=o.get('--request-file');requireCondition(path,'REQUEST_FILE_REQUIRED');return jsonFile(path);};

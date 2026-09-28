@@ -2,7 +2,7 @@ import {type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js'
 import {McpSamplingStructuredModel,subscriptionAwareModelFromHostEnvironment,type SubscriptionAwareModelOptions} from '../integrations/subscription-auth.js';
 import {structuredModelFromEnvironment} from '../integrations/model-provider.js';
 import {publicModelSettings,scopedModelConfiguration,type ModelScope} from './model-settings.js';
-import {classifyClientFailure,handoffContext,type ClientRouteEvent,type HandoffReason} from '../integrations/client-handoff.js';
+import {classifyClientFailure,handoffContext,isNonRetryableClientFailure,recordClientRoute,type ClientRouteEvent,type HandoffReason} from '../integrations/client-handoff.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
 
 /** Read at invocation start, never mutate process.env or an already-running model call. */
@@ -22,23 +22,27 @@ export class ConfiguredStructuredModel implements StructuredModel{
   }
   async status(){const context=scopedModelConfiguration(this.path,this.scope,this.base);return {...publicModelSettings(context.saved,context.base),model_scope:this.scope,model_source:context.source,...await subscriptionAwareModelFromHostEnvironment({...(this.sampling?{sampling:this.sampling}:{})},context.environment).status()};}
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
+    input=structuredClone(input);schema=structuredClone(schema);
     const context=scopedModelConfiguration(this.path,this.scope,this.base),{saved}=context;
     if(saved?.selection.mode==='api'&&saved.selection.api_to_subscription){
       const env=context.environment,api=this.factories.api?.(env)??structuredModelFromEnvironment(env);
       try{return await api.call(purpose,instructions,input,schema);}catch(error){
         const call=api.calls.at(-1),status=call?.http_status;
-        if(error instanceof Error&&error.message==='MODEL_PROVIDER_RESPONSE_INVALID'||status!==undefined&&status>=400&&status<500&&![401,402,403,429].includes(status))throw error;
+        if(isNonRetryableClientFailure(error)||call?.failure_kind==='invalid_output'||call?.failure_kind==='json_decode'||call?.failure_kind==='refusal'||status!==undefined&&status>=400&&status<500&&![401,402,403,429].includes(status))throw error;
         const reason:HandoffReason=status===401||status===403?'auth_expired':status===402?'quota_exhausted':status===429?'rate_limited':classifyClientFailure(error);
         const connected=['mcp','codex','claude','opencode'];
         const subscribed={...env,AGENT_DRIVER_LLM_CLIENT:saved.selection.client==='auto'?connected.join(','):[saved.selection.client,...connected.filter(client=>client!==saved.selection.client)].join(',')};
         const onHandoff=(event:ClientRouteEvent)=>this.onHandoff?.(event);
         const options={environment:subscribed,subscriptionOnly:true,...(this.sampling?{sampling:this.sampling}:{}),onHandoff};
         const alternative=this.factories.subscription?.(options)??subscriptionAwareModelFromHostEnvironment(options,subscribed);
-        try{const value=await alternative.call(purpose,instructions,input,schema),target=alternative.calls.findLast(item=>item.status==='accepted');
-          if(target&&['mcp_sampling','codex','claude','opencode','cursor'].includes(target.provider??''))this.onHandoff?.({...handoffContext(input),source:'api',target:target.provider==='mcp_sampling'?'mcp':target.provider as ClientRouteEvent['target'],source_model:call?.model??saved.selection.api_model,target_model:target.model,reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});
-          return value;
-        }catch(fallbackError){this.onHandoff?.({...handoffContext(input),source:'api',target:null,source_model:call?.model??saved.selection.api_model,target_model:null,reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});throw fallbackError;
+        let value:unknown;
+        try{value=await alternative.call(purpose,instructions,input,schema);
+        }catch(fallbackError){if(!isNonRetryableClientFailure(fallbackError))recordClientRoute(this.onHandoff,{...handoffContext(input),source:'api',target:null,source_model:call?.model??saved.selection.api_model,target_model:null,reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});throw fallbackError;
         }finally{this.calls.push(...alternative.calls);}
+        const target=alternative.calls.findLast(item=>item.status==='accepted');
+        if(!target||!['mcp_sampling','codex','claude','opencode','cursor'].includes(target.provider??''))throw Error('CLIENT_HANDOFF_RECEIPT_MISSING');
+        recordClientRoute(this.onHandoff,{...handoffContext(input),source:'api',target:target.provider==='mcp_sampling'?'mcp':target.provider as ClientRouteEvent['target'],source_model:call?.model??saved.selection.api_model,target_model:target.model,reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});
+        return value;
       }finally{this.calls.push(...api.calls);}
     }
     const provider=this.resolve(context);try{return await provider.call(purpose,instructions,input,schema);}finally{this.calls.push(...provider.calls);}

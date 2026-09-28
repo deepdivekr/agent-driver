@@ -1,6 +1,6 @@
 # 클라이언트 인계와 모델 선택
 
-관제센터의 **연결 및 설정 → AI**에서 우선 사용할 클라이언트와 Codex·Claude Code·OpenCode 각각의 모델을 저장한다. 이 설정은 Work가 실행 중이어도 **다음 모델 호출부터** 적용된다. 선택한 클라이언트가 실패하면 연결된 다른 클라이언트를 순서대로 시도하며, 받는 클라이언트에는 그 클라이언트에 저장한 모델을 전달한다. 모델을 선택하지 않으면 공식 클라이언트의 기본값을 사용한다.
+관제센터의 **연결 및 설정 → AI**에서 우선 사용할 클라이언트와 Codex·Claude Code·OpenCode 각각의 모델을 저장한다. 이 설정은 Work가 실행 중이어도 **다음 모델 호출부터** 적용된다. 선택한 클라이언트의 인증·한도·연결 문제라면 연결된 다른 클라이언트를 순서대로 시도하며, 받는 클라이언트에는 그 클라이언트에 저장한 모델을 전달한다. 잘못된 답변 형식이나 인계 기록 저장 실패는 연결 장애로 바꿔 재시도하지 않는다. 모델을 선택하지 않으면 공식 클라이언트의 기본값을 사용한다.
 
 모델 드롭다운의 출처는 Codex의 현재 `model/list`, OpenCode의 현재 `models`, Claude Code의 `sonnet`·`opus`·`haiku` 최신 버전 별칭이다. API 공급자 목록은 해당 공급자의 현재 Models endpoint에서 새로고침한다. 목록 조회 실패 시 저장한 모델 ID를 유지한다. 특정 버전 ID를 저장한 경우 새 릴리스가 나와도 자동으로 다른 ID로 바꾸지 않는다. 최신 버전을 계속 따르려면 클라이언트 기본값 또는 Claude의 최신 별칭을 선택한다. MCP sampling의 모델은 호출 클라이언트가 관리하며 이 화면에서 지정하지 않는다.
 
@@ -24,5 +24,15 @@ SQLite `client_handoff` 기록은 `project_id`와 가능한 `work_id`·`run_id`�
 코딩 Work에는 [로컬 Git 체크포인트](coding-orchestration.md#로컬-git-인계-체크포인트)도 적용한다. SQLite의 단계 영수증과 Git 지문에서 다시 만든 인계 내용을 새 클라이언트의 호출 입력에 넣는다. GitHub 원격은 필요하지 않다. 이전 단계 뒤의 외부 Git 변경이 감지되면 다음 CLI 실행 전에 거부한다.
 
 현재 범위는 런타임 내부의 판단 및 위 코딩 단계다. 사용자가 별도로 연 Codex Desktop/CLI·Claude 대화 세션의 메시지 기록을 가져오거나 임의의 외부 에이전트 대화를 자동으로 이어붙이지는 않는다. 클라이언트의 구독 인증과 토큰 갱신은 해당 공식 클라이언트가 소유한다.
+
+## 연결·인계 보강 (Phase 73)
+
+- 연결 여부와 지원 기능을 분리한다. `DecisionClientCapabilities` v1은 이 런타임의 **도구 없는 판단 어댑터**가 지원하는 동작을 표현한다. 전체 CLI가 갖는 모든 기능을 뜻하지 않는다. MCP sampling은 실제 협상 결과가 필요하고, Cursor·Hermes의 직접 구조화 CLI 호출은 미지원으로 남는다.
+- 같은 실행기·환경의 동시 상태 확인은 하나의 프로세스로 합친다. 실제 모델 판단은 합치지 않는다. 실패한 상태 확인은 저장하지 않으며, 정상 상태의 짧은 캐시는 설정 경로·실행 파일 지문 변경, 로그인·실행 실패 때 무효화한다. 다른 OS 프로세스까지 공유하는 로그인 잠금은 아니다.
+- 하나의 연결 화면에서 중복 로그인 요청은 같은 시작 작업에 합류한다. 화면이 종료되면 상태 확인이 늦게 끝나도 로그인 프로세스를 새로 띄우지 않는다. 종료된 작업의 늦은 출력으로 완료 상태를 덮어쓰지 않는다.
+- 인계 성공에는 다음 클라이언트·모델·입력 해시가 필요하다. 효과가 불확실하면 반드시 `requires_reconciliation`이며, 성공 인계와 동시에 기록할 수 없다. 로그 저장 실패도 성공으로 숨기거나 다음 모델 호출로 덮지 않는다.
+- 코딩 검토의 대체 답변은 실제 검토 스키마를 검증한 뒤 이전 세션을 해제하고 인계 기록을 남긴다. 일반 판단의 `accepted`는 JSON 전달 성공이며, **해당 Work의 의미·권한·완료 검증은 여전히 Pack/Swarm의 계약과 독립 readback이 담당**한다.
+
+Atlas에서 참고한 설계와 적용 범위는 [연결·인계 설계 메모](atlas-continuity.md)를 참조한다. 이 보강은 새로운 Jev 호출 지점이나 독립적인 Work별 Jev 정책을 추가하지 않는다.
 
 공식 모델 목록 참고: [Codex App Server](https://learn.chatgpt.com/docs/app-server), [OpenAI Models API](https://developers.openai.com/api/reference/cli/resources/models), [Claude Code CLI](https://code.claude.com/docs/en/cli-usage), [Anthropic Models API](https://platform.claude.com/docs/en/api/models/list), [OpenRouter Models API](https://openrouter.ai/docs/api/api-reference/models/list-all-models-and-their-properties).

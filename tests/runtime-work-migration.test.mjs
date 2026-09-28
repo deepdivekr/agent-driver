@@ -13,6 +13,7 @@ import {readWorkDetail} from '../dist/observability/work-view.js';
 import {parseWorkImportDraft, UNIVERSAL_WORK_MIGRATION_PROMPT} from '../dist/work/import-draft.js';
 import {modelSettingsPath,publicModelSettings,saveModelSettings} from '../dist/onboarding/model-settings.js';
 import {normalizeProjectPath, scanProject} from '../dist/work/project-scan.js';
+import {initialWorkPlan,validateWorkPlan} from '../dist/work/plan.js';
 const syntheticSecret=['sk','proj','abcdefghijklmnopqrstuvwxyz123456'].join('-');
 
 function externalDraft(){
@@ -53,8 +54,9 @@ async function setup(t,{modelApproved=false,model,packModels=null}={}){
   }));
   const config=loadHostConfig(path);
   const api=new RuntimeApi(config,model?{swarmModel:model}:{});
-  t.after(async()=>{api.close();await api.drain();await rm(root,{recursive:true,force:true});});
-  return {root,project,config,api};
+  const resources=[];
+  t.after(async()=>{for(const close of resources.reverse())await close();api.close();await api.drain();await rm(root,{recursive:true,force:true});});
+  return {root,project,config,api,resources};
 }
 
 async function makeBot(project){
@@ -114,8 +116,12 @@ test('local and WSL project scan reads bounded evidence without executing code, 
   const marker=join(x.root,'should-not-run');
   await writeFile(join(x.project,'danger.js'),`import {writeFileSync} from 'node:fs'; writeFileSync(${JSON.stringify(marker)}, 'executed');`);
   await writeFile(join(x.project,'.env'),`API_KEY=${syntheticSecret}\n`);
-  const outside=join(x.root,'outside.ts');await writeFile(outside,'OpenAI create_agent tool_call checkpoint');
-  await symlink(outside,join(x.project,'linked.ts'));
+  if(process.platform==='win32'){
+    // Exercise native link traversal without requiring Windows symlink privileges.
+    const outside=join(x.root,'outside');await mkdir(outside);await writeFile(join(outside,'linked.ts'),'OpenAI create_agent tool_call checkpoint');
+    await symlink(outside,join(x.project,'linked'),'junction');
+    t.diagnostic('Windows junction boundary exercised; POSIX file-symlink case runs on Linux.');
+  }else{const outside=join(x.root,'outside.ts');await writeFile(outside,'OpenAI create_agent tool_call checkpoint');await symlink(outside,join(x.project,'linked.ts'));}
   const result=await scanProject(x.project);
   assert.equal(result.kind,'bot_only');
   assert.equal(result.authority.execution,false);assert.equal(result.authority.project_write,false);
@@ -123,7 +129,7 @@ test('local and WSL project scan reads bounded evidence without executing code, 
   assert.ok(result.evidence.some(item=>item.signal==='bot_channel'&&item.file==='bot.js'));
   assert.ok(result.recommendations.some(item=>item.includes('LLM')));
   assert.ok(!JSON.stringify(result).includes('sk-proj-'));
-  assert.ok(!result.evidence.some(item=>item.file==='linked.ts'||item.file==='.env'));
+  assert.ok(!result.evidence.some(item=>item.file.includes('linked')||item.file==='.env'));
   await assert.rejects(access(marker));
   assert.equal((await scanProject(x.project)).content_sha256,result.content_sha256);
   assert.equal(normalizeProjectPath('\\\\wsl.localhost\\Ubuntu-24.04\\home\\me\\bot','linux','Ubuntu-24.04'),'/home/me/bot');
@@ -190,9 +196,15 @@ test('project scan recommends only an observed semantic step, preserves its plai
   const accepted=await x.api.imports.accept({import_id:scanned.import_id,goal:'메시지 검토 업무를 옮긴다',completion:'분류 결과를 확인한다'});
   assert.equal(accepted.jev.enabled,false);assert.equal(accepted.execution,false);assert.equal(jevCalls,0);
   const detail=readWorkDetail(x.api.store,x.config,accepted.work_id);
+  assert.equal(detail.work_plan.source,'project_scan');
+  assert.equal(detail.work_plan.provenance,'observed_code_unverified_execution');
+  assert.deepEqual(detail.work_plan.steps.map(step=>({id:step.id,depends_on:step.depends_on})),scanned.preview.analysis.steps.map(step=>({id:step.id,depends_on:step.depends_on})));
+  const context=await x.api.call('runtime_work_context',{work_id:accepted.work_id,actor:'test.project'});
+  assert.ok(context.reference_map.references.some(item=>item.locator.startsWith('agent.py:')));
+  assert.equal(context.reference_map.source_digest,scanned.preview.content_sha256);
   assert.deepEqual(detail.jev_recommendations,scanned.preview.jev_recommendations);
   assert.equal(detail.jev_recommendation_status,'complete');assert.equal(detail.jev.enabled,false);
-  const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());
+  const reopened=new PackStore(x.config.dbPath);x.resources.push(()=>reopened.close());
   const persisted=readWorkDetail(reopened,x.config,accepted.work_id);
   assert.deepEqual(persisted.jev_recommendations,scanned.preview.jev_recommendations);
   assert.equal(persisted.jev.enabled,false);assert.equal(jevCalls,0);
@@ -257,12 +269,52 @@ test('pasted import is durable, requires explicit acceptance, and persists per-W
   const stored=x.api.store.intakeWork(x.config.project.id,accepted.work_id);
   assert.equal(stored.spec.recurrence.kind,'recurring');
   assert.equal(stored.spec.requested_effect,'external_effect_requested');
+  assert.equal(stored.spec.plan.format,1);
+  assert.equal(stored.spec.plan.provenance,'unverified_external');
+  assert.deepEqual(stored.spec.plan.steps.map(step=>({id:step.id,depends_on:step.depends_on})),[{id:'collect',depends_on:[]},{id:'deliver',depends_on:['collect']}]);
+  const first=await x.api.call('runtime_work_context',{work_id:accepted.work_id,actor:'test.client'});
+  assert.equal(first.plan.source,'pasted_import');
+  assert.equal(first.reference_map.references.find(item=>item.id==='collect').kind,'external_claim');
+  assert.equal(first.selected_references.length,0);
+  assert.equal(first.capsule.core.binding.work_id,accepted.work_id);
+  assert.equal(first.delivery.input_tokens,null);
+  assert.equal(first.metrics.work_completion,'unobserved');
+  const repeated=await x.api.call('runtime_work_context',{work_id:accepted.work_id,actor:'test.client'});
+  assert.ok(repeated.delivery.repeated_bytes>0);
+  assert.ok(repeated.delivery.repeated_bytes<=first.delivery.input_bytes);
+  assert.equal(repeated.metrics.deliveries,2);
+  assert.equal(repeated.metrics.stage_outcomes.unobserved,2);
+  const selected=await x.api.call('runtime_work_context',{work_id:accepted.work_id,actor:'test.client',reference_ids:['collect']});
+  assert.equal(selected.selected_references[0].id,'collect');
+  assert.equal(selected.selected_references[0].trust,'unverified_external');
+  await assert.rejects(x.api.call('runtime_work_context',{work_id:accepted.work_id,actor:'test.client',reference_ids:['missing']}),/WORK_CONTEXT_REFERENCE_NOT_FOUND/u);
   assert.deepEqual(x.api.store.workRevisions(x.config.project.id,accepted.work_id).map(item=>item.kind),['received','imported']);
   const duplicate=await x.api.imports.accept({import_id:pasted.import_id});
   assert.equal(duplicate.work_id,accepted.work_id);assert.equal(duplicate.deduplicated,true);
-  const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());
+  const reopened=new PackStore(x.config.dbPath);x.resources.push(()=>reopened.close());
   assert.equal(reopened.workImport(x.config.project.id,pasted.import_id).accepted_work_id,accepted.work_id);
   assert.equal(reopened.intakeWork(x.config.project.id,accepted.work_id).jev_enabled,false);
+  assert.equal(reopened.workContextDeliveries(x.config.project.id,accepted.work_id).length,3);
+});
+
+test('legacy imported Work without embedded plan reconstructs a non-mutating DAG projection',async t=>{
+  const x=await setup(t),pasted=await x.api.call('runtime_work_import_paste',{text:JSON.stringify(externalDraft())});
+  const accepted=await x.api.imports.accept({import_id:pasted.import_id});
+  const work=x.api.store.intakeWork(x.config.project.id,accepted.work_id),legacy={...work.spec};delete legacy.plan;
+  x.api.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify(legacy),accepted.work_id);
+  const context=await x.api.call('runtime_work_context',{work_id:accepted.work_id,actor:'test.legacy'});
+  assert.deepEqual(context.plan.steps.map(step=>step.depends_on),[[],['collect']]);
+  assert.equal(context.plan.provenance,'unverified_external');
+  assert.equal(readWorkDetail(x.api.store,x.config,accepted.work_id).work_plan.steps.length,2);
+  assert.equal(x.api.store.intakeWork(x.config.project.id,accepted.work_id).spec.plan,undefined);
+});
+
+test('Work plan refuses missing dependencies and cycles before persistence',()=>{
+  assert.equal(initialWorkPlan('a'.repeat(2000),'read_only').steps[0].goal.length,2000);
+  const template={format:1,revision:1,source:'request',source_id:null,source_digest:null,provenance:'user_request',steps:[{id:'a',goal:'A',depends_on:[],effect:'read_only',tool_hints:[],evidence_ids:[]},{id:'b',goal:'B',depends_on:['a'],effect:'read_only',tool_hints:[],evidence_ids:[]}]};
+  assert.deepEqual(validateWorkPlan(template).steps[1].depends_on,['a']);
+  assert.throws(()=>validateWorkPlan({...template,steps:[template.steps[0],{...template.steps[1],depends_on:['missing']}]}),/WORK_PLAN_DEPENDENCY_INVALID/u);
+  assert.throws(()=>validateWorkPlan({...template,steps:[{...template.steps[0],depends_on:['b']},template.steps[1]]}),/WORK_PLAN_STEP_CYCLE/u);
 });
 
 test('MCP offers preview routes but cannot accept an import or turn on paid Jev',async t=>{
@@ -287,7 +339,7 @@ test('changed source blocks project acceptance and preserves a reviewable draft'
 
 test('local Control Center protects import acceptance and Jev toggle, then persists the selected setting',async t=>{
   const x=await setup(t);await makeBot(x.project);
-  const server=await startControlCenter(x.config,{poll_ms:25});t.after(()=>server.close());
+  const server=await startControlCenter(x.config,{poll_ms:25});x.resources.push(()=>server.close());
   const origin=new URL(server.url).origin,headers={origin,'content-type':'application/json','x-agent-driver':'human-office'};
   const post=(path,body,extra={})=>fetch(new URL(path,server.url),{method:'POST',headers:{...headers,...extra},body:JSON.stringify(body)});
   const scanResponse=await post('work/import/scan',{path:x.project});
@@ -314,7 +366,7 @@ test('local Control Center protects import acceptance and Jev toggle, then persi
   assert.equal((await post('work/jev',{work_id:accepted.work_id,revision:detail.revision,enabled:false})).status,409);
   const disabledResponse=await post('work/jev',{work_id:accepted.work_id,revision:enabled.revision,enabled:false});
   assert.equal(disabledResponse.status,200);assert.equal((await disabledResponse.json()).jev.enabled,false);
-  const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());
+  const reopened=new PackStore(x.config.dbPath);x.resources.push(()=>reopened.close());
   const persisted=reopened.intakeWork(x.config.project.id,accepted.work_id);
   assert.equal(persisted.jev_enabled,false);assert.ok(persisted.jev_cost_consent_at);
   assert.deepEqual(reopened.workRevisions(x.config.project.id,accepted.work_id).map(item=>item.kind),['received','imported','jev_enabled','jev_disabled']);

@@ -1,8 +1,8 @@
-import {constants} from 'node:fs';
-import {lstat,mkdir,open,readFile} from 'node:fs/promises';
+import {lstat,mkdir,readFile} from 'node:fs/promises';
 import {dirname} from 'node:path';
 import {z} from 'zod';
 import {decisionEventSchema,type DecisionEvent,stableJson} from './contracts.js';
+import {openDecisionAppend} from './append-file.js';
 
 const decisionId=z.string().regex(/^[a-z][a-z0-9_.-]{0,95}$/u),eventId=z.string().uuid();
 export const decisionLabelSplit=z.enum(['unassigned','train','holdout','audit']);
@@ -24,8 +24,8 @@ export class MemoryDecisionJournal implements DecisionJournal {
 export class FileDecisionJournal implements DecisionJournal {
   constructor(readonly eventsPath:string,readonly labelsPath=eventsPath.replace(/\.jsonl$/u,'.labels.jsonl')){}
   private async write(path:string,value:unknown){
-    await mkdir(dirname(path),{recursive:true,mode:0o700});const line=stableJson(value)+'\n',handle=await open(path,constants.O_WRONLY|constants.O_APPEND|constants.O_CREAT|constants.O_NOFOLLOW,0o600);
-    try{const stat=await handle.stat();if(!stat.isFile()||stat.nlink!==1||stat.size+Buffer.byteLength(line)>67_108_864)throw Error('DECISION_JOURNAL_UNSAFE');await handle.write(line);await handle.sync();}finally{await handle.close();}
+    await mkdir(dirname(path),{recursive:true,mode:0o700});const line=stableJson(value)+'\n',handle=await openDecisionAppend(path,Buffer.byteLength(line),'DECISION_JOURNAL_UNSAFE');
+    try{await handle.write(line);await handle.sync();}finally{await handle.close();}
   }
   async append(event:DecisionEvent){await this.write(this.eventsPath,decisionEventSchema.parse(event));}
   async label(rawId:string,label:DecisionLabelInput){await this.write(this.labelsPath,makeLabel(rawId,label));}

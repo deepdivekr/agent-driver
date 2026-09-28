@@ -1,8 +1,11 @@
+import {dirname} from 'node:path';
 import {type HostConfig} from '../interface/config.js';
 import {type IntakeWork,type PackStore} from '../packs/store.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {redact} from '../terminal/contracts.js';
 import {type WorkProposal} from '../work/contracts.js';
+import {workContextMetrics} from '../work/context.js';
+import {planFromImport} from '../work/plan.js';
 import {authSites} from '../swarm/browser-auth.js';
 import {type WorkImportDraft} from '../work/import-draft.js';
 import {type ProjectScan} from '../work/project-scan.js';
@@ -28,7 +31,8 @@ function boardRow(row:OfficeRow){
 
 export function readWorkBoard(store:PackStore,config:HostConfig,limit=60){
   const project=config.project.id;store.expireCodingStages(project);store.expireCodingDialogTurns(project);store.expireCodingDialogAdvice(project);
-  const works=store.officeWorkSummaries(project,limit).map(row=>({...boardRow(row),...(hermesBoardRow(store,project,row.id)??{}),...(remoteBoard(store,project,row.id)??{})}));
+  const files=store.localFileExplorer(project,dirname(config.dbPath));
+  const works=store.officeWorkSummaries(project,limit).map(row=>{const base=boardRow(row),file=files.activity(row.id);return {...base,...(!base.run&&file?{status:base.paused?'paused':file.status,file_activity:file}:{}),...(hermesBoardRow(store,project,row.id)??{}),...(remoteBoard(store,project,row.id)??{})};});
   const auth_attention_count=authSites(store,config).filter(site=>site.handoff||site.state!=='ready'&&site.state!=='retry_requested').length;
   return {format:1,project_id:project,generated_at:new Date().toISOString(),works,auth_attention_count,read_only:false,coverage:{runtime_only:true,unobserved_work:'not_shown'}};
 }
@@ -44,6 +48,11 @@ export function readWorkDetail(store:PackStore,config:HostConfig,id:string){
   const jevRecommendations=imported?.kind==='project'?projectJevRecommendations(imported.body).map(item=>({...item,step_goal:clean(item.step_goal,500),judgment:clean(item.judgment,160),why_fit:clean(item.why_fit,300)})):[];
   const jevRecommendationStatus=imported?.kind==='project'?(imported.body as {analysis_status?:string}).analysis_status??'not_evaluated':'not_evaluated';
   const spec=intake?.spec as WorkProposal|null??null,runs=store.officeRuns(project,id).slice(0,20);
+  // Legacy run-backed Works use IDs such as `swarm:<id>`; do not apply the
+  // UUID-only file command contract to a Work with no recorded file activity.
+  const files=store.localFileExplorer(project,dirname(config.dbPath));
+  const fileActivity=files.activity(id)?files.report({work_id:id}):null;
+  const workPlan=spec?.plan??(spec&&imported?planFromImport(imported,spec.desired_outcome,spec.requested_effect):null);
   const latest=runs[0]??null;
   let stages:Array<{id:string;label:string;objective:string;status:string;verified:boolean;executor:string|null;can_edit:boolean;attempts:number;owner:string|null}>=[];
   let control:{paused:boolean;revision:number;can_pause:boolean}|null=null;
@@ -78,10 +87,17 @@ export function readWorkDetail(store:PackStore,config:HostConfig,id:string){
   codingDialog.older_turns_available=codingDialog.turn_count>turns.length;
   stages=turns.map(turn=>({id:turn.id,label:`Codex 대화 ${turn.ordinal+1}`,objective:clean(turn.instruction,500),status:turn.status,verified:false,executor:'Codex CLI',can_edit:false,attempts:turn.status==='queued'?0:1,owner:turn.status==='running'?'Codex CLI':null}));
     events=store.officeEvents(project,dialog.id).slice(-20).map(item=>({id:String(item.id),kind:item.kind,detail:clean(item.detail,240),worker_id:item.worker_id,created_at:item.created_at}));
+  }else if(workPlan?.steps.length&&workPlan.steps.length>1){
+    stages=workPlan.steps.map(step=>({id:step.id,label:workPlan.source==='request'?'계획 단계':'가져온 단계',objective:clean(step.goal,500),status:'pending',verified:false,executor:null,can_edit:false,attempts:0,owner:null}));
   }else if(importedPlan?.steps.length){
     stages=importedPlan.steps.map(step=>({id:step.id,label:'가져온 단계',objective:step.goal,status:'pending',verified:false,executor:null,can_edit:false,attempts:0,owner:null}));
   }else if(spec?.completion_checks){
     stages=spec.completion_checks.map(check=>({id:check.id,label:'완료 확인',objective:clean(check.result,500),status:'pending',verified:false,executor:null,can_edit:false,attempts:0,owner:null}));
+  }
+  if(!latest&&fileActivity){
+    runStatus=fileActivity.activity!.status;
+    stages=fileActivity.plans.map(plan=>({id:plan.id,label:'파일 정리안',objective:clean(plan.moves.map(move=>`${move.from} → ${move.to}`).join('; '),500),status:['done','undone'].includes(plan.state)?'succeeded':plan.state==='preview'?'waiting_approval':'reconciliation_required',verified:['done','undone'].includes(plan.state),executor:'local files',can_edit:false,attempts:plan.state==='preview'?0:1,owner:null}));
+    if(!stages.length)stages=[{id:'files-observation',label:'폴더 확인',objective:fileActivity.observations.length?'관측 결과를 바탕으로 다음 작업 결정':'폴더 접근을 허용하면 연결된 에이전트가 계속 진행',status:fileActivity.observations.length?'succeeded':runStatus,verified:fileActivity.observations.length>0,executor:'local files',can_edit:false,attempts:fileActivity.observations.length?1:0,owner:null}];
   }
   const verifiedSteps=stages.filter(stage=>stage.verified).length;
   const activePack=latest?.source_kind==='pack'&&runStatus!==null&&['running','retryable_failure','waiting_auth','waiting_approval','approved','reconciliation_required'].includes(runStatus);
@@ -90,5 +106,5 @@ export function readWorkDetail(store:PackStore,config:HostConfig,id:string){
   const workControl=intake?{paused:intake.paused,revision:intake.revision,can_pause:!activePack&&!activeSwarm&&!activeCoding&&['ready','running','needs_model'].includes(intake.status),scope:'future_dispatch' as const}:null;
   const progress=(swarm||coding)&&stages.length?Math.floor(verifiedSteps*100/stages.length):null;
   const codingAttach={eligible:Boolean(intake?.status==='ready'&&!intake.paused&&spec?.route.kind==='pack'&&spec.route.pack_family==='coding.orchestrate'&&!latest),suggested_project_ref:config.coding?.projects.find(item=>item.root===(imported?.kind==='project'?(imported.body as {scan?:ProjectScan}).scan?.root:undefined))?.id??null,registered_project_refs:config.coding?.projects.map(item=>item.id)??[]};
-  return {format:1,id,title:clean(record.title,160),goal:clean(record.goal,2000),prompt:intake?clean(intake.prompt,8000):null,work_status:intake?.status??null,mode:intake?.mode??null,revision:intake?.revision??null,paused:Boolean(intake?.paused||control?.paused),jev:intake?{enabled:intake.jev_enabled,cost_consent_at:intake.jev_cost_consent_at,optional:true,can_change:['ready','running'].includes(intake.status)}:null,jev_recommendations:jevRecommendations,jev_recommendation_status:jevRecommendationStatus,imported_plan:importedPlan,imported_coding:importedCodingReadiness(store,config,id),coding_attach:codingAttach,coding_dialog:codingDialog,spec:intake?.spec??null,questions:intake?.questions??[],answers:intake?.answers??{},route:spec?.route??null,pack,run_id:latest?.source_id??null,run_status:runStatus,runs,client_handoffs:store.clientHandoffs(project,id),swarm,coding,agent_count:stages.filter(stage=>stage.status==='leased'||stage.status==='running').length,verified_steps:verifiedSteps,total_steps:stages.length,progress_percent:progress,progress_basis:swarm?'독립 확인과 품질 승인된 단계만 계산':coding?'단계 실행·검증 완료 기준이며 업무 완료 조건은 별도 확인':'이 실행 경로는 단계별 독립 검증 진행률을 제공하지 않음',stages,control,work_control:workControl,events,updated_at:record.updated_at,completion_verified:false,completion_note:'Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.'};
+  return {format:1,id,file_activity:fileActivity,title:clean(record.title,160),goal:clean(record.goal,2000),prompt:intake?clean(intake.prompt,8000):null,work_status:intake?.status??null,mode:intake?.mode??null,revision:intake?.revision??null,paused:Boolean(intake?.paused||control?.paused),jev:intake?{enabled:intake.jev_enabled,cost_consent_at:intake.jev_cost_consent_at,optional:true,can_change:['ready','running'].includes(intake.status)}:null,jev_recommendations:jevRecommendations,jev_recommendation_status:jevRecommendationStatus,work_plan:workPlan,context_metrics:intake?workContextMetrics(store,project,id):null,imported_plan:importedPlan,imported_coding:importedCodingReadiness(store,config,id),coding_attach:codingAttach,coding_dialog:codingDialog,spec:intake?.spec??null,questions:intake?.questions??[],answers:intake?.answers??{},route:spec?.route??null,pack,run_id:latest?.source_id??null,run_status:runStatus,runs,client_handoffs:store.clientHandoffs(project,id),swarm,coding,agent_count:stages.filter(stage=>stage.status==='leased'||stage.status==='running').length,verified_steps:verifiedSteps,total_steps:stages.length,progress_percent:progress,progress_basis:swarm?'독립 확인과 품질 승인된 단계만 계산':coding?'단계 실행·검증 완료 기준이며 업무 완료 조건은 별도 확인':'이 실행 경로는 단계별 독립 검증 진행률을 제공하지 않음',stages,control,work_control:workControl,events,updated_at:record.updated_at,completion_verified:false,completion_note:'Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.'};
 }

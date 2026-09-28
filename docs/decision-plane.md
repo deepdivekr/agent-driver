@@ -90,6 +90,8 @@ LLM이 Jev의 판단을 보정하면 우선 **후보**로 저장한다. 코드�
 
 ## 차용한 OSS 패턴
 
+Phase 75 개발 후보판에는 `pack.semantic`의 `citation.support`, `extraction.support`, `context.relevance`가 추가되었다. 수집 Pack의 선택적 근거 검증과 MCP Work 참조 선별이 같은 profile·journal·shadow 경로를 사용한다. 기존 Work/전역 opt-out을 유지하며, 새 판단의 threshold를 실측 calibration이라고 표기하지 않는다. [12가지 사례별 구현 범위와 사용법](jev-use-case-coverage.md)을 참고한다. 원본 WSL·설치본 반영은 별도 단계다.
+
 | 출처 패턴 | 반영한 시스템 | 그대로 복사하지 않은 경계 |
 |---|---|---|
 | `jev-ultrafast`의 한 요청 내 operation/target/value speculative heads | adaptive browser가 상태·행동·대상·값·완료·정체·방해를 같은 관측에서 fan-out | 한 질문의 답을 다른 질문이 전제로 삼지 않음 |

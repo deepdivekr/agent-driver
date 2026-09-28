@@ -51,6 +51,7 @@ export function sidebarHtml(page:ShellPage){
 <a class="nav" href="./?view=waiting" data-view="waiting">대기<span class="n" data-count="waiting"></span></a>
 <a class="nav" href="./?view=done" data-view="done">종료된 업무<span class="n" data-count="done"></span></a>
 <div class="sec">tools</div>
+
 <a class="nav" href="./?import=1" data-nav="import">가져오기</a>
 <a class="nav" id="connections" href="connections"${current('connections')}>사이트 로그인</a>
 <a class="nav" href="settings"${current('settings')}>연결 및 설정</a>

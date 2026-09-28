@@ -78,18 +78,44 @@ test('runtime decision journal binds labels to one exact judgment and excludes o
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
-test('runtime decision journal and activation history refuse redirected or multiply-linked files',async()=>{
+test('runtime native decision journal and activation history refuse file symlinks',async t=>{
   const root=await mkdtemp(join(tmpdir(),'agent-driver-decision-files-')),sentinel=join(root,'sentinel'),eventLink=join(root,'events.jsonl'),historyTarget=join(root,'history-target'),registryRoot=join(root,'registry');
   const one={...catalog,judgments:[catalog.judgments[0]]},rows=(prefix,count)=>Array.from({length:count},(_,i)=>({id:`${prefix}-${i}`,decision_id:'fixture.route',strength:.9,correct:true}));
   try{
     const memory=new MemoryDecisionJournal(),plane=new DecisionPlane({catalog,profile:provisionalProfile(catalog,'jev-latest'),primary:{id:'primary',async systemOne(){return answer();}},journal:memory}),evaluated=await plane.evaluate(request,{context_id:'redirect-test',bindings:[{question_id:'route',decision_id:'fixture.route'},{question_id:'complete',decision_id:'fixture.complete'}]});
-    await writeFile(sentinel,'unchanged');await symlink(sentinel,eventLink);const journal=new FileDecisionJournal(eventLink);
+    await writeFile(sentinel,'unchanged');
+    try{await symlink(sentinel,eventLink);}catch(error){
+      if(process.platform==='win32'&&['EPERM','EACCES'].includes(error.code)){t.skip('BLOCKED_ENV: Windows account cannot create file symlinks; assertions remain required on a symlink-capable host');return;}
+      throw error;
+    }
+    const journal=new FileDecisionJournal(eventLink);
     await assert.rejects(journal.append(evaluated.event),/ELOOP|DECISION_JOURNAL_UNSAFE/);assert.equal(await readFile(sentinel,'utf8'),'unchanged');
-    const hardSource=join(root,'hard-source'),hardJournal=join(root,'hard-events.jsonl');await writeFile(hardSource,'');await link(hardSource,hardJournal);
-    await assert.rejects(new FileDecisionJournal(hardJournal).append(evaluated.event),/DECISION_JOURNAL_UNSAFE/);
     const fit=fitDecisionCalibration(one,'jev-latest',rows('train',4),rows('holdout',3),{target_precision:.9,min_train:3,min_holdout:2,evidence_level:'fixture',dataset_sha256:'4'.repeat(64)}),registry=new DecisionProfileRegistry(registryRoot),installed=await registry.install(one,fit.profile,fit.report);
     await writeFile(historyTarget,'unchanged');await symlink(historyTarget,join(registryRoot,'activation-history.jsonl'));
     await assert.rejects(registry.promote(one,installed.profile_sha256,'fixture'),/ELOOP|DECISION_REGISTRY_UNSAFE/);assert.equal(await readFile(historyTarget,'utf8'),'unchanged');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('runtime native decision journal and activation history refuse hard links independently of symlink privilege',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'agent-driver-decision-hardlinks-'));
+  try{
+    const memory=new MemoryDecisionJournal(),plane=new DecisionPlane({catalog,profile:provisionalProfile(catalog,'jev-latest'),primary:{id:'primary',async systemOne(){return answer();}},journal:memory}),evaluated=await plane.evaluate(request,{context_id:'hardlink-test',bindings:[{question_id:'route',decision_id:'fixture.route'},{question_id:'complete',decision_id:'fixture.complete'}]});
+    const sentinel=join(root,'sentinel'),events=join(root,'events.jsonl');await writeFile(sentinel,'unchanged');await link(sentinel,events);
+    await assert.rejects(new FileDecisionJournal(events).append(evaluated.event),/DECISION_JOURNAL_UNSAFE/);assert.equal(await readFile(sentinel,'utf8'),'unchanged');
+    const registryRoot=join(root,'registry'),one={...catalog,judgments:[catalog.judgments[0]]},rows=(prefix,count)=>Array.from({length:count},(_,i)=>({id:`${prefix}-${i}`,decision_id:'fixture.route',strength:.9,correct:true}));
+    const fit=fitDecisionCalibration(one,'jev-latest',rows('train',4),rows('holdout',3),{target_precision:.9,min_train:3,min_holdout:2,evidence_level:'fixture',dataset_sha256:'4'.repeat(64)}),registry=new DecisionProfileRegistry(registryRoot),installed=await registry.install(one,fit.profile,fit.report);
+    await link(sentinel,join(registryRoot,'activation-history.jsonl'));
+    await assert.rejects(registry.promote(one,installed.profile_sha256,'fixture'),/DECISION_REGISTRY_UNSAFE/);assert.equal(await readFile(sentinel,'utf8'),'unchanged');
+    assert.equal((await registry.status(one,'fixture')).status,'not_configured');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
+
+test('runtime native decision append refuses directory redirects without following them',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'agent-driver-decision-redirect-'));
+  try{
+    const memory=new MemoryDecisionJournal(),plane=new DecisionPlane({catalog,profile:provisionalProfile(catalog,'jev-latest'),primary:{id:'primary',async systemOne(){return answer();}},journal:memory}),evaluated=await plane.evaluate(request,{context_id:'directory-link-test',bindings:[{question_id:'route',decision_id:'fixture.route'},{question_id:'complete',decision_id:'fixture.complete'}]});
+    const redirected=join(root,'events.jsonl');await symlink(root,redirected,process.platform==='win32'?'junction':'dir');
+    await assert.rejects(new FileDecisionJournal(redirected).append(evaluated.event),/DECISION_JOURNAL_UNSAFE/);
   }finally{await rm(root,{recursive:true,force:true});}
 });
 
