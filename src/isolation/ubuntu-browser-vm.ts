@@ -31,9 +31,14 @@ export const localVmSpawner:VmCommandSpawner={
     requireCondition(typeof child.pid==='number'&&child.pid>0,'VM_LAUNCH_PID_UNAVAILABLE');
     child.unref();
     return {pid:child.pid,async stop(){
-      if(child.exitCode!==null)return;
-      child.kill('SIGTERM');
-      await new Promise<void>(resolveStop=>child.once('close',()=>resolveStop()));
+      if(child.exitCode!==null||child.signalCode!==null)return;
+      // A detached/unref'd child must keep the parent alive during explicit cleanup.
+      child.ref();
+      await new Promise<void>((resolveStop,rejectStop)=>{
+        const timeout=setTimeout(()=>{child.removeListener('close',done);child.unref();rejectStop(Error('VM_STOP_TIMEOUT'));},15000);
+        const done=()=>{clearTimeout(timeout);resolveStop();};
+        child.once('close',done);child.kill('SIGTERM');
+      });
     }};
   },
 };
@@ -213,7 +218,7 @@ write_files:
       done
       apt-get -o Acquire::Retries=2 install --yes chromium-browser dbus-user-session socat xvfb x11vnc openbox fonts-noto-cjk fonts-nanum fonts-unfonts-core
       fc-cache --force
-      install -d -o ${spec.guest_user} -g ${spec.guest_user} /home/${spec.guest_user}/snap/chromium/common/agent-driver-browser-profile /home/${spec.guest_user}/.config/systemd/user
+      install -d -o ${spec.guest_user} -g ${spec.guest_user} /home/${spec.guest_user}/snap /home/${spec.guest_user}/snap/chromium /home/${spec.guest_user}/snap/chromium/common /home/${spec.guest_user}/snap/chromium/common/agent-driver-browser-profile /home/${spec.guest_user}/.config /home/${spec.guest_user}/.config/systemd /home/${spec.guest_user}/.config/systemd/user
       chown -R ${spec.guest_user}:${spec.guest_user} /home/${spec.guest_user}/snap/chromium/common/agent-driver-browser-profile
       install -o ${spec.guest_user} -g ${spec.guest_user} -m 0644 /etc/agent-driver/agent-driver-browser.service /home/${spec.guest_user}/.config/systemd/user/agent-driver-browser.service
       loginctl enable-linger ${spec.guest_user}

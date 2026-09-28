@@ -10,9 +10,9 @@ import {prepareLocalConnection,setWorkModelDataApproval} from '../dist/onboardin
 function proposal(){return {title:'AI 소식 정리',desired_outcome:'이번 주 AI 소식을 표로 정리한다',completion_checks:[{id:'sources',result:'소식 5건을 찾는다',evidence:'출처 링크'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}
 
 test('fresh onboarding config asks for AI data consent, then defines Work after the local approval without restart',async t=>{
-  const root=await mkdtemp(join(tmpdir(),'driver-work-data-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const root=await mkdtemp(join(tmpdir(),'driver-work-data-'));
   const paths=await prepareLocalConnection(root),config=loadHostConfig(paths.runtimeConfig);let calls=0;
-  const api=new RuntimeApi(config,{swarmModel:{async call(){calls++;return structuredClone(proposal());}}});t.after(async()=>{api.close();await api.drain();});
+  const api=new RuntimeApi(config,{swarmModel:{async call(){calls++;return structuredClone(proposal());}}});t.after(async()=>{api.close();await api.drain();await rm(root,{recursive:true,force:true});});
   assert.equal(workModelDataApproved(config),false);
   const first=await api.call('runtime_work_start',{request_id:'news',prompt:'이번 주 AI 에이전트 뉴스 5건 표로 정리해줘'});
   assert.equal(first.status,'needs_model');assert.equal(first.reason,'MODEL_DATA_APPROVAL_REQUIRED');assert.equal(calls,0);

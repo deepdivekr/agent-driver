@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import {lookup} from 'node:dns/promises';
 import {isIP} from 'node:net';
-import {chromium,type Browser,type BrowserContext,type Page} from 'playwright';
+import {type Browser,type BrowserContext,type Page} from 'playwright';
 import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {type PackStore} from '../packs/store.js';
@@ -67,7 +67,7 @@ export class SwarmVisualExecutor {
     const pending=(async()=>{
       let context:BrowserContext|undefined,page:Page|undefined;const persistent=!!this.config.swarm?.visual.owned_vm;
       try{
-        const browser=await (this.#browser??=(persistent?(this.options.fixture_owned_connect?.()??connectOwnedBrowser(this.config)):chromium.launch({headless:true})));
+        const browser=await (this.#browser??=(persistent?(this.options.fixture_owned_connect?.()??connectOwnedBrowser(this.config)):import('playwright').then(({chromium})=>chromium.launch({headless:true}))));
         requireCondition(!this.#closed,'CONTROL_POOL_CLOSED');
         context=persistent?browser.contexts()[0]:await browser.newContext({viewport:{width:1024,height:640},locale:'en-US',acceptDownloads:false,serviceWorkers:'block'});
         requireCondition(context,'AUTH_PROFILE_MISSING');page=await context!.newPage();await page.setViewportSize({width:1024,height:640});

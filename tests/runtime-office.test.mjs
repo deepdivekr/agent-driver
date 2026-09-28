@@ -26,6 +26,21 @@ test('office snapshot uses verified stage evidence, shows pause and records hand
 
 test('office HTTP is capability scoped and requires same-origin user action',async t=>{const x=await setup(t),run=begin(x),server=await startControlCenter(x.config,{poll_ms:25});t.after(()=>server.close());const page=await (await fetch(server.url)).text();assert.match(page,/Agent Office/u);assert.match(page,/단계 진척도/u);assert.doesNotMatch(page,/LIVE ACTOR WALL/u);assert.doesNotThrow(()=>new Script(page.match(/<script nonce="[^"]+">([\s\S]*?)<\/script>/u)[1]));const snap=await (await fetch(new URL('office/snapshot',server.url))).json();assert.equal(snap.works[0].run_id,run.run_id);const url=new URL('office/action',server.url),body=JSON.stringify({run_id:run.run_id,action:'pause',revision:0});assert.equal((await fetch(url,{method:'POST',headers:{'content-type':'application/json','x-agent-driver':'human-office'},body})).status,403);const post=(payload,headers={})=>fetch(url,{method:'POST',headers:{origin:new URL(server.url).origin,'content-type':'application/json','x-agent-driver':'human-office',...headers},body:JSON.stringify(payload)});assert.equal((await post({run_id:run.run_id,action:'pause',revision:0},{'sec-fetch-site':'cross-site'})).status,403);assert.equal((await post({run_id:run.run_id,action:'pause',revision:0})).status,200);assert.equal((await post({run_id:run.run_id,action:'pause',revision:0})).status,409);assert.equal((await (await fetch(new URL('office/snapshot',server.url))).json()).works[0].paused,true);});
 
+test('runtime fixture legacy run-backed Work detail does not require a UUID-only file report',async t=>{
+  const x=await setup(t),run=begin(x),server=await startControlCenter(x.config);
+  t.after(()=>server.close());
+  const response=await fetch(new URL('work/detail?id='+encodeURIComponent('swarm:'+run.run_id),server.url));
+  assert.equal(response.status,200);
+  const detail=await response.json();
+  assert.equal(detail.id,'swarm:'+run.run_id);
+  assert.equal(detail.run_id,run.run_id);
+  assert.equal(detail.file_activity,null);
+  assert.equal(detail.swarm,true);
+  assert.equal(detail.stages.length,2);
+  assert.equal(detail.stages[1].can_edit,true);
+  assert.equal(detail.completion_verified,false);
+});
+
 test('minimal Work detail edits a future stage without losing draft, desktop and mobile',async t=>{
   const x=await setup(t),run=begin(x),server=await startControlCenter(x.config,{poll_ms:25}),browser=await chromium.launch({headless:true});
   t.after(async()=>{await browser.close();await server.close()});

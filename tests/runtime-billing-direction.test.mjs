@@ -13,7 +13,7 @@ const key='fixture-key-never-sent-to-provider';
 const environment={OPENAI_API_KEY:key,AGENT_DRIVER_LLM_CLIENT:'codex,claude,api',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude'};
 const runner={async run(r){
   if(r.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
-  if(r.args.join(' ')==='auth status')return {code:0,stdout:'{"loggedIn":true,"authMethod":"claude.ai"}',stderr:''};
+  if(r.args.join(' ')==='auth status')return {code:0,stdout:'{"loggedIn":true,"authMethod":"claude.ai","apiProvider":"firstParty"}',stderr:''};
   return {code:1,stdout:'',stderr:'Weekly usage limit reached'};
 }};
 async function fixture(t){const root=await mkdtemp(join(tmpdir(),'billing-direction-'));t.after(()=>rm(root,{recursive:true,force:true}));return join(root,'models.json');}
@@ -95,5 +95,23 @@ test('runtime contract exhausted API transfers to saved auth model once, never r
     if(authWorks){assert.deepEqual(await model.call('correct','Choose.',{work_id:'work-1'},schema),{ok:true});assert.equal(events.at(-1).target,'codex');assert.equal(events.at(-1).target_model,'saved-codex');}
     else {await assert.rejects(model.call('correct','Choose.',{work_id:'work-1'},schema),/STRUCTURED_MODEL_UNAVAILABLE/);assert.equal(events.at(-1).status,'no_candidate');}
     assert.equal(paid,1);assert.ok(events.every(e=>e.target!=='api'));
+  }
+});
+
+test('runtime contract Claude first-party subscription label never overrides reported API billing',async()=>{
+  for(const apiKeySource of ['ANTHROPIC_API_KEY','apiKeyHelper','unknown-source',false,17]){
+    let invoked=0;
+    const model=new SubscriptionAwareStructuredModel({
+      environment:{...environment,AGENT_DRIVER_LLM_CLIENT:'codex,claude'},subscriptionOnly:true,
+      runner:{async run(r){
+        if(r.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty',apiKeySource}),stderr:''};
+        if(r.executable==='/fixture/claude'){invoked++;throw Error('UNEXPECTED_CLAUDE_API_BILLING');}
+        return runner.run(r);
+      }},
+    });
+    await assert.rejects(model.call('correct','Choose.',{},schema),/STRUCTURED_MODEL_UNAVAILABLE/);
+    assert.equal(invoked,0);
+    const status=(await model.status()).clients.find(c=>c.id==='claude');
+    assert.equal(status.status,'unknown');assert.equal(status.auth,'unknown');
   }
 });

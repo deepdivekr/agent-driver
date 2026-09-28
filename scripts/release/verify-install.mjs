@@ -40,7 +40,7 @@ try{
     // Public release tags may already exist on later CI runs. Do not import
     // the current tag into this disposable candidate mirror or overwrite it.
     await run('git',['clone','--quiet','--no-hardlinks','--no-tags',repo,source]);
-    for(const baseline of ['v0.1.0','v0.1.1'])await run('git',['-C',source,'fetch','--quiet','origin',`refs/tags/${baseline}:refs/tags/${baseline}`]);
+    for(const baseline of ['v0.1.0','v0.1.1','v0.2.0'])await run('git',['-C',source,'fetch','--quiet','origin',`refs/tags/${baseline}:refs/tags/${baseline}`]);
     const ref=await run('git',['rev-parse','HEAD']);
     await run('git',['-C',source,'checkout','--quiet','--detach',ref]);
     await run('git',['-C',source,'tag',tag,ref]);
@@ -48,7 +48,7 @@ try{
     env.AGENT_DRIVER_ALLOW_LOCAL_FIXTURE='1';
   }
   env.AGENT_DRIVER_REPOSITORY_URL=source;
-  for(const scenario of ['upgrade-0.1.0','upgrade-0.1.1','fresh']){
+  for(const scenario of ['upgrade-0.1.0','upgrade-0.1.1','upgrade-0.2.0','fresh']){
     const baseline=scenario.startsWith('upgrade-')?scenario.slice('upgrade-'.length):null;
     const home=join(base,scenario);await mkdir(home);
     const installed=join(home,'.local/share/agent-driver'),state=join(home,'.agent-driver');

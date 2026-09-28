@@ -14,7 +14,7 @@ import {modelSettingsPath,scopedModelSettingsPath,saveModelSettings,readModelSet
 const choice={mode:'subscription',client:'codex',client_models:{codex:'global-code',claude:'global-review',opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'global-api',api_base_url:'',reasoning:'low',jev:'off'};
 const body=(revision,selection=choice,extra={})=>({revision,selection,onboarding_step:3,...extra});
 const secret='fixture-key-not-real-1234567890';
-async function setup(t){const root=await mkdtemp(join(tmpdir(),'coding-models-'));t.after(()=>rm(root,{recursive:true,force:true}));const paths=await prepareLocalConnection(root),config=loadHostConfig(paths.runtimeConfig),path=modelSettingsPath(config);return {root,config,path,coding:scopedModelSettingsPath(path,'coding')}}
+async function setup(t){const root=await mkdtemp(join(tmpdir(),'coding-models-')),disposers=[];t.after(async()=>{for(const dispose of disposers)await dispose();await rm(root,{recursive:true,force:true});});const paths=await prepareLocalConnection(root),config=loadHostConfig(paths.runtimeConfig),path=modelSettingsPath(config);return {root,config,path,coding:scopedModelSettingsPath(path,'coding'),disposers}}
 
 test('runtime unit coding settings inherit by default, override only coding, and return to current global values',async t=>{
  const x=await setup(t);saveModelSettings(x.path,body(0),{});const before=await readFile(x.path,'utf8');assert.equal(scopedModelConfiguration(x.path,'coding',{}).environment.AGENT_DRIVER_CODEX_MODEL,'global-code');
@@ -43,11 +43,11 @@ test('runtime contract coding planner and advice use scoped models while existin
  const x=await setup(t);saveModelSettings(x.path,body(0),{});saveModelSettings(x.coding,body(0,{...choice,client_models:{...choice.client_models,codex:'coding-code'}},{inherit_global:false}),{});
  let release;const gate=new Promise(r=>release=r),seen=[];let blocked=true;
  const model=new ConfiguredStructuredModel(x.path,{}, {subscription:options=>({calls:[],async call(){const result=options.environment.AGENT_DRIVER_CODEX_MODEL;seen.push(result);if(blocked){blocked=false;await gate}return result}})});
- const api=new RuntimeApi(x.config,{swarmModel:model});t.after(async()=>{api.close();await api.drain()});
+ const api=new RuntimeApi(x.config,{swarmModel:model});x.disposers.push(async()=>{api.close();await api.drain()});
  assert.equal(api.coding.model.scope,'coding');assert.equal(api.codingDialog.model.scope,'coding');
  const pending=api.coding.model.call('design','',{},{});saveModelSettings(x.coding,body(1,{...choice,client_models:{...choice.client_models,codex:'coding-new'}},{inherit_global:false}),{});release();assert.equal(await pending,'coding-code');
  assert.equal(await api.codingDialog.model.call('correct','',{},{}),'coding-new');assert.equal(await model.call('design','',{},{}),'global-code');assert.deepEqual(seen,['coding-code','coding-new','global-code']);
- const native=new RuntimeApi(x.config);t.after(async()=>{native.close();await native.drain()});const sampling={test:'sampling'};native.attachClientSampling(sampling);assert.equal(native.coding.model.sampling,sampling);assert.equal(native.codingDialog.model.sampling,sampling);
+ const native=new RuntimeApi(x.config);x.disposers.push(async()=>{native.close();await native.drain()});const sampling={test:'sampling'};native.attachClientSampling(sampling);assert.equal(native.coding.model.sampling,sampling);assert.equal(native.codingDialog.model.sampling,sampling);
 });
 
 test('runtime contract coding API fallback uses coding CLI choice and subscription never falls into paid API',async t=>{
@@ -74,6 +74,33 @@ test('runtime fixture coding settings HTTP preserves global revisions, requires 
  const saved=await(await call('coding/save',{...payload,api_probe_token:probe.probe_token})).json();assert.equal(saved.scope,'coding');assert.equal(saved.inherit_global,false);assert.doesNotMatch(JSON.stringify(saved),new RegExp(secret));assert.equal(readModelSettings(x.path).revision,1);
  assert.equal((await call('save',body(1,choice,{inherit_global:true}))).status,400);
  assert.equal((await call('coding/save',body(1,choice,{inherit_global:true}))).status,200);assert.equal(server.calls(),1);
+});
+
+test('runtime fixture initial API catalog latency cannot drop client model discovery',{timeout:30000},async t=>{
+ const x=await setup(t);saveModelSettings(x.path,body(0,{...choice,mode:'api'},{api_action:'replace',api_key:secret}),{});
+ const server=await serverFor(t,x),browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const page=await browser.newPage();let release,started;const gate=new Promise(r=>release=r),requested=new Promise(r=>started=r);t.after(()=>release());let clientRequests=0;
+ await page.route('**/settings/status',async route=>{const response=await route.fetch(),status=await response.json();await route.fulfill({json:{...status,computer:{kind:'host_configured',connected:true},onboarding_step:2}});});
+ await page.route(/\/settings\/models$/,async route=>{
+  if(route.request().method()==='POST'){started();await gate;return route.fulfill({json:{status:'unavailable',models:[],selected:'global-api'}});}
+  clientRequests++;return route.fulfill({json:{codex:{status:'available',models:[{id:'coding-ui',label:'Coding UI'}]},claude:{models:[]},opencode:{models:[]}}});
+ });
+ await page.goto(server.url+'/settings');await requested;
+ try{assert.equal(clientRequests,1,'Client discovery must complete before an API catalog request can occupy startup');assert.equal(await page.locator('#save-model').isDisabled(),true);}finally{release();}
+ await page.waitForFunction(()=>!busy&&clientsLoaded);
+ await page.locator('#mode').selectOption('subscription');await page.locator('#codex-model').selectOption('coding-ui');
+ assert.equal(await page.locator('#codex-model').inputValue(),'coding-ui');assert.equal(server.calls(),0);
+});
+
+test('runtime fixture failed client catalog is retried on returning to AI settings',{timeout:30000},async t=>{
+ const x=await setup(t);saveModelSettings(x.path,body(0),{});const server=await serverFor(t,x),browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+ const page=await browser.newPage();let requests=0;
+ await page.route('**/settings/status',async route=>{const response=await route.fetch(),status=await response.json();await route.fulfill({json:{...status,computer:{kind:'host_configured',connected:true},onboarding_step:2}});});
+ await page.route(/\/settings\/models$/,route=>++requests===1?route.fulfill({status:503,json:{error:'CATALOG_UNAVAILABLE'}}):route.fulfill({json:{codex:{status:'available',models:[{id:'coding-ui',label:'Coding UI'}]},claude:{models:[]},opencode:{models:[]}}}));
+ await page.goto(server.url+'/settings');await page.waitForFunction(()=>initialized&&!busy&&document.getElementById('notice').textContent==='CATALOG_UNAVAILABLE');
+ assert.equal(await page.evaluate(()=>clientsLoaded),false);
+ await page.locator('[data-step="3"]').click();await page.locator('[data-step="2"]').click();await page.waitForFunction(()=>!busy&&clientsLoaded);
+ await page.locator('#codex-model').selectOption('coding-ui');assert.equal(requests,2);assert.equal(server.calls(),0);
 });
 
 test('runtime fixture coding settings UI persists priority and inheritance on desktop/mobile without model calls',{timeout:60000},async t=>{

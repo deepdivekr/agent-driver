@@ -2,7 +2,7 @@ import {createHash,randomUUID} from 'node:crypto';
 import {mkdir} from 'node:fs/promises';
 import {join,resolve} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
-import {chromium,type Browser,type BrowserContext,type Page} from 'playwright';
+import {type Browser,type BrowserContext,type Page} from 'playwright';
 import {requireCondition} from '../core/contracts.js';
 import {type BrowserGate} from './protocol.js';
 import {dismissHumanConfirmedJavaScriptDialogOverLoopbackRfb,focusSavedPasswordFieldOverLoopbackRfb,hoverSavedPasswordSuggestionOverLoopbackRfb,loopbackRfbDisplayGeometry,loopbackRfbObservationFingerprint,savedPasswordFieldTarget,savedPasswordSuggestionProbeTarget,savedPasswordSuggestionTarget,selectFirstSavedPasswordSuggestionOverLoopbackRfb,type BrowserFieldBox,type BrowserWindowMetrics,type SavedPasswordSuggestionPolicy} from './vm-visual-auth.js';
@@ -129,7 +129,7 @@ export class OwnedPersistentPage {
     await mkdir(this.profileDir,{recursive:true,mode:0o700});await mkdir(this.captureRoot,{recursive:true,mode:0o700});
     if(this.options.recordVideoDir!==undefined)await mkdir(this.options.recordVideoDir,{recursive:true,mode:0o700});
     const recording=this.options.recordVideoDir===undefined?{}:{recordVideo:{dir:this.options.recordVideoDir,...(this.options.recordVideoSize===undefined?{}:{size:this.options.recordVideoSize})}};
-    this.#context=await chromium.launchPersistentContext(this.profileDir,{headless:this.headless,...recording,...(this.options.draftOnly?{serviceWorkers:'block' as const}:{})});
+    this.#context=await (await import('playwright')).chromium.launchPersistentContext(this.profileDir,{headless:this.headless,...recording,...(this.options.draftOnly?{serviceWorkers:'block' as const}:{})});
     if(this.options.draftOnly){
       await this.#context.route('**/*',route=>['GET','HEAD','OPTIONS'].includes(route.request().method())?route.continue():route.abort('blockedbyclient'));
       await this.#context.routeWebSocket('**/*',socket=>socket.close());
@@ -198,7 +198,7 @@ export class OwnedVmCdpPage {
     const target=new URL(plan.url);requireCondition(plan.allowed_origins.includes(target.origin),'ORIGIN_NOT_DELEGATED');
     const started=performance.now();
     await mkdir(this.captureRoot,{recursive:true,mode:0o700});
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     const contexts=this.#browser.contexts();requireCondition(contexts.length===1,'VM_BROWSER_CONTEXT_AMBIGUOUS');
     const context=contexts[0]!;this.#page=await context.newPage();this.#page.setDefaultTimeout(5_000);
     const attached=performance.now(),navigationStarted=performance.now();await this.#page.goto(plan.url,{waitUntil:'domcontentloaded'});requireCondition(new URL(this.#page.url()).origin===target.origin,'TARGET_URL_CHANGED');
@@ -254,7 +254,7 @@ export class OwnedVmCdpPage {
   }
   /** Diagnostic inventory is limited to origins and paths; it never exposes page text, queries, or credentials. */
   async ownedRouteInventory(){
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const routes=this.#browser.contexts().flatMap(context=>context.pages()).map(page=>{
         try {const url=new URL(page.url());return {origin:url.origin,pathname:url.pathname};}
@@ -275,7 +275,7 @@ export class OwnedVmCdpPage {
       requireCondition(/^[a-z][a-z0-9_]{0,63}$/u.test(signal.id),'INVALID_VM_SIGNAL_ID');
       requireCondition(signal.selector.length>0&&signal.selector.length<=500&&!/[\r\n]/u.test(signal.selector),'INVALID_VM_SIGNAL_SELECTOR');
     }
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -293,7 +293,7 @@ export class OwnedVmCdpPage {
    */
   async ownedPageNavigationInventory(origin:string,pathname:string){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_NAVIGATION_TARGET');
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -318,7 +318,7 @@ export class OwnedVmCdpPage {
   /** Like navigation inventory, but also reports visible button/tile labels without exposing handler code or triggering them. */
   async ownedPageInteractiveInventory(origin:string,pathname:string){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_INTERACTIVE_TARGET');
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -344,7 +344,7 @@ export class OwnedVmCdpPage {
   /** Reports only the origin and pathname of frames in the exact agent-owned page. */
   async ownedPageFrameInventory(origin:string,pathname:string){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_FRAME_TARGET');
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -360,7 +360,7 @@ export class OwnedVmCdpPage {
   /** Activates one Pack-reviewed, visible same-origin portal link and returns only its resulting route. */
   async activateReviewedVisibleLink(origin:string,pathname:string,plan:OwnedVmVisibleLinkPlan){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_LINK_TARGET');assertVmVisibleLinkPlan(plan);
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -385,7 +385,7 @@ export class OwnedVmCdpPage {
    */
   async savedPasswordLoginSurface(origin:string,pathname:string,plan:OwnedVmSavedPasswordLoginPlan){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_SAVED_PASSWORD_TARGET');assertVmSavedPasswordLoginPlan(plan);
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -406,7 +406,7 @@ export class OwnedVmCdpPage {
    */
   async probeSavedPasswordSuggestionRows(origin:string,pathname:string,plan:OwnedVmSavedPasswordLoginPlan,vncPort:number){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_SAVED_PASSWORD_TARGET');assertVmSavedPasswordLoginPlan(plan);
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -439,7 +439,7 @@ export class OwnedVmCdpPage {
    */
   async selectSavedPasswordAndSubmit(origin:string,pathname:string,plan:OwnedVmSavedPasswordLoginPlan,vncPort:number){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_SAVED_PASSWORD_TARGET');assertVmSavedPasswordLoginPlan(plan);
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}
@@ -472,7 +472,7 @@ export class OwnedVmCdpPage {
    */
   async submitLoginWithSavedPassword(origin:string,pathname:string,plan:OwnedVmSavedPasswordLoginPlan){
     const expected=new URL(origin);requireCondition(expected.origin===origin&&pathname.startsWith('/'),'INVALID_VM_SAVED_PASSWORD_TARGET');assertVmSavedPasswordLoginPlan(plan);
-    this.#browser=await chromium.connectOverCDP(this.endpoint);
+    this.#browser=await (await import('playwright')).chromium.connectOverCDP(this.endpoint);
     try {
       const matches=this.#browser.contexts().flatMap(context=>context.pages()).filter(page=>{
         try {const current=new URL(page.url());return current.origin===origin&&current.pathname===pathname;}catch{return false;}

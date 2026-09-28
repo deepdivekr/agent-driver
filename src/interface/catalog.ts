@@ -1,4 +1,7 @@
 import {z} from 'zod';
+import {compatibilityWorkflowTools} from '../integrations/workflow-compatibility.js';
+import {fileTools} from '../files/explorer.js';
+import {windowsTools} from '../desktop/windows-workflows.js';
 import {FIXTURE_DRAFT} from '../browser/fixture-capability.js';
 import {terminalStart,terminalSubmit,terminalBound,terminalList,terminalHistory,terminalOutput,terminalHandoff,terminalVerify} from '../terminal/contracts.js';
 import {packTools} from '../packs/contracts.js';
@@ -16,6 +19,9 @@ export const startRequest=z.object({request_id:id,capability:z.literal('fixture.
 const task=z.object({task_id:id}).strict(),empty=z.object({}).strict();
 const notImplemented={implemented:false,readOnly:false};
 export const tools={
+  ...compatibilityWorkflowTools,
+  ...windowsTools,
+  ...fileTools,
   ...workTools,
   runtime_work_import_prompt:{schema:empty,implemented:true,readOnly:true},
   runtime_work_remote_targets:{schema:empty,implemented:true,readOnly:true},
@@ -63,6 +69,7 @@ export const tools={
   runtime_terminal_resume:{schema:terminalBound,implemented:true,readOnly:false},
   runtime_terminal_interrupt:{schema:terminalBound,implemented:true,readOnly:false},
   runtime_browser_session_open:{schema:z.object({request_id:id}).strict(),...notImplemented},
+  runtime_browser_executors:{schema:z.object({probe:z.boolean().default(false),target_id:z.string().regex(/^[a-z][a-z0-9_-]{0,63}$/u).optional()}).strict(),implemented:true,readOnly:true},
   runtime_browser_session_status:{schema:z.object({session_ref:id}).strict(),...notImplemented},
 } as const;
 export const draftManifest={id:FIXTURE_DRAFT.id,version:1,input_schema:z.toJSONSchema(draftInput),effect:'write_external',

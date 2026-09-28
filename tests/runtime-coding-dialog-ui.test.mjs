@@ -53,7 +53,9 @@ test('conversation UI escapes long Codex reply and labels advice separately; cat
   const html=workHtml('safe-nonce'),script=html.match(/<script nonce="safe-nonce">([\s\S]*?)<\/script>/u)?.[1];
   assert.ok(script);
   assert.doesNotThrow(()=>new vm.Script(script));
-  const helpers=script.slice(script.indexOf('function renderCodingAttach'),script.indexOf('function renderDetail'));
+  const helperStart=script.indexOf('function renderCodingAttach'),helperEnd=script.indexOf('let fileActionBusy');
+  assert.ok(helperStart>=0&&helperEnd>helperStart);
+  const helpers=script.slice(helperStart,helperEnd);
   const context={esc:escape,labels:{waiting_user:'사용자 지시 대기',completed:'실행 완료'},attachProjectRef:'demo',attachSessionId:'',codingCatalogProject:'demo',codingCatalog:{sessions:[{id:session,title:'기존 작업',preview:'변경 사항',status:'idle',selectable:true},{id:'22222222-2222-4222-8222-222222222222',title:'진행 중',preview:'',status:'active',selectable:false}]},codingDraft:'',codingReconcileResult:null};
   const attach=vm.runInNewContext(helpers+"\nrenderCodingAttach({suggested_project_ref:'demo',registered_project_refs:['demo','other']})",context);
   assert.match(attach,/기존 작업/u);

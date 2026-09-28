@@ -14,28 +14,29 @@ import {writeLocalHandoff} from '../dist/coding/local-checkpoint.js';
 
 const proposal={title:'코딩 업무',desired_outcome:'등록된 프로젝트의 구현과 검토를 마친다',completion_checks:[{id:'change',result:'코드 변경을 확인한다',evidence:'Git diff와 검증 명령'},{id:'review',result:'독립 검토를 마친다',evidence:'Claude 검토 결과'}],assumptions:[],route:{kind:'pack',pack_family:'coding.orchestrate'},requested_effect:'local_file_write',recurrence:{kind:'once',rule:null},questions:[]};
 const plan={goal:'프로젝트 구현 및 검토',stages:[{id:'implement',actor:'codex',operation:'implement',instruction:'요청된 기능을 main.txt 파일에 구현한다',evidence:'Git diff 및 검사 통과'},{id:'review',actor:'claude',operation:'review',instruction:'Codex 변경분의 품질과 오류를 독립적으로 검토한다',evidence:'구조화된 검토 판정'}],completion_checks:['코드 차이를 확인한다','검토 결과를 확인한다']};
+const gitExecutable=process.platform==='win32'?'git.exe':'/usr/bin/git';
 
-async function setup(t,{write=true,commit=false,selectedPlan=plan,runnerOverride=null,claudeFailure=false,codexFailure=false,claudeMutatesRepo=false}={}){
+async function setup(t,{write=true,commit=false,selectedPlan=plan,runnerOverride=null,claudeFailure=false,codexFailure=false,claudeMutatesRepo=false,invalidCodexReview=false}={}){
   const root=await mkdtemp(join(tmpdir(),'driver-coding-')),repo=join(root,'repo');await mkdir(repo);
   await writeFile(join(repo,'README.md'),'# Fixture\n');await writeFile(join(repo,'main.txt'),'base\n');
-  const git=(...args)=>execFileSync('/usr/bin/git',['-C',repo,...args],{encoding:'utf8'});
+  const git=(...args)=>execFileSync(gitExecutable,['-C',repo,...args],{encoding:'utf8',windowsHide:true});
   git('init','-q');git('config','user.name','Fixture');git('config','user.email','fixture@example.test');git('add','.');git('commit','-qm','base');
   const path=join(root,'host.json');await writeFile(path,JSON.stringify({schema_version:1,project_id:'coding-fixture',caller_ref:'local-agent',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',coding:{projects:[{id:'demo',root:repo,allow_write:write,allow_commit:commit,verify:[]}],model_data_approved:true}}));
   const config=loadHostConfig(path),calls=[];
   const model={calls:[],async call(purpose,instructions,input){this.calls.push({purpose,instructions,input});return structuredClone(input.project_ref?selectedPlan:proposal)}};
   const runner=runnerOverride??{async run(request){
     calls.push({executable:request.executable,args:request.args,stdin:request.stdin});
-    if(request.executable==='/usr/bin/git')return nativeProcessRunner.run(request);
+    if(request.executable===gitExecutable)return nativeProcessRunner.run(request);
     if(request.executable==='/fake/codex'){
       if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
-      if(request.args.includes('--output-schema'))return {code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({approved:true,summary:'Codex reviewed the diff.',issues:[]})}})+'\n',stderr:''};
+      if(request.args.includes('--output-schema'))return {code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(invalidCodexReview?{approved:'not a boolean'}:{approved:true,summary:'Codex reviewed the diff.',issues:[]})}})+'\n',stderr:''};
       if(codexFailure){await writeFile(join(repo,'main.txt'),'partial implementation\n');return {code:1,stdout:'',stderr:'Weekly usage limit reached'};}
       await writeFile(join(repo,'main.txt'),'implemented\n');
       const stdout=[{type:'thread.started',thread_id:'11111111-1111-4111-8111-111111111111'},{type:'item.completed',item:{type:'agent_message',text:'Implemented fixture change.'}},{type:'turn.completed'}].map(value=>JSON.stringify(value)).join('\n')+'\n';
       request.onStdout?.(stdout);return {code:0,stdout,stderr:''};
     }
     if(request.executable==='/fake/claude'){
-      if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai'}),stderr:''};
+      if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};
       if(claudeFailure)return {code:1,stdout:'',stderr:'Authentication expired'};
       if(claudeMutatesRepo)await writeFile(join(repo,'main.txt'),'external concurrent edit\n');
       const id=request.args[request.args.indexOf('--session-id')+1],output=request.stdin.includes('Stage: review')?{approved:true,summary:'No issue found.',issues:[]}:{content:'# Updated fixture\n',summary:'README updated.'};
@@ -44,8 +45,9 @@ async function setup(t,{write=true,commit=false,selectedPlan=plan,runnerOverride
     throw Error('UNEXPECTED_EXECUTABLE');
   }};
   const api=new RuntimeApi(config,{swarmModel:model,coding:{runner,executables:{codex:'/fake/codex',claude:'/fake/claude'}}});
-  t.after(async()=>{api.close();await api.drain();await rm(root,{recursive:true,force:true});});
-  return {api,config,repo,calls,git,model,runner};
+  const runtimes=[api];
+  t.after(async()=>{for(const runtime of runtimes){runtime.close();await runtime.drain();}await rm(root,{recursive:true,force:true});});
+  return {api,config,repo,calls,git,model,runner,runtimes};
 }
 
 test('coding Work binds registered project, persists exact CLI sessions and hands Codex diff to Claude',async t=>{
@@ -172,6 +174,14 @@ test('Claude auth expiry hands a read-only review to the selected Codex model wi
   assert.ok(fallback);assert.deepEqual(fallback.args.slice(0,2),['--model','gpt-5.6-luna']);
 });
 
+test('invalid coding successor output cannot clear the prior session or record a successful handoff',async t=>{
+  const x=await setup(t,{claudeFailure:true,invalidCodexReview:true});
+  const work=await x.api.call('runtime_work_start',{request_id:'invalid-successor',prompt:'demo 프로젝트 구현 후 Claude로 검토해줘'}),run=await x.api.call('runtime_coding_start',{request_id:'invalid-successor',work_id:work.work_id,project_ref:'demo'});
+  const implemented=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:run.revision});
+  const rejected=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:implemented.revision});
+  assert.equal(rejected.status,'failed');assert.equal(rejected.stages[1].status,'failed');assert.ok(rejected.stages[1].session_id);assert.deepEqual(rejected.client_handoffs,[]);assert.equal(x.calls.filter(call=>call.args.includes('--output-schema')).length,1);
+});
+
 test('runtime fixture coding override controls executor models and Claude to Codex handoff without changing global settings',async t=>{
  const x=await setup(t,{claudeFailure:true}),path=modelSettingsPath(x.config),selection={mode:'subscription',client:'claude',client_models:{codex:'global-codex',claude:'global-claude',opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'global-api',api_base_url:'',reasoning:'low',jev:'off'};
  saveModelSettings(path,{revision:0,onboarding_step:2,selection},{});const before=await readFile(path,'utf8');
@@ -209,10 +219,43 @@ test('local Git handoff records the codebase and verified stages without dirtyin
   const reviewed=await x.api.call('runtime_coding_step',{run_id:started.run_id,expected_revision:implemented.revision});
   assert.equal(reviewed.status,'completed');
   const prompt=x.calls.find(call=>call.executable==='/fake/claude').stdin;
-  assert.match(prompt,/Runtime-verified local Git handoff/u);
-  assert.match(prompt,/implement: Implemented fixture change/u);
+  assert.match(prompt,/Bounded Work handoff/u);
+  assert.match(prompt,/"effect_state":"verified"/u);
+  assert.match(prompt,/Implemented fixture change/u);
+  const contextMetrics=x.api.store.workContextDeliveries(x.config.project.id,work.work_id);
+  assert.equal(contextMetrics.length,2);
+  assert.ok(contextMetrics.every(item=>item.resume_result==='stage_succeeded'&&item.legacy_prompt_bytes>0&&item.actual_prompt_bytes>0));
   const final=await readFile(handoff,'utf8');assert.match(final,/review: No issue found/u);
   assert.equal(x.git('status','--porcelain').trim(),'M main.txt');
+});
+
+test('context binds the requested run instead of borrowing a newer run from the same Work',async t=>{
+  const x=await setup(t),work=await x.api.call('runtime_work_start',{request_id:'context-runs',prompt:'demo 프로젝트 구현 후 검토해줘'});
+  const first=await x.api.call('runtime_coding_start',{request_id:'context-first',work_id:work.work_id,project_ref:'demo'});
+  const second=await x.api.call('runtime_coding_start',{request_id:'context-second',work_id:work.work_id,project_ref:'demo'});
+  const context=await x.api.call('runtime_work_context',{work_id:work.work_id,run_id:first.run_id,actor:'reviewer'});
+  assert.equal(context.run.id,first.run_id);
+  assert.equal(context.capsule.core.binding.run_id,first.run_id);
+  const latest=await x.api.call('runtime_work_context',{work_id:work.work_id,actor:'reviewer'});
+  assert.equal(latest.run.id,second.run_id);
+  const other=await x.api.call('runtime_work_start',{request_id:'context-other',prompt:'별도 프로젝트 검토'});
+  await assert.rejects(x.api.call('runtime_work_context',{work_id:other.work_id,run_id:first.run_id,actor:'reviewer'}),/WORK_CONTEXT_RUN_MISMATCH/u);
+  const result=await x.api.call('runtime_coding_step',{run_id:first.run_id,expected_revision:first.revision});
+  assert.equal(result.stages[0].status,'succeeded');
+  const delivered=x.api.store.workContextDeliveries(x.config.project.id,work.work_id).find(item=>item.actor==='coding_executor');
+  assert.equal(delivered.run_id,first.run_id);
+  assert.equal(x.api.store.codingStages(x.config.project.id,second.run_id)[0].status,'pending');
+});
+
+test('context telemetry failure does not overwrite a successful coding stage or replay its effect',async t=>{
+  const x=await setup(t),work=await x.api.call('runtime_work_start',{request_id:'context-log-failure',prompt:'demo 프로젝트 구현 후 검토해줘'});
+  const started=await x.api.call('runtime_coding_start',{request_id:'context-log-failure',work_id:work.work_id,project_ref:'demo'});
+  x.api.store.finishWorkContextDelivery=()=>{throw Error('INJECTED_TELEMETRY_FAILURE');};
+  const result=await x.api.call('runtime_coding_step',{run_id:started.run_id,expected_revision:started.revision});
+  assert.equal(x.api.store.codingStages(x.config.project.id,started.run_id)[0].status,'succeeded');
+  assert.notEqual(result.status,'reconciliation_required');
+  assert.equal(x.api.store.workContextDeliveries(x.config.project.id,work.work_id)[0].resume_result,'unobserved');
+  await assert.rejects(x.api.call('runtime_coding_step',{run_id:started.run_id,expected_revision:started.revision}),/CODING_REVISION_CONFLICT/u);
 });
 
 test('a locally edited handoff file is regenerated from SQLite before the next client receives it',async t=>{
@@ -252,7 +295,7 @@ test('a reopened runtime uses its durable Git checkpoint and never trusts README
   assert.doesNotMatch(await readFile(handoff,'utf8'),new RegExp(syntheticSecret,'u'));
   const implemented=await x.api.call('runtime_coding_step',{run_id:started.run_id,expected_revision:started.revision});
   const reopened=new RuntimeApi(x.config,{swarmModel:x.model,coding:{runner:x.runner,executables:{codex:'/fake/codex',claude:'/fake/claude'}}});
-  t.after(async()=>{reopened.close();await reopened.drain();});
+  x.runtimes.push(reopened);
   assert.equal(reopened.store.codingCheckpoint(x.config.project.id,started.run_id).revision,implemented.revision);
   const reviewed=await reopened.call('runtime_coding_step',{run_id:started.run_id,expected_revision:implemented.revision});
   assert.equal(reviewed.status,'completed');
@@ -281,9 +324,9 @@ test('a change during read-only review is held for reconciliation instead of acc
 
 test('linked local Git worktree writes the handoff to its Git metadata, not to tracked files',async t=>{
   const x=await setup(t),linked=join(x.repo,'..','linked');x.git('worktree','add','--detach',linked);
-  const gitRead=async(root,args)=>execFileSync('/usr/bin/git',['-C',root,...args],{encoding:'utf8'});
+  const gitRead=async(root,args)=>execFileSync(gitExecutable,['-C',root,...args],{encoding:'utf8',windowsHide:true});
   const path=await writeLocalHandoff(linked,'11111111-1111-4111-8111-111111111111','# local handoff\n',gitRead);
-  assert.match(path,/\/\.git\/worktrees\/linked\/agent-driver\/handoffs\//u);
+  assert.match(path.replaceAll('\\','/'),/\/\.git\/worktrees\/linked\/agent-driver\/handoffs\//u);
   assert.equal(await readFile(path,'utf8'),'# local handoff\n');
   assert.equal((await gitRead(linked,['status','--porcelain'])).trim(),'');
 });

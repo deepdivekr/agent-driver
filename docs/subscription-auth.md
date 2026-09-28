@@ -31,18 +31,16 @@ Agent Driver는 로그인 child process의 bounded 상태만 추적한다. devic
 MCP client sampling
   → 같은 OS/PATH의 Codex CLI 구독 로그인
   → Claude Code 구독 로그인
-  → OpenCode에 연결된 공급자
-  → 명시적으로 설정된 API key fallback
   → unavailable
 ```
 
-`AGENT_DRIVER_LLM_CLIENT=claude,opencode,api`처럼 최초 저장 전의 호스트 설정에서 순서를 좁힐 수 있다. 기본값은 `mcp,codex,claude,opencode,cursor,api`다. 관제센터에서 저장한 **구독 방식**은 선택한 클라이언트를 우선하고 다른 연결된 구독 클라이언트를 후보로 둔다. API로 자동 전환하지 않는다. API 방식의 구독 대체도 사용자가 별도로 켠 경우에만 동작한다. 각 CLI의 고정된 읽기 전용 status 명령만 실행하며 인증 파일을 직접 열지 않는다. [모델 선택·인계 계약](client-handoff.md).
+`AGENT_DRIVER_LLM_CLIENT=claude,codex`처럼 최초 저장 전의 호스트 설정에서 순서를 좁힐 수 있다. 코드의 기본 후보 목록은 `mcp,codex,claude,opencode,cursor`이며, 실제 지원 기능과 인증 유형을 통과한 후보만 호출한다. OpenCode의 인증 과금 유형이 불명확하면 자동 구독 후계자로 사용하지 않는다. OpenCode를 직접 우선 선택한 경우에는 그 클라이언트의 설정 공급자를 이용할 수 있다. 관제센터에서 저장한 **구독 방식**은 API로 자동 전환하지 않는다. API 직접 사용은 API 모드 선택 또는 정확히 `AGENT_DRIVER_LLM_CLIENT=api`일 때만 가능하며, API 방식의 구독 대체도 사용자가 별도로 켠 경우에만 동작한다. 각 CLI의 고정된 읽기 전용 status 명령만 실행하며 인증 파일을 직접 열지 않는다. [모델 선택·인계 계약](client-handoff.md).
 
 | client | auth 확인 | 구조화 판단 경로 | 비고 |
 |---|---|---|---|
 | MCP client | MCP capability handshake | `sampling/createMessage`, tools 없음, context 없음 | 연결된 client가 sampling을 지원할 때 최우선 |
 | Codex CLI | `codex login status` | ephemeral, read-only sandbox, output schema | ChatGPT 구독 로그인 사용 |
-| Claude Code | `claude auth status` | print/json schema, tools·hooks·MCP 없음, session 저장 없음 | claude.ai 구독 로그인 사용 |
+| Claude Code | `claude auth status` | print/json schema, tools·hooks·MCP 없음, session 저장 없음 | `apiProvider: firstParty`가 명시된 claude.ai 구독 로그인만 사용. provider 누락·API key/helper·Bedrock·Vertex는 구독으로 인정하지 않음 |
 | OpenCode | `opencode auth list --format json` | `run --format json`, 임시 프로젝트의 모든 permission deny | OpenCode에 연결된 API/OAuth 공급자와 선택 모델 사용 |
 | Cursor Agent | 현재 검증된 명령 없음 | 미지원 | 설치된 공식 status/login 계약을 확인하기 전에는 추측 실행하지 않음 |
 | Hermes | `hermes proxy status` | Agent Driver MCP sampling | proxy OAuth 상태는 진단만 하며 auth store를 읽지 않음 |

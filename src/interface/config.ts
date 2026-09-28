@@ -8,6 +8,9 @@ import {resourceBudgetSchema,type ResourceBudget} from '../resources/budget.js';
 import {storagePolicySchema,type StoragePolicy} from '../storage/budget.js';
 import {packPolicySchema,type PackPolicy} from '../packs/contracts.js';
 import {swarmPolicySchema,type SwarmPolicy} from '../swarm/contracts.js';
+import {windowsExecutorConfigSchema,type WindowsExecutorConfig} from '../desktop/cua-contracts.js';
+import {browserExecutorsSchema,type BrowserExecutors} from '../browser/executor-contracts.js';
+import {legacyWorkflowPolicy,workflowBridgeSchema,type WorkflowBridge} from '../integrations/workflow-contracts.js';
 
 const identifier=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,79}$/);
 const TerminalConfigSchema=z.object({
@@ -47,6 +50,10 @@ export const HostConfigSchema=z.object({
   observability:ObservabilityConfigSchema.optional(),
   coding:CodingConfigSchema.optional(),
   work:WorkConfigSchema.optional(),
+  windows_executor:windowsExecutorConfigSchema.optional(),
+  browser_executors:browserExecutorsSchema.optional(),
+  workflows:legacyWorkflowPolicy.optional(),
+  workflow_bridge:workflowBridgeSchema.optional(),
 }).strict();
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
@@ -60,10 +67,15 @@ export interface HostConfig {
   observability:ObservabilityConfig|null;
   coding:CodingConfig|null;
   work:WorkConfig|null;
+  windowsExecutor?:WindowsExecutorConfig|null;
+  browserExecutors?:BrowserExecutors|null;
+  legacyWorkflows?:Record<string,unknown>|null;
+  workflowBridge?:WorkflowBridge|null;
 }
 export function loadHostConfig(path:string):HostConfig {
   const actual=realpathSync(path);requireCondition(statSync(actual).size<=16_384,'CONFIG_TOO_LARGE');
   const raw=HostConfigSchema.parse(JSON.parse(readFileSync(actual,'utf8')));
+  requireCondition(!raw.workflow_bridge||raw.workflows!==undefined,'WORKFLOW_BRIDGE_POLICY_REQUIRED');
   const worktree=realpathSync(isAbsolute(raw.worktree)?raw.worktree:resolve(dirname(actual),raw.worktree));
   const worktreeStat=statSync(worktree);requireCondition(worktreeStat.isDirectory(),'INVALID_WORKTREE');
   const data=resolve(dirname(actual),raw.data_dir);
@@ -120,6 +132,9 @@ export function loadHostConfig(path:string):HostConfig {
   if(coding){requireCondition(new Set(coding.projects.map(item=>item.id)).size===coding.projects.length,'CODING_PROJECT_DUPLICATE');requireCondition(coding.projects.every(item=>!item.allow_commit||item.allow_write),'CODING_COMMIT_REQUIRES_WRITE');}
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(coding?['coding.orchestrate']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
   return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,coding,work:raw.work??null,
+    windowsExecutor:raw.windows_executor??null,
+    browserExecutors:raw.browser_executors??null,
+    legacyWorkflows:raw.workflows??null,workflowBridge:raw.workflow_bridge??null,
     fingerprint:createHash('sha256').update(JSON.stringify({raw:{...raw,work:undefined},worktree,data,coding,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
 }
 /** Work-definition consent is read from disk on each use so a running MCP server or Control Center sees a new approval without restart. */

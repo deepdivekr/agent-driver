@@ -50,6 +50,7 @@ if(mode==='seed'){console.log(JSON.stringify({seeded:true,model_calls:'injected 
 
 const {Client}=await load('node_modules/@modelcontextprotocol/sdk/dist/esm/client/index.js');
 const {StdioClientTransport}=await load('node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js');
+const {stopMcpService}=await load('dist/interface/mcp-service-manager.js');
 const client=new Client({name:'release-install-probe',version:'1'});
 const transport=new StdioClientTransport({command:process.execPath,args:[join(installed,'dist/cli.js'),'mcp'],env:{...process.env,AGENT_DRIVER_CONNECTION_ROOT:stateRoot},stderr:'pipe'});
 try{
@@ -58,10 +59,19 @@ try{
   const {tools}=await client.listTools();
   assert.ok(tools.some(t=>t.name==='runtime_work_status'));
   for(const name of ['runtime_work_migration_discover','runtime_work_remote_targets','runtime_work_remote_propose','runtime_work_import_scan'])assert.ok(tools.some(t=>t.name===name),name);
-  assert.ok(tools.every(t=>!t.name.startsWith('runtime_workflow_')));
+  assert.deepEqual(tools.filter(t=>t.name.startsWith('runtime_workflow_')).map(t=>t.name).sort(),['runtime_workflow_catalog','runtime_workflow_run','runtime_workflow_status']);
+  const catalog=await client.callTool({name:'runtime_workflow_catalog',arguments:{}});
+  assert.notEqual(catalog.isError,true);
   const health=await client.callTool({name:'runtime_health',arguments:{}});
   assert.notEqual(health.isError,true);
-}finally{await client.close();}
+}finally{
+  await client.close();
+  // Only this disposable home's service, never a user's existing runtime.
+  for(let attempt=0;;attempt++){
+    try{await stopMcpService(paths.runtimeConfig);break;}
+    catch(error){if(error.message!=='MCP_SERVICE_DISCONNECT_CLIENTS_FIRST'||attempt>=30)throw error;await new Promise(r=>setTimeout(r,100));}
+  }
+}
 
 const {startControlCenter}=await load('dist/observability/control-center.js');
 const {chromium}=await load('node_modules/playwright/index.mjs');

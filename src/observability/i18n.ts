@@ -4,6 +4,34 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
+'브라우저 준비':'Browser setup','기본':'Default','선택':'Optional','등록됨':'Registered','점검 전':'Not checked','설치 확인됨':'Installation checked','CLI 설치 필요':'CLI installation needed','설치·실행 확인 필요':'Check installation and running app',
+'기본 전용 브라우저는 내 화면을 빼앗지 않습니다. 별도 브라우저 연결은 아래에서 선택할 수 있습니다.':'The default dedicated browser leaves your screen alone. Other browser connections are optional below.',
+'기본은 Playwright입니다. Aside·Neo는 원할 때만 연결하세요. 사이트 로그인은 업무에 필요할 때 안내합니다.':'Playwright is the default. Connect Aside or Neo only if wanted. Site login is requested when a task needs it.',
+'다른 브라우저 연결 · 선택':'Other browsers · optional','설치 안내 → 앱에서 로그인·CLI 연결 → 연결 확인 → 등록 순서입니다. 연결한 브라우저의 화면을 사용하는 조회 작업에만 적용됩니다.':'Install → sign in and set up the CLI in the app → check connection → register. This connection supports read-only tasks in that browser.',
+'이 브라우저의 화면·로그인 프로필을 조회 작업에 사용하도록 연결합니다.':'Allow read-only tasks to use this browser screen and signed-in profile.',
+'등록하면 새 MCP 연결부터 적용됩니다. 기존 연결은 다시 연결해야 하며, 진행 중 업무는 설정 변경 확인에서 멈출 수 있습니다.':'Registration applies to new MCP connections. Reconnect existing clients; active work may pause on a configuration-change check.',
+'설치 안내 다시 불러오기':'Reload setup guides','연결·로그인 안내':'Connection and login guide','전용 브라우저 다운로드':'Download dedicated browser',
+'기본 백그라운드 브라우저입니다. 브라우저 파일이 없으면 준비 버튼을 누르세요.':'Default background browser. Use the download button if its browser files are missing.',
+'별도 서비스 계정은 필요 없습니다. 사이트 로그인은 업무가 요청할 때 진행합니다.':'No separate service account is needed. Sign in to websites when a task requests it.',
+'사용할 컴퓨터에 Aside를 설치·실행한 뒤 Settings → Developers에서 CLI를 설치하세요.':'Install and run Aside on the execution computer, then install its CLI under Settings → Developers.',
+'Aside의 첫 실행·로그인은 Aside에서 완료하세요. 로컬 연결은 --host local을 사용하며, 사이트 로그인은 별도입니다.':'Complete Aside setup and sign-in inside Aside. The local connection uses --host local; website login is separate.',
+'사용할 컴퓨터에 Neo를 설치·실행하고 로컬 MCP 연결을 켜세요. 기본 주소는 127.0.0.1:9010/mcp입니다.':'Install and run Neo on the execution computer and enable its local MCP connection. The default endpoint is 127.0.0.1:9010/mcp.',
+'필요한 첫 실행·로그인은 Neo에서 완료하세요. Agent Office는 비밀번호나 로그인 토큰을 복사하지 않습니다.':'Complete any setup or sign-in inside Neo. Agent Office does not copy passwords or login tokens.',
+'연결하지 않은 Aside·Neo 없이도 기본 Playwright 업무를 사용할 수 있습니다.':'Default Playwright tasks work without connecting Aside or Neo.',
+'실행기 설정이 바뀌었습니다. MCP를 다시 연결하세요. 기존 업무의 승인·진행 상태는 유지됩니다.':'Executor settings changed. Reconnect MCP. Existing approvals and work progress are preserved.',
+'브라우저 화면·프로필 사용 동의를 확인하세요.':'Confirm permission to use the browser screen and profile.',
+'점검 결과를 표시했습니다. 실제 업무 성공 여부와 사이트 로그인은 별도로 확인합니다.':'Check results displayed. Task success and website login are verified separately.',
+'연결을 등록했습니다. MCP를 다시 연결한 뒤 새 업무에서 사용하세요.':'Connection registered. Reconnect MCP before using it for new work.',
+'Chromium 다운로드 중…':'Downloading Chromium…','브라우저 준비 결과를 확인하세요.':'Check the browser setup result.',
+'브라우저 안내를 불러오지 못했습니다. 다시 불러오기를 누르세요.':'Could not load browser guides. Use Reload setup guides.',
+'에이전트 실행 배정 대기':'Waiting for agent dispatch','업무 정의는 저장됐습니다. 연결된 에이전트가 Pack과 실행기를 호출하면 작업이 시작됩니다.':'The work definition is saved. Execution starts when the connected agent calls the Pack and executor.','에이전트에게 보낼 지시 복사':'Copy instructions for your agent','업무 이어가기 지시':'Instructions to continue this work','연결된 에이전트에게 붙여넣어 주세요. 복사만으로 실행되지는 않습니다.':'Paste this into your connected agent. Copying does not start execution.','지시를 선택했습니다. 복사해서 연결된 에이전트에 붙여넣어 주세요.':'Instructions selected. Copy and paste them into your connected agent.',
+'파일 작업 기록':'File operation records','실행 결과 확인':'Verify execution result','파일 작업':'File operations','파일 작업 확인과 결과':'File approvals and results','파일 정리안':'File organization plan','폴더 확인':'Folder inspection',
+'이 업무에 필요한 폴더 접근':'Folder access for this work','폴더 경로':'Folder path','런타임이 실행되는 컴퓨터의 폴더 경로':'Folder path on the runtime computer','작은 텍스트의 내용 일부도 읽기':'Also read short text excerpts','허용한 내용은 연결된 에이전트에게 전달될 수 있습니다.':'Allowed excerpts may be sent to the connected agent.',
+'정리안을 따로 승인한 후 이동 허용':'Allow moves after separate plan approval','이 폴더 접근 허용':'Allow access to this folder','접근 중인 폴더':'Accessible folder','이 폴더 권한은 다른 업무에서도 재사용됩니다. 해제해도 이미 남긴 실행 기록은 보존됩니다.':'Other work can reuse this folder permission. Revoking it preserves existing execution records.','폴더 접근 해제':'Revoke folder access',
+'정리안 확인':'Review organization plan','이동 결과 확인 중':'Checking move results','파일 이동 완료':'Files moved','복원 결과 확인 중':'Checking restore results','원래 위치로 복원':'Restored to original location','파일 상태 확인 필요':'Check file state','이 정리안 승인하고 이동':'Approve this plan and move files','원래 위치로 되돌리기':'Restore original locations',
+'폴더 권한이 해제되거나 변경됐습니다. 실행 기록만 표시합니다.':'Folder permission was revoked or changed. Only execution records are shown.','중단된 작업입니다. 원본과 대상의 상태를 확인하기 전에는 다시 실행하지 않습니다.':'This operation was interrupted. Check source and destination state before retrying.','최근 정리안 100개의 기록입니다. 위 건수는 전체 누계가 아닙니다.':'Showing the latest 100 plans. These counts are not lifetime totals.',
+'실행한 이동·복원은 당시 파일 내용의 해시를 대조한 기록입니다. 업무 전체의 완료 여부와는 구분합니다.':'Executed moves and restores have hash checks recorded at execution time. This does not establish completion of the entire work.','기록 새로고침':'Refresh records','폴더 접근을 허용했습니다. 에이전트가 이 업무를 이어갈 수 있습니다.':'Folder access allowed. The agent can continue this work.','폴더 접근을 해제했습니다. 기존 실행 기록은 남아 있습니다.':'Folder access revoked. Existing execution records are retained.','일부 작업의 확인이 필요합니다. 결과를 확인하세요.':'Some operations need inspection. Check the results.','파일을 원래 위치로 복원했습니다.':'Files restored to their original locations.','승인한 정리안을 실행했습니다.':'Executed the approved organization plan.',
+'관측 결과를 바탕으로 다음 작업 결정':'Choose the next action from observed evidence','폴더 접근을 허용하면 연결된 에이전트가 계속 진행':'The connected agent continues once folder access is allowed','일시정지하면 다음 파일 이동 승인이 차단됩니다. 이미 시작한 이동은 완료·확인 후 결과를 남깁니다.':'Pausing prevents new move approvals. A started move finishes verification and records its result.','최근 수정':'Recently modified','바로가기':'Shortcut','앱·프로젝트 파일':'App or project file','대용량':'Large file',
 '전체':'All','확인 필요':'Needs you','진행 중':'Running','대기':'Queued','완료':'Done','검증 완료':'Verified','종료된 업무':'Closed work','가져오기':'Import','사이트 로그인':'Site login','연결 및 설정':'Connections & settings','메뉴':'Menu',
 '닫기':'Close','설명':'About','설명 보기':'Show explanation','저장':'Save','다음':'Next','다시 확인':'Check again','다시 시도':'Retry','보드':'Board','목록':'List','보기 방식':'View','업무 검색':'Search work',
 '전체 업무':'All work','업무 상세':'Work detail','업무 현황':'Work','새 업무 맡기기':'Assign new work','한 줄로 어떤 업무를 맡길까요?':'What should the agent do? One line is enough.','업무 접수':'Submit',
@@ -153,6 +181,7 @@ const EN:Record<string,string>={
 };
 /** Ordered regex rules for text assembled from numbers or names. */
 const RULES:Array<[string,string]>=[
+['^(Playwright|Aside|BrowserOS Neo) 연결 확인$','Check $1 connection'],['^(Aside|BrowserOS Neo) 연결 등록$','Register $1 connection'],['^(Playwright|Aside|BrowserOS Neo) 확인 중…$','Checking $1…'],
 ['^(\\d+)개$','$1'],['^(\\d+)건$','$1'],['^(\\d+)분 전$','$1m ago'],['^(\\d+)시간 전$','$1h ago'],['^(\\d+)일 전$','$1d ago'],
 ['^사이트 로그인 (\\d+)개 필요$','Site login · $1 needed'],['^실행 이력 (\\d+)건$','Run history · $1'],['^최근 변경 (\\d+)건$','Recent changes · $1'],['^클라이언트 인계 (\\d+)건$','Client handoffs · $1'],
 ['^근거 (\\d+)건 보기$','Show evidence · $1'],['^미확인 (\\d+)건$','Unknown · $1'],['^완료 조건 (\\d+)개$','Completion checks · $1'],['^확인된 완료 조건 (\\d+)개$','Confirmed completion checks · $1'],['^확인된 단계 (\\d+)개 · 제안 (\\d+)개$','Confirmed steps $1 · suggestions $2'],

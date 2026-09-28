@@ -114,7 +114,10 @@ async function launchPersistent(root,port){
   const child=spawn(chromium.executablePath(),['--headless=new','--no-sandbox','--disable-gpu','--no-first-run','--disable-background-networking','--disable-component-update',`--remote-debugging-port=${port}`,`--user-data-dir=${root}`,'about:blank'],{stdio:['ignore','ignore','pipe']});
   let diagnostics='',probe='unobserved';child.stderr.on('data',chunk=>{diagnostics=(diagnostics+chunk.toString()).slice(-8000);});
   const deadline=Date.now()+30_000;
-  while(Date.now()<deadline){if(child.exitCode!==null)throw Error('FIXTURE_BROWSER_EXIT: '+diagnostics);try{const response=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(500)});if(response.ok)return child;probe='HTTP '+response.status;}catch(error){probe=String(error);}await delay(100);}await stop(child);throw Error('FIXTURE_BROWSER_TIMEOUT: '+probe+' '+diagnostics);
+  // DevTools can need over a second to serve discovery on a busy host. Aborting
+  // every request at 500 ms can reject a healthy browser for the entire window.
+  // Preserve the overall 30 s deadline, including each individual probe.
+  while(Date.now()<deadline){if(child.exitCode!==null)throw Error('FIXTURE_BROWSER_EXIT: '+diagnostics);try{const response=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(Math.max(1,Math.min(5000,deadline-Date.now())))});if(response.ok)return child;probe='HTTP '+response.status;}catch(error){probe=String(error);}await delay(100);}await stop(child);throw Error('FIXTURE_BROWSER_TIMEOUT: '+probe+' '+diagnostics);
 }
 async function stop(child){if(child.exitCode!==null||child.signalCode!==null)return;const closed=once(child,'exit');if(!child.kill('SIGTERM'))return;const forced=setTimeout(()=>child.kill('SIGKILL'),2000);try{await closed;}finally{clearTimeout(forced);}}
 async function gracefulStop(child,port){const closed=once(child,'exit'),browser=await chromium.connectOverCDP(`http://127.0.0.1:${port}`),session=await browser.newBrowserCDPSession();await session.send('Browser.close').catch(()=>{});await closed;}
