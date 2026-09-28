@@ -1,0 +1,552 @@
+{
+  "scene": "scene.js",
+  "meta": {
+    "name": "agent-office",
+    "tagline": [
+      "설치 한 줄, 연결 네 단계, 한 줄로 첫 업무 접수까지.",
+      "AI 에이전트의 업무를 내 컴퓨터에서 이어가는 로컬 MCP 서버"
+    ],
+    "counterLabel": "",
+    "stepLabel": "STEP",
+    "footerLeft": "github.com/deepdivekr/agent-office",
+    "footerRight": "v0.3.1  /  한국어 모드  /  예시 업무",
+    "introSeconds": 0,
+    "rail": {
+      "title": "첫 실행",
+      "active": "진행 중",
+      "items": [
+        {
+          "label": "설치",
+          "sub": "v0.3.1 · 전용 런타임",
+          "shot": 0,
+          "at": 6.1
+        },
+        {
+          "label": "에이전트 연결",
+          "sub": "Claude Code · MCP 등록됨",
+          "shot": 1,
+          "at": 3.3
+        },
+        {
+          "label": "로컬 실행",
+          "sub": "방해하지 않는 모드",
+          "shot": 2,
+          "at": 2.5
+        },
+        {
+          "label": "AI 연결",
+          "sub": "구독 · Claude Code",
+          "shot": 3,
+          "at": 4.9
+        },
+        {
+          "label": "Jev · 선택",
+          "sub": "사용 안 함 · LLM 판단",
+          "shot": 3,
+          "at": 6.7
+        },
+        {
+          "label": "첫 업무 접수",
+          "sub": "research.search · 3단계",
+          "shot": 4,
+          "at": 5.9
+        },
+        {
+          "label": "에이전트 이어받기",
+          "sub": "01 단계 진행 중",
+          "shot": 5,
+          "at": 4.0
+        }
+      ]
+    },
+    "logTitles": {
+      "setup": "연결 작업 기록",
+      "work": "업무 기록"
+    },
+    "logLive": "실시간 연결됨",
+    "terminalTitle": "ubuntu@ubuntu: ~ — Ubuntu 24.04 LTS",
+    "settingsUrl": "127.0.0.1:45657/···/settings",
+    "workUrl": "127.0.0.1:45657/···/work",
+    "detailUrl": "127.0.0.1:45657/···/work/3f2c71a0",
+    "lang": "KO",
+    "settings": {
+      "title": "연결 및 설정",
+      "flow": [
+        {
+          "title": "mcp client",
+          "sub": "claude code · codex"
+        },
+        {
+          "title": "agent-office mcp",
+          "sub": "stdio · pack plan"
+        },
+        {
+          "title": "LOCAL",
+          "sub": "no cloud relay"
+        }
+      ],
+      "tabs": [
+        "에이전트",
+        "로컬 실행",
+        "AI",
+        "Jev"
+      ]
+    },
+    "work": {
+      "title": "전체 업무",
+      "placeholder": "한 줄로 어떤 업무를 맡길까요?",
+      "button": "업무 접수",
+      "deep": "심화 · 결과에 중요한 조건을 먼저 선택",
+      "import": "기존 업무 가져오기",
+      "columns": [
+        {
+          "label": "확인 필요",
+          "color": "human"
+        },
+        {
+          "label": "진행 중",
+          "color": "acc"
+        },
+        {
+          "label": "대기",
+          "color": "dim"
+        },
+        {
+          "label": "검증 완료",
+          "color": "ok"
+        }
+      ],
+      "defining": "업무 정의 중",
+      "cardTitle": "3사 공식 발표 비교표",
+      "cardPill": "실행 대기",
+      "cardFoot": "접수됨",
+      "cardAge": "방금",
+      "packsTitle": "Pack family 9종 · 업무의 출발점",
+      "packsNote": "LLM이 요청을 구조화",
+      "packs": [
+        {
+          "name": "검색",
+          "note": "조사·출처 비교",
+          "id": "research.search"
+        },
+        {
+          "name": "포털 수집",
+          "note": "조회·다운로드",
+          "id": "portal.collect"
+        },
+        {
+          "name": "폼 작성·제출",
+          "note": "제출마다 승인",
+          "id": "form.draft-submit"
+        },
+        {
+          "name": "기록 수정",
+          "note": "수정마다 승인",
+          "id": "record.update"
+        },
+        {
+          "name": "받은함 분류",
+          "note": "전송 금지",
+          "id": "inbox.triage"
+        },
+        {
+          "name": "모니터링",
+          "note": "변화 감지·알림",
+          "id": "monitor.watch"
+        },
+        {
+          "name": "파일 처리",
+          "note": "정리·변환·통합",
+          "id": "file.pipeline"
+        },
+        {
+          "name": "후보 선택",
+          "note": "결제·예약 확정 금지",
+          "id": "choose.stage"
+        },
+        {
+          "name": "코딩 오케스트레이션",
+          "note": "CLI 세션 지시·검토",
+          "id": "coding.orchestrate"
+        }
+      ],
+      "pick": 0
+    },
+    "detail": {
+      "title": "업무 상세",
+      "back": "← 업무 목록",
+      "workLabel": "WORK",
+      "workId": "#3F2C71A0",
+      "statusBefore": "실행 대기",
+      "statusAfter": "진행 중",
+      "packLabel": "pack",
+      "packNote": "read-only",
+      "checks": [
+        "완료 조건 · 세 회사의 공식 발표를 출처 링크와 함께 비교합니다.",
+        "완료 조건 · 허용된 범위 안에서 작업합니다."
+      ],
+      "planTitle": "진행 단계",
+      "steps": [
+        "출처와 범위 확인",
+        "공식 발표 수집",
+        "비교표 작성 · 출처 표기"
+      ],
+      "stepWait": "계획 단계 · 대기",
+      "stepRun": "진행 중",
+      "unassigned": "아직 배정되지 않음",
+      "assigned": "Claude Code · research.search",
+      "controlTitle": "작업 제어",
+      "pause": "일시정지",
+      "waitTitle": "에이전트 실행 배정 대기",
+      "waitBody": "업무 정의는 저장됐습니다. 연결된 에이전트가 Pack과 실행기를 호출하면 작업이 시작됩니다.",
+      "runTitle": "Claude Code가 이어받았습니다",
+      "runBody": "Pack과 전용 브라우저로 01 단계를 실행합니다. 진행·중단 이유·인계는 여기에 기록됩니다.",
+      "jevLine": "Jev 판단 · 사용 안 함",
+      "historyBefore": "실행 이력 0건",
+      "historyAfter": "실행 이력 1건",
+      "footer": "proposal is not permission · snapshot approval · independent readback"
+    }
+  },
+  "logs": [
+    {
+      "shot": 0,
+      "at": 6.9,
+      "log": "setup",
+      "state": "run",
+      "area": "설치",
+      "text": "$ agent-office connect"
+    },
+    {
+      "shot": 0,
+      "at": 7.15,
+      "log": "setup",
+      "state": "ok",
+      "area": "설치",
+      "text": "WSL/Linux 실행 환경과 Agent Office 설치를 확인했습니다."
+    },
+    {
+      "shot": 0,
+      "at": 7.4,
+      "log": "setup",
+      "state": "ok",
+      "area": "설치",
+      "text": "로컬 관제센터를 시작했습니다."
+    },
+    {
+      "shot": 1,
+      "at": 3.3,
+      "log": "setup",
+      "state": "ok",
+      "area": "에이전트",
+      "text": "Claude Code MCP 등록 완료 · 1.8초"
+    },
+    {
+      "shot": 2,
+      "at": 2.5,
+      "log": "setup",
+      "state": "ok",
+      "area": "로컬 실행",
+      "text": "로컬 실행 연결을 승인했습니다."
+    },
+    {
+      "shot": 3,
+      "at": 4.9,
+      "log": "setup",
+      "state": "ok",
+      "area": "AI",
+      "text": "구독 AI 설정을 저장했습니다."
+    },
+    {
+      "shot": 3,
+      "at": 6.7,
+      "log": "setup",
+      "state": "ok",
+      "area": "Jev",
+      "text": "Jev 없이 LLM 판단으로 진행하도록 저장했습니다."
+    },
+    {
+      "shot": 4,
+      "at": 3.7,
+      "log": "work",
+      "state": "ok",
+      "area": "업무",
+      "text": "업무를 접수했습니다. 실행 배정은 연결된 에이전트가 이어갑니다."
+    },
+    {
+      "shot": 4,
+      "at": 5.9,
+      "log": "work",
+      "state": "acc",
+      "area": "업무",
+      "text": "업무 정의 · research.search · 완료 조건 2개 · 계획 3단계"
+    },
+    {
+      "shot": 5,
+      "at": 4.0,
+      "log": "work",
+      "state": "acc",
+      "area": "실행",
+      "text": "Claude Code가 research.search를 호출했습니다 · 01 단계 시작"
+    }
+  ],
+  "shots": [
+    {
+      "name": "install",
+      "kind": "install",
+      "title": "설치 한 줄",
+      "sec": 8.6,
+      "intro": 2.5,
+      "who": "claude code",
+      "session": "claude code  ·  ~/projects",
+      "prompt": "github.com/deepdivekr/agent-office 설치하고 MCP로 연결해줘",
+      "reply": "● 설치 스크립트를 실행합니다",
+      "command": "$ curl -fsSL …/agent-office/v0.3.1/install.sh | bash",
+      "prefix": "[agent-office]",
+      "lines": [
+        {
+          "text": "Node.js 22.22.0 준비"
+        },
+        {
+          "text": "Agent Office 내려받기"
+        },
+        {
+          "text": "npm 11.11.0 준비"
+        },
+        {
+          "text": "의존성 설치"
+        },
+        {
+          "text": "Agent Office 빌드"
+        },
+        {
+          "text": "전용 Chromium 준비"
+        },
+        {
+          "text": "전용 Chromium 실행 확인"
+        },
+        {
+          "text": "설치 완료: ~/.local/bin/agent-office",
+          "kind": "ok"
+        },
+        {
+          "text": "관제센터 시작"
+        }
+      ],
+      "json": [
+        "{\"status\":\"control_center_ready\",",
+        " \"connection\":\"awaiting_local_approval\"}"
+      ],
+      "chips": [
+        {
+          "text": "전용 Node.js 22.22.0",
+          "line": 0
+        },
+        {
+          "text": "전용 Chromium",
+          "line": 6
+        },
+        {
+          "text": "관리자 권한 자동 사용 없음",
+          "line": 7
+        }
+      ],
+      "chipsTitle": "홈 디렉터리 안에만 설치"
+    },
+    {
+      "name": "agents",
+      "kind": "agents",
+      "title": "에이전트 연결",
+      "sec": 7.2,
+      "tab": 0,
+      "push": [
+        1.4,
+        4.6
+      ],
+      "heading": "에이전트 연결",
+      "sub": "업무를 맡길 앱을 연결하세요. 여기서 설치·로그인·MCP 등록까지.",
+      "runtime": "Agent Office 런타임",
+      "runtimeBadge": "설치됨 · MCP 서버 준비됨",
+      "rows": [
+        {
+          "name": "Codex",
+          "badge": "설치 필요",
+          "button": "Codex 설치"
+        },
+        {
+          "name": "Claude Code",
+          "badge": "MCP 등록 필요",
+          "badgeAfter": "MCP 등록됨",
+          "button": "Claude Code에 MCP 등록",
+          "busy": "등록 중…",
+          "done": "등록됨",
+          "note": "로그인 확인됨 · MCP를 연결하면 준비가 끝납니다.",
+          "noteAfter": "stdio 시작 명령 저장 · agent-office mcp",
+          "target": true
+        },
+        {
+          "name": "OpenCode",
+          "badge": "설치 필요",
+          "button": "OpenCode 설치"
+        },
+        {
+          "name": "Cursor CLI",
+          "badge": "설치 필요",
+          "button": "Cursor CLI 설치"
+        },
+        {
+          "name": "Hermes",
+          "badge": "설치 필요",
+          "button": "Hermes 설치"
+        }
+      ],
+      "actions": [
+        "다시 확인",
+        "다음"
+      ],
+      "hint": "앱 하나를 설치하고 MCP를 등록하세요."
+    },
+    {
+      "name": "runtime",
+      "kind": "runtime",
+      "title": "로컬 실행",
+      "sec": 6.6,
+      "tab": 1,
+      "push": [
+        2.8,
+        5.4
+      ],
+      "heading": "로컬 실행",
+      "sub": "기본 전용 브라우저는 내 화면을 빼앗지 않습니다.",
+      "runtime": "전용 작업 환경",
+      "badgeBefore": "승인 전",
+      "badgeAfter": "연결됨",
+      "mine": {
+        "title": "내 화면",
+        "note": "데스크톱·탭·클립보드 접근 없음"
+      },
+      "dedicated": {
+        "title": "전용 Chromium",
+        "note": "백그라운드에서 업무 실행",
+        "ready": "준비됨"
+      },
+      "options": [
+        {
+          "name": "방해하지 않는 모드",
+          "badge": "기본 · 사용 가능",
+          "color": "ok"
+        },
+        {
+          "name": "네이티브 Windows 앱 제어",
+          "badge": "실험 기능",
+          "color": "warn"
+        },
+        {
+          "name": "Aside · Neo 브라우저",
+          "badge": "선택 · 조회 전용",
+          "color": "dim"
+        }
+      ],
+      "button": "로컬 실행 승인",
+      "next": "다음"
+    },
+    {
+      "name": "ai",
+      "kind": "ai",
+      "title": "AI 연결 · Jev",
+      "sec": 9.0,
+      "tab": 2,
+      "jevAt": 5.6,
+      "push": [
+        1.9,
+        4.4
+      ],
+      "heading": "AI 연결",
+      "note": "구독 한도를 소진해도 유료 API로 자동 전환하지 않습니다.",
+      "modeLabel": "연결 방식",
+      "modes": [
+        "구독 사용",
+        "API 키 사용",
+        "OpenAI 호환 서버"
+      ],
+      "client": "구독 클라이언트",
+      "clientName": "Claude Code",
+      "clientBadge": "로그인됨",
+      "flowTitle": "사용량이 소진되면",
+      "from": "구독 · Claude Code",
+      "handoff": {
+        "title": "다른 구독 연결",
+        "label": "허용 시 인계"
+      },
+      "paid": {
+        "title": "유료 API",
+        "label": "자동 전환 없음"
+      },
+      "consent": "업무 내용을 선택한 AI로 보내 정의·계획하도록 허용",
+      "actions": [
+        "저장",
+        "다음"
+      ],
+      "jev": {
+        "heading": "Jev 판단",
+        "badge": "선택사항",
+        "sub": "꺼도 AI와 코드로 업무를 진행할 수 있습니다.",
+        "options": [
+          {
+            "title": "사용 안 함",
+            "sub": "LLM과 코드로 판단"
+          },
+          {
+            "title": "Jev 연결",
+            "sub": "API 키 · 비용 발생 가능"
+          }
+        ],
+        "planeTitle": "판단 담당",
+        "plane": [
+          {
+            "id": "code",
+            "color": "cool",
+            "note": "정확한 실행"
+          },
+          {
+            "id": "jev",
+            "color": "acc",
+            "note": "꺼짐",
+            "off": true
+          },
+          {
+            "id": "llm",
+            "color": "alt",
+            "note": "계획·재계획"
+          },
+          {
+            "id": "human",
+            "color": "human",
+            "note": "승인·로그인"
+          }
+        ],
+        "doneTitle": "연결 완료",
+        "doneBody": "이제 업무 현황에서 한 줄로 업무를 맡기면 됩니다.",
+        "doneButton": "업무 현황으로"
+      }
+    },
+    {
+      "name": "intake",
+      "kind": "intake",
+      "title": "첫 업무 접수",
+      "sec": 8.2,
+      "intro": 2.9,
+      "request": "세 회사의 공식 발표를 조사해서 출처가 있는 비교표를 만들어줘"
+    },
+    {
+      "name": "detail",
+      "kind": "detail",
+      "title": "업무 상세",
+      "sec": 8.6,
+      "push": [
+        0.2,
+        2.9
+      ],
+      "request": "세 회사의 공식 발표를 조사해서 출처가 있는 비교표를 만들어줘"
+    }
+  ]
+}

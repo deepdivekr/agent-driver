@@ -11,3 +11,4 @@ tests/evidence/
 artifacts/
 *:Zone.Identifier
 .public-export*
+docs/motion/*/out/
