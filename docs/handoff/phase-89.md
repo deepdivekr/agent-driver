@@ -29,7 +29,13 @@ shared-process start/stop/restart. Evidence:
 `tests/evidence/runtime-tests-2026-09-28T13-26-38-190Z.json`.
 
 Final quick regression, four install/upgrade scenarios and remote CI/publication
-are pending. No tag/release/main update yet. The existing open PR29 is not
+were pending at the first commit. All four real install scenarios subsequently
+passed on candidate 5a30c5c; receipt:
+`tests/evidence/release-install/2026-09-28T13-31-44.468Z.json`.
+Initial GitHub CI 36430504154/36430499776 failed before tests because three older
+ledger entries still referenced ignored tests/report.json. Their shipped phase
+records and digest summaries remain the public evidence; the local report is
+not deleted or published. No tag/release/main update yet. The existing open PR29 is not
 silently merged; its unreviewed README/UI/auth changes remain separate.
 
 ## Resume

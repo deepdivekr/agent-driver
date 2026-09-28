@@ -371,7 +371,6 @@
     "status": "done",
     "evidence": [
       "docs/validation/v0.3.0-history.json",
-      "tests/report.json",
       "docs/handoff/phase-82.md"
     ],
     "note": "Repaired minimized capture diagnostics, dropped checkbox state, invented first context, truthful observation waits, verified UIA repeat guard and omitted candidate evidence. Full quick 900/900 passed before final candidate enrichment; final build plus all affected consumer tests 158/158 passed with stable fingerprints, followed by real native acceptance and OCR probe. Historical failures preserved; long soak excluded; source/staging only, not an installed-host upgrade or release.",
@@ -442,7 +441,6 @@
     "status": "done",
     "evidence": [
       "docs/validation/v0.3.0-history.json",
-      "tests/report.json",
       "docs/handoff/phase-81.md"
     ],
     "note": "Final build and quick 890/890 PASS, 0 BLOCKED_ENV/NOT_RUN, stable input fingerprints; no long soak. Real subscription/native first and repeat passed, followed by final-build fixture-model native correctness and expected DPI-refusal acceptance. Initial failures preserved separately. Controlled canvas is not all-app coverage; no message send, installed-host replacement or release.",
@@ -551,8 +549,7 @@
     "status": "done",
     "evidence": [
       "docs/handoff/phase-79.md",
-      "docs/owned-windows-executor.md",
-      "tests/report.json"
+      "docs/owned-windows-executor.md"
     ],
     "note": "Documented scoped prototype, measured operations, preserved failures and native-vs-contract evidence; no private chat data published. Ledger verified 51 RQs and diff check passed; owned processes closed, user draft preserved. No commit or release."
   },
