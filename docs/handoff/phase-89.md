@@ -38,6 +38,28 @@ records and digest summaries remain the public evidence; the local report is
 not deleted or published. No tag/release/main update yet. The existing open PR29 is not
 silently merged; its unreviewed README/UI/auth changes remain separate.
 
+## Final-candidate follow-up
+
+Local quick finished 999/1000 checks: only the release-metadata contract failed
+because docs/first-run.md still linked to the previous installer. Input integrity
+passed. Initial local receipt:
+`tests/evidence/runtime-tests-2026-09-28T13-31-38-769Z.json`.
+GitHub run 36431024929 caught the same documentation defect.
+The link is corrected without weakening the test.
+
+The final review also tightened Claude's subscription classifier: even a
+firstParty/claude.ai status cannot override a reported API-key/helper source.
+Unknown nonempty source types remain unverified; no CLI invocation follows.
+This does not add support for unreviewed auth methods from PR29.
+
+Final build and focused authentication/continuity/release checks: 64/64 PASS
+(63 cases plus input integrity), zero BLOCKED_ENV/NOT_RUN.
+`tests/evidence/runtime-tests-2026-09-28T13-56-45-827Z.json`.
+Production dependency audit reports zero vulnerabilities.
+The shipped-source ledger passes without local ignored files.
+Final all-suite and four-scenario installation confirmation is required on
+the final GitHub candidate and again on main before automatic release.
+
 ## Resume
 
 Read docs/release-readiness-v0.3.0.md, scripts/release/verify-install.mjs,

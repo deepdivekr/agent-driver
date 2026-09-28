@@ -36,5 +36,18 @@ credentials and databases are not deployment targets.
 
 ## Candidate evidence
 
-Pending final candidate checks. Exact results and publication references are
-recorded in [Phase89 handoff](handoff/phase-89.md).
+- Build, dependency audit (zero vulnerabilities), public boundary (534 files),
+  and clean-source ledger (97 requirements) passed.
+- Owned shared-service lifecycle/publication checks: 10/10 PASS.
+- Real installation and upgrades: four of four scenarios passed. Original Work
+  IDs, model settings and configuration bytes were preserved.
+- Initial local quick: 999/1000; only the stale first-run installer link failed.
+  The failed receipt is retained. The link is corrected.
+- Final affected auth/continuity/release tests: 64/64 PASS, including the added
+  API-billing-source rejection and input integrity.
+
+These local counts are not a substitute for final all-suite validation.
+The public release workflow runs the full quick suite and all four installation
+scenarios before it can publish from main. See [GitHub Actions](https://github.com/deepdivekr/agent-driver/actions/workflows/runtime.yml)
+for the exact tagged commit, and [Phase89 handoff](handoff/phase-89.md) for retained
+failures and evidence scope. Long soak is excluded.

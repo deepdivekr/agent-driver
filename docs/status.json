@@ -1,32 +1,45 @@
 {
   "RQ-799": {
-    "status": "partial",
+    "status": "done",
     "evidence": [
-      "prompts/phase-89-public-release.md"
+      "docs/release-readiness-v0.3.0.md",
+      "docs/handoff/phase-89.md"
     ],
-    "note": "Finish public scope and remote/source audit before publication."
+    "note": "Supported Ubuntu/WSL scope distinguished from native desktop/optional browser limitations; public tree audited, unrelated PR29 and private installations preserved."
   },
   "RQ-800": {
-    "status": "not_run",
-    "evidence": [],
-    "note": "Prepare concise bilingual README and aligned v0.3.0 installer/release notes."
+    "status": "done",
+    "evidence": [
+      "README.md",
+      "README.ko.md",
+      "docs/first-run.md",
+      "docs/releases/v0.3.0.md",
+      "tests/runtime-release-metadata.test.mjs"
+    ],
+    "note": "Concise bilingual guides and current installer/package version align at v0.3.0; stale first-run link repaired with original failing check retained."
   },
   "RQ-801": {
-    "status": "not_run",
-    "evidence": [],
-    "note": "Freeze candidate then run quick and clean-install/upgrade gates without soak."
+    "status": "partial",
+    "evidence": [
+      "docs/release-readiness-v0.3.0.md",
+      "docs/handoff/phase-89.md"
+    ],
+    "note": "Local real installs 4/4 and final affected tests 64/64 passed; initial quick 999/1000 documentation failure retained. Final all-suite/install CI on the exact candidate must pass before merge/release."
   },
   "RQ-802": {
-    "status": "not_run",
-    "evidence": [],
-    "note": "Publish only after required candidate checks pass."
+    "status": "partial",
+    "evidence": [
+      "docs/handoff/phase-89.md"
+    ],
+    "note": "PR30 published with exact source-tree comparison. Await final CI, merge, tagged release and asset verification; no existing release overwritten."
   },
   "RQ-803": {
     "status": "partial",
     "evidence": [
-      "prompts/phase-89-public-release.md"
+      "docs/validation/v0.3.0-history.json",
+      "docs/handoff/phase-89.md"
     ],
-    "note": "Preserve existing receipts and private installation; append final release evidence."
+    "note": "Raw private receipts remain local; historical failures and CI failures preserved. Append final publication evidence after the immutable release exists."
   },
   "RQ-795": {
     "status": "done",
