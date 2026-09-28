@@ -16,7 +16,7 @@ const receiptSchema=z.object({format:z.literal(1),registrations:z.partialRecord(
 type Receipts=z.infer<typeof receiptSchema>;
 export interface McpClientRegistrationView {id:McpRegistrationClient;installed:boolean;registration:'registered'|'not_registered'|'unavailable'|'conflict'|'unknown';automatic:boolean;reason:string;restart_required:boolean;}
 export interface WindowsMcpBridge {command:'wsl.exe';args:string[];registration:'manual_unverified';}
-export interface McpRegistrationView {agent_driver:{installed:true;mcp_command:'agent-driver mcp'};clients:McpClientRegistrationView[];registered_count:number;windows_bridge?:WindowsMcpBridge;credentials_exposed:false;}
+export interface McpRegistrationView {agent_driver:{installed:true;mcp_command:'agent-office mcp'};clients:McpClientRegistrationView[];registered_count:number;windows_bridge?:WindowsMcpBridge;credentials_exposed:false;}
 
 function entrypoint(){return resolve(fileURLToPath(new URL('../cli.js',import.meta.url)));}
 /** Windows desktop MCP clients can launch the same WSL stdio server without a shell or credential copy. */
@@ -65,7 +65,7 @@ export class McpRegistrationController{
       clients.push({id,installed:present,registration,automatic:present,reason,restart_required:registration==='registered'});
     }
     const windows_bridge=windowsMcpBridge(this.environment);
-    return {agent_driver:{installed:true,mcp_command:'agent-driver mcp'},clients,registered_count:clients.filter(item=>item.registration==='registered').length,...(windows_bridge?{windows_bridge}:{}),credentials_exposed:false};
+    return {agent_driver:{installed:true,mcp_command:'agent-office mcp'},clients,registered_count:clients.filter(item=>item.registration==='registered').length,...(windows_bridge?{windows_bridge}:{}),credentials_exposed:false};
   }
   async register(id:McpRegistrationClient){
     requireCondition(clientIds.includes(id),'MCP_CLIENT_INVALID');const present=installed(id,this.environment);requireCondition(present,'MCP_CLIENT_UNAVAILABLE');

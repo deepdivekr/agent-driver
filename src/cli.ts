@@ -40,7 +40,7 @@ try {
   if(command==='help'||command==='--help')console.log('No real-site or user-browser effects are performed by demo mode.');
   if(command==='help'||command==='--help'){
     const [{onboardingHelp},{hermesHelp},{decisionHelp},{workflowCompatibilityHelp},{interfaceHelp},{maintenanceHelp},{soakHelp},{vmHelp}]=await Promise.all([import('./onboarding/cli.js'),import('./integrations/cli.js'),import('./decision-plane/cli.js'),import('./integrations/workflow-upgrade.js'),import('./interface/cli.js'),import('./storage/cli.js'),import('./soak/cli.js'),import('./isolation/cli.js')]);
-    console.log('agent-driver\n  demo [--db PATH] [--fault none|before|after] [--wrong-account true|false]\n  status --task ID [--db PATH]\n  tasks --project ID --db PATH\n  events --project ID --consumer NAME --event ID --db PATH\n  ack --project ID --consumer NAME --event ID --db PATH\n  cancel --task ID --db PATH\n  recover --task ID --db PATH\n'+onboardingHelp+hermesHelp+decisionHelp+workflowCompatibilityHelp+interfaceHelp+maintenanceHelp+soakHelp+vmHelp);
+    console.log('agent-office\n  demo [--db PATH] [--fault none|before|after] [--wrong-account true|false]\n  status --task ID [--db PATH]\n  tasks --project ID --db PATH\n  events --project ID --consumer NAME --event ID --db PATH\n  ack --project ID --consumer NAME --event ID --db PATH\n  cancel --task ID --db PATH\n  recover --task ID --db PATH\n'+onboardingHelp+hermesHelp+decisionHelp+workflowCompatibilityHelp+interfaceHelp+maintenanceHelp+soakHelp+vmHelp);
   }
   else if(command==='demo'){
     const {runFixtureDemo}=await import('./browser/fixture-driver.js');

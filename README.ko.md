@@ -2,9 +2,32 @@
 
 **AI 에이전트가 내 컴퓨터에서 업무를 실행하고, 중단된 지점부터 이어가게 하는 로컬 MCP 서버입니다.**
 
-[English](README.md) · **한국어** · [v0.3.0 변경 내역](docs/releases/v0.3.0.md)
+[English](README.md) · **한국어** · [v0.3.1 변경 내역](docs/releases/v0.3.1.md)
 
-저장소와 명령어 이름은 `agent-driver`입니다. Codex, Claude Code, Cursor, OpenCode, Hermes 등 MCP 클라이언트에 연결합니다.
+Codex, Claude Code, Cursor, OpenCode, Hermes 등 MCP 클라이언트에 연결합니다.
+저장소와 기본 명령은 `agent-office`입니다. 이전 `agent-driver` 명령은 호환용 별칭으로 남깁니다.
+
+## 화면으로 보기
+
+**업무 목록** — 한 줄로 업무를 맡기고, 현재 상태와 확인할 일을 모아 봅니다.
+
+![Agent Office 업무 목록](docs/images/work-overview.png)
+
+<details>
+<summary>업무 상세와 AI 연결 화면 보기</summary>
+
+**업무 상세** — 목표·완료 조건·계획 단계와 실행 배정 상태를 확인하고, 실행 전에 일시정지합니다.
+
+![업무 상세와 제어](docs/images/work-detail.png)
+
+**AI 연결** — 구독 클라이언트·API·호환 로컬 모델 중 사용할 연결을 선택합니다.
+
+![AI 연결 설정](docs/images/ai-connection.png)
+
+</details>
+
+v0.3.1 실제 화면에 공개용 예시 업무를 넣어 촬영했습니다.
+설정과 실행 대기 상태를 보여주며, 실제 에이전트 실행 성과를 뜻하지 않습니다.
 
 ## 지원 환경
 
@@ -22,12 +45,12 @@
 
 에이전트에게 이렇게 요청하세요.
 
-> github.com/deepdivekr/agent-driver를 설치하고 MCP로 연결해줘. 앞으로 브라우저·파일 업무에 Agent Office를 사용해줘.
+> github.com/deepdivekr/agent-office를 설치하고 MCP로 연결해줘. 앞으로 브라우저·파일 업무에 Agent Office를 사용해줘.
 
 직접 설치하려면 **Ubuntu 또는 WSL Ubuntu 터미널**에서 실행합니다. 작업 폴더와 무관합니다.
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-driver/v0.3.0/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-office/v0.3.1/install.sh | bash'
 ```
 
 설치 전에 [스크립트](install.sh)를 확인할 수 있습니다.
@@ -51,10 +74,10 @@ Aside·Neo는 별도 설치와 실행이 필요합니다. 관제센터에서 연
 이후 관제센터를 다시 열려면 같은 Ubuntu 환경에서 실행하세요.
 
 ```bash
-~/.local/bin/agent-driver connect
+~/.local/bin/agent-office connect
 ```
 
-수동 MCP 등록 명령은 `agent-driver mcp`입니다.
+수동 MCP 등록 명령은 `agent-office mcp`입니다.
 Windows 앱에는 관제센터가 표시하는 WSL 연결 명령을 사용합니다.
 [자세한 첫 실행 안내](docs/first-run.md) · [MCP 설정](docs/agent-interface.md)
 
@@ -106,7 +129,8 @@ API에서 구독으로의 인계도 등록된 연결과 정책을 따릅니다.
 
 진행 중인 업무를 마치고 MCP 클라이언트와 관제센터를 종료한 뒤 설치 명령을 다시 실행합니다.
 공유 서버가 남아 있다면 [종료·재연결 안내](docs/mcp-resource-lifecycle.md)를 따르세요.
-기본 설정과 업무 데이터는 `~/.agent-driver`에 유지됩니다.
+앱은 `~/.local/share/agent-office`, 새 설정·업무 데이터는 `~/.agent-office`에 저장합니다.
+기존 `~/.agent-driver`에 업무가 있으면 그대로 이어 쓰며, 이전 설치본을 삭제하지 않습니다.
 개인 실행 코드를 추가한 설치본은 [호환성 확인](docs/local-workflow-compatibility.md)이 먼저입니다.
 
 - Aside·Neo 어댑터는 현재 **조회 전용**입니다. 폼 쓰기와 VM 내부 연결은 미지원입니다.
@@ -114,13 +138,13 @@ API에서 구독으로의 인계도 등록된 연결과 정책을 따릅니다.
 - 큐의 업무마다 VM을 만들지 않습니다. 실제 브라우저·CLI 실행은 별도 자원을 사용합니다.
 - 로컬 연결 주소의 토큰, API 키, 개인 업무 데이터는 공유하지 마세요.
 
-[출시 검증 범위](docs/release-readiness-v0.3.0.md) · [AI 설정](docs/control-settings.md) · [브라우저 라우팅](docs/browser-executor-routing.md) · [메모리와 서버 수명](docs/mcp-resource-lifecycle.md)
+[출시 검증 범위](docs/release-readiness-v0.3.1.md) · [AI 설정](docs/control-settings.md) · [브라우저 라우팅](docs/browser-executor-routing.md) · [메모리와 서버 수명](docs/mcp-resource-lifecycle.md)
 
 ## 개발과 라이선스
 
 ```bash
-git clone https://github.com/deepdivekr/agent-driver.git
-cd agent-driver
+git clone https://github.com/deepdivekr/agent-office.git
+cd agent-office
 npm ci
 npm test
 ```

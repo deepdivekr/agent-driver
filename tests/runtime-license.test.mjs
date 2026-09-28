@@ -20,7 +20,7 @@ test('Apache license, package metadata and notices remain consistent',()=>{
   assert.ok(existsSync(resolve(root,'docs/licensing.md')));
 });
 
-if(JSON.parse(read('package.json')).name==='agent-driver')test('public package excludes private workflow implementations while allowing an explicit local compatibility bridge',()=>{
+if(JSON.parse(read('package.json')).name==='agent-office')test('public package excludes private workflow implementations while allowing an explicit local compatibility bridge',()=>{
   assert.equal(existsSync(resolve(root,'src/workflows')),false);
   assert.doesNotMatch(read('src/interface/api.ts'),/from ['"][^'"]*\/workflows\//u);
   assert.match(read('src/interface/api.ts'),/WorkflowCompatibility/u);

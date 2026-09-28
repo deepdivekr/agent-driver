@@ -10,7 +10,7 @@ export const nonInterferingConnectionMode='non_interfering' as const;
 export const localConnectionState=z.object({
   format:z.literal(1),connection_id:z.string().uuid(),connected_at:z.string().datetime(),mode:z.literal(nonInterferingConnectionMode),
   computer:z.object({kind:z.literal('persistent_agent_computer'),surface:z.literal('browser'),host_desktop_access:z.literal('none'),host_file_bridge:z.literal('explicit_transfer_only')}).strict(),
-  mcp:z.object({command:z.literal('agent-driver mcp'),registration:z.literal('client_managed')}).strict(),
+  mcp:z.object({command:z.enum(['agent-office mcp','agent-driver mcp']),registration:z.literal('client_managed')}).strict(),
   jev:z.object({status:z.literal('optional')}).strict(),
 }).strict();
 export type LocalConnectionState=z.infer<typeof localConnectionState>;
@@ -37,9 +37,16 @@ function safeRoot(value:string){
   requireCondition(typeof value==='string'&&value.length>0&&isAbsolute(value),'CONNECTION_ROOT_ABSOLUTE_REQUIRED');
   const root=resolve(value);requireCondition(root!==sep,'CONNECTION_ROOT_UNSAFE');return root;
 }
-export function connectionRoot(environment:NodeJS.ProcessEnv=process.env){
-  const configured=environment.AGENT_DRIVER_CONNECTION_ROOT;
-  return safeRoot(configured===undefined?join(homedir(),'.agent-driver'):configured);
+export function connectionRoot(environment:NodeJS.ProcessEnv=process.env,home=homedir()){
+  const current=environment.AGENT_OFFICE_CONNECTION_ROOT,legacy=environment.AGENT_DRIVER_CONNECTION_ROOT;
+  requireCondition(current===undefined||legacy===undefined||safeRoot(current)===safeRoot(legacy),'CONNECTION_ROOT_CONFLICT');
+  const configured=current??legacy;
+  if(configured!==undefined)return safeRoot(configured);
+  const office=join(home,'.agent-office'),driver=join(home,'.agent-driver');
+  const hasState=(root:string)=>existsSync(join(root,'runtime-config.json'))||existsSync(join(root,'connection.json'));
+  requireCondition(!(hasState(office)&&hasState(driver)),'CONNECTION_ROOT_AMBIGUOUS');
+  // Preserve existing IDs, credentials, absolute paths and journals in place.
+  return safeRoot(hasState(driver)?driver:office);
 }
 export function localConnectionPaths(root=connectionRoot()):LocalConnectionPaths{
   const base=safeRoot(root);
@@ -54,7 +61,7 @@ export async function approveNonInterferingConnection(root=connectionRoot(),now=
   if(existing)return {state:existing,paths};
   await mkdir(paths.root,{recursive:true,mode:0o700});await chmod(paths.root,0o700);
   await mkdir(paths.workspace,{recursive:true,mode:0o700});await mkdir(paths.data,{recursive:true,mode:0o700});
-  const state=localConnectionState.parse({format:1,connection_id:randomUUID(),connected_at:now.toISOString(),mode:nonInterferingConnectionMode,computer:{kind:'persistent_agent_computer',surface:'browser',host_desktop_access:'none',host_file_bridge:'explicit_transfer_only'},mcp:{command:'agent-driver mcp',registration:'client_managed'},jev:{status:'optional'}});
+  const state=localConnectionState.parse({format:1,connection_id:randomUUID(),connected_at:now.toISOString(),mode:nonInterferingConnectionMode,computer:{kind:'persistent_agent_computer',surface:'browser',host_desktop_access:'none',host_file_bridge:'explicit_transfer_only'},mcp:{command:'agent-office mcp',registration:'client_managed'},jev:{status:'optional'}});
   await writePrivateJson(paths.state,state);return {state,paths};
 }
 /** Prepare only inert host configuration. MCP default still requires separate human connection approval. */
@@ -75,7 +82,7 @@ export function readLocalConnection(root=connectionRoot()):LocalConnectionState|
   const path=localConnectionPaths(root).state;if(!existsSync(path))return null;
   return localConnectionState.parse(JSON.parse(readFileSync(path,'utf8')));
 }
-/** Returns the config consumed by the one universal stdio command: `agent-driver mcp`. */
+/** Returns the config consumed by `agent-office mcp` (legacy agent-driver alias supported). */
 export function approvedMcpConfigPath(root=connectionRoot()){
   requireCondition(readLocalConnection(root)!==null,'COMPUTER_CONNECTION_REQUIRED');const path=localConnectionPaths(root).runtimeConfig;
   requireCondition(existsSync(path),'COMPUTER_CONNECTION_CONFIG_MISSING');return path;

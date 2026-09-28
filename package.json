@@ -1,6 +1,6 @@
 {
-  "name": "agent-driver",
-  "version": "0.3.0",
+  "name": "agent-office",
+  "version": "0.3.1",
   "private": true,
   "description": "Local MCP runtime for durable agent work",
   "type": "module",
@@ -9,6 +9,7 @@
     "npm": "11.11.0"
   },
   "bin": {
+    "agent-office": "dist/cli.js",
     "agent-driver": "dist/cli.js"
   },
   "scripts": {
@@ -33,6 +34,6 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/deepdivekr/agent-driver.git"
+    "url": "https://github.com/deepdivekr/agent-office.git"
   }
 }
