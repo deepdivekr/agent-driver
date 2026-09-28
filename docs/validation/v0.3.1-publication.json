@@ -1,0 +1,85 @@
+{
+  "version": "0.3.1",
+  "released_commit": "49b8ef323bbfa1b08a7fc952b2602c24d7e525bf",
+  "source_tree": "c20b5f2545b59f8e0dfb8aab08c02ac785964714",
+  "candidate_commit": "99d52f1ec6cda188141608fae243eaba789754b6",
+  "pull_request": "https://github.com/deepdivekr/agent-office/pull/31",
+  "release_url": "https://github.com/deepdivekr/agent-office/releases/tag/v0.3.1",
+  "checks": [
+    {
+      "name": "PR quick regression",
+      "status": "PASS",
+      "passed": 1006,
+      "blocked_env": 0,
+      "not_run": 0,
+      "url": "https://github.com/deepdivekr/agent-office/actions/runs/36486829465",
+      "per_case_evidence": "Individual evidence levels are retained in the CI runtime-evidence artifact; this aggregate is not a live-provider certification."
+    },
+    {
+      "name": "Merged release quick regression",
+      "status": "PASS",
+      "passed": 1006,
+      "blocked_env": 0,
+      "not_run": 0,
+      "url": "https://github.com/deepdivekr/agent-office/actions/runs/36487711309",
+      "per_case_evidence": "Individual evidence levels are retained in the CI runtime-evidence artifact; this aggregate is not a live-provider certification."
+    },
+    {
+      "name": "Original installer upgrades and fresh install",
+      "status": "PASS",
+      "evidence_level": "native_integration",
+      "scenarios": [
+        "v0.1.0 to v0.3.1",
+        "v0.1.1 to v0.3.1",
+        "v0.2.0 to v0.3.1",
+        "v0.3.0 to v0.3.1",
+        "fresh v0.3.1"
+      ],
+      "tested": "local candidate, PR CI and merged release CI",
+      "work_model": "injected fixture",
+      "external_model_calls": 0
+    },
+    {
+      "name": "Actual published installer, release assets, default state and canonical launcher",
+      "status": "PASS",
+      "evidence_level": "native_integration",
+      "finished_at": "2026-09-28T21:48:36.272Z",
+      "external_model_calls": 0,
+      "work_model": "injected fixture",
+      "checks": [
+        "tag and source tree match",
+        "archive, installer and SHA256SUMS digests match",
+        "fresh install from public GitHub",
+        "agent-office launcher from another directory",
+        "default .agent-office state discovery",
+        "real MCP and browser",
+        "Work and model settings preserved",
+        "owned service/browser cleanup"
+      ]
+    }
+  ],
+  "assets": [
+    {
+      "name": "agent-office-0.3.1.tar.gz",
+      "bytes": 6392843,
+      "sha256": "85e6001ae914ef6e92a25f4366b4f0377cc100cf7049dfcf7ef66acc2f484848"
+    },
+    {
+      "name": "install.sh",
+      "bytes": 10176,
+      "sha256": "b330dedba5d93555642896adadb186c13f651841b281e16b854e154ee7581d09"
+    },
+    {
+      "name": "SHA256SUMS",
+      "bytes": 169,
+      "sha256": "17c1b948a300478ca3f0884425559229b8887aa5d6d1d68c56d409c67080344d"
+    }
+  ],
+  "limitations": [
+    "Ubuntu 24.04 x86_64 / Windows 11 WSL2 runtime scope unchanged.",
+    "Native Windows desktop control remains experimental; macOS and guest optional-browser transports are not certified.",
+    "README captures use isolated sample records, not successful live-agent tasks.",
+    "Private installations and existing launchers were not replaced.",
+    "No paid model invocation or long soak in this release."
+  ]
+}

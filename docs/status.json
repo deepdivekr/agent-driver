@@ -2,8 +2,8 @@
   "RQ-804": {"status":"done","evidence":["README.md","README.ko.md","install.sh","package.json"],"note":"Repository rename verified; current links updated without changing old tags."},
   "RQ-805": {"status":"done","evidence":["docs/images/capture.json","docs/images/work-overview.png","docs/images/work-detail.png","docs/images/ai-connection.png"],"note":"Current candidate UI captured with four isolated sample Works; pause/resume verified; API key blank, no settings saved or paid model calls. All three images visually inspected."},
   "RQ-806": {"status":"done","evidence":["README.md","README.ko.md","docs/first-run.md"],"note":"Three captioned actual UI screenshots; canonical commands and new/default versus legacy data paths distinguished."},
-  "RQ-807": {"status":"partial","note":"Initial documentation tests passed; final release validation and GitHub publication pending."},
-  "RQ-808": {"status":"partial","note":"Canonical CLI/path implementation added; affected tests and real fresh/legacy installations pending."},
+  "RQ-807": {"status":"done","evidence":["docs/validation/v0.3.1-publication.json","docs/handoff/phase-90.md"],"note":"PR31 merged; PR and release CI each passed 1006/1006 quick checks and five native install scenarios. Immutable v0.3.1 tag/assets and a fresh installation from the actual public installer verified. No paid calls or live-business success claim."},
+  "RQ-808": {"status":"done","evidence":["install.sh","src/onboarding/connection.ts","tests/runtime-onboarding.test.mjs","docs/validation/v0.3.1-publication.json"],"note":"Canonical agent-office command and fresh install/state paths verified; original v0.1.0/v0.1.1/v0.2.0/v0.3.0 installations preserve Work/settings and old launchers. Ambiguous roots refused; personal installations untouched."},
   "RQ-799": {
     "status": "done",
     "evidence": [

@@ -1,6 +1,6 @@
 # Phase 90 — repository rename and current UI
 
-Candidate: v0.3.1, based on public v0.3.0 main (9da5600), not personal runtime state.
+Released: v0.3.1, based on public v0.3.0 main (9da5600), not personal runtime state.
 Primary CLI/package/install paths now use agent-office. Legacy data is reused in place;
 existing binaries, protocol IDs and MCP registration keys are not deleted.
 Screenshots use isolated sample Work records and do not prove live model or executor success.
@@ -8,7 +8,7 @@ Screenshots use isolated sample Work records and do not prove live model or exec
 Read first: prompts/phase-90-office-readme.md, README.md, README.ko.md.
 Toolchain unchanged: Node 22.22.0, npm 11.11.0.
 
-## Evidence so far
+## Evidence
 
 - Related runtime suite: 33/33 PASS (32 cases plus input-fingerprint integrity).
   Private evidence: tests/evidence/runtime-tests-2026-09-28T21-21-23-406Z.json.
@@ -22,8 +22,20 @@ Toolchain unchanged: Node 22.22.0, npm 11.11.0.
 - First boundary check hit EISDIR on the worktree's reused node_modules symlink.
   Ignore rule now covers both dependency directories and symlinks; no dependencies are published.
 
-## Remaining release gates
+## Publication result
 
-Quick suite and five disposable real installation scenarios must pass in CI before merge.
-After merging, verify v0.3.1 tag/assets and actual published installation.
-No old tag/assets or private running services are replaced.
+- PR31 merged as 49b8ef323bbfa1b08a7fc952b2602c24d7e525bf. Source tree
+  c20b5f2545b59f8e0dfb8aab08c02ac785964714 matches local candidate 99d52f1.
+- PR CI 36486829465 and main CI 36487711309: 1006/1006 quick checks each.
+  Both also passed the five native installation scenarios.
+- Local five-scenario evidence: tests/evidence/release-install/2026-09-28T21-27-24.831Z.json.
+- Actual public asset/fresh-install evidence: tests/evidence/release-v0.3.1-public.json.
+  Finished 2026-09-28T21:48:36.272Z; default state/launcher, MCP, browser and font passed.
+- Public summary: docs/validation/v0.3.1-publication.json. CI artifacts retain per-case evidence.
+- Raw receipts are private/ignored. Sample Work uses an injected model, not a paid provider.
+- Both capture servers, owned screenshot browser and late-created Aside capture tab were closed.
+  Existing user tabs, private services, old launchers, old tags and release assets were preserved.
+
+No Phase 90 release blocker remains. Private production runtime upgrade is separate;
+no automatic replacement of the user's personal installation was performed.
+This documentation receipt follows publication; immutable v0.3.1 source/assets are not rewritten.
