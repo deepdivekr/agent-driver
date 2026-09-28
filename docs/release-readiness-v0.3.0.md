@@ -47,6 +47,11 @@ credentials and databases are not deployment targets.
   API-billing-source rejection and input integrity.
 
 These local counts are not a substitute for final all-suite validation.
+Candidate 70e1e76 passed 1001/1001 checks and all four installs in push CI,
+but concurrent PR CI caught a client-model catalog startup race. That race is
+fixed with explicit delayed-response and failed-request/re-entry regression
+coverage; the affected settings/control browser suite passed 12/12 locally.
+Final CI must pass on the corrected candidate, not only the earlier run.
 The public release workflow runs the full quick suite and all four installation
 scenarios before it can publish from main. See [GitHub Actions](https://github.com/deepdivekr/agent-driver/actions/workflows/runtime.yml)
 for the exact tagged commit, and [Phase89 handoff](handoff/phase-89.md) for retained

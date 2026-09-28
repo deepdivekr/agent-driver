@@ -62,6 +62,26 @@ the final GitHub candidate and again on main before automatic release.
 
 ## Resume
 
+## Catalog startup race
+
+On candidate 70e1e76, push CI 36432550881 passed 1001/1001 quick checks and
+all four installation scenarios. PR CI 36432556408 failed one coding-model UI
+case: the Codex dropdown never acquired its model options. Both receipts remain.
+The initial API catalog request could occupy the action lock and drop the
+timer-based client discovery while prematurely marking it loaded.
+Step initialization now awaits discovery inside the same action; loaded flags
+are set only on success. Returning after a failed catalog request retries it.
+Two explicit latency/retry regression cases were added. Both fail against the
+prior production UI and pass against the correction. The affected settings
+and control-action browser suite passed 12/12 cases locally, including desktop
+and mobile; settings HTTP/contracts plus input integrity passed 26/26.
+The frozen pre-fix local full run finished 1000/1001: its only failure was the
+wizard test asserting an install button's count immediately after the heading
+appeared, before asynchronous discovery finished. The test now waits for that
+same required button (no removed assertions). Its original receipt is retained:
+`tests/evidence/runtime-tests-2026-09-28T13-59-41-018Z.json`.
+Final CI must pass again; a prior successful run is not substituted.
+
 Read docs/release-readiness-v0.3.0.md, scripts/release/verify-install.mjs,
 scripts/release/install-probe.mjs and src/interface/mcp-service-manager.ts.
 Preserve candidate input while tests run; no soak or paid model calls.
