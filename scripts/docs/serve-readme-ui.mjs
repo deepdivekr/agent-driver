@@ -8,12 +8,19 @@ import {PackStore} from '../../dist/packs/store.js';
 import {validateWorkProposal} from '../../dist/work/contracts.js';
 import {startControlCenter} from '../../dist/observability/control-center.js';
 
+const language=process.argv[2]??'ko';
+if(!['en','ko'].includes(language))throw Error('README_LANGUAGE_MUST_BE_EN_OR_KO');
 const root=await mkdtemp(join(tmpdir(),'office-readme-'));
 const paths=await prepareLocalConnection(root);
 const config=loadHostConfig(paths.runtimeConfig);
 const store=new PackStore(config.dbPath);
 store.registerProject(config.project);
-const samples=[
+const samples=language==='en'?[
+  ['Weekly AI brief','Summarize five official announcements with source links, excluding duplicates.','research.search',false,'read_only',['Confirm sources and scope','Collect and deduplicate news','Verify evidence and write the brief']],
+  ['Contact form draft','Fill in the contact form and stop before submitting it.','form.draft-submit',true,'draft_only',['Review required fields','Prepare the draft','Review before submission']],
+  ['Monthly data merge','Combine monthly files into one table and record duplicates and missing values.','file.pipeline',false,'local_file_write',['Inspect source files','Check duplicates and gaps','Save the combined table']],
+  ['Resume project coding','Read the saved checkpoint and send the next task to the coding CLI.','coding.orchestrate',true,'local_file_write',['Read the checkpoint','Instruct the coding CLI','Review the changes']],
+]:[
   ['AI 소식 주간 요약','공식 발표 5건을 출처 링크와 함께 요약하고, 중복 소식을 제외합니다.','research.search',false,'read_only',['출처와 범위 확인','자료 수집 및 중복 제거','근거 확인 후 요약 작성']],
   ['문의 양식 초안','문의 양식을 작성하고 제출 버튼을 누르기 전에 멈춥니다.','form.draft-submit',true,'draft_only',['입력 항목 확인','초안 작성','제출 전 검토']],
   ['월별 자료 통합','월별 파일을 한 표로 합치고 중복·누락 내역을 기록합니다.','file.pipeline',false,'local_file_write',['원본 파일 확인','중복·누락 검사','통합본 저장']],
@@ -23,9 +30,9 @@ const ids=[];
 for(const [title,goal,family,paused,effect,steps] of samples){
   const proposal=validateWorkProposal({
     title,desired_outcome:goal,
-    completion_checks:[{id:'result',result:goal,evidence:'산출물과 출처·검증 기록'},
-      {id:'scope',result:'허용된 범위 안에서 작업합니다.',evidence:'실행 및 승인 기록'}],
-    assumptions:[{field:'데이터',value:'README 화면 설명용 예시',basis:'실제 업무·모델 실행 아님'}],
+    completion_checks:[{id:'result',result:goal,evidence:language==='en'?'Artifacts, sources and verification records':'산출물과 출처·검증 기록'},
+      {id:'scope',result:language==='en'?'Stay within the approved scope.':'허용된 범위 안에서 작업합니다.',evidence:language==='en'?'Execution and approval records':'실행 및 승인 기록'}],
+    assumptions:[language==='en'?{field:'Data',value:'Sample records for README screenshots',basis:'Not live work or model execution'}:{field:'데이터',value:'README 화면 설명용 예시',basis:'실제 업무·모델 실행 아님'}],
     route:{kind:'pack',pack_family:family},requested_effect:effect,
     recurrence:{kind:'once',rule:null},questions:[],
     plan:{format:1,revision:1,source:'request',source_id:null,source_digest:null,provenance:'user_request',
@@ -42,7 +49,7 @@ for(const [title,goal,family,paused,effect,steps] of samples){
 store.close();
 const server=await startControlCenter(config,{poll_ms:1000,workModel:{async call(){throw Error('README_NO_MODEL_CALLS');}}});
 const version=JSON.parse(await readFile(new URL('../../package.json',import.meta.url),'utf8')).version;
-const receipt={pid:process.pid,root,url:server.url,detail_url:server.url+'?work='+ids[0],sample_data:true,version};
+const receipt={pid:process.pid,root,url:server.url,detail_url:server.url+'?work='+ids[0],sample_data:true,version,language};
 await writeFile(join(root,'server.json'),JSON.stringify(receipt,null,2)+'\n');
 console.log(JSON.stringify(receipt));
 let stopping=false;

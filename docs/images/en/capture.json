@@ -1,7 +1,7 @@
 {
   "source_version": "0.3.1",
   "ui_base_commit": "124d92d31a36e6085c55d87b2311f87f218669d8",
-  "captured_at": "2026-09-28T21:59:29.763Z",
+  "captured_at": "2026-09-28T21:59:18.318Z",
   "sample_data": true,
   "live_task_run": false,
   "paid_model_calls": 0,
@@ -11,7 +11,7 @@
     "detail_height": 1000,
     "settings_height": 1000
   },
-  "language": "ko",
+  "language": "en",
   "theme": "dark",
   "layout": "board",
   "screens": [

@@ -40,6 +40,15 @@ test('runtime contract renamed repository preserves installation identity and RE
     assert.doesNotMatch(text,/deepdivekr\/agent-driver/u);
     const screenshots=[...text.matchAll(/!\[[^\]]*\]\((docs\/images\/[^)]+)\)/gu)].map(match=>match[1]);
     assert.equal(screenshots.length,3);
+    const english=path==='README.md';
+    assert.ok(screenshots.every(s=>english?s.startsWith('docs/images/en/'):!s.startsWith('docs/images/en/')),'README screenshots must match its language');
+    const localized=JSON.parse(await readFile(english?'docs/images/en/capture.json':'docs/images/capture.json','utf8'));
+    assert.equal(localized.language,english?'en':'ko');
+    assert.equal(localized.theme,'dark');
+    assert.equal(localized.layout,'board');
+    assert.equal(localized.sample_data,true);
+    assert.equal(localized.live_task_run,false);
+    assert.equal(localized.paid_model_calls,0);
     for(const screenshot of screenshots){
       const bytes=await readFile(screenshot);
       assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');

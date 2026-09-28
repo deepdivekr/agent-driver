@@ -174,6 +174,7 @@ const EN:Record<string,string>={
 '로그인이나 사람 확인이 끝날 때까지 해당 worker는 대기합니다.':'The worker waits until the login or human check is done.','로그인 창 열기':'Open login window','로그인 확인':'Check login','연결 상태를 읽지 못했습니다.':'Could not read connection status.','로그인 화면을 여는 중…':'Opening login window…',
 '로그인 창을 열었습니다. 인증을 마친 뒤 로그인 확인을 누르세요.':'Login window opened. Finish signing in, then press Check login.','작업에서 다시 접근합니다.':'The work will try again.','로그인 상태를 확인했습니다.':'Login confirmed.','아직 로그인 완료를 확인하지 못했습니다.':'Login not confirmed yet.','준비됨':'Ready',' · 직접 로그인 중':' · signing in',
 // work view (server)
+'계획 단계':'Planned stage','업무 계획':'Work plan',
 '이 실행 경로는 단계별 독립 검증 진행률을 제공하지 않음':'This run path does not report independently verified stage progress','독립 확인과 품질 검사를 통과한 단계만 완료로 계산':'Only stages that passed independent checks and quality review count as done',
 '독립 확인과 품질 승인된 단계만 계산':'Counts only independently checked and quality-approved stages','단계 실행·검증 완료 기준이며 업무 완료 조건은 별도 확인':'Based on stage runs and checks; work completion checks are confirmed separately',
 '사용자가 일시정지함':'Paused by you','완료 확인':'Completion check','결과 작성':'Write result','자료 확인':'Check sources','에이전트 ID 미보고':'Agent ID not reported','사이트 로그인이 필요함':'Site login required',

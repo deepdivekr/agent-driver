@@ -22,6 +22,16 @@ test('Control Center renders English by default and the flag button switches to 
   assert.doesNotMatch(await page.locator('aside').innerText(),hangul);
   assert.doesNotMatch(await page.locator('#intake').innerText(),hangul);
   assert.equal(await page.locator('#lang-toggle [data-lang-code]').textContent(),'EN');
+  await page.evaluate(()=>{
+    const probe=document.createElement('section');probe.id='plan-translation-probe';
+    for(const value of ['계획 단계 · 대기','업무 계획 · v1']){
+      const row=document.createElement('p');row.textContent=value;probe.append(row);
+    }
+    document.querySelector('main').append(probe);
+  });
+  await page.getByText('Planned stage · Queued',{exact:true}).waitFor();
+  await page.getByText('Work plan · v1',{exact:true}).waitFor();
+  assert.doesNotMatch(await page.locator('#plan-translation-probe').innerText(),hangul);
   await page.locator('#lang-toggle').click();
   await page.getByRole('button',{name:'업무 접수',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.lang),'ko');

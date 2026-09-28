@@ -180,6 +180,7 @@
 | RQ-806 | Keep both READMEs concise, add selected screenshots with accurate captions, and align first-run documentation with the current interface. |
 | RQ-807 | Verify links, screenshots, affected contracts and public boundaries; publish documentation through a reviewed PR and record exact evidence and limitations. |
 | RQ-808 | Make agent-office the canonical package, CLI and new install/state directory; verify legacy data discovery, ambiguous-root refusal and actual old-installer upgrades without deleting private installations. |
+| RQ-809 | Capture the English README in English dark mode with a Work board, align the Korean overview to board view, verify localized sample content and image links, and publish without replacing release assets. |
 
 ## Phase 89
 

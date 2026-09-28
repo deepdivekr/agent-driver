@@ -9,24 +9,24 @@ Install and run it as `agent-office`. The old `agent-driver` command remains a c
 
 ## A look inside
 
-**Work overview** — submit a request, find your work, and see what needs attention.
+**Work board** — submit a request and see work grouped by status.
 
-![Agent Office Work overview](docs/images/work-overview.png)
+![Agent Office Work board in dark mode](docs/images/en/work-overview.png)
 
 <details>
 <summary>Work details and AI connection</summary>
 
 **Work detail** — review the goal, completion checks, planned steps and execution handoff; pause before dispatch.
 
-![Work detail and controls](docs/images/work-detail.png)
+![Work detail and controls](docs/images/en/work-detail.png)
 
 **AI connection** — choose a subscription client, API provider or compatible local endpoint.
 
-![AI connection settings](docs/images/ai-connection.png)
+![AI connection settings](docs/images/en/ai-connection.png)
 
 </details>
 
-Actual v0.3.1 interface, shown in Korean with isolated sample work. English is also available.
+Current interface in English and dark mode, with isolated sample work.
 These screenshots show setup and queued work, not completed live-agent runs.
 
 ## Supported environments

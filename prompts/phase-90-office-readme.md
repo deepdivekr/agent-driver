@@ -10,3 +10,7 @@
 - [ ] RQ-808: Make agent-office the canonical package, CLI and new install/state directory; verify legacy data discovery, ambiguous-root refusal and actual old-installer upgrades without deleting private installations.
 
 User expanded scope to command and directory renaming. Publish a new v0.3.1 rather than replacing v0.3.0 assets. No private runtime migration or historical evidence rewrite.
+
+## Screenshot follow-up
+
+- [x] RQ-809: Capture the English README in English dark mode with a Work board, align the Korean overview to board view, verify localized sample content and image links, and publish without replacing release assets.

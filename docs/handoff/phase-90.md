@@ -39,3 +39,22 @@ Toolchain unchanged: Node 22.22.0, npm 11.11.0.
 No Phase 90 release blocker remains. Private production runtime upgrade is separate;
 no automatic replacement of the user's personal installation was performed.
 This documentation receipt follows publication; immutable v0.3.1 source/assets are not rewritten.
+
+## RQ-809 — localized dark board screenshots
+
+- English README now uses docs/images/en/; Korean screenshots stay in docs/images/.
+  Both show the real dark UI, board overview, Work detail and AI connection.
+  Sample Work content is localized as well as application labels. No work was executed.
+- Captures explicitly assert dark media/rendered background, selected board layout, blank API
+  key, no page errors and no visible Hangul in English. Pause/resume is exercised on sample Work.
+- Initial English capture failed because two UI plan labels were untranslated. Added
+  Planned stage / Work plan translations and a dynamic-text browser regression; failure retained.
+- Affected suite: 4/4 PASS (three cases + input integrity), no blocked/not-run.
+  Evidence: tests/evidence/runtime-tests-2026-09-28T22-00-27-515Z.json.
+- All six PNGs visually inspected; each under 143 KB. Read manifests for exact language,
+  viewport, dark theme, board layout and timestamps.
+- Neo transport unavailable. Aside verified the English board, but its REPL lacks viewport
+  and color-scheme emulation; the reproducible local Playwright capture path rendered PNGs.
+  Owned Aside tab and both capture servers were closed. User tabs and private services untouched.
+- This follow-up changes documentation assets and two UI translations on main.
+  Existing v0.3.1 release tag/install assets remain immutable.

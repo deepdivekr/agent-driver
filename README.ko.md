@@ -9,9 +9,9 @@ Codex, Claude Code, Cursor, OpenCode, Hermes 등 MCP 클라이언트에 연결�
 
 ## 화면으로 보기
 
-**업무 목록** — 한 줄로 업무를 맡기고, 현재 상태와 확인할 일을 모아 봅니다.
+**업무 보드** — 한 줄로 업무를 맡기고, 상태별로 모아 봅니다.
 
-![Agent Office 업무 목록](docs/images/work-overview.png)
+![Agent Office 다크모드 업무 보드](docs/images/work-overview.png)
 
 <details>
 <summary>업무 상세와 AI 연결 화면 보기</summary>
@@ -26,7 +26,7 @@ Codex, Claude Code, Cursor, OpenCode, Hermes 등 MCP 클라이언트에 연결�
 
 </details>
 
-v0.3.1 실제 화면에 공개용 예시 업무를 넣어 촬영했습니다.
+v0.3.1 한국어·다크모드 화면에 공개용 예시 업무를 넣어 촬영했습니다.
 설정과 실행 대기 상태를 보여주며, 실제 에이전트 실행 성과를 뜻하지 않습니다.
 
 ## 지원 환경
