@@ -44,10 +44,25 @@ tests/runtime-connection-actions.test.mjs. Node 22.22.0, npm 11.11.0 unchanged.
 
 ## Deployment and remaining limits
 
-Pending: publish candidate branch and upgrade the managed UI only, retaining its
-URL, private configuration, model settings, Work and existing personal MCP.
-Actual Windows page check and new CI status must be recorded after application.
-Immutable v0.3.1 tag and installer assets are not rewritten.
+Candidate 110ddaa published to the existing PR32 branch and applied using the
+official managed installer with an explicit branch ref. Source checkout remains
+clean; rollback ref retained. UI PID 782288, same URL, private config/model settings,
+Work IDs and personal MCP process independently verified unchanged. Initial
+preflight refused an exact recorded reuse URL argument before changing anything;
+the helper was corrected to accept only that exact optional argument and rerun.
+Private receipt: tests/evidence/phase92-ui-upgrade.json.
+
+Actual Windows Aside check: five native disclosures blue (rgb 111,168,220) and
+underlined; eight connection buttons 112x36px; Windows bridge expands on click,
+dark theme retained and no horizontal overflow. No settings saved or Work executed.
+Per-case axes plus the preflight failure retained in tests/report.json and
+tests/evidence/phase92-native.json. Full-page Aside screenshot stitching repeated
+a viewport, so that screenshot was not published as a README capture.
+
+Public CI 36508806660 and 36508801398 was still running at last check. The prior
+ac34a66 CI 36505132716 failed npm test; it is not treated as a pass. Current-head
+CI and merge are required before a new immutable public release. Existing v0.3.1
+tag and installer assets are not rewritten by this local candidate application.
 
 User authentication still belongs to the official client. Cursor connection does
 not add a structured judgment bridge. OpenCode credential-provider type remains
