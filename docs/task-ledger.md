@@ -211,6 +211,15 @@
 | RQ-797 | Preserve default Playwright when registering optional browsers, preserve existing configuration and environment/credential boundaries, and state reconnect requirements accurately. |
 | RQ-798 | Verify missing/disconnected/ready, registration conflict and security gates, desktop/mobile controls and relevant runtime regressions; document actual native evidence and remaining limitations. |
 
+## Phase 92
+
+| ID | Requirement |
+|---|---|
+| RQ-815 | Diagnose and repair official client installation in the MCP runtime environment with bounded, allowlisted downloads and useful failure messages; preserve installed clients and credentials. |
+| RQ-816 | Continue verified installation into the supported official login flow, implement Cursor and OpenCode connection paths using verified CLI contracts, and independently verify authentication without implicit API use. |
+| RQ-817 | Unify concise connection actions, remove documentation-only installation controls, expose official app download pages where needed, and make disclosures/import controls visibly clickable with consistent spacing. |
+| RQ-818 | Verify installer, authentication, registration, security and real desktop/mobile UI paths; apply the verified local UI without replacing private settings, Work or the personal MCP, and record exact evidence and remaining limits. |
+
 ## Phase 87
 
 | ID | Requirement |

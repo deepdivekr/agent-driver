@@ -6,7 +6,10 @@ export const uiCss=`@font-face{font-family:"Pretendard Variable";font-style:norm
 *{box-sizing:border-box}body{margin:0;background:var(--bg)}[hidden]{display:none!important}a{color:var(--accent)}
 button,select,input,textarea{font:inherit;color:inherit;background:var(--raise);border:1px solid var(--line2);border-radius:8px;padding:6px 11px;max-width:100%}
 button{cursor:pointer;white-space:nowrap;font-family:var(--mono);font-size:12.5px}button:hover{border-color:var(--dim)}button:disabled{opacity:.45;cursor:not-allowed}
-button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:1px}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.text-action{color:var(--code);text-decoration:underline;text-underline-offset:3px;background:none;border:0;padding:4px 2px;cursor:pointer}.text-action:hover{color:var(--code);text-decoration-thickness:2px}
+details>summary{padding:8px 0;color:var(--code);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:13px}details[open]>summary{margin-bottom:12px}details>summary:hover{text-decoration-thickness:2px}
+.action-link{display:inline-flex;align-items:center;justify-content:center;text-decoration:none;border:1px solid var(--line2);border-radius:8px;background:var(--raise);color:var(--text);padding:6px 11px;font:12.5px var(--mono);min-height:36px}.action-link:hover{border-color:var(--dim)}
 button.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}button.warning{border-color:var(--human);color:var(--human);background:var(--human-a)}
 input,select,textarea{width:100%;background:var(--bg)}input[type=checkbox],input[type=radio]{width:auto;accent-color:var(--accent);margin:0 6px 0 0;vertical-align:-2px}textarea{min-height:84px;resize:vertical}
 label{display:block;margin:12px 0 4px;color:var(--dim);font-size:13px}h1,h2,h3,h4,h5{margin:0;font-weight:600;letter-spacing:-.01em;text-wrap:balance}h1{font:600 20px var(--sans)}h2{font-size:17px}h3{font:600 14px var(--mono)}h4{font:600 13px var(--mono)}

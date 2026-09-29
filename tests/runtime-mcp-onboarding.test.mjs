@@ -35,7 +35,8 @@ test('runtime contract onboarding registers five clients without a shell and pre
   const controller=new McpRegistrationController(x.root,env,runner);assert.equal((await controller.view()).registered_count,0);
   for(const id of ['codex','claude','opencode','cursor','hermes'])await controller.register(id);
   const view=await controller.view();assert.equal(view.registered_count,5);assert.equal(view.credentials_exposed,false);assert.ok(view.clients.every(item=>item.registration==='registered'));
-  assert.equal(calls.length,3);assert.deepEqual(calls.map(item=>item.args.slice(0,4)),[['mcp','add','agent-driver','--'],['mcp','add','--scope','user'],['mcp','add','agent-driver','--global']]);assert.ok(calls.every(item=>item.executable.startsWith('/fixture/')&&!('shell' in item)));
+  assert.equal(calls.length,2);assert.deepEqual(calls.map(item=>item.args.slice(0,4)),[['mcp','add','agent-driver','--'],['mcp','add','--scope','user']]);assert.ok(calls.every(item=>item.executable.startsWith('/fixture/')&&!('shell' in item)));
+  const opencode=JSON.parse(await readFile(join(x.root,'.config','opencode','opencode.json'),'utf8'));assert.deepEqual(opencode.mcp['agent-driver'],{type:'local',command:[controller.command,...controller.args]});
   const cursor=JSON.parse(await readFile(env.AGENT_DRIVER_CURSOR_MCP_CONFIG,'utf8'));assert.equal(cursor.theme,'dark');assert.equal(cursor.mcpServers.other.command,'other');assert.equal(cursor.mcpServers['agent-driver'].command,process.execPath);assert.equal(cursor.mcpServers['agent-driver'].args.at(-1),'mcp');
   const hermes=parse(await readFile(join(env.HERMES_HOME,'config.yaml'),'utf8'));assert.equal(hermes.model,'fixture');assert.equal(hermes.mcp_servers.other.command,'/other');assert.equal(hermes.mcp_servers['agent-driver'].command,process.execPath);
   const receipt=await readFile(join(x.root,'mcp-registrations.json'),'utf8');assert.doesNotMatch(receipt,/configured|fixture\/codex|secret/iu);assert.match(receipt,/command_fingerprint/);
@@ -45,6 +46,15 @@ test('runtime contract registration refuses conflicting Cursor entry and failed 
   const x=await setup(t),env=environment(x.root);await mkdir(join(x.root,'.cursor'),{recursive:true});await writeFile(env.AGENT_DRIVER_CURSOR_MCP_CONFIG,JSON.stringify({mcpServers:{'agent-driver':{command:'/different',args:['mcp']}}}));
   const failed=new McpRegistrationController(x.root,env,{async run(){return {code:2,stdout:'secret should not persist',stderr:'failed'};}});
   await assert.rejects(failed.register('cursor'),/MCP_REGISTRATION_CONFLICT/);await assert.rejects(failed.register('codex'),/MCP_REGISTRATION_FAILED/);assert.equal((await failed.view()).registered_count,0);assert.equal(readSetupActivity(x.root).length,0);
+});
+
+test('runtime contract OpenCode MCP registration preserves configuration, independently detects edits and refuses conflicting or unparseable files',async t=>{
+  const x=await setup(t),env=environment(x.root),path=join(x.root,'.config','opencode','opencode.json');await mkdir(join(x.root,'.config','opencode'),{recursive:true});
+  await writeFile(path,JSON.stringify({model:'fixture/model',mcp:{other:{type:'remote',url:'https://example.test/mcp'}}}));
+  const controller=new McpRegistrationController(x.root,env,{async run(){throw Error('unsupported mcp add flags must not be invoked');}});
+  await controller.register('opencode');await controller.register('opencode');let value=JSON.parse(await readFile(path,'utf8'));assert.equal(value.model,'fixture/model');assert.equal(value.mcp.other.url,'https://example.test/mcp');
+  value.mcp['agent-driver']={type:'local',command:['different']};await writeFile(path,JSON.stringify(value));const before=await readFile(path,'utf8');assert.equal((await controller.view()).clients.find(c=>c.id==='opencode').registration,'conflict');await assert.rejects(controller.register('opencode'),/MCP_REGISTRATION_CONFLICT/u);assert.equal(await readFile(path,'utf8'),before);
+  await writeFile(path,'{ // comments must be preserved, not overwritten\n}');await assert.rejects(controller.register('opencode'),/OPENCODE_MCP_CONFIG_REVIEW_REQUIRED/u);assert.match(await readFile(path,'utf8'),/comments must be preserved/u);
 });
 
 test('runtime native setup activity SSE replays history and streams sanitized MCP progress',async t=>{

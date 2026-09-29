@@ -104,7 +104,7 @@ export class ControlSettings{
         else if(suffix==='settings/login'){
           const value=body as {client?:unknown;flow?:unknown};
           if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))||!['device','browser'].includes(String(value.flow))){send(400,{error:'INVALID_CLIENT_FLOW'});return true;}
-          await this.activity.record('ai','running','공식 AI 로그인 절차를 시작했습니다.');send(202,await this.auth.start(value.client as 'codex'|'claude'|'hermes',value.flow as 'device'|'browser'));
+          await this.activity.record('ai','running','공식 AI 로그인 절차를 시작했습니다.');send(202,await this.auth.start(value.client as McpRegistrationClient,value.flow as 'device'|'browser'));
         }else if(suffix==='settings/client/install'){
           const value=body as {client?:unknown};if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))){send(400,{error:'CLIENT_INSTALL_TARGET_INVALID'});return true;}
           const client=value.client as McpRegistrationClient,name=({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor CLI',hermes:'Hermes'} as const)[client];
@@ -117,7 +117,13 @@ export class ControlSettings{
               :`${name} 실행 파일 탐지 중`;
             await this.activity.record('setup',stage==='installer_exited'&&observation?.exit_code!==0?'error':stage==='downloaded'||stage==='installer_exited'?'success':'running',message);
           });
-          await this.activity.record('setup','success',`${name} 설치 확인 완료 · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
+          await this.activity.record('setup','success',`${name} 설치 확인 완료 · ${((Date.now()-started)/1000).toFixed(1)}초`);
+          const connection=(await this.auth.connections()).find(item=>item.id===client);
+          const flow=connection?.supported_login_flows.includes('device')?'device':connection?.supported_login_flows[0];
+          const login=connection?.status==='ready'?{client_id:client,flow:flow??null,state:'completed',reason:'existing_session_reused',credentials_exposed:false}:
+            flow?await this.auth.start(client,flow):{client_id:client,flow:null,state:'unavailable',reason:connection?.reason??'login_contract_unavailable',credentials_exposed:false};
+          await this.activity.record('ai',login.state==='completed'?'success':login.state==='unavailable'||login.state==='failed'?'warning':'running',`${name} ${login.state==='completed'?'기존 로그인 확인됨':login.state==='unavailable'||login.state==='failed'?'설치됨 · 로그인 재확인 필요':'공식 로그인 시작 · 브라우저에서 승인하세요'}`);
+          send(200,{...result,login});
         }else if(suffix==='settings/mcp/register'){
           const value=body as {client?:unknown};if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))){send(400,{error:'MCP_CLIENT_INVALID'});return true;}
           const name=({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor',hermes:'Hermes'} as const)[value.client as McpRegistrationClient];
@@ -132,7 +138,7 @@ export class ControlSettings{
           await this.activity.record('runtime','running','전용 작업 폴더와 로컬 실행 권한을 준비하는 중입니다.');await approveNonInterferingConnection(dirname(this.config.path));await this.activity.record('runtime','success','로컬 실행 연결을 승인했습니다.');send(200,this.status());
         }else send(404,{error:'NOT_FOUND'});
       }finally{this.busy=false;}
-    }catch(error){const message=error instanceof Error&&/^(?:BROWSER_SETUP|MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|CLIENT_INSTALL)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error','클라이언트 설치를 마치지 못했습니다. 공식 안내를 확인해 주세요.');send(message.includes('CONFLICT')||message.includes('BUSY')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
+    }catch(error){const message=error instanceof Error&&/^(?:BROWSER_SETUP|MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|OPENCODE_MCP_CONFIG|CLIENT_INSTALL)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error',message.startsWith('CLIENT_INSTALL_DOWNLOAD')?'설치 파일 다운로드 실패 · 네트워크를 확인한 뒤 설치를 다시 누르세요.':'설치 완료를 확인하지 못했습니다. 연결 작업 기록과 설치 상태를 다시 확인하세요.');send(message.includes('CONFLICT')||message.includes('BUSY')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
     return true;
   }
   close(){this.auth.close();this.activity.close();}

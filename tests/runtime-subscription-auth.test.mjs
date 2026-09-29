@@ -22,14 +22,14 @@ test('runtime subscription auth probes client-owned status only and returns no i
   const seen=[];const runner={async run(request){seen.push(request);
     if(executableId(request)==='codex')return {code:0,stdout:'Logged in using ChatGPT\n',stderr:''};
     if(executableId(request)==='claude')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty',subscriptionType:'pro',email:'private@example.test',projectsDirectory:'/secret'}),stderr:''};
-    if(executableId(request)==='opencode')return {code:0,stdout:JSON.stringify([{provider:'openrouter',credential:'never-return'}]),stderr:''};
-    if(executableId(request)==='agent')return {code:0,stdout:'Not authenticated\n',stderr:''};
+    if(executableId(request)==='opencode')return {code:0,stdout:'┌ Credentials\n│ OpenRouter api\n└ 1 credentials',stderr:''};
+    if(executableId(request)==='agent')return {code:0,stdout:JSON.stringify({status:'unauthenticated',isAuthenticated:false,hasAccessToken:false}),stderr:''};
     return {code:0,stdout:'[nous] Nous Portal — not logged in\n',stderr:''};
   }};
   const result=await probeSubscriptionClients(fixtureEnvironment(),runner);
-  assert.deepEqual(result.map(item=>[item.id,item.status]),[['codex','ready'],['claude','ready'],['opencode','ready'],['cursor','unavailable'],['hermes','signed_out']]);
+  assert.deepEqual(result.map(item=>[item.id,item.status]),[['codex','ready'],['claude','ready'],['opencode','ready'],['cursor','signed_out'],['hermes','signed_out']]);
   assert.equal(JSON.stringify(result).includes('private@example.test'),false);assert.equal(JSON.stringify(result).includes('/secret'),false);
-  assert.deepEqual(seen.map(item=>item.args),[['login','status'],['auth','status'],['auth','list','--format','json'],['proxy','status']]);
+  assert.deepEqual(seen.map(item=>item.args),[['login','status'],['auth','status'],['auth','list'],['status','--format','json'],['proxy','status']]);
   assert.ok(seen.every(item=>item.stdin===undefined));
 });
 
@@ -58,15 +58,39 @@ test('runtime status probe distinguishes an expired client session even when the
   assert.equal(JSON.stringify(status).includes('private@example.test'),false);
 });
 
-test('runtime auth flow does not guess an unsupported Cursor login contract',async()=>{
+test('runtime auth flow fails closed when the installed Cursor executable cannot report its official status',async()=>{
   let calls=0;const controller=new SubscriptionAuthFlowController({}, {async run(){calls++;throw Error('must not run');}});
-  assert.deepEqual(await controller.start('cursor','browser'),{client_id:'cursor',flow:'browser',state:'unavailable',reason:'login_contract_unavailable',credentials_exposed:false});
-  assert.equal(calls,0);
+  const view=await controller.start('cursor','browser');assert.equal(view.state,'unavailable');assert.equal(view.credentials_exposed,false);
+  assert.ok(calls<=1);
 });
 
 test('runtime auth process runner passes metacharacters as an argument instead of invoking a shell',async()=>{
   const literal='$(printf should-not-execute)';const result=await nativeProcessRunner.run({executable:process.execPath,args:['-e','process.stdout.write(process.argv[1])',literal],timeout_ms:2_000});
   assert.equal(result.code,0);assert.equal(result.stdout,literal);
+});
+
+test('runtime contract Cursor browser login uses its installed official CLI, typed status and an allowlisted URL without a model call',async()=>{
+  let finish,ready=false;const requests=[];
+  const runner={async run(request){requests.push(request);if(request.args[0]==='status')return {code:0,stdout:JSON.stringify({status:ready?'authenticated':'unauthenticated',isAuthenticated:ready,hasAccessToken:ready,email:'private@example.test'}),stderr:''};
+    assert.deepEqual(request.args,['login']);assert.equal(request.login_browser,'ui');
+    request.onStdout?.('Open https://evil.test/login and https://cursor.com/loginDeepControl?mode=login&redirectTarget=cli&uuid=fixture&challenge=fixture\nsecret never returned');
+    return new Promise(resolve=>finish=()=>{ready=true;resolve({code:0,stdout:'private@example.test',stderr:''});});}};
+  const controller=new SubscriptionAuthFlowController(fixtureEnvironment(),runner);const view=await controller.start('cursor','browser');
+  assert.equal(view.state,'waiting');assert.match(view.auth_url,/^https:\/\/cursor\.com\/loginDeepControl\?/u);assert.doesNotMatch(JSON.stringify(view),/evil|private@example|secret/u);
+  finish();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));assert.equal(controller.view('cursor').state,'completed');assert.equal(requests.length,3);controller.close();
+});
+
+test('runtime contract OpenCode device login chooses the official ChatGPT OAuth method and only exposes its device code',async()=>{
+  let finish,ready=false;const runner={async run(request){if(request.args.join(' ')==='auth list')return {code:0,stdout:'┌ Credentials\n└ '+(ready?'1':'0')+' credentials',stderr:''};
+    assert.deepEqual(request.args,['auth','login','--provider','openai','--method','ChatGPT Pro/Plus (headless)']);request.onStdout?.('\u001b[0mhttps://auth.openai.com/codex/device\nEnter code: ABCD-1234\n');
+    return new Promise(resolve=>finish=()=>{ready=true;resolve({code:0,stdout:'',stderr:''});});}};
+  const controller=new SubscriptionAuthFlowController(fixtureEnvironment(),runner),view=await controller.start('opencode','device');assert.equal(view.device_url,'https://auth.openai.com/codex/device');assert.equal(view.user_code,'ABCD-1234');
+  finish();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));assert.equal(controller.view('opencode').state,'completed');controller.close();
+});
+
+test('runtime contract Cursor incomplete status and externally injected API authentication remain unknown',async()=>{
+  for(const value of [{status:'authenticated',isAuthenticated:true},{status:'authenticated',isAuthenticated:true,hasAccessToken:true,usingApiKeyFromEnv:true},{status:'authenticated',isAuthenticated:true,hasAccessToken:true,usingAuthTokenFromEnv:true}]){const status=await probeSubscriptionClient('cursor',fixtureEnvironment(),{async run(){return {code:0,stdout:JSON.stringify(value),stderr:''};}});assert.equal(status.status,'unknown');}
+  const status=await probeSubscriptionClient('opencode',fixtureEnvironment(),{async run(){return {code:0,stdout:'some unknown response',stderr:''};}});assert.equal(status.status,'unknown');
 });
 
 test('runtime WSL resolver ignores Windows PATH shims and selects a WSL-native subscription client',async t=>{
@@ -138,7 +162,7 @@ test('runtime subscription model falls from failed Codex to Claude while preserv
 
 test('runtime OpenCode bridge reuses its configured provider but denies every tool and validates JSON output',async()=>{
   let projectConfig;const runner={async run(request){
-    if(request.args.join(' ')==='auth list --format json')return {code:0,stdout:'[{"provider":"openrouter"}]',stderr:''};
+    if(request.args.join(' ')==='auth list')return {code:0,stdout:'┌ Credentials\n│ OpenRouter api\n└ 1 credentials',stderr:''};
     assert.equal(request.args[0],'run');assert.ok(request.args.includes('--format'));projectConfig=JSON.parse(await readFile(join(request.cwd,'opencode.json'),'utf8'));
     return {code:0,stdout:JSON.stringify({type:'text',part:{type:'text',text:'{"choice":"A"}'}})+'\n',stderr:''};
   }};

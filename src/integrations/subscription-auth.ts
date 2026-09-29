@@ -17,7 +17,7 @@ export type SubscriptionAuthFlowKind='browser'|'device';
 export type SubscriptionAuthFlowState='idle'|'starting'|'waiting'|'completed'|'failed'|'unavailable';
 export interface SubscriptionAuthFlowView {
   client_id:SubscriptionClientId;flow:SubscriptionAuthFlowKind|null;state:SubscriptionAuthFlowState;
-  device_url?:string;user_code?:string;reason:string;credentials_exposed:false;
+  device_url?:string;auth_url?:string;user_code?:string;reason:string;credentials_exposed:false;
 }
 export interface SubscriptionClientConnection extends SubscriptionClientStatus {
   supported_login_flows:SubscriptionAuthFlowKind[];connection:SubscriptionAuthFlowView;
@@ -25,6 +25,7 @@ export interface SubscriptionClientConnection extends SubscriptionClientStatus {
 export interface ProcessRequest {
   executable:string;args:string[];stdin?:string;cwd?:string;timeout_ms:number;signal?:AbortSignal;
   output_limit_bytes?:number;
+  login_browser?:'ui';
   onStdout?:(text:string)=>void;onStderr?:(text:string)=>void;
 }
 export interface ProcessResult {code:number|null;stdout:string;stderr:string;}
@@ -43,7 +44,7 @@ const executableEnvironment=()=>{
 };
 export const nativeProcessRunner:SafeProcessRunner={run(request){
   return new Promise((resolve,reject)=>{
-    const child=spawn(request.executable,request.args,{cwd:request.cwd,env:executableEnvironment(),shell:false,windowsHide:true,stdio:['pipe','pipe','pipe'],signal:request.signal});
+    const child=spawn(request.executable,request.args,{cwd:request.cwd,env:{...executableEnvironment(),...(request.login_browser==='ui'?{NO_OPEN_BROWSER:'1'}:{})},shell:false,windowsHide:true,stdio:['pipe','pipe','pipe'],signal:request.signal});
     let stdout='',stderr='',settled=false;
     let timer:NodeJS.Timeout;
     const fail=(error:Error)=>{if(!settled){settled=true;clearTimeout(timer);child.kill('SIGKILL');reject(error);}};
@@ -94,15 +95,24 @@ const expiredPattern=/\b(?:expired|expiration|refresh token (?:is )?invalid|sess
 const probeSpec:Record<SubscriptionClientId,{args:string[]|null;parse:(text:string)=>Omit<SubscriptionClientStatus,'id'|'structured_bridge'>}>={
   codex:{args:['login','status'],parse:text=>/Logged in using ChatGPT/iu.test(text)?{status:'ready',auth:'subscription',reason:'client_reported_ready'}:expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:/not logged in|login required/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
   claude:{args:['auth','status'],parse:text=>{try{const value=JSON.parse(text) as {loggedIn?:unknown;authMethod?:unknown;apiProvider?:unknown;apiKeySource?:unknown;subscriptionType?:unknown;error?:unknown;status?:unknown};if(value.loggedIn===true){const subscription=value.apiProvider==='firstParty'&&(value.apiKeySource===undefined||value.apiKeySource===null||value.apiKeySource==='')&&(value.authMethod==='claude.ai'||value.authMethod===undefined&&typeof value.subscriptionType==='string'&&['pro','max','team','enterprise'].includes(value.subscriptionType.toLowerCase()));return {status:subscription?'ready':'unknown',auth:subscription?'subscription':'unknown',reason:subscription?'client_reported_ready':'client_auth_not_subscription'};}if(value.loggedIn===false){const detail=[value.error,value.status].filter(item=>typeof item==='string').join(' ');return expiredPattern.test(detail)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}}catch{}return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}},
-  opencode:{args:['auth','list','--format','json'],parse:text=>{try{const value=JSON.parse(text) as unknown;const count=Array.isArray(value)?value.length:value&&typeof value==='object'?Object.keys(value).length:0;return count>0?{status:'ready',auth:'unknown',reason:'client_reported_ready'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}catch{return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}}},
-  cursor:{args:null,parse:()=>({status:'unavailable',auth:'unknown',reason:'status_contract_unavailable'})},
+  opencode:{args:['auth','list'],parse:text=>{
+    const clean=text.replace(/\u001b\[[0-9;]*m/gu,''),count=clean.match(/\b(\d+) credentials?\b/iu);
+    if(count&&/Credentials/u.test(clean))return Number(count[1])>0?{status:'ready',auth:'unknown',reason:'client_reported_ready'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};
+    return expiredPattern.test(clean)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};
+  }},
+  cursor:{args:['status','--format','json'],parse:text=>{
+    try{const value=JSON.parse(text) as {status?:unknown;isAuthenticated?:unknown;hasAccessToken?:unknown;usingApiKeyFromEnv?:unknown;usingAuthTokenFromEnv?:unknown};
+      if(value.isAuthenticated===false&&value.status==='unauthenticated')return {status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};
+      if(value.isAuthenticated===true&&value.status==='authenticated'&&value.hasAccessToken===true&&value.usingApiKeyFromEnv!==true&&value.usingAuthTokenFromEnv!==true)return {status:'ready',auth:'oauth',reason:'client_reported_ready'};
+    }catch{}return {status:'unknown',auth:'unknown',reason:'unrecognized_status'};
+  }},
   hermes:{args:['proxy','status'],parse:text=>/\[[^\]]+\][^\r\n]*logged in/iu.test(text)&&!/not logged in/iu.test(text)?{status:'ready',auth:'oauth',reason:'oauth_proxy_ready'}:/not logged in/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'proxy_upstreams_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
 };
 const loginSpec:Record<SubscriptionClientId,Partial<Record<SubscriptionAuthFlowKind,string[]>>>= {
   codex:{browser:['login'],device:['login','--device-auth']},
   claude:{browser:['auth','login','--claudeai']},
-  opencode:{},
-  cursor:{},
+  opencode:{device:['auth','login','--provider','openai','--method','ChatGPT Pro/Plus (headless)']},
+  cursor:{browser:['login']},
   hermes:{browser:['portal','login']},
 };
 // Only read-only probes are joined. Model turns are deliberately never deduplicated.
@@ -148,12 +158,18 @@ export async function probeSubscriptionClients(environment:NodeJS.ProcessEnv=pro
 
 const idleFlow=(id:SubscriptionClientId):SubscriptionAuthFlowView=>({client_id:id,flow:null,state:loginFlows(id).length?'idle':'unavailable',reason:loginFlows(id).length?'not_started':'login_contract_unavailable',credentials_exposed:false});
 export function loginFlows(id:SubscriptionClientId){return Object.keys(loginSpec[id]) as SubscriptionAuthFlowKind[];}
-function safeLoginArtifacts(text:string){
-  let device_url:string|undefined,user_code:string|undefined;
-  for(const match of text.matchAll(/https:\/\/[^\s<>"']+/giu))try{const url=new URL(match[0]);if(url.origin==='https://auth.openai.com'&&url.pathname==='/codex/device')device_url=url.href;}catch{}
+function safeLoginArtifacts(id:SubscriptionClientId,text:string){
+  let device_url:string|undefined,auth_url:string|undefined,user_code:string|undefined;
+  const clean=text.replace(/\u001b\[[0-9;]*m/gu,'');
+  for(const match of clean.matchAll(/https:\/\/[^\s<>"']+/giu))try{
+    const url=new URL(match[0]);if(url.username||url.password||url.href.length>4096||[...url.searchParams.keys()].some(key=>/token|secret|password/iu.test(key)))continue;
+    if(['codex','opencode'].includes(id)&&url.origin==='https://auth.openai.com'&&url.pathname==='/codex/device'&&!url.search&&!url.hash)device_url=url.href;
+    if(id==='cursor'&&url.origin==='https://cursor.com'&&url.pathname==='/loginDeepControl'&&url.searchParams.get('mode')==='login'&&url.searchParams.get('redirectTarget')==='cli')auth_url=url.href;
+    if(id==='claude'&&url.origin==='https://claude.ai'&&url.pathname==='/oauth/authorize')auth_url=url.href;
+  }catch{}
   const codeContext=text.match(/(?:one[- ]time|device|verification)?\s*code\s*(?:is|:)?\s*([A-Z0-9]{4,8}-[A-Z0-9]{4,8})/iu);
   if(codeContext)user_code=codeContext[1]!.toUpperCase();
-  return {...(device_url?{device_url}:{}),...(user_code?{user_code}:{})};
+  return {...(device_url?{device_url}:{}),...(auth_url?{auth_url}:{}),...(device_url&&user_code?{user_code}:{})};
 }
 
 /** Owns only official CLI processes. It never opens or reads a client's credential store. */
@@ -196,11 +212,11 @@ export class SubscriptionAuthFlowController {
     const currentEntry=()=>{this.view(id);return !this.closed&&!abort.signal.aborted&&this.active.get(id)===entry;};
     const observe=(text:string)=>{
       if(!currentEntry())return;
-      entry.output=(entry.output+text).slice(-16_384);const artifacts=safeLoginArtifacts(entry.output);
+      entry.output=(entry.output+text).slice(-16_384);const artifacts=safeLoginArtifacts(id,entry.output);
       entry.view={client_id:id,flow,state:'waiting',reason:flow==='device'?'waiting_for_device_confirmation':'waiting_for_browser_confirmation',...artifacts,credentials_exposed:false};
     };
     invalidateClient(id,this.runner);
-    void Promise.resolve().then(()=>{requireCondition(currentEntry(),'CLIENT_LOGIN_CANCELLED');return this.runner.run({executable:clientExecutable(id,environment),args,timeout_ms:10*60_000,signal:abort.signal,onStdout:observe,onStderr:observe});}).then(async result=>{
+    void Promise.resolve().then(()=>{requireCondition(currentEntry(),'CLIENT_LOGIN_CANCELLED');return this.runner.run({executable:clientExecutable(id,environment),args,timeout_ms:10*60_000,signal:abort.signal,...(id==='cursor'?{login_browser:'ui' as const}:{}),onStdout:observe,onStderr:observe});}).then(async result=>{
       if(!currentEntry())return;
       if(result.code!==0){entry.view={client_id:id,flow,state:'failed',reason:'official_cli_login_failed',credentials_exposed:false};return;}
       invalidateClient(id,this.runner);

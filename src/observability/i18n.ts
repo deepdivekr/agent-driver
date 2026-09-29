@@ -4,6 +4,28 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
+'설치':'Install','연결':'Connect','MCP 연결':'Connect MCP','다운로드':'Download','연결 확인':'Check connection','인증 열기':'Open login',
+'인증 화면 준비 중…':'Preparing login…','설치 중… 연결 작업 기록에서 진행 상황을 확인하세요.':'Installing… Follow progress in the setup log.',
+'설치 후 로그인 화면이 자동으로 열립니다.':'The login page opens automatically after installation.',
+'Windows 앱 연결을 선택하거나 Linux·WSL에서 CLI를 설치하세요.':'Connect a Windows app, or install the CLI in Linux / WSL.',
+'ChatGPT 구독으로 로그인합니다. API는 AI 설정에서 선택하세요.':'Sign in with your ChatGPT subscription. Choose an API in AI settings.',
+'로그인을 누르면 공식 인증 화면이 열립니다.':'Log in opens the official sign-in page.',
+'로그인 상태를 확인하지 못했습니다. 다시 확인을 누르세요.':'Could not verify sign-in. Press Check again.',
+'로그인을 완료하지 못했습니다. 로그인 버튼으로 다시 시도하세요.':'Sign-in did not complete. Press Log in to retry.',
+'설치는 유지됩니다. 다시 확인 후 로그인을 다시 누르세요.':'The installation is kept. Check again, then retry Log in.',
+'자동 설치는 Linux·WSL에서 지원합니다. Windows 앱 연결을 선택하세요.':'Automatic installation supports Linux / WSL. Choose Windows app connection.',
+'공식 설치 파일의 주소나 크기를 확인하지 못해 실행하지 않았습니다. 설치를 다시 누르세요.':'The installer address or size could not be verified. Nothing was run. Retry Install.',
+'설치 파일을 내려받지 못했습니다. 인터넷 연결을 확인한 뒤 설치를 다시 누르세요.':'Could not download the installer. Check your internet connection and retry Install.',
+'설치 파일 다운로드가 지연됐습니다. 인터넷 연결을 확인한 뒤 다시 누르세요.':'Installer download timed out. Check your internet connection and retry.',
+'올바른 설치 파일이 아니어서 실행하지 않았습니다. 설치를 다시 누르세요.':'The downloaded file is not a valid installer. Nothing was run. Retry Install.',
+'기존 OpenCode 설정을 안전하게 읽지 못해 보존했습니다. 설정 파일을 확인한 뒤 다시 연결하세요.':'Existing OpenCode settings could not be safely read and were preserved. Check the configuration file before reconnecting.',
+'OpenCode 설정 파일이 일반 파일이 아니거나 너무 큽니다. 기존 파일은 변경하지 않았습니다.':'The OpenCode configuration is not a regular file or is too large. The existing file was not changed.',
+'설치 프로그램이 실패했습니다. 아래 연결 작업 기록에서 종료 코드를 확인하고 다시 누르세요.':'Installation failed. Check the exit code in the setup log below, then retry.',
+'설치 시간이 초과됐습니다. 다시 확인으로 설치 여부를 확인하세요.':'Installation timed out. Press Check again to verify the installation.',
+'설치 후 실행 파일을 찾지 못했습니다. 다시 확인을 누르거나 설치를 다시 시도하세요.':'Could not find the executable after installation. Check again or retry Install.',
+'요청을 처리하지 못했습니다. 다시 확인 후 재시도하세요.':'Could not process the request. Check again and retry.',
+'설치 파일 다운로드 실패 · 네트워크를 확인한 뒤 설치를 다시 누르세요.':'Installer download failed · check your network and retry Install.',
+'설치 완료를 확인하지 못했습니다. 연결 작업 기록과 설치 상태를 다시 확인하세요.':'Installation could not be verified. Check the setup log and installation status.',
 '브라우저 준비':'Browser setup','기본':'Default','선택':'Optional','등록됨':'Registered','점검 전':'Not checked','설치 확인됨':'Installation checked','CLI 설치 필요':'CLI installation needed','설치·실행 확인 필요':'Check installation and running app',
 '기본 전용 브라우저는 내 화면을 빼앗지 않습니다. 별도 브라우저 연결은 아래에서 선택할 수 있습니다.':'The default dedicated browser leaves your screen alone. Other browser connections are optional below.',
 '기본은 Playwright입니다. Aside·Neo는 원할 때만 연결하세요. 사이트 로그인은 업무에 필요할 때 안내합니다.':'Playwright is the default. Connect Aside or Neo only if wanted. Site login is requested when a task needs it.',
@@ -182,6 +204,8 @@ const EN:Record<string,string>={
 };
 /** Ordered regex rules for text assembled from numbers or names. */
 const RULES:Array<[string,string]>=[
+['^(.+) MCP 연결$','Connect $1 MCP'],['^(.+) 로그인$','Log in to $1'],['^(.+) 다운로드$','Download $1'],
+['^(.+) 기존 로그인 확인됨$','$1: existing sign-in verified'],['^(.+) 설치됨 · 로그인 재확인 필요$','$1: installed · check sign-in again'],['^(.+) 공식 로그인 시작 · 브라우저에서 승인하세요$','$1: sign-in started · approve in your browser'],
 ['^(Playwright|Aside|BrowserOS Neo) 연결 확인$','Check $1 connection'],['^(Aside|BrowserOS Neo) 연결 등록$','Register $1 connection'],['^(Playwright|Aside|BrowserOS Neo) 확인 중…$','Checking $1…'],
 ['^(\\d+)개$','$1'],['^(\\d+)건$','$1'],['^(\\d+)분 전$','$1m ago'],['^(\\d+)시간 전$','$1h ago'],['^(\\d+)일 전$','$1d ago'],
 ['^사이트 로그인 (\\d+)개 필요$','Site login · $1 needed'],['^실행 이력 (\\d+)건$','Run history · $1'],['^최근 변경 (\\d+)건$','Recent changes · $1'],['^클라이언트 인계 (\\d+)건$','Client handoffs · $1'],

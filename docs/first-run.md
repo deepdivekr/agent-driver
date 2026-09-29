@@ -17,7 +17,7 @@ bootstrap은 홈 디렉터리 안에 고정 Node/npm 런타임과 저장소를 �
 사용자가 직접 보는 절차는 다음과 같다.
 
 1. 설치를 지시한다.
-2. `agent-office connect`가 표시한 로컬 화면에서 사용할 클라이언트를 선택한다. 없으면 **설치**, 설치됐지만 로그아웃 상태면 **로그인**, 준비됐으면 **MCP 등록** 순서로 같은 카드가 바뀐다.
+2. `agent-office connect`가 표시한 로컬 화면에서 사용할 클라이언트를 선택한다. 없으면 **설치**를 누른다. 설치 확인 뒤 공식 로그인 화면으로 이어지며, 인증을 마치면 **MCP 연결**을 누른다. 이미 설치된 앱은 **로그인**부터 진행한다.
 3. **로컬 실행 승인** 뒤 AI 연결과 선택적 Jev를 설정한다. Telegram을 쓸 때는 Hermes가 안내하는 bot 연결에서 token과 허용 사용자만 한 번 입력한다.
 
 ## 연결 화면
@@ -32,9 +32,11 @@ bootstrap은 홈 디렉터리 안에 고정 Node/npm 런타임과 저장소를 �
 - **네이티브 Windows 앱 제어**: 실험 기능이다. 설치 즉시 모든 앱을 조작할 수 있는 것은 아니다.
 - **Aside·Neo**: 별도 설치·로그인 후 관제센터에서 연결한다. 현재 어댑터는 조회 전용이며 VM 내부 연결은 미지원이다.
 
-클라이언트 설치와 MCP 등록은 사용자가 각각의 버튼을 누른 뒤에만 실행한다. Linux/WSL 설치 버튼은 allowlist에 고정된 공식 HTTPS 설치 원본만 내려받고, redirect·2 MiB 초과·shell script가 아닌 응답을 거부한다. 임시 파일은 실행 후 삭제하고 raw installer 출력은 화면·journal에 보존하지 않는다. 이 검사는 원격 설치 프로그램의 내용 자체를 보증하거나 checksum을 고정하는 것은 아니다. 원격 프로그램 실행을 원하지 않으면 함께 표시되는 공식 설치 안내를 따라 수동 설치한다.
+클라이언트 설치와 MCP 등록은 사용자가 각각의 버튼을 누른 뒤에만 실행한다. Linux/WSL 설치는 MCP가 실행되는 같은 환경에 진행한다. 공식 HTTPS 설치 원본과 확인된 공식 redirect만 허용하며, 다운로드는 30초·2 MiB로 제한한다. shell script가 아닌 응답은 실행하지 않는다. 임시 파일은 실행 후 삭제하고 raw installer 출력은 화면·journal에 보존하지 않는다. 이 검사는 원격 설치 프로그램의 내용 자체를 보증하거나 checksum을 고정하는 것은 아니다. 원격 프로그램 실행을 원하지 않으면 버튼을 누르지 않고 직접 설치해도 된다. Aside·Neo처럼 별도 앱 설치가 필요한 경우 **다운로드**는 공식 다운로드 페이지를 연다.
 
-설치 뒤 Codex·Claude Code·Hermes는 지원되는 공식 CLI 로그인 흐름을 관제센터에서 시작한다. 기기 코드가 있으면 인증 URL과 코드만 표시하고 token·credential store는 읽지 않는다. OpenCode와 Cursor CLI처럼 bounded login 계약을 제공하지 않는 경로는 공식 로그인 안내를 연다. 실제 MCP 등록에는 절대 경로의 Node와 Agent Office CLI를 사용하므로 이후 작업 디렉터리에 의존하지 않는다. Codex·Claude Code·OpenCode는 공식 CLI 등록 명령, Cursor는 사용자 설정의 `mcpServers`, Hermes는 기존 YAML의 `mcp_servers.agent-driver`만 갱신한다. 같은 이름의 다른 설정이 있으면 덮어쓰지 않고 검토 필요로 멈춘다.
+설치 뒤 지원되는 공식 CLI 로그인 흐름을 자동으로 시작한다. Cursor는 공식 브라우저 로그인, OpenCode는 ChatGPT 구독의 기기 코드 인증으로 연결한다. 인증 URL과 일회용 코드만 표시하고 token·credential store는 읽지 않는다. 로그인 완료는 CLI 상태를 다시 확인해서 판정한다. OpenCode의 기존 provider 종류는 인증 목록만으로 추측하지 않으며 API 선택은 AI 설정에서 명시적으로 진행한다.
+
+실제 MCP 등록에는 절대 경로의 Node와 Agent Office CLI를 사용하므로 이후 작업 디렉터리에 의존하지 않는다. Codex·Claude Code는 공식 CLI 등록 명령, OpenCode는 사용자 전역 설정의 `mcp`, Cursor는 `mcpServers`, Hermes는 기존 YAML의 `mcp_servers.agent-driver`만 갱신한다. 같은 이름의 다른 설정은 덮어쓰지 않는다. 현재 OpenCode의 주석 포함 JSONC는 자동 변경하지 않고 기존 파일을 보존한 채 검토를 요청한다. Windows 앱 연결, 저장된 키 관리, 업무 계획·이력, 연결 로그처럼 펼쳐 보는 항목은 파란 글자와 밑줄로 표시한다.
 
 새 설치의 앱 경로는 `~/.local/share/agent-office`, 상태 경로는 `~/.agent-office`다. 기존 `~/.agent-driver`에 업무가 있으면 데이터를 옮기지 않고 그대로 이어 쓴다. `AGENT_OFFICE_CONNECTION_ROOT`로 다른 절대 경로를 지정할 수 있으며 이전 `AGENT_DRIVER_CONNECTION_ROOT`도 지원한다. 두 기본 경로 모두에 업무가 있으면 임의로 합치지 않고, 명시적인 경로 선택을 요구한다. 실행 명령은 `agent-office mcp`, 관제센터는 `agent-office connect`, Hermes 상태 확인은 `agent-office hermes doctor`다.
 
