@@ -103,7 +103,7 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     await rightEdge(page,'#refresh-mcp,#mcp-next','#step-0');await noOverflow(page);
     if(width===1280)await page.screenshot({path:join(evidence,`agents-${width}-${lang}-${theme}.png`),fullPage:true});
     await page.locator('[data-step="1"]').click();await page.locator('[data-browser=playwright]').waitFor();
-    await page.locator('#browser-setup>details>summary').focus();await page.keyboard.press('Enter');
+    await page.locator('#browser-alternatives>summary').focus();await page.keyboard.press('Enter');
     await page.getByRole('button',{name:lang==='ko'?'Aside 연결 확인':'Check Aside connection',exact:true}).click();
     await page.locator('[data-browser=aside][data-setup-state=permission]').waitFor();
     // A cached ready badge is not evidence that this new check finished rerendering the rows.
@@ -154,7 +154,8 @@ test('runtime native Work import and detail retain compact right actions, readab
     await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('재개')||document.querySelector('#pause')?.textContent.includes('Resume'));
     await page.locator('#pause').click();await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('일시정지')||document.querySelector('#pause')?.textContent.includes('Pause'));
     await compactButtons(page.locator('.controls button'));await rightEdge(page,'.controls button','.controls');
-    assert.ok(['start','left'].includes(await page.locator('.control-note').first().evaluate(e=>getComputedStyle(e).textAlign)));await noOverflow(page);
+    // The live Work stream can replace the node after a locator resolves. Inspect the current connected node atomically.
+    await page.waitForFunction(()=>{const note=document.querySelector('.control-note');return note?.isConnected&&['start','left'].includes(getComputedStyle(note).textAlign);});await noOverflow(page);
     await page.screenshot({path:join(evidence,`work-${width}-${lang}.png`),fullPage:true});assert.deepEqual(errors,[]);await context.close();
   }
 });

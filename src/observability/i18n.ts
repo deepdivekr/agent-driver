@@ -4,6 +4,11 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
+ '연결됐습니다.':'Connected.',
+ '조회 업무에 화면·프로필 사용을 허용합니다.':'Allows screen and profile access for read-only work.',
+ 'CLI 설치 후 다시 확인하세요.':'Install the CLI, then check again.',
+ '연결하지 못했습니다. 설명 보기를 확인하세요.':'Could not connect. Open Show explanation for help.',
+ '설정이 바뀌었습니다. MCP를 다시 연결하세요.':'Settings changed. Reconnect MCP.',
 '설치':'Install','연결':'Connect','관리':'Manage','MCP 연결':'Connect MCP','다운로드':'Download','연결 확인':'Check connection','인증 열기':'Open login',
 '허용하고 연결':'Allow & connect','사용 허용 필요':'Permission needed','확인 전':'Not checked','연결 필요':'Connection needed','연결 확인 필요':'Check connection',
 '상태 확인 → 필요한 설치·연결 → 화면·프로필 사용 허용 순서로 진행합니다.':'Check status → install or connect if needed → allow screen and profile access.',

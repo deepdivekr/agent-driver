@@ -211,6 +211,13 @@
 | RQ-797 | Preserve default Playwright when registering optional browsers, preserve existing configuration and environment/credential boundaries, and state reconnect requirements accurately. |
 | RQ-798 | Verify missing/disconnected/ready, registration conflict and security gates, desktop/mobile controls and relevant runtime regressions; document actual native evidence and remaining limitations. |
 
+## Phase 96
+
+| ID | Requirement |
+|---|---|
+| RQ-826 | Group connection explanations into closed, blue-underlined Show explanation disclosures; consolidate browser setup guidance, remove scattered question-mark help and duplicate notices, and preserve visible state, actions, errors, concise permission meaning and Windows configuration instructions inside its existing disclosure. |
+| RQ-827 | Verify Korean/English desktop/mobile disclosure and connection flows using the existing relevant checks; apply the managed UI preserving private Work/settings/MCP and record fixture versus actual Windows evidence. |
+
 ## Phase 95
 
 | ID | Requirement |

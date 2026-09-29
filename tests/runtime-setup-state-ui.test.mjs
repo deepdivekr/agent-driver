@@ -24,7 +24,7 @@ test('runtime fixture browser actions guide unknown, missing CLI, disconnected, 
  for(const width of [1280,375])for(const lang of ['ko','en'])for(const theme of ['dark','light']){
   const f=await fixture(t),before=await readFile(f.paths.runtimeConfig,'utf8'),context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];
   await context.addInitScript(({lang,theme})=>{localStorage.setItem('office-lang',lang);localStorage.setItem('office-theme',theme);},{lang,theme});page.on('pageerror',error=>errors.push(error.message));
-  await page.goto(f.url);await ready(page);await page.locator('#browser-setup>details>summary').click();const card=page.locator('[data-browser=aside]');
+  await page.goto(f.url);await ready(page);await page.locator('#browser-alternatives>summary').click();const card=page.locator('[data-browser=aside]');
   assert.equal(await card.getAttribute('data-setup-state'),'unchecked');assert.equal(f.state.probes,0);
   assert.equal(await card.locator('.cact .action-link').count(),0,'Do not show Download before installation is checked');
   await card.locator('.cact button').click();await ready(page);assert.equal(await card.getAttribute('data-setup-state'),'missing_cli');
@@ -53,7 +53,7 @@ test('runtime fixture browser actions guide unknown, missing CLI, disconnected, 
 test('runtime fixture stale browser revision is explained beside the action and requires a new check without overwriting settings',async t=>{
  const f=await fixture(t);f.state.installed=true;f.state.reachable=true;
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));
- await page.goto(f.url);await ready(page);await page.locator('#browser-setup>details>summary').click();const card=page.locator('[data-browser=aside]');await card.locator('.cact button').click();await ready(page);
+ await page.goto(f.url);await ready(page);await page.locator('#browser-alternatives>summary').click();const card=page.locator('[data-browser=aside]');await card.locator('.cact button').click();await ready(page);
  const changed=(await readFile(f.paths.runtimeConfig,'utf8'))+'\n';await writeFile(f.paths.runtimeConfig,changed);await card.locator('.cact button').click();await ready(page);
  assert.equal(await card.getAttribute('data-setup-state'),'unchecked');assert.match(await card.locator('.browser-feedback').textContent(),/설정이 변경됐습니다/u);assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),changed);
  await card.locator('.cact button').click();await ready(page);assert.equal(await card.getAttribute('data-setup-state'),'permission');
