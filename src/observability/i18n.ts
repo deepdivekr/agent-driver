@@ -32,7 +32,7 @@ const EN:Record<string,string>={
 '다른 브라우저 연결 · 선택':'Other browsers · optional','설치 안내 → 앱에서 로그인·CLI 연결 → 연결 확인 → 등록 순서입니다. 연결한 브라우저의 화면을 사용하는 조회 작업에만 적용됩니다.':'Install → sign in and set up the CLI in the app → check connection → register. This connection supports read-only tasks in that browser.',
 '이 브라우저의 화면·로그인 프로필을 조회 작업에 사용하도록 연결합니다.':'Allow read-only tasks to use this browser screen and signed-in profile.',
 '등록하면 새 MCP 연결부터 적용됩니다. 기존 연결은 다시 연결해야 하며, 진행 중 업무는 설정 변경 확인에서 멈출 수 있습니다.':'Registration applies to new MCP connections. Reconnect existing clients; active work may pause on a configuration-change check.',
-'설치 안내 다시 불러오기':'Reload setup guides','연결·로그인 안내':'Connection and login guide','전용 브라우저 다운로드':'Download dedicated browser',
+'새로고침':'Refresh','모델 새로고침':'Refresh models','설치 안내 다시 불러오기':'Reload setup guides','연결·로그인 안내':'Connection and login guide','전용 브라우저 다운로드':'Download dedicated browser',
 '기본 백그라운드 브라우저입니다. 브라우저 파일이 없으면 준비 버튼을 누르세요.':'Default background browser. Use the download button if its browser files are missing.',
 '별도 서비스 계정은 필요 없습니다. 사이트 로그인은 업무가 요청할 때 진행합니다.':'No separate service account is needed. Sign in to websites when a task requests it.',
 '사용할 컴퓨터에 Aside를 설치·실행한 뒤 Settings → Developers에서 CLI를 설치하세요.':'Install and run Aside on the execution computer, then install its CLI under Settings → Developers.',

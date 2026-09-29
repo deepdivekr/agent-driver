@@ -5,7 +5,9 @@ export const uiCss=`@font-face{font-family:"Pretendard Variable";font-style:norm
 :root[data-theme=light]{color-scheme:light;--bg:#f4f5f7;--side:#f4f5f7;--panel:#fff;--raise:#eef0f3;--line:#e2e5ea;--line2:#cfd4db;--text:#171a1f;--dim:#5f6774;--faint:#a3aab4;--accent:#c77d05;--accent-ink:#fff;--ok:#2f8f55;--warn:#c2415f;--err:#c73a3a;--run:#c77d05;--idle:#7c8491;--llm:#6f5bc4;--code:#2f6fae;--human:#c2415f;--acc-a:rgba(199,125,5,.10);--human-a:rgba(194,65,95,.10);--ok-a:rgba(47,143,85,.10)}
 *{box-sizing:border-box}body{margin:0;background:var(--bg)}[hidden]{display:none!important}a{color:var(--accent)}
 button,select,input,textarea{font:inherit;color:inherit;background:var(--raise);border:1px solid var(--line2);border-radius:8px;padding:6px 11px;max-width:100%}
-button{cursor:pointer;white-space:nowrap;font-family:var(--mono);font-size:12.5px}button:hover{border-color:var(--dim)}button:disabled{opacity:.45;cursor:not-allowed}
+button{cursor:pointer;white-space:nowrap;font-family:var(--mono);font-size:12.5px;min-height:36px;text-align:center}button:hover{border-color:var(--dim)}button:disabled{opacity:.45;cursor:not-allowed}
+.action-grid{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;align-items:stretch}.action-grid>button,.action-grid>.action-link{width:auto;min-width:0;max-width:100%;white-space:normal;line-height:1.4;text-align:center;display:inline-flex;align-items:center;justify-content:center}.action-grid>button:focus-visible{position:relative;z-index:1}
+.candidate-list{display:grid;gap:8px;margin:12px 0}.candidate-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border:1px solid var(--line);border-radius:8px;padding:10px}.candidate-row>span{min-width:0;overflow-wrap:anywhere}.candidate-row>button{width:auto;justify-self:end;white-space:normal}.candidate-list>button{width:fit-content;justify-self:end;white-space:normal}.candidate-list>p{margin:0}
 button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
 .text-action{color:var(--code);text-decoration:underline;text-underline-offset:3px;background:none;border:0;padding:4px 2px;cursor:pointer}.text-action:hover{color:var(--code);text-decoration-thickness:2px}
 details>summary{padding:8px 0;color:var(--code);text-decoration:underline;text-underline-offset:3px;cursor:pointer;font-size:13px}details[open]>summary{margin-bottom:12px}details>summary:hover{text-decoration-thickness:2px}
@@ -31,18 +33,18 @@ label{display:block;margin:12px 0 4px;color:var(--dim);font-size:13px}h1,h2,h3,h
 .lang svg{width:20px;height:14px;border-radius:2px;box-shadow:0 0 0 1px var(--line2);flex:none}
 .display-options{display:flex;align-items:center;gap:8px;margin-left:auto}.theme{display:inline-flex;align-items:center;gap:6px;border-radius:999px;padding:5px 10px;font:500 11.5px var(--sans)}.theme svg{width:15px;height:15px;flex:none}
 .panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px}
-.badge{display:inline-flex;align-items:center;gap:5px;font:500 11.5px var(--mono);line-height:1;padding:4px 9px;border-radius:999px;border:1px solid currentColor;white-space:nowrap}
-.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
+.badge{display:inline-flex;align-items:center;justify-content:center;gap:5px;font:500 11.5px var(--mono);line-height:1.25;min-height:24px;padding:4px 9px;border-radius:999px;border:1px solid currentColor;white-space:nowrap;text-align:center;max-width:100%}
+.badge::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor;flex:none}
 .ok{color:var(--ok)}.warn{color:var(--human)}.err{color:var(--err)}.run{color:var(--run)}.idle{color:var(--idle)}.badge.idle{border-style:dashed}
 .dot{width:8px;height:8px;border-radius:50%;background:currentColor;display:inline-block;flex:none}
 .caret{display:inline-block;width:8px;height:16px;background:var(--accent);vertical-align:-3px;flex:none}
-.import-routes .hint{align-self:center}.hint{width:20px;height:20px;padding:0;border-radius:50%;font-size:12px;line-height:18px;color:var(--faint);background:none;margin-left:6px;vertical-align:1px}
+.import-routes .hint{align-self:center}.hint{width:20px;height:20px;min-height:0;padding:0;border-radius:50%;font-size:12px;line-height:18px;color:var(--faint);background:none;margin-left:6px;vertical-align:1px}
 .hinted{display:none}:is(h1,h2,h3,h4,h5,label):has(+.hint){display:inline-block}
 dialog.help{border:1px solid var(--line2);border-radius:12px;background:var(--panel);color:var(--text);max-width:min(520px,calc(100vw - 32px));padding:18px}dialog.help::backdrop{background:#0009}
 dialog.help p{margin:0 0 14px;line-height:1.6;white-space:pre-line}dialog.help form{text-align:right}
 .notice{min-height:20px;margin:10px 0;color:var(--accent);font:12.5px var(--mono);overflow-wrap:anywhere}
 .tagline{margin-top:34px;padding-top:14px;border-top:1px solid var(--line);display:flex;gap:14px;flex-wrap:wrap;font:11.5px var(--mono);color:var(--faint)}.tagline span:last-child{margin-left:auto}
-@media(max-width:760px){.app{grid-template-columns:1fr;grid-template-rows:auto 1fr;background:var(--bg)}.side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:4px;padding:12px 16px;border-bottom:1px solid var(--line)}.brand{width:100%;padding:0 0 6px}.brand-sub,.side .sec,.side .foot,.paths{display:none}.nav{width:auto;padding:5px 8px}.main{padding:16px 16px 36px}}`;
+@media(max-width:760px){.app{grid-template-columns:1fr;grid-template-rows:auto 1fr;background:var(--bg)}.side{position:static;height:auto;flex-direction:row;flex-wrap:wrap;align-items:center;gap:4px;padding:12px 16px;border-bottom:1px solid var(--line)}.brand{width:100%;padding:0 0 6px}.brand-sub,.side .sec,.side .foot,.paths{display:none}.nav{width:auto;padding:5px 8px}.main{padding:16px 16px 36px}}@media(max-width:480px){.candidate-row{grid-template-columns:1fr}.candidate-row>button{min-height:36px}}`;
 
 export type ShellPage='work'|'settings'|'connections';
 /** Sidebar links are plain anchors so every view is one click away and pages stay independent. */

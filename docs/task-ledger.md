@@ -211,6 +211,14 @@
 | RQ-797 | Preserve default Playwright when registering optional browsers, preserve existing configuration and environment/credential boundaries, and state reconnect requirements accurately. |
 | RQ-798 | Verify missing/disconnected/ready, registration conflict and security gates, desktop/mobile controls and relevant runtime regressions; document actual native evidence and remaining limitations. |
 
+## Phase 94
+
+| ID | Requirement |
+|---|---|
+| RQ-820 | Audit active Control Center settings, connection, Work/detail and import surfaces for content-dependent card and action placement; identify shared alignment fixes without centering long-form instructions or logs. |
+| RQ-821 | Implement consistent equal-column/row layouts, centered compact card contents and uniform action geometry with responsive behavior, preserving existing controls, disclosures, authentication and user settings. |
+| RQ-822 | Verify actual geometry, interaction and screenshots in Korean/English, desktop/mobile and dark/light; apply the managed local UI with private state preserved and record exact evidence and remaining release boundaries. |
+
 ## Phase 93
 
 | ID | Requirement |

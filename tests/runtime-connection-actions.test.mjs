@@ -40,7 +40,9 @@ test('runtime fixture connection actions align and automatically continue instal
     await page.goto(f.url);await page.locator('[data-client=cursor] button').waitFor();
     assert.equal(await page.getByText(lang==='ko'?'공식 설치 안내':'Official install guide',{exact:true}).count(),0);
     const geometry=await page.locator('#mcp-clients .cact button').evaluateAll(buttons=>buttons.map(b=>{const r=b.getBoundingClientRect();return {width:r.width,height:r.height,text:b.textContent};}));
-    assert.ok(geometry.every(b=>b.width===geometry[0].width&&b.height===36));assert.ok(geometry.every(b=>b.text.length<=11));
+    assert.ok(geometry.every(b=>b.height===36));assert.ok(geometry.every(b=>b.text.length<=11));
+    const compact=await page.locator('#mcp-clients .cact button').evaluateAll(buttons=>buttons.map(button=>{const text=document.createRange();text.selectNodeContents(button);const style=getComputedStyle(button);return Math.abs(button.getBoundingClientRect().width-text.getBoundingClientRect().width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth));}));
+    assert.ok(compact.every(extra=>extra<2),'Connection buttons size to their localized label, without fixed-width filler');
     const summary=page.locator('#windows-bridge summary');await assertDisclosures(page,5);
     await summary.focus();await page.keyboard.press('Enter');assert.equal(await page.locator('#windows-bridge').evaluate(e=>e.open),true);
     for(const id of ['cursor','opencode']){

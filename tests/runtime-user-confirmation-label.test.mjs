@@ -56,7 +56,10 @@ test('runtime fixture confirmation tags render on board, list, detail and site l
       const req=route.request(),url=new URL(req.url());
       if(url.origin!==new URL(server.url).origin)return route.abort();
       if(req.method()!=='GET'){writes.push(req.method());return route.abort();}
-      if(url.pathname.endsWith('/work/board'))return route.fulfill({json:{works:[{id,title:'Confirmation label fixture',status:'needs_human',pack:null,run:null,updated_at:new Date().toISOString()}],auth_attention_count:0}});
+      const board={works:[{id,title:'Confirmation label fixture',status:'needs_human',pack:null,run:null,updated_at:'2026-09-29T00:00:00.000Z'}],auth_attention_count:0};
+      if(url.pathname.endsWith('/work/board'))return route.fulfill({json:board});
+      // The real defining-state SSE used to race and overwrite the HTTP-only fixture.
+      if(url.pathname.endsWith('/work/events'))return route.fulfill({contentType:'text/event-stream',body:'event: board\ndata: '+JSON.stringify(board)+'\n\n'});
       if(url.pathname.endsWith('/work/detail'))return route.fulfill({json:{...detail,run_status:'needs_human'}});
       if(url.pathname.endsWith('/connections/status'))return route.fulfill({json:{sites:[{site:'example.test',label:'Test portal',state:'challenge'}],profile_preserved:true,vnc:null}});
       return route.continue();
@@ -64,7 +67,7 @@ test('runtime fixture confirmation tags render on board, list, detail and site l
     const expected=lang==='ko'?'사용자 확인 필요':'User confirmation needed';
     await page.goto(server.url);
     const tile=page.locator('[data-work="'+id+'"]');
-    await tile.locator('.badge').filter({hasText:expected}).waitFor();
+    await tile.locator('.badge').filter({hasText:expected}).waitFor().catch(async error=>{throw Error(error.message+'; fixture badges='+JSON.stringify(await page.locator('.badge').allTextContents())+'; lang='+await page.locator('html').getAttribute('lang'),{cause:error});});
     assert.equal(await tile.locator('.badge').textContent(),expected);
     await page.locator('[data-layout="list"]').click();
     await page.locator('.rows .badge').filter({hasText:expected}).waitFor();
