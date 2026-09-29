@@ -4,6 +4,14 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
+ '어떤 업무를 가져올까요? · 선택':'What should we import? · optional',
+ '예: 이 프로젝트에서 뉴스 수집·텔레그램 알림만 가져와줘. 쇼핑몰과 결제 기능은 제외해.':'Example: Import only news collection and Telegram alerts from this project. Exclude the store and payment features.',
+ '가져올 기능과 제외할 부분을 적으세요. 비워두면 프로젝트에서 업무를 찾아 제안합니다.':'Describe what to include or exclude. Leave blank to discover workflows in the project.',
+ '분석 범위 안내':'About scan scope',
+ '입력한 내용은 가져올 업무의 범위를 정합니다. 파일 접근 범위를 제한하지는 않으며, 관련 맥락을 확인하기 위해 프로젝트의 다른 파일도 제한된 읽기 전용 스캔에 포함될 수 있습니다.':'Your prompt defines which work to import, not file access permissions. The bounded read-only scan may also read other project files for context.',
+ '가져올 범위':'Import scope',
+ '가져올 내용이 바뀌었습니다. 다시 분석해 주세요.':'The import request changed. Analyze it again.',
+
  'Windows AI 앱 연결 · 선택':'Connect a Windows AI app · optional',
  'Cursor 같은 Windows AI 앱의 채팅에서 Agent Office에 업무를 맡기고 싶을 때만 설정하세요. 위에서 WSL 앱을 연결했다면 건너뛰어도 됩니다.':'Use this only to give Agent Office work from a Windows AI app such as Cursor. Skip it if you connected a WSL app above.',
  '예: Windows AI 앱에서 요청 → WSL의 Agent Office가 도구 실행 → 같은 채팅에서 결과 확인.':'Example: ask in your Windows AI app → Agent Office runs tools in WSL → see the result in the same chat.',

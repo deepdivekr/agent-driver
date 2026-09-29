@@ -9,6 +9,7 @@ export const workPlanSchema=z.object({
   source:z.enum(['request','pasted_import','project_scan']),
   source_id:z.string().min(1).max(128).nullable(),
   source_digest:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
+  import_scope:z.string().trim().min(1).max(2000).optional(),
   provenance:z.enum(['user_request','unverified_external','observed_code_unverified_execution']),
   steps:z.array(z.object({
     id:stepId,goal:z.string().trim().min(1).max(2000),depends_on:z.array(stepId).max(10),
@@ -40,6 +41,7 @@ export function initialWorkPlan(goal:string,requestedEffect:'read_only'|'draft_o
 
 export function planFromImport(record:WorkImportRecord,goal:string,requestedEffect:'read_only'|'draft_only'|'local_file_write'|'external_effect_requested'|'unknown'):WorkPlan{
   const steps:WorkPlan['steps']=record.kind==='pasted'?(record.body as WorkImportDraft).steps.map(step=>({id:step.id,goal:step.goal,depends_on:step.depends_on,effect:step.effect,tool_hints:step.tool_hints,evidence_ids:step.evidence_ids})):(record.body as {analysis?:{steps:Array<{id:string;goal:string;depends_on:string[];evidence_ids:string[]}>}|null}).analysis?.steps.map(step=>({id:step.id,goal:step.goal,depends_on:step.depends_on,effect:'unknown' as const,tool_hints:[],evidence_ids:step.evidence_ids}))??[];
+  const scope=record.kind==='project'?(record.body as {scope?:string}).scope:undefined;
   const fallback=initialWorkPlan(goal,requestedEffect).steps[0]!;
-  return validateWorkPlan({format:1,revision:1,source:record.kind==='pasted'?'pasted_import':'project_scan',source_id:record.id,source_digest:record.source_digest,provenance:record.kind==='pasted'?'unverified_external':'observed_code_unverified_execution',steps:steps.length?steps:[fallback]});
+  return validateWorkPlan({format:1,revision:1,source:record.kind==='pasted'?'pasted_import':'project_scan',source_id:record.id,source_digest:record.source_digest,...(scope?{import_scope:scope}:{}),provenance:record.kind==='pasted'?'unverified_external':'observed_code_unverified_execution',steps:steps.length?steps:[fallback]});
 }

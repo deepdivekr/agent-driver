@@ -152,7 +152,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(suffix==='work/import/paste'||suffix==='work/import/scan'||suffix==='work/import/accept'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
-      try{let body='';const max=suffix==='work/import/paste'?70_000:4_096;for await(const chunk of request){body+=String(chunk);if(body.length>max)throw Error('WORK_IMPORT_REQUEST_TOO_LARGE');}
+      try{let body='';const max=suffix==='work/import/paste'?70_000:suffix==='work/import/scan'?32_768:4_096;for await(const chunk of request){body+=String(chunk);if(body.length>max)throw Error('WORK_IMPORT_REQUEST_TOO_LARGE');}
         const raw=JSON.parse(body) as unknown;
         const result=suffix==='work/import/paste'?imports.paste(workImportPasteSchema.parse(raw)):suffix==='work/import/scan'?await imports.scan(workImportScanSchema.parse(raw)):await imports.accept(workImportAcceptSchema.parse(raw));
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');

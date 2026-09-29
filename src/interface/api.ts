@@ -170,10 +170,10 @@ export class RuntimeApi{
         case 'runtime_work_import_paste':return this.imports.paste(args);
         case 'runtime_work_import_status':return this.imports.status(args);
         case 'runtime_work_import_scan':{
-          const input=args as {project_ref?:unknown};
+          const input=args as {project_ref?:unknown;scope?:string};
           const item=this.config.coding?.projects.find(project=>project.id===input.project_ref);
           requireCondition(item,'WORK_IMPORT_PROJECT_NOT_REGISTERED');
-          return this.imports.scan({path:item.root});
+          return this.imports.scan({path:item.root,...(input.scope!==undefined?{scope:input.scope}:{})});
         }
         case 'runtime_work_start':return this.work.start(args);
         case 'runtime_work_define':return this.work.define(args);

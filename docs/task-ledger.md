@@ -1,5 +1,13 @@
 # Public release ledger
 
+## Phase 98
+
+| ID | Requirement |
+|---|---|
+| RQ-831 | Add an optional natural-language import scope field to workflow/bot project import, with concise Korean/English guidance, preview and stale-preview protection. |
+| RQ-832 | Carry the user's scope through HTTP/MCP scan, approved project analysis, saved import and Work/hand-off instructions; preserve legacy empty-input behavior, source freshness, approvals and Jev policy. |
+| RQ-833 | Verify mixed-project scope propagation, invalid/empty input, model-unavailable behavior, repeated import, and desktop/mobile UI; apply the verified local Control Center preserving personal Work/settings/MCP and document exact evidence. |
+
 ## Phase 97
 
 | ID | Requirement |
