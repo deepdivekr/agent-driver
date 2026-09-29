@@ -4,7 +4,7 @@ import {access} from 'node:fs/promises';
 import {type IncomingMessage,type ServerResponse} from 'node:http';
 import {type HostConfig} from '../interface/config.js';
 import {type PackStore} from '../packs/store.js';
-import {langButtonHtml,sidebarHtml,uiCss} from './ui-shell.js';
+import {displayOptionsHtml,sidebarHtml,themeScript,uiCss} from './ui-shell.js';
 import {i18nScript} from './i18n.js';
 import {BrowserLoginBroker,authSites,knownLoginSites} from '../swarm/browser-auth.js';
 
@@ -44,8 +44,9 @@ export class BrowserConnections {
 }
 function connectionHtml(nonce:string){return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>사이트 로그인 · Agent Office</title><style>${uiCss}
 .wrap{max-width:760px}.site{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;border-bottom:1px solid var(--line);flex-wrap:wrap}.site h2{font-size:14px;font-weight:500;margin:0 0 4px}.actions{display:flex;gap:6px;flex-wrap:wrap}.empty-line{color:var(--dim);padding:12px 0}
-</style></head><body><div class="app">${sidebarHtml('connections')}<main class="main"><div class="wrap"><header class="top"><h1>사이트 로그인</h1><span class="muted">로그인 화면: <code id="vnc">—</code></span>${langButtonHtml}</header><div class="panel"><p class="muted keep">현재 작업에 필요한 사이트만 표시됩니다.</p><div id="sites"></div><small>로그인이나 사람 확인이 끝날 때까지 해당 worker는 대기합니다.</small></div><div id="notice" class="notice" role="status">연결 상태 확인 중…</div></div></main></div><script nonce="${nonce}">
+</style></head><body><div class="app">${sidebarHtml('connections')}<main class="main"><div class="wrap"><header class="top"><h1>사이트 로그인</h1><span class="muted">로그인 화면: <code id="vnc">—</code></span>${displayOptionsHtml}</header><div class="panel"><p class="muted keep">현재 작업에 필요한 사이트만 표시됩니다.</p><div id="sites"></div><small>로그인이나 사람 확인이 끝날 때까지 해당 worker는 대기합니다.</small></div><div id="notice" class="notice" role="status">연결 상태 확인 중…</div></div></main></div><script nonce="${nonce}">
 ${i18nScript}
+${themeScript}
 
 const labels={unchecked:'확인 필요',needs_login:'로그인 필요',challenge:'사람 확인 필요',ready:'준비됨',unknown:'확인 필요',retry_requested:'재시도 대기',policy_blocked:'확인 필요'};let busy=false,last='';
 async function refresh(){try{const response=await fetch('connections/status');if(!response.ok)throw Error('연결 상태를 읽지 못했습니다.');const data=await response.json();document.getElementById('vnc').textContent=data.vnc||'준비되지 않음';const next=JSON.stringify([data.sites,data.profile_preserved]);if(next===last)return true;last=next;const root=document.getElementById('sites');root.replaceChildren();for(const site of data.sites){const card=document.createElement('section');card.className='site';const info=document.createElement('div'),title=document.createElement('h2'),state=document.createElement('div');title.textContent=site.label;state.className='badge '+(site.state==='ready'?'ok':site.state==='retry_requested'?'run':'warn');state.textContent=(labels[site.state]||site.state)+(site.handoff?' · 직접 로그인 중':'');info.append(title,state);const actions=document.createElement('div');actions.className='actions';for(const [action,label] of [['open','로그인 창 열기'],['check','로그인 확인'],['retry','다시 시도']]){const button=document.createElement('button');button.textContent=label;if(action==='open')button.className='primary';button.disabled=busy||!data.profile_preserved;button.onclick=()=>act(action,site.site);actions.append(button);}card.append(info,actions);root.append(card);}if(!data.sites.length){const empty=document.createElement('p');empty.className='empty-line';empty.textContent='현재 로그인이 필요한 사이트가 없습니다.';root.append(empty);}return true;}catch(error){document.getElementById('notice').textContent=error.message;return false;}}

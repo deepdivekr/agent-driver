@@ -32,3 +32,18 @@ src/onboarding/control-service-entry.ts. Node 22.22.0, npm 11.11.0 unchanged.
 
 Pending: PR/CI publication. This is a source fix for a subsequent installation release;
 the immutable v0.3.1 installer/tag is not rewritten.
+
+## Theme addition
+
+Work (including detail), settings and site-login share a visible light/dark toggle.
+The initial theme follows the system. Explicit browser-local choice overrides it,
+persists across reload/navigation and synchronizes open tabs. Clicking never reloads
+or submits settings, preserving unsent drafts and running Work. Storage denial
+degrades to a usable in-page toggle rather than blocking the UI.
+
+Affected suite: 47/47 PASS (46 cases plus input integrity), including four real
+Chromium theme cases. Receipt: tests/evidence/runtime-tests-2026-09-29T00-44-35-757Z.json.
+375px layout, Korean/English controls, keyboard actions and no-POST behavior verified.
+Ledger: 108 RQ. Public-boundary check: no findings. The first PR32 head passed the
+full quick/installer CI; the amended theme head still requires CI before publication.
+Pending: managed local upgrade and actual Windows theme-control verification.
