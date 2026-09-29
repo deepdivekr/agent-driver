@@ -17,6 +17,7 @@ const ROW0 = 532, ROWH = 70;
 const SCR = { y:540, h:222 }, DIA = { y:640, h:176 };
 const INTAKE = { y:290, h:104 }, CARD = { y:448, h:142 }, GRID = { y:644, th:100, gap:10 };
 const COLW = (CW - 3*16) / 4;
+const FG = 16;   // gap between the client → mcp → local flow boxes
 
 function prepare() {}
 
@@ -72,10 +73,30 @@ function button(x, y, label, kind, press = 0, spin = null) {
   return { x, y, w, h };
 }
 function badgeR(xr, y, text, col, a = 1) { const w = mw(text, `500 12px ${M}`) + 20; pill(xr - w, y, text, col, a); return w; }
+// Control Center status badge: "● 설치 필요" (dashed while idle, solid once it matters). Returns width.
+function statusPill(x, y, text, col, dashed, a = 1) {
+  col = colorOf(col); const f = `500 12px ${M}`, w = mw(text, f) + 34;
+  if (!dashed) fillR(x, y, w, 22, 11, hexA(col, 0.14*a));
+  strokeR(x + .5, y + .5, w - 1, 21, 11, col, 1, (dashed ? 0.8 : 0.75)*a, dashed ? [3, 3] : null);
+  dot(x + 12, y + 11, 3, col, a); txt(text, x + 22, y + 15, { font:f, color:col, alpha:a }); return w;
+}
+// KO chip with a small Taegukgi, as in the Control Center header.
 function langChip(xr, y) {
-  const w = 52; fillR(xr - w, y, w, 26, 13, C.surf2); strokeR(xr - w + .5, y + .5, w - 1, 25, 13, C.line2, 1);
-  dot(xr - w + 15, y + 13, 5, C.human); dot(xr - w + 15, y + 13, 2.5, C.cool);
-  txt(meta.lang || 'KO', xr - 12, y + 18, { font:`600 12px ${M}`, color:C.text, align:'right' });
+  const w = 62, x = xr - w; fillR(x, y, w, 26, 13, C.surf2); strokeR(x + .5, y + .5, w - 1, 25, 13, C.line2, 1);
+  const fx = x + 10, fy = y + 6; fillR(fx, fy, 21, 14, 2, '#f4f5f7');
+  ctx.save(); ctx.globalAlpha = GA; const cx = fx + 10.5, cy = fy + 7;
+  ctx.beginPath(); ctx.arc(cx, cy, 3.6, Math.PI, 0); ctx.fillStyle = '#cd2e3a'; ctx.fill();
+  ctx.beginPath(); ctx.arc(cx, cy, 3.6, 0, Math.PI); ctx.fillStyle = '#0047a0'; ctx.fill();
+  ctx.strokeStyle = '#101317'; ctx.lineWidth = 1.2;
+  [[fx + 3, fy + 3], [fx + 18, fy + 3], [fx + 3, fy + 11], [fx + 18, fy + 11]].forEach(([px, py]) => { ctx.beginPath(); ctx.moveTo(px - 1.5, py - 1); ctx.lineTo(px + 1.5, py + 1); ctx.stroke(); });
+  ctx.restore();
+  txt(meta.lang || 'KO', xr - 11, y + 18, { font:`600 12px ${M}`, color:C.text, align:'right' });
+}
+// Select box as in the settings form; value dims while it is a placeholder.
+function selectBox(x, y, w, value, placeholder, open) {
+  fillR(x, y, w, 40, 7, C.bg); strokeR(x + .5, y + .5, w - 1, 39, 7, open ? C.acc : C.line2, 1);
+  txt(value, x + 16, y + 26, { font:`${placeholder ? 400 : 500} 15px ${S}`, color: placeholder ? C.faint : C.text });
+  const cx = x + w - 20, cy = y + 20; ln(cx - 5, cy - 2, cx, cy + 3, C.dim, 1.6); ln(cx, cy + 3, cx + 5, cy - 2, C.dim, 1.6);
 }
 function check(x, y, col, a = 1, sz = 5) { ctx.save(); ctx.globalAlpha = a*GA; ctx.strokeStyle = colorOf(col); ctx.lineWidth = 2.2; ctx.lineCap = 'round';
   ctx.beginPath(); ctx.moveTo(x - sz, y); ctx.lineTo(x - sz*0.3, y + sz*0.7); ctx.lineTo(x + sz, y - sz*0.8); ctx.stroke(); ctx.restore(); }
@@ -214,16 +235,17 @@ function settingsFrame(s, E, tm) {
   txt(ST.title || '', CX, CY + 44, { font:`600 22px ${S}`, color:C.text });
   langChip(CR, CY + 22);
   let tab = s.tab || 0; const jevQ = s.jevAt != null ? ease(win(r, s.jevAt, s.jevAt + 0.3)) : 0; if (jevQ >= 1) tab = 3;
-  txt(`${tab + 1} / 4`, CR - 66, CY + 40, { font:`400 14px ${M}`, color:C.dim, align:'right' });
+  txt(`${tab + 1} / 4`, CR - 76, CY + 40, { font:`400 14px ${M}`, color:C.dim, align:'right' });
   // flow row
-  const fy = CY + 66, bw = (CW - 2*26) / 3, fl = ST.flow || [];
+  const fy = CY + 66, bw = (CW - 2*FG) / 3, fl = ST.flow || [];
   const on0 = tm >= gAt(ITEMS[1].shot, ITEMS[1].at), on2 = tm >= gAt(ITEMS[2].shot, ITEMS[2].at);
   fl.forEach((b, j) => {
-    const bx = CX + j*(bw + 26), col = j === 1 ? C.acc : (j === 0 ? on0 : on2) ? C.ok : C.line2;
-    fillR(bx, fy, bw, 54, 9, C.surf2); strokeR(bx + .5, fy + .5, bw - 1, 53, 9, col, j === 1 ? 1.5 : 1);
-    txt(b.title, bx + 14, fy + 23, { font:`600 13px ${M}`, color:C.text });
-    txt(fitText(b.sub, `400 11px ${M}`, bw - 28), bx + 14, fy + 42, { font:`400 11px ${M}`, color:C.dim });
-    if (j < 2) ln(bx + bw, fy + 27, bx + bw + 26, fy + 27, (j === 0 ? on0 : on2) ? C.ok : C.line2, 1.5);
+    const bx = CX + j*(bw + FG), col = j === 1 ? C.acc : (j === 0 ? on0 : on2) ? C.ok : C.line2;
+    const subs = [].concat(b.sub), bh = 38 + subs.length*17, by = fy + 27 - bh/2;
+    fillR(bx, by, bw, bh, 9, C.surf2); strokeR(bx + .5, by + .5, bw - 1, bh - 1, 9, col, j === 1 ? 1.5 : 1);
+    txt(b.title, bx + 12, by + 23, { font:`600 13px ${M}`, color:C.text });
+    subs.forEach((l, k) => txt(fitText(l, `400 11px ${M}`, bw - 20), bx + 12, by + 42 + k*17, { font:`400 11px ${M}`, color:C.dim }));
+    if (j < 2) ln(bx + bw, fy + 27, bx + bw + FG, fy + 27, (j === 0 ? on0 : on2) ? C.ok : C.line2, 1.5);
   });
   // tabs with a sliding underline
   const ty = CY + 158, tabs = ST.tabs || [], xs = [];
@@ -254,7 +276,7 @@ function agents(s, E, t) {
   const r = E.r, CLICK = 1.8, DONE = ITEMS[1].at;
   panelHead(s.heading, s.sub);
   txt(s.runtime, CX, 508, { font:`600 14px ${S}`, color:C.text });
-  badgeR(CR, 492, s.runtimeBadge, 'ok');
+  statusPill(CR - mw(s.runtimeBadge, `500 12px ${M}`) - 34, 492, s.runtimeBadge, 'ok', false);
   ln(CX, 522.5, CR, 522.5, C.line, 1);
   let target = null;
   s.rows.forEach((row, k) => {
@@ -264,10 +286,11 @@ function agents(s, E, t) {
     const nameY = row.note ? yy + 30 : yy + 40;
     txt(row.name, CX + 4, nameY, { font:`600 15px ${S}`, color:C.text });
     const bcol = row.target ? (flipped ? 'ok' : 'human') : 'dim';
-    pill(CX + 140, nameY - 16, flipped ? row.badgeAfter : row.badge, bcol, 1);
+    statusPill(CX + 136, nameY - 16, flipped ? row.badgeAfter : row.badge, bcol, !row.target);
     if (row.note) txt(flipped ? row.noteAfter : row.note, CX + 4, yy + 54, { font:`400 12px ${S}`, color: flipped ? C.ok : C.dim });
     const busy = row.target && r >= CLICK + 0.1 && r < DONE, lab = flipped ? row.done : busy ? row.busy : row.button;
-    const bx = CR - btnW(row.target ? row.button : lab) - (busy ? 22 : 0);
+    let bx = CR - btnW(lab);
+    if (!row.target && s.guide) { const gf = `400 12px ${S}`, gw = mw(s.guide, gf); txt(s.guide, CR, yy + 39, { font:gf, color:C.acc, align:'right' }); ln(CR - gw, yy + 42.5, CR, yy + 42.5, C.acc, 1, 0.7); bx -= gw + 12; }
     const b = button(row.target ? CR - btnW(lab) - (busy ? 22 : 0) - (flipped ? 18 : 0) : bx, yy + 17, lab, row.target ? (flipped ? 'done' : 'primary') : 'ghost', row.target ? press(r, CLICK) : 0, busy ? t : null);
     if (flipped) check(b.x + b.w - 14, b.y + 17, C.ok, win(r, DONE, DONE + 0.2), 4);
     if (row.target) target = { b, top, badgeX: CX + 140, nameY };
@@ -285,8 +308,8 @@ function agents(s, E, t) {
     mouse(r, 0.9, CLICK - 0.1, [CR - 60, 980], bc, 2.4);
     mouse(r, 5.0, 5.6, bc, [CR - btnW(s.actions[1])/2, ay + 17], 6.6);
     toRail(r, DONE, [target.badgeX + 8, target.nameY - 5], 1);
-    const fy = CY + 66, bw = (CW - 2*26) / 3;
-    flyTo(r, DONE, DONE + 0.5, [CX + bw - 10, fy + 27], [CX + bw + 26 + 10, fy + 27], 'ok');
+    const fy = CY + 66, bw = (CW - 2*FG) / 3;
+    flyTo(r, DONE, DONE + 0.5, [CX + bw - 10, fy + 27], [CX + bw + FG + 10, fy + 27], 'ok');
   }
 }
 
@@ -336,8 +359,8 @@ function runtime(s, E, t) {
   button(b.x + b.w + 12, ay, s.next, 'ghost');
   mouse(r, 0.5, CLICK - 0.1, [CR - 40, 990], [b.x + b.w/2, ay + 17], 2.2);
   toRail(r, DONE, [CR - 60, 500], 2);
-  const fy = CY + 66, fbw = (CW - 2*26) / 3;
-  flyTo(r, DONE, DONE + 0.5, [CX + 2*fbw + 26 - 10, fy + 27], [CX + 2*fbw + 52 + 10, fy + 27], 'ok');
+  const fy = CY + 66, fbw = (CW - 2*FG) / 3;
+  flyTo(r, DONE, DONE + 0.5, [CX + 2*fbw + FG - 10, fy + 27], [CX + 2*fbw + 2*FG + 10, fy + 27], 'ok');
 }
 
 // shot 4: AI connection (subscription, never auto-switch to paid API), then Jev off
@@ -349,10 +372,15 @@ function ai(s, E, t) {
     dot(CX + 7, 465, 7, C.acc, 0.9); txt('!', CX + 7, 469.5, { font:`700 11px ${M}`, color:C.bg, align:'center' });
     txt(s.note, CX + 22, 470, { font:`500 13px ${S}`, color:C.acc });
     txt(s.modeLabel, CX, 506, { font:`400 12px ${M}`, color:C.dim });
-    const sw = CW / 3, sy = 516, sel = ease(win(r, PICK, PICK + 0.2));
-    fillR(CX, sy, CW, 42, 8, C.bg); strokeR(CX + .5, sy + .5, CW - 1, 41, 8, C.line2, 1);
-    if (sel > 0) { fillR(CX + 3, sy + 3, sw - 6, 36, 6, hexA(C.acc, 0.16*sel)); strokeR(CX + 3.5, sy + 3.5, sw - 7, 35, 6, C.acc, 1.2, sel); }
-    s.modes.forEach((m, j) => txt(m, CX + sw*j + sw/2, sy + 26, { font: j === 0 && sel > 0.5 ? `600 14px ${S}` : `400 14px ${S}`, color: j === 0 && sel > 0.5 ? C.acc : C.dim, align:'center' }));
+    // the real form's <select>: click opens the list, 구독 사용 is picked
+    const sy = 516, OPEN = 0.55, picked = r >= PICK, open = r >= OPEN && r < PICK + 0.12;
+    selectBox(CX, sy, CW, picked ? s.modes[0] : s.modePlaceholder, !picked, open);
+    if (open) { const la = ease(win(r, OPEN, OPEN + 0.15)), ly = sy + 44, lh = 38;
+      GA = base*aA*la; fillR(CX, ly, CW, lh*s.modes.length + 8, 8, C.surf2); strokeR(CX + .5, ly + .5, CW - 1, lh*s.modes.length + 7, 8, C.line2, 1);
+      s.modes.forEach((m, j) => { const hot = j === 0 && r >= 0.85;
+        if (hot) fillR(CX + 4, ly + 4 + j*lh, CW - 8, lh, 6, hexA(C.acc, 0.16));
+        txt(m, CX + 16, ly + 29 + j*lh, { font:`${hot ? 600 : 400} 15px ${S}`, color: hot ? C.acc : C.text }); });
+      GA = base*aA; }
     const ca = appear(r, PICK + 0.2, 0);
     if (ca > 0) { GA = base*aA*ca;
       txt(s.client, CX, 598, { font:`400 12px ${M}`, color:C.dim }); txt(s.clientName, CX + 128, 598, { font:`600 15px ${S}`, color:C.text });
@@ -386,7 +414,8 @@ function ai(s, E, t) {
     button(CR - btnW(s.actions[1]) - 12 - btnW(s.actions[0]), ay, s.actions[0], 'ghost', press(r, CONSENT + 0.3));
     spot(CX - 8, 490, CW + 16, 124, 1 - band(r, 1.8, 4.3, 0.3));
     GA = base;
-    mouse(r, 0.3, PICK - 0.1, [CR - 40, 990], [CX + CW/6, 537], 1.6);
+    mouse(r, 0.15, OPEN - 0.1, [CR - 40, 990], [CR - 60, 536], 0.62);
+    mouse(r, 0.62, PICK - 0.1, [CR - 60, 536], [CX + 150, 579], 1.6);
     mouse(r, 4.0, CONSENT - 0.1, [CX + CW/6, 1000], [CX + 25, cy + 23], J - 0.1);
     toRail(r, DONE, [CX + 25, cy + 23], 3);
   }
@@ -433,6 +462,12 @@ function intake(s, E, t) {
   GA = fa;
   txt(WK.title, CX, CY + 44, { font:`600 22px ${S}`, color:C.text });
   langChip(CR, CY + 22);
+  // header controls: search, 목록 | 보드 (board selected)
+  const vf = `500 13px ${S}`, v1 = WK.views[1], v0 = WK.views[0], v1x = CR - 62 - 18 - mw(v1, vf), v0x = v1x - 18 - mw(v0, vf);
+  txt(v0, v0x, CY + 40, { font:vf, color:C.dim }); txt(v1, v1x, CY + 40, { font:`600 13px ${S}`, color:C.text });
+  fillR(v1x - 6, CY + 48, mw(v1, vf) + 12, 2, 1, C.acc);
+  const sw = 150, sx = v0x - 18 - sw; fillR(sx, CY + 20, sw, 30, 7, C.bg); strokeR(sx + .5, CY + 20.5, sw - 1, 29, 7, C.line2, 1);
+  txt(WK.search, sx + 12, CY + 40, { font:`400 13px ${S}`, color:C.faint });
   // intake box
   const iy = INTAKE.y; panel(CX, iy, CW, INTAKE.h, 12);
   const fw = CW - 28 - 112, tf = typeProgress(r, E.I), typing = r < E.I;
@@ -461,10 +496,12 @@ function intake(s, E, t) {
     if (filled <= 0) { spinner(kx + 22, ky + 24, t, C.acc, 6); txt(WK.defining, kx + 36, ky + 29, { font:`500 12px ${S}`, color:C.acc });
       [0, 1].forEach(i => fillR(kx + 14, ky + 50 + i*20, (COLW - 28)*(0.9 - i*0.3), 9, 4, C.line)); }
     else { GA = fa*ca*filled;
-      txt(fitText(WK.packs[WK.pick].id, `600 12px ${M}`, COLW - 28), kx + 14, ky + 27, { font:`600 12px ${M}`, color:C.acc });
-      wrapText(WK.cardTitle, `600 15px ${S}`, COLW - 28, 2).forEach((l, i) => txt(l, kx + 14, ky + 56 + i*21, { font:`600 15px ${S}`, color:C.text }));
-      pill(kx + 14, ky + 84, WK.cardPill, 'dim');
-      txt(WK.cardFoot, kx + 14, ky + 130, { font:`400 11px ${S}`, color:C.dim }); txt(WK.cardAge, kx + COLW - 14, ky + 130, { font:`400 11px ${S}`, color:C.faint, align:'right' }); }
+      // same card as the board: pack id, title, dashed state pill, short id, received time
+      txt(fitText(WK.packs[WK.pick].id, `500 13px ${M}`, COLW - 28), kx + 14, ky + 28, { font:`500 13px ${M}`, color:C.text });
+      wrapText(WK.cardTitle, `600 15px ${S}`, COLW - 28, 2).forEach((l, i) => txt(l, kx + 14, ky + 55 + i*21, { font:`600 15px ${S}`, color:C.text }));
+      statusPill(kx + 14, ky + 72, WK.cardPill, 'dim', true);
+      txt(WK.cardId, kx + COLW - 14, ky + 87, { font:`400 11px ${M}`, color:C.faint, align:'right' });
+      txt(WK.cardFoot, kx + 14, ky + 124, { font:`400 12px ${S}`, color:C.text }); txt(WK.cardAge, kx + COLW - 14, ky + 124, { font:`400 12px ${S}`, color:C.faint, align:'right' }); }
     GA = fa; }
   // Pack families: the AI scans and locks onto one
   const gy = GRID.y, tw = (CW - 2*GRID.gap) / 3, packs = WK.packs || [];
@@ -499,13 +536,16 @@ function detail(s, E, t) {
   txt(DT.title, CX, CY + 44, { font:`600 22px ${S}`, color:C.text });
   langChip(CR, CY + 22);
   txt(DT.back, CX, 300, { font:`400 12px ${S}`, color:C.dim });
-  pill(CX, 312, run ? DT.statusAfter : DT.statusBefore, run ? 'acc' : 'dim');
-  txt(DT.workLabel, CR, 320, { font:`400 11px ${M}`, color:C.dim, align:'right', ls:1 });
-  txt(DT.workId, CR, 352, { font:`600 26px ${M}`, color:C.acc, align:'right' });
+  pill(CX, 312, run ? DT.statusAfter : DT.statusBefore, 'acc');
+  if (run) spinner(CX + mw(DT.statusAfter, `500 12px ${M}`) + 36, 323, t, C.acc, 5);
+  txt(DT.workLabel, CR, 318, { font:`400 11px ${M}`, color:C.dim, align:'right', ls:1 });
+  txt(DT.workId, CR, 346, { font:`600 24px ${M}`, color:C.acc, align:'right' });
+  txt(run ? DT.runAfter : DT.runBefore, CR, 368, { font:`400 12px ${M}`, color: run ? C.acc : C.dim, align:'right' });
   txt(WK.cardTitle, CX, 364, { font:`600 24px ${S}`, color:C.text });
   fillR(CX, 382, CW, 46, 9, C.surf2); strokeR(CX + .5, 382.5, CW - 1, 45, 9, C.line2, 1);
   fillR(CX + 12, 394, 44, 22, 6, C.bg); txt('mcp', CX + 34, 409, { font:`600 12px ${M}`, color:C.text, align:'center' });
-  txt(fitText(s.request, `400 15px ${S}`, CW - 84), CX + 68, 410, { font:`400 15px ${S}`, color:C.text });
+  txt(fitText(s.request, `400 15px ${S}`, CW - 104), CX + 68, 410, { font:`400 15px ${S}`, color:C.text });
+  fillR(CR - 22, 395, 8, 20, 1, C.acc);
   txt(DT.packLabel, CX, 460, { font:`400 13px ${M}`, color:C.dim });
   const pw = pill(CX + 44, 444, WK.packs[WK.pick].id, 'acc');
   txt(DT.packNote, CX + 56 + pw, 460, { font:`400 13px ${M}`, color:C.dim });
@@ -528,19 +568,20 @@ function detail(s, E, t) {
     GA = fa;
   });
   // control box
-  const bx = CX + lw + 22, bw = CW - lw - 22, by = py, bh = 310;
+  const bx = CX + lw + 22, bw = CW - lw - 22, by = py, bh = 340;
   fillR(bx, by, bw, bh, 12, C.surf); strokeR(bx + .5, by + .5, bw - 1, bh - 1, 12, C.human, 1.2);
   txt(DT.controlTitle, bx + 18, by + 30, { font:`600 15px ${S}`, color:C.human });
   const pbw = mw(DT.pause, `500 13px ${S}`) + 28; fillR(bx + 18, by + 44, pbw, 30, 7, hexA(C.human, 0.1)); strokeR(bx + 18.5, by + 44.5, pbw - 1, 29, 7, C.human, 1);
   txt(DT.pause, bx + 18 + pbw/2, by + 64, { font:`500 13px ${S}`, color:C.human, align:'center' });
   const nx = bx + 18, ny = by + 90, nw = bw - 36;
-  fillR(nx, ny, nw, 124, 9, C.surf2); strokeR(nx + .5, ny + .5, nw - 1, 123, 9, run ? C.acc : C.line2, run ? 1.4 : 1, run ? q : 1);
+  fillR(nx, ny, nw, 156, 9, C.surf2); strokeR(nx + .5, ny + .5, nw - 1, 155, 9, run ? C.acc : C.line2, run ? 1.4 : 1, run ? q : 1);
   const title = run ? DT.runTitle : DT.waitTitle, body = run ? DT.runBody : DT.waitBody, ta = run ? q : 1;
   if (run) spinner(nx + 20, ny + 25, t, C.acc, 6);
   txt(fitText(title, `600 14px ${S}`, nw - 50), nx + (run ? 36 : 16), ny + 30, { font:`600 14px ${S}`, color: run ? C.acc : C.text, alpha:ta });
-  wrapText(body, `400 13px ${S}`, nw - 32, 4).forEach((l, i) => txt(l, nx + 16, ny + 58 + i*21, { font:`400 13px ${S}`, color:C.dim, alpha:ta }));
-  txt(DT.jevLine, nx, by + 250, { font:`500 13px ${S}`, color:C.text });
-  txt(run ? DT.historyAfter : DT.historyBefore, nx, by + 280, { font:`400 13px ${S}`, color: run ? C.text : C.dim });
+  wrapText(body, `400 13px ${S}`, nw - 32, 3).forEach((l, i) => txt(l, nx + 16, ny + 56 + i*20, { font:`400 13px ${S}`, color:C.dim, alpha:ta }));
+  if (!run) button(nx + 16, ny + 110, DT.copy, 'ghost');
+  txt(DT.jevLine, nx, by + 282, { font:`500 13px ${S}`, color:C.text });
+  txt(run ? DT.historyAfter : DT.historyBefore, nx, by + 312, { font:`400 13px ${S}`, color: run ? C.text : C.dim });
   txt(fitText(DT.footer, `400 11px ${M}`, CW), CX + CW/2, 978, { font:`400 11px ${M}`, color:C.faint, align:'center' });
   spot(CX - 8, 296, CW + 16, 272, 1 - band(r, 3.0, 99, 0.3));
   GA = 1;

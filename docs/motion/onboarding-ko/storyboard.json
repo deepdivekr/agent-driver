@@ -11,6 +11,9 @@
     "footerLeft": "github.com/deepdivekr/agent-office",
     "footerRight": "v0.3.1  /  한국어 모드  /  예시 업무",
     "introSeconds": 0,
+    "colors": {
+      "dim": "#8b93a0"
+    },
     "rail": {
       "title": "첫 실행",
       "active": "진행 중",
@@ -74,11 +77,11 @@
       "flow": [
         {
           "title": "mcp client",
-          "sub": "claude code · codex"
+          "sub": ["claude code · codex ·", "cursor · hermes"]
         },
         {
           "title": "agent-office mcp",
-          "sub": "stdio · pack plan"
+          "sub": "stdio · observe · pack plan"
         },
         {
           "title": "LOCAL",
@@ -94,6 +97,8 @@
     },
     "work": {
       "title": "전체 업무",
+      "views": ["목록", "보드"],
+      "search": "업무 검색",
       "placeholder": "한 줄로 어떤 업무를 맡길까요?",
       "button": "업무 접수",
       "deep": "심화 · 결과에 중요한 조건을 먼저 선택",
@@ -112,13 +117,14 @@
           "color": "dim"
         },
         {
-          "label": "검증 완료",
-          "color": "ok"
+          "label": "종료된 업무",
+          "color": "text"
         }
       ],
       "defining": "업무 정의 중",
       "cardTitle": "3사 공식 발표 비교표",
       "cardPill": "실행 대기",
+      "cardId": "#3f2c",
       "cardFoot": "접수됨",
       "cardAge": "방금",
       "packsTitle": "Pack family 9종 · 업무의 출발점",
@@ -177,6 +183,9 @@
       "back": "← 업무 목록",
       "workLabel": "WORK",
       "workId": "#3F2C71A0",
+      "runBefore": "run not started",
+      "runAfter": "run 1 · running",
+      "copy": "에이전트에게 보낼 지시 복사",
       "statusBefore": "실행 대기",
       "statusAfter": "진행 중",
       "packLabel": "pack",
@@ -403,7 +412,8 @@
         "다시 확인",
         "다음"
       ],
-      "hint": "앱 하나를 설치하고 MCP를 등록하세요."
+      "hint": "앱 하나를 설치하고 MCP를 등록하세요.",
+      "guide": "공식 설치 안내"
     },
     {
       "name": "runtime",
@@ -463,6 +473,7 @@
       "heading": "AI 연결",
       "note": "구독 한도를 소진해도 유료 API로 자동 전환하지 않습니다.",
       "modeLabel": "연결 방식",
+      "modePlaceholder": "연결 방식 선택",
       "modes": [
         "구독 사용",
         "API 키 사용",
