@@ -19,6 +19,10 @@ The Phase 102 acceptance record documents actual web, registered file, parallel 
 
 The exact candidate must pass the affected suite, frozen full quick, production dependency audit, public boundary, ledger, five real candidate-install scenarios and current-head GitHub CI before merge. Long soak is excluded. Installation probes run real package installation, Chromium and MCP but use injected Work models: they are not billed model or real-business acceptance.
 
+The first published candidate, `f774efb54db386250fcaade0574882d9e3f1fc46`, passed local affected regressions (62/62), full quick (1,288/1,288; unchanged inputs) and all five real temporary fresh/upgrade scenarios, each installing that exact commit. Both [PR CI](https://github.com/deepdivekr/agent-office/actions/runs/36559440344) and [push CI](https://github.com/deepdivekr/agent-office/actions/runs/36559435078) failed one theme assertion (1,287/1,288); their installation steps were skipped, not successful.
+
+The artifacts attribute that failure to the settings page's normal initialization `settings/refresh` request being counted as a theme-triggered write. The regression now binds exactly one initialization request to the settings navigation, asserts no request for the first theme action and rejects every other POST throughout the traversal. It does not whitelist every refresh or disable the request check. All four repaired browser-theme cases plus input stability passed (5/5). Product source/build code did not change for this test correction. Both original CI failures remain failures; a fresh exact-head CI is still required.
+
 At this source checkpoint, final candidate verification and merge are pending. The PR check history and final merge receipt must identify the exact head; an older green or cancelled run cannot substitute for it. Raw local receipts and private settings are not publication artifacts.
 
 ## Issue reconciliation

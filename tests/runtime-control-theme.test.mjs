@@ -23,8 +23,8 @@ async function color(page,expected){
 const dark='rgb(16, 19, 23)',light='rgb(244, 245, 247)';
 
 test('runtime native theme changes immediately without losing a draft and persists across all Control Center routes',async t=>{
-  const {page,server,errors}=await setup(t),posts=[];
-  page.on('request',request=>{if(request.method()==='POST')posts.push(request.url());});
+  const {page,server,errors}=await setup(t),posts=[],bootstrapRequests=new Set();
+  page.on('request',request=>{if(request.method()==='POST')posts.push(request);});
   await page.goto(server.url);
   await color(page,light);
   await page.locator('#prompt').fill('Keep this unsent work draft');
@@ -32,13 +32,19 @@ test('runtime native theme changes immediately without losing a draft and persis
   await color(page,dark);
   assert.equal(await page.locator('#prompt').inputValue(),'Keep this unsent work draft');
   assert.equal(await page.evaluate(()=>localStorage.getItem('office-theme')),'dark');
+  assert.deepEqual(posts.map(request=>request.url()),[]);
   await page.emulateMedia({colorScheme:'dark'});
   await page.emulateMedia({colorScheme:'light'});
   await color(page,dark);
   await page.reload();
   await color(page,dark);
   for(const route of ['settings','connections','']){
+    // Settings performs one read-only connection probe on initialization. Bind
+    // that exact request to this navigation instead of blaming asynchronous
+    // bootstrap work on the theme button or allowing every future probe.
+    const bootstrap=route==='settings'?page.waitForRequest(request=>request.method()==='POST'&&request.url()===server.url+'settings/refresh'):null;
     await page.goto(server.url+route);
+    if(bootstrap)bootstrapRequests.add(await bootstrap);
     await color(page,dark);
     assert.equal(await page.getByRole('button',{name:'Switch to light mode',exact:true}).count(),1);
   }
@@ -47,7 +53,8 @@ test('runtime native theme changes immediately without losing a draft and persis
   await color(page,light);
   await page.reload();
   await color(page,light);
-  assert.deepEqual(posts,[]);
+  assert.equal(bootstrapRequests.size,1);
+  assert.deepEqual(posts.filter(request=>!bootstrapRequests.has(request)).map(request=>request.url()),[]);
   assert.deepEqual(errors,[]);
 });
 
