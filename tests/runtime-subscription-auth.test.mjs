@@ -8,6 +8,7 @@ import {startModelConnectionScreen} from '../dist/onboarding/model-screen.js';
 import {optionalTypeSafeTransportFromHostEnvironment} from '../dist/taskpack/typesafe-jev.js';
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 import {LlmSwarmPlanner} from '../dist/swarm/planner.js';
+import {z} from 'zod';
 
 const schema={type:'object',additionalProperties:false,required:['choice'],properties:{choice:{type:'string',enum:['A','B']}}};
 const fixtureExecutables={
@@ -22,14 +23,14 @@ test('runtime subscription auth probes client-owned status only and returns no i
   const seen=[];const runner={async run(request){seen.push(request);
     if(executableId(request)==='codex')return {code:0,stdout:'Logged in using ChatGPT\n',stderr:''};
     if(executableId(request)==='claude')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty',subscriptionType:'pro',email:'private@example.test',projectsDirectory:'/secret'}),stderr:''};
-    if(executableId(request)==='opencode')return {code:0,stdout:JSON.stringify([{provider:'openrouter',credential:'never-return'}]),stderr:''};
-    if(executableId(request)==='agent')return {code:0,stdout:'Not authenticated\n',stderr:''};
+    if(executableId(request)==='opencode')return {code:0,stdout:'┌ Credentials\n│ OpenRouter api\n└ 1 credentials',stderr:''};
+    if(executableId(request)==='agent')return {code:0,stdout:JSON.stringify({status:'unauthenticated',isAuthenticated:false,hasAccessToken:false}),stderr:''};
     return {code:0,stdout:'[nous] Nous Portal — not logged in\n',stderr:''};
   }};
   const result=await probeSubscriptionClients(fixtureEnvironment(),runner);
-  assert.deepEqual(result.map(item=>[item.id,item.status]),[['codex','ready'],['claude','ready'],['opencode','ready'],['cursor','unavailable'],['hermes','signed_out']]);
+  assert.deepEqual(result.map(item=>[item.id,item.status]),[['codex','ready'],['claude','ready'],['opencode','ready'],['cursor','signed_out'],['hermes','signed_out']]);
   assert.equal(JSON.stringify(result).includes('private@example.test'),false);assert.equal(JSON.stringify(result).includes('/secret'),false);
-  assert.deepEqual(seen.map(item=>item.args),[['login','status'],['auth','status'],['auth','list','--format','json'],['proxy','status']]);
+  assert.deepEqual(seen.map(item=>item.args),[['login','status'],['auth','status'],['auth','list'],['status','--format','json'],['proxy','status']]);
   assert.ok(seen.every(item=>item.stdin===undefined));
 });
 
@@ -58,15 +59,39 @@ test('runtime status probe distinguishes an expired client session even when the
   assert.equal(JSON.stringify(status).includes('private@example.test'),false);
 });
 
-test('runtime auth flow does not guess an unsupported Cursor login contract',async()=>{
+test('runtime auth flow fails closed when the installed Cursor executable cannot report its official status',async()=>{
   let calls=0;const controller=new SubscriptionAuthFlowController({}, {async run(){calls++;throw Error('must not run');}});
-  assert.deepEqual(await controller.start('cursor','browser'),{client_id:'cursor',flow:'browser',state:'unavailable',reason:'login_contract_unavailable',credentials_exposed:false});
-  assert.equal(calls,0);
+  const view=await controller.start('cursor','browser');assert.equal(view.state,'unavailable');assert.equal(view.credentials_exposed,false);
+  assert.ok(calls<=1);
 });
 
 test('runtime auth process runner passes metacharacters as an argument instead of invoking a shell',async()=>{
   const literal='$(printf should-not-execute)';const result=await nativeProcessRunner.run({executable:process.execPath,args:['-e','process.stdout.write(process.argv[1])',literal],timeout_ms:2_000});
   assert.equal(result.code,0);assert.equal(result.stdout,literal);
+});
+
+test('runtime contract Cursor browser login uses its installed official CLI, typed status and an allowlisted URL without a model call',async()=>{
+  let finish,ready=false;const requests=[];
+  const runner={async run(request){requests.push(request);if(request.args[0]==='status')return {code:0,stdout:JSON.stringify({status:ready?'authenticated':'unauthenticated',isAuthenticated:ready,hasAccessToken:ready,email:'private@example.test'}),stderr:''};
+    assert.deepEqual(request.args,['login']);assert.equal(request.login_browser,'ui');
+    request.onStdout?.('Open https://evil.test/login and https://cursor.com/loginDeepControl?mode=login&redirectTarget=cli&uuid=fixture&challenge=fixture\nsecret never returned');
+    return new Promise(resolve=>finish=()=>{ready=true;resolve({code:0,stdout:'private@example.test',stderr:''});});}};
+  const controller=new SubscriptionAuthFlowController(fixtureEnvironment(),runner);const view=await controller.start('cursor','browser');
+  assert.equal(view.state,'waiting');assert.match(view.auth_url,/^https:\/\/cursor\.com\/loginDeepControl\?/u);assert.doesNotMatch(JSON.stringify(view),/evil|private@example|secret/u);
+  finish();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));assert.equal(controller.view('cursor').state,'completed');assert.equal(requests.length,3);controller.close();
+});
+
+test('runtime contract OpenCode device login chooses the official ChatGPT OAuth method and only exposes its device code',async()=>{
+  let finish,ready=false;const runner={async run(request){if(request.args.join(' ')==='auth list')return {code:0,stdout:'┌ Credentials\n└ '+(ready?'1':'0')+' credentials',stderr:''};
+    assert.deepEqual(request.args,['auth','login','--provider','openai','--method','ChatGPT Pro/Plus (headless)']);request.onStdout?.('\u001b[0mhttps://auth.openai.com/codex/device\nEnter code: ABCD-1234\n');
+    return new Promise(resolve=>finish=()=>{ready=true;resolve({code:0,stdout:'',stderr:''});});}};
+  const controller=new SubscriptionAuthFlowController(fixtureEnvironment(),runner),view=await controller.start('opencode','device');assert.equal(view.device_url,'https://auth.openai.com/codex/device');assert.equal(view.user_code,'ABCD-1234');
+  finish();await new Promise(r=>setImmediate(r));await new Promise(r=>setImmediate(r));assert.equal(controller.view('opencode').state,'completed');controller.close();
+});
+
+test('runtime contract Cursor incomplete status and externally injected API authentication remain unknown',async()=>{
+  for(const value of [{status:'authenticated',isAuthenticated:true},{status:'authenticated',isAuthenticated:true,hasAccessToken:true,usingApiKeyFromEnv:true},{status:'authenticated',isAuthenticated:true,hasAccessToken:true,usingAuthTokenFromEnv:true}]){const status=await probeSubscriptionClient('cursor',fixtureEnvironment(),{async run(){return {code:0,stdout:JSON.stringify(value),stderr:''};}});assert.equal(status.status,'unknown');}
+  const status=await probeSubscriptionClient('opencode',fixtureEnvironment(),{async run(){return {code:0,stdout:'some unknown response',stderr:''};}});assert.equal(status.status,'unknown');
 });
 
 test('runtime WSL resolver ignores Windows PATH shims and selects a WSL-native subscription client',async t=>{
@@ -138,7 +163,7 @@ test('runtime subscription model falls from failed Codex to Claude while preserv
 
 test('runtime OpenCode bridge reuses its configured provider but denies every tool and validates JSON output',async()=>{
   let projectConfig;const runner={async run(request){
-    if(request.args.join(' ')==='auth list --format json')return {code:0,stdout:'[{"provider":"openrouter"}]',stderr:''};
+    if(request.args.join(' ')==='auth list')return {code:0,stdout:'┌ Credentials\n│ OpenRouter api\n└ 1 credentials',stderr:''};
     assert.equal(request.args[0],'run');assert.ok(request.args.includes('--format'));projectConfig=JSON.parse(await readFile(join(request.cwd,'opencode.json'),'utf8'));
     return {code:0,stdout:JSON.stringify({type:'text',part:{type:'text',text:'{"choice":"A"}'}})+'\n',stderr:''};
   }};
@@ -159,9 +184,74 @@ test('runtime Codex schema transport removes nested URI annotations without muta
   const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex'}),runner});
   await model.call('design',instructions,input,original);
   const expected=structuredClone(before);delete expected.properties.workers.items.properties.source_urls.items.format;delete expected.properties.workers.items.properties.relative.anyOf[0].format;delete expected.$defs.reference.format;delete expected.allOf[0].properties.more.prefixItems[0].format;
+  const row=expected.properties.workers.items;row.required.push('relative','timestamp','format','metadata');
+  for(const key of ['timestamp','format','metadata'])row.properties[key]={anyOf:[row.properties[key],{type:'null'}]};
+  expected.allOf[0].required=['more'];expected.allOf[0].properties.more={anyOf:[expected.allOf[0].properties.more,{type:'null'}]};
   assert.deepEqual(transported,expected);assert.deepEqual(original,before);
   assert.ok(stdin.includes('SCHEMA:\n'+JSON.stringify(original)+'\nINPUT:'));
   assert.equal(model.calls[0].input_sha256,hashJson({instructions,input,schema:original}));
+});
+
+async function codexSchemaRoundTrip(original,response){
+  let transport,stdin;
+  const runner={async run(request){
+    if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+    assert.ok(request.args.includes('--output-schema'));transport=JSON.parse(await readFile(request.args[request.args.indexOf('--output-schema')+1],'utf8'));stdin=request.stdin;
+    return {code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(response)}}),stderr:''};
+  }};
+  const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex'}),runner});
+  return {value:await model.call('design','Return the requested bounded shape.',{},original),transport,stdin,calls:model.calls};
+}
+
+test('runtime contract Codex optional transport is required-nullable and decodes nested arrays/unions before original Zod validation',async()=>{
+  const domain=z.object({
+    required_null:z.string().nullable(),optional_null:z.string().nullable().optional(),
+    browser:z.object({mode:z.enum(['background','foreground']),preferred_engine:z.enum(['playwright','aside']).optional()}).strict().optional(),
+    workers:z.array(z.discriminatedUnion('kind',[
+      z.object({kind:z.literal('click'),target:z.string().optional(),domain_null:z.string().nullable()}).strict(),
+      z.object({kind:z.literal('read'),url:z.url().optional(),values:z.array(z.object({note:z.string().optional()}).strict())}).strict(),
+    ])),
+  }).strict(),original=z.toJSONSchema(domain),before=structuredClone(original);
+  const freeze=value=>{if(value&&typeof value==='object'){Object.values(value).forEach(freeze);Object.freeze(value);}};freeze(original);
+  const reply={required_null:null,optional_null:null,browser:null,workers:[{kind:'click',target:null,domain_null:null},{kind:'read',url:null,values:[{note:null}]}]};
+  const result=await codexSchemaRoundTrip(original,reply);
+  assert.deepEqual(domain.parse(result.value),{required_null:null,optional_null:null,workers:[{kind:'click',domain_null:null},{kind:'read',values:[{}]}]});
+  assert.deepEqual(result.transport.required.toSorted(),Object.keys(original.properties).toSorted());
+  assert.deepEqual(result.transport.properties.browser.anyOf.at(-1),{type:'null'});
+  const nested=result.transport.properties.browser.anyOf[0];assert.deepEqual(nested.required,['mode','preferred_engine']);assert.deepEqual(nested.properties.preferred_engine.anyOf.at(-1),{type:'null'});
+  assert.deepEqual(result.transport.properties.required_null,original.properties.required_null);assert.deepEqual(result.transport.properties.optional_null,original.properties.optional_null);
+  assert.deepEqual(original,before);assert.deepEqual(reply.browser,null);assert.equal(reply.workers[0].target,null);
+  assert.ok(result.stdin.includes('SCHEMA:\n'+JSON.stringify(original)+'\nINPUT:'));
+  assert.equal(result.calls[0].input_sha256,hashJson({instructions:'Return the requested bounded shape.',input:{},schema:original}));
+  const second=await codexSchemaRoundTrip(original,{required_null:null,optional_null:null,browser:{mode:'foreground',preferred_engine:null},workers:[]});
+  assert.deepEqual(domain.parse(second.value).browser,{mode:'foreground'});
+});
+
+test('runtime contract Codex local schema references retain required and optional domain nulls while stripping only added absence markers',async()=>{
+  const original={type:'object',additionalProperties:false,required:['payload','required_nullable'],properties:{
+    payload:{$ref:'#/$defs/payload'},optional_ref:{$ref:'#/$defs/payload'},optional_nullable:{$ref:'#/$defs/nullable'},required_nullable:{$ref:'#/$defs/nullable'},
+  },$defs:{payload:{type:'object',additionalProperties:false,required:['keep'],properties:{keep:{type:['string','null']},extra:{type:'string',enum:['yes']}}},nullable:{anyOf:[{type:'string'},{type:'null'}]}}};
+  const before=structuredClone(original),result=await codexSchemaRoundTrip(original,{payload:{keep:null,extra:null},optional_ref:null,optional_nullable:null,required_nullable:null});
+  assert.deepEqual(result.value,{payload:{keep:null},optional_nullable:null,required_nullable:null});
+  assert.deepEqual(result.transport.properties.optional_ref,{anyOf:[{$ref:'#/$defs/payload'},{type:'null'}]});
+  assert.deepEqual(result.transport.properties.optional_nullable,{$ref:'#/$defs/nullable'});
+  assert.deepEqual(result.transport.$defs.payload.required,['keep','extra']);assert.equal(result.transport.$defs.payload.additionalProperties,false);
+  assert.deepEqual(original,before);
+});
+
+test('runtime contract Codex transport never deletes required nulls, unknown keys, dictionary values or broadens caller allowlists',async()=>{
+  const domain=z.object({required:z.string(),optional:z.string().optional(),dictionary:z.record(z.string(),z.string().nullable())}).strict();
+  const original=z.toJSONSchema(domain),before=structuredClone(original),result=await codexSchemaRoundTrip(original,{required:null,optional:null,dictionary:{customer:null},unexpected:null});
+  assert.deepEqual(result.value,{required:null,dictionary:{customer:null},unexpected:null});assert.equal(domain.safeParse(result.value).success,false);
+  assert.equal(result.transport.additionalProperties,false);
+  assert.deepEqual(result.transport.properties.dictionary.additionalProperties,original.properties.dictionary.additionalProperties);
+  assert.deepEqual(original,before);
+});
+
+test('runtime contract Codex overlapping union branches preserve a legitimate optional null instead of selecting an absence sentinel',async()=>{
+  const domain=z.object({variant:z.union([z.object({value:z.string().optional()}).strict(),z.object({value:z.string().nullable().optional()}).strict()])}).strict();
+  const result=await codexSchemaRoundTrip(z.toJSONSchema(domain),{variant:{value:null}});
+  assert.deepEqual(result.value,{variant:{value:null}});assert.deepEqual(domain.parse(result.value),{variant:{value:null}});
 });
 
 test('Claude exact JSON fences are accepted, but surrounding prose and multiple blocks are rejected',async()=>{
@@ -186,15 +276,19 @@ test('runtime URI transport compatibility is Codex-only and leaves Claude struct
 
 test('runtime Codex transport normalization does not authorize an invalid URL returned to the Swarm planner',async()=>{
   const worker=id=>({id,role:id,objective:'Read one source.',stage:'source_read',source_urls:['not a valid URL'],executor:'sub_agent',depends_on:[],required_capabilities:[],effect:'read_only',completion_evidence:['Source readback.'],max_steps:4,timeout_ms:10_000}),draft={summary:'Bounded source review.',workers:[worker('first'),worker('second')]};
+  const requests=[];
   const runner={async run(request){
     if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+    requests.push(request);
     const transported=JSON.parse(await readFile(request.args[request.args.indexOf('--output-schema')+1],'utf8'));
     assert.equal(transported.properties.workers.items.properties.source_urls.items.format,undefined);
     return {code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(draft)}}),stderr:''};
   }};
   const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex'}),runner}),planner=new LlmSwarmPlanner(model);
-  await assert.rejects(planner.plan('Read and verify sources.',{},{max_workers:4,max_concurrency:2,capabilities:[]}),/Invalid URL/u);
-  assert.equal(model.calls[0].status,'accepted'); // Provider returned JSON; the domain validator still rejected the plan.
+  await assert.rejects(planner.plan('Read and verify sources.',{},{max_workers:4,max_concurrency:2,capabilities:[]}),/^Error: SWARM_PLANNER_CORRECTION_FAILED_SWARM_PLAN_SCHEMA_INVALID$/u);
+  assert.equal(requests.length,2,'Exactly one output-only repair is allowed; an invalid URL is never a valid source.');
+  assert.doesNotMatch(requests[0].stdin,/OUTPUT-ONLY CORRECTION/u);assert.match(requests[1].stdin,/OUTPUT-ONLY CORRECTION/u);assert.match(requests[1].stdin,/SWARM_PLAN_SCHEMA_INVALID/u);assert.match(requests[1].stdin,/not a valid URL/u);
+  assert.deepEqual(model.calls.map(call=>[call.purpose,call.status]),[['design','accepted'],['repair','accepted']]); // Both JSON outputs reached, and failed, the original URL/domain validation.
 });
 
 test('runtime optional Jev treats a missing key as a supported LLM-direct mode and rejects malformed configured keys',()=>{

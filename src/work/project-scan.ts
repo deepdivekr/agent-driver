@@ -3,9 +3,10 @@ import {constants} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {homedir} from 'node:os';
 import {basename,extname,isAbsolute,join,relative,resolve,sep,win32} from 'node:path';
-import {redact} from '../terminal/contracts.js';
+import {redact} from '../core/redact.js';
+import {networkProjectPath,scanNetworkProject} from './network-project.js';
 
-const MAX_FILES=120,MAX_ENTRIES=2500,MAX_BYTES=1_000_000,MAX_FILE_BYTES=64_000,MAX_DEPTH=5;
+const MAX_FILES=120,MAX_ENTRIES=2500,MAX_BYTES=1_000_000,MAX_FILE_BYTES=192_000,MAX_DEPTH=5;
 const MAX_CONTEXT_CHARS=32_000,MAX_CONTEXT_PER_POINT=2400;
 const excluded=/^(?:\.git|node_modules|vendor|dist|build|coverage|\.next|\.venv|venv|__pycache__|\.secrets?|secrets?|credentials?|cookies?|\.runtime|artifacts|data)$/iu;
 const confidential=/(?:^\.|env|secret|credential|password|token|cookie|key(?:ring|chain)?|\.pem$|\.p12$|\.sqlite(?:3)?$|\.db$|\.log$)/iu;
@@ -13,6 +14,7 @@ const sourceExtensions=new Set(['.ts','.tsx','.js','.mjs','.cjs','.py','.go','.r
 const implementationExtensions=new Set(['.ts','.tsx','.js','.mjs','.cjs','.py','.go','.rs','.sh']);
 const preferred=new Set(['README.md','package.json','pyproject.toml','requirements.txt','Cargo.toml','go.mod','docker-compose.yml','compose.yml']);
 const signals:{id:string;description:string;pattern:RegExp}[]=[
+  {id:'entrypoint',description:'실행 진입점 후보 — 실행 여부는 별도 확인 필요',pattern:/\b(?:def\s+main|function\s+main|__name__\s*==\s*['"]__main__|argparse\.ArgumentParser)\b/u},
   {id:'bot_channel',description:'메시지 봇 또는 채널 연결',pattern:/\b(?:telegram|discord|slack|telegraf|python-telegram-bot|bot\.command|on_message|sendMessage)\b/iu},
   {id:'model',description:'LLM 또는 모델 호출',pattern:/\b(?:openai|anthropic|claude|codex|llm|chat\.completions|responses\.create|generate_text)\b/iu},
   {id:'model_call',description:'실제 모델 호출식 후보 — 입력과 반환 용도는 코드 문맥으로 확인 필요',pattern:/\b(?:(?:responses|chat\.completions|messages)\.create|generateText|generate_text|with_structured_output)\s*\(/u},
@@ -56,7 +58,7 @@ function codeContext(lines:string[],index:number,remaining:number):ProjectSignal
     const cleaned=redact(line).replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f]/gu,'');
     // Do not send credential assignments, auth headers, private-key material,
     // credential-like blobs, or credential-bearing URLs in the new code excerpts.
-    if(/(?:api[_-]?key|secret|password|passwd|authorization|access[_-]?token|refresh[_-]?token|bot[_-]?token|private[_-]?key)\s*["']?\s*[:=]|BEGIN .*PRIVATE KEY|\b\d{8,12}:[A-Za-z0-9_-]{30,}\b|[A-Za-z0-9_-]{80,}/iu.test(cleaned))return '[REDACTED LINE]';
+    if(/(?:api[_-]?key|service[_-]?key|secret|password|passwd|authorization|access[_-]?token|refresh[_-]?token|bot[_-]?token|private[_-]?key)\s*["']?\s*[:=]|BEGIN .*PRIVATE KEY|\b\d{8,12}:[A-Za-z0-9_-]{30,}\b|[A-Za-z0-9_-]{80,}/iu.test(cleaned))return '[REDACTED LINE]';
     return cleaned.replace(/https?:\/\/[^\s"'`<>]+/giu,'[URL]');
   }).join('\n');
   const limit=Math.min(MAX_CONTEXT_PER_POINT,remaining),text=excerpt.slice(0,limit);
@@ -72,6 +74,7 @@ function recommendation(kind:ProjectKind,found:Set<string>){
   return ['진입점과 실제 실행 로그를 추가 확인한 뒤 자동화 여부를 판정하기'];
 }
 export async function scanProject(rawPath:string):Promise<ProjectScan>{
+  const network=networkProjectPath(rawPath);if(network&&process.platform!=='win32')return scanNetworkProject(network);
   const input=normalizeProjectPath(rawPath),entry=await lstat(input);
   if(entry.isSymbolicLink()||!entry.isDirectory())throw Error('PROJECT_DIRECTORY_REQUIRED');
   const root=await realpath(input),home=await realpath(homedir()).catch(()=>homedir());
@@ -91,8 +94,8 @@ export async function scanProject(rawPath:string):Promise<ProjectScan>{
     }
     if(entries>MAX_ENTRIES)break;
   }
-  candidates.sort((a,b)=>Number(preferred.has(basename(b)))-Number(preferred.has(basename(a)))||relative(root,a).localeCompare(relative(root,b)));
-  const evidence:ProjectSignalEvidence[]=[],found=new Set<string>(),digest=createHash('sha256'),commands=new Set<string>(),scripts=new Set<string>();let filesRead=0,bytesRead=0,contextChars=0,contextTruncated=false,purpose:string|null=null,readmeExcerpt:string|null=null;
+  candidates.sort((a,b)=>Number(preferred.has(basename(b)))-Number(preferred.has(basename(a)))||Number(implementationExtensions.has(extname(b)))-Number(implementationExtensions.has(extname(a)))||relative(root,a).localeCompare(relative(root,b)));
+  const evidence:ProjectSignalEvidence[]=[],found=new Set<string>(),digest=createHash('sha256'),commands=new Set<string>(),scripts=new Set<string>();let filesRead=0,bytesRead=0,contextChars=0,generalContextChars=0,contextTruncated=false,purpose:string|null=null,readmeExcerpt:string|null=null;
   for(const path of candidates){
     if(filesRead>=MAX_FILES||bytesRead>=MAX_BYTES){truncated=true;break;}
     const resolved=await realpath(path).catch(()=>null);if(!resolved||!resolved.startsWith(root+sep))continue;
@@ -119,8 +122,8 @@ export async function scanProject(rawPath:string):Promise<ProjectScan>{
         const decisionSignal=['semantic_judgment','model_call'].includes(signal.id);
         if(decisionSignal&&source==='observed_code'&&/^\s*(?:\/\/|\/\*|\*|#)/u.test(line))continue;
         if(evidence.length<100&&signal.pattern.test(line)&&!evidence.some(item=>item.file===file&&item.signal===signal.id&&(!decisionSignal||item.line===index+1))){
-          const context=decisionSignal&&source==='observed_code'?codeContext(lines,index,MAX_CONTEXT_CHARS-contextChars):undefined;
-          if(context)contextChars+=context.text.length;
+          const context=source==='observed_code'?codeContext(lines,index,Math.min(MAX_CONTEXT_CHARS-contextChars,decisionSignal?MAX_CONTEXT_CHARS:8000-generalContextChars)):undefined;
+          if(context){contextChars+=context.text.length;if(!decisionSignal)generalContextChars+=context.text.length;}
           if(decisionSignal&&source==='observed_code'&&(!context||context.truncated))contextTruncated=true;
           evidence.push({id:`e${evidence.length+1}`,file,line:index+1,signal:signal.id,description:signal.description,source,...(context?{context}:{})});
           if(source==='observed_code')found.add(signal.id);

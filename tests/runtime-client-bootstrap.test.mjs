@@ -17,7 +17,7 @@ test('runtime contract client bootstrap catalog uses exact official HTTPS instal
 test('runtime contract managed client install downloads one allowlisted script, runs without shell composition, verifies and removes the temporary file',async()=>{
   let installed=false,scriptPath='';const stages=[];
   const resolver=id=>{assert.equal(id,'codex');if(!installed)throw Error('missing');return '/home/fixture/.local/bin/codex';};
-  const fetcher=async(url,options)=>{assert.equal(url,'https://chatgpt.com/codex/install.sh');assert.equal(options.redirect,'error');return new Response('#!/usr/bin/env bash\nprintf ready\n',{status:200,headers:{'content-type':'text/x-shellscript'}});};
+  const fetcher=async(url,options)=>{assert.equal(url,'https://chatgpt.com/codex/install.sh');assert.equal(options.redirect,'manual');return new Response('#!/usr/bin/env bash\nprintf ready\n',{status:200,headers:{'content-type':'text/x-shellscript'}});};
   const runner={async run(request){assert.equal(request.executable,'/bin/bash');assert.equal(request.args.length,1);assert.equal(request.timeout_ms,600000);scriptPath=request.args[0];assert.match(await readFile(scriptPath,'utf8'),/^#!\/usr\/bin\/env bash/u);installed=true;return {code:0,stdout:'credential-like-output-must-not-escape',stderr:''};}};
   const controller=new ClientBootstrapController({},runner,fetcher,resolver,'linux'),result=await controller.install('codex',(stage,observation)=>stages.push({stage,observation}));
   assert.deepEqual(stages.map(item=>item.stage),['downloading','downloaded','running','installer_exited','verifying']);assert.ok(stages[1].observation.byte_count>0);assert.equal(stages[3].observation.exit_code,0);assert.ok(stages[3].observation.elapsed_ms>=0);assert.equal(result.clients[0].installed,true);assert.doesNotMatch(JSON.stringify(result),/credential-like-output/iu);await assert.rejects(readFile(scriptPath,'utf8'),/ENOENT/);
@@ -52,4 +52,24 @@ test('runtime native client resolver finds managed Linux paths and the official 
     assert.equal(resolveSubscriptionClientExecutable('opencode',environment),join(home,'.opencode','bin','opencode'));
     assert.equal(resolveSubscriptionClientExecutable('hermes',environment),join(home,'.hermes','bin','hermes'));
   }finally{await rm(home,{recursive:true,force:true});}
+});
+
+test('runtime contract official installer redirects are exact, bounded and never accept unrelated HTTPS sources',async()=>{
+  for(const [id,first,last] of [['codex','https://chatgpt.com/codex/install.sh','https://releases.openai.com/codex/install.sh'],['claude','https://claude.ai/install.sh','https://downloads.claude.ai/claude-code-releases/bootstrap.sh'],['opencode','https://opencode.ai/install','https://raw.githubusercontent.com/anomalyco/opencode/refs/heads/dev/install']]){
+    const seen=[];let present=false;const fetcher=async(url,options)=>{seen.push(url);assert.equal(options.redirect,'manual');return url===first?new Response('',{status:307,headers:{location:last}}):new Response('#!/bin/bash\nexit 0\n');};
+    const controller=new ClientBootstrapController({}, {async run(){present=true;return {code:0,stdout:'',stderr:''};}},fetcher,()=>{if(!present)throw Error('missing');return '/fixture/client';},'linux');
+    await controller.install(id);assert.deepEqual(seen,[first,last]);
+  }
+  let executions=0;const missing=()=>{throw Error('missing');},runner={async run(){executions++;return {code:0,stdout:'',stderr:''};}};
+  for(const location of ['https://evil.test/install','http://releases.openai.com/codex/install.sh','https://releases.openai.com/codex/install.sh?extra=1','https://raw.githubusercontent.com/other/repo/install'])await assert.rejects(new ClientBootstrapController({},runner,async()=>new Response('',{status:302,headers:{location}}),missing,'linux').install('codex'),/CLIENT_INSTALL_DOWNLOAD_REJECTED/u);
+  const loop=async()=>new Response('',{status:307,headers:{location:'https://releases.openai.com/codex/install.sh'}});
+  await assert.rejects(new ClientBootstrapController({},runner,loop,missing,'linux').install('codex'),/CLIENT_INSTALL_DOWNLOAD_REJECTED/u);assert.equal(executions,0);
+});
+
+test('runtime contract download network, HTTP, oversized stream and malformed UTF-8 failures are actionable and never execute',async()=>{
+  let executions=0;const runner={async run(){executions++;return {code:0,stdout:'',stderr:''};}},missing=()=>{throw Error('missing');};
+  for(const fetcher of [async()=>{throw new TypeError('fetch failed with private source');},async()=>new Response('unavailable',{status:503})])await assert.rejects(new ClientBootstrapController({},runner,fetcher,missing,'linux').install('opencode'),/CLIENT_INSTALL_DOWNLOAD_FAILED/u);
+  await assert.rejects(new ClientBootstrapController({},runner,async()=>new Response(new Uint8Array(2*1024*1024+1)),missing,'linux').install('opencode'),/CLIENT_INSTALL_DOWNLOAD_REJECTED/u);
+  await assert.rejects(new ClientBootstrapController({},runner,async()=>new Response(new Uint8Array([255,254,253])),missing,'linux').install('opencode'),/CLIENT_INSTALL_SCRIPT_INVALID/u);
+  assert.equal(executions,0);
 });

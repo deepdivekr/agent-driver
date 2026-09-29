@@ -51,7 +51,7 @@ test('runtime contract unclassified CLI credentials are not used as an automatic
       environment:{...environment,AGENT_DRIVER_LLM_CLIENT:subscriptionOnly?'opencode':'codex,opencode',AGENT_DRIVER_OPENCODE_EXECUTABLE:'/fixture/opencode'},
       subscriptionOnly,
       runner:{async run(r){
-        if(r.args.join(' ')==='auth list --format json')return {code:0,stdout:'[{"provider":"openrouter"}]',stderr:''};
+        if(r.args.join(' ')==='auth list')return {code:0,stdout:'┌ Credentials\n│ OpenRouter api\n└ 1 credentials',stderr:''};
         if(r.executable==='/fixture/opencode'){invoked++;throw Error('UNEXPECTED_UNCLASSIFIED_BILLING');}
         return runner.run(r);
       }},

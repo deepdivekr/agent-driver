@@ -98,10 +98,15 @@ test('runtime fixture settings UI locks startup controls, offers retry after fai
   assert.equal(await x.page.locator('[data-step="2"]').isEnabled(),true);
   assert.equal(await x.page.locator('#connect-computer').isEnabled(),true);
   assert.equal(await x.page.locator('#retry-settings').isHidden(),true);
-  await x.page.locator('#step-1 .hint').click();
-  assert.equal(await x.page.locator('#help').isVisible(),true);
-  await x.page.locator('#help button').click();
-  assert.equal(await x.page.locator('#help').isVisible(),false);
+  // Settings now collect explanations in an accessible disclosure rather than
+  // the old question-mark dialog. Verify the actual open and close actions.
+  const help=x.page.locator('#step-1 #browser-help');
+  assert.equal(await help.evaluate(node=>node.open),false);
+  await help.locator('summary').click();
+  assert.equal(await help.evaluate(node=>node.open),true);
+  assert.ok((await help.innerText()).includes('기본 전용 브라우저는 내 화면을 빼앗지 않습니다.'));
+  await help.locator('summary').click();
+  assert.equal(await help.locator('p').first().isHidden(),true);
 });
 
 test('runtime fixture all three import routes preview and save inactive Work through the real HTTP UI',async t=>{
@@ -146,7 +151,7 @@ test('runtime fixture all three import routes preview and save inactive Work thr
 test('runtime fixture site-login UI enables only configured actions, dispatches all three actions and recovers from failure (fixture browser)',async t=>{
   const x=await setup(t,{calls:[],async call(){return spec;}}),posts=[];
   let available=false,failCheck=true;
-  await x.page.route('**/connections/status',r=>r.fulfill({json:{sites:[{site:'example.test',label:'Example',state:'needs_login',handoff:false}],vnc:'127.0.0.1:45901',profile_preserved:available}}));
+  await x.page.route('**/connections/status',r=>r.fulfill({json:{sites:[{site:'example.test',label:'Example',state:'needs_login',handoff:false}],vnc:'127.0.0.1:45901',profile_preserved:available,vm_state:available?'running':'unavailable'}}));
   await x.page.route('**/connections/*/example.test',r=>{
     posts.push({action:r.request().url().split('/').at(-2),method:r.request().method(),header:r.request().headers()['x-agent-driver']});
     if(posts.at(-1).action==='check'&&failCheck){failCheck=false;return r.fulfill({status:409,json:{error:'CONNECTION_UNAVAILABLE'}});}
@@ -159,7 +164,7 @@ test('runtime fixture site-login UI enables only configured actions, dispatches 
   await x.page.getByRole('button',{name:'로그인 창 열기',exact:true}).click();
   await x.page.getByRole('status').filter({hasText:'VNC 127.0.0.1:45901'}).waitFor();
   await x.page.getByRole('button',{name:'로그인 확인',exact:true}).click();
-  await x.page.getByRole('status').filter({hasText:'CONNECTION_UNAVAILABLE'}).waitFor();
+  await x.page.getByRole('status').filter({hasText:'로그인 화면에 연결하지 못했습니다. 브라우저 상태와 연결 설정을 확인하세요.'}).waitFor();
   assert.equal(await x.page.locator('#lang-toggle').isEnabled(),true);
   await x.page.getByRole('button',{name:'로그인 확인',exact:true}).click();
   await x.page.getByRole('status').filter({hasText:'로그인 상태를 확인했습니다.'}).waitFor();

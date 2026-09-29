@@ -406,7 +406,7 @@ export class PackStore extends TerminalStore {
     requireCondition(result.changes===1,'WORK_IMPORT_CODING_STAGE_APPROVAL_REQUIRED');
   }
   importAcceptanceHash(project:string,importId:string){return this.connection.prepare('SELECT request_hash FROM office_import_acceptance WHERE project_id=? AND import_id=?').get(project,importId)?.request_hash??null;}
-  acceptWorkImport(project:string,importId:string,prompt:string,spec:unknown,jevEnabled=false,costAcknowledged=false,approvalHash?:string):IntakeWork{
+  acceptWorkImport(project:string,importId:string,prompt:string,spec:unknown,jevEnabled=false,costAcknowledged=false,approvalHash?:string,initialPaused=false):IntakeWork{
     return this.transaction(()=>{
       const record=this.workImport(project,importId);
       if(record.accepted_work_id){if(approvalHash)requireCondition(this.importAcceptanceHash(project,importId)===approvalHash,'WORK_IMPORT_APPROVAL_CONFLICT');return this.intakeWork(project,record.accepted_work_id);}
@@ -418,6 +418,7 @@ export class PackStore extends TerminalStore {
       this.connection.prepare('INSERT INTO office_intake(work_id,project_id,request_id,prompt_hash,mode,status,revision,prompt,spec,questions,answers,jev_enabled,jev_override,jev_cost_consent_at,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,`import-${importId}`,snapshotHash(prompt),'quick','ready',1,prompt,JSON.stringify(spec),'[]','{}',Number(jevEnabled),Number(jevEnabled),jevEnabled?at:null,at,at);
       this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,0,'received','null','{}',at);
       this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,1,'imported',JSON.stringify(spec),'{}',at);
+      if(initialPaused)this.connection.prepare('UPDATE office_intake SET paused=1 WHERE project_id=? AND work_id=?').run(project,id);
       this.connection.prepare("UPDATE office_import SET status='accepted',accepted_work_id=?,updated_at=? WHERE id=? AND project_id=? AND status='draft'").run(id,at,importId,project);
       if(approvalHash)this.connection.prepare('INSERT INTO office_import_acceptance VALUES(?,?,?)').run(importId,project,approvalHash);
       return this.intakeWork(project,id);

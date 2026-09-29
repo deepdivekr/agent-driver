@@ -52,7 +52,7 @@ async function setup(t,{write=true,commit=false,selectedPlan=plan,runnerOverride
 
 test('coding Work binds registered project, persists exact CLI sessions and hands Codex diff to Claude',async t=>{
   const x=await setup(t),work=await x.api.call('runtime_work_start',{request_id:'coding-1',prompt:'demo 프로젝트에 기능 구현하고 Claude로 검토해줘'});
-  assert.equal(work.status,'ready');assert.equal(work.next_action,'runtime_coding_start_with_work_id_and_project_ref');
+  assert.equal(work.status,'ready');assert.equal(work.next_action,'runtime_work_execute');
   const begun=await x.api.call('runtime_coding_start',{request_id:'coding-1',work_id:work.work_id,project_ref:'demo'});
   assert.equal(begun.status,'ready');assert.equal(begun.deduplicated,false);
   assert.equal((await x.api.call('runtime_coding_last',{project_ref:'demo'})).run_id,begun.run_id);

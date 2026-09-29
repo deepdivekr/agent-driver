@@ -10,8 +10,8 @@ import {nativeProcessRunner,type SafeProcessRunner} from '../integrations/subscr
 type Engine='playwright'|'aside'|'neo';
 export const browserSetupGuides={
   playwright:{label:'Playwright',docs:'https://playwright.dev/docs/browsers',setup:'기본 백그라운드 브라우저입니다. 브라우저 파일이 없으면 준비 버튼을 누르세요.',auth:'별도 서비스 계정은 필요 없습니다. 사이트 로그인은 업무가 요청할 때 진행합니다.'},
-  aside:{label:'Aside',docs:'https://docs.aside.com/help/get-started',connection:'https://docs.aside.com/help/developers',setup:'사용할 컴퓨터에 Aside를 설치·실행한 뒤 Settings → Developers에서 CLI를 설치하세요.',auth:'Aside의 첫 실행·로그인은 Aside에서 완료하세요. 로컬 연결은 --host local을 사용하며, 사이트 로그인은 별도입니다.'},
-  neo:{label:'BrowserOS Neo',docs:'https://www.browseros.com/',connection:'https://docs.browseros.com/',setup:'사용할 컴퓨터에 Neo를 설치·실행하고 로컬 MCP 연결을 켜세요. 기본 주소는 127.0.0.1:9010/mcp입니다.',auth:'필요한 첫 실행·로그인은 Neo에서 완료하세요. Agent Office는 비밀번호나 로그인 토큰을 복사하지 않습니다.'},
+  aside:{label:'Aside',docs:'https://docs.aside.com/help/get-started',download:'https://aside.com/download',connection:'https://docs.aside.com/help/developers',setup:'사용할 컴퓨터에 Aside를 설치·실행한 뒤 Settings → Developers에서 CLI를 설치하세요.',auth:'Aside의 첫 실행·로그인은 Aside에서 완료하세요. 로컬 연결은 --host local을 사용하며, 사이트 로그인은 별도입니다.'},
+  neo:{label:'BrowserOS Neo',docs:'https://www.browseros.com/',download:'https://www.browseros.com/',connection:'https://docs.browseros.com/',setup:'사용할 컴퓨터에 Neo를 설치·실행하고 로컬 MCP 연결을 켜세요. 기본 주소는 127.0.0.1:9010/mcp입니다.',auth:'필요한 첫 실행·로그인은 Neo에서 완료하세요. Agent Office는 비밀번호나 로그인 토큰을 복사하지 않습니다.'},
 } as const;
 
 const revision=(text:string)=>createHash('sha256').update(text).digest('hex');

@@ -50,6 +50,19 @@ test('presence distinguishes active stale stopped and Office HTTP remains capabi
   const reopened=new PackStore(x.config.dbPath);t.after(()=>reopened.close());assert.equal(reopened.presences(x.config.project.id).find(p=>p.kind==='dashboard').state,'stopped');
 });
 
+test('runtime native Control Center shutdown closes live Work streams instead of losing them when request parsing ends',{timeout:12000},async t=>{
+  const x=await setup(t),work=x.store.beginWork(x.config.project.id,'stream-shutdown','Observe actual live logs','quick').work;
+  const server=await startControlCenter(x.config,{poll_ms:25});t.after(()=>server.close());
+  const abort=new AbortController();t.after(()=>abort.abort());
+  const response=await fetch(new URL('work/activity?id='+work.id,server.url),{signal:abort.signal});
+  assert.equal(response.status,200);const reader=response.body.getReader();assert.equal((await reader.read()).done,false);
+  // The incoming GET body is complete while its SSE response remains open.
+  // Closing the service must end that response and release the listener.
+  await server.close();
+  let item;do{item=await reader.read();}while(!item.done);
+  assert.equal(item.done,true);
+});
+
 test('managed worker surfaces bind before activity and expired leases stop projecting as live',async t=>{
   const x=await setup(t),swarm=swarmSnapshot(),expires=Date.now()+60000;
   Object.assign(swarm.workers['source-a'],{status:'leased',lease_token:'lease-a',lease_expires_at_ms:expires});

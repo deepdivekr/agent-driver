@@ -35,6 +35,8 @@ const start=x=>x.api.call('runtime_swarm_start',{request_id:'auth-run',goal:'Res
 test('auth site mapping and gate detection do not mistake mention of login for an auth wall',()=>{
   assert.equal(authSite('https://www.reddit.com/r/example'),'reddit.com');assert.equal(authSite('https://x.com.evil.test'),'x.com.evil.test');assert.throws(()=>authSite('https://user:pass@x.com/'));
   assert.equal(detectAuthGate('https://example.test/article','News','The company added a login button.'),null);
+  assert.equal(detectAuthGate('https://x.com/i/flow/login','X',"We've temporarily limited your login. Please try again later."),'login_limited');
+  assert.equal(detectAuthGate('https://example.test/article','News',"We've temporarily limited your login. Please try again later."),null);
   assert.equal(detectAuthGate('https://x.com/i/flow/login','X',''),'needs_login');assert.equal(detectAuthGate('https://reddit.com/','Reddit - Prove your humanity',''),'challenge');assert.equal(detectAuthGate('https://example.test','Portal','',true),'needs_login');
 });
 
@@ -43,6 +45,7 @@ test('auth requirements persist without credentials and user retry remains unver
   assert.equal(authSites(x.api.store,x.config).length,2);assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/a']).length,1);
   const broker=new BrowserLoginBroker(x.api.store,x.config);assert.equal(broker.retry('x.com').state,'retry_requested');assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/a']).length,0);
   assert.throws(()=>broker.retry('unknown.test'),/AUTH_SITE_NOT_REQUESTED/);
+  setSiteAuth(x.api.store,x.config,'x.com','login_limited');assert.throws(()=>broker.retry('x.com'),/AUTH_LOGIN_LIMITED/);assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com']).length,1);setSiteAuth(x.api.store,x.config,'x.com','retry_requested');
   const reopened=new PackStore(x.config.dbPath);try{assert.equal(authSites(reopened,x.config).find(s=>s.site==='x.com').state,'retry_requested');}finally{reopened.close();}
   setSiteAuth(x.api.store,x.config,'reddit.com','needs_login',true);assert.equal(blockedAuthSites(x.api.store,x.config,['https://example.test']).length,1);
   assert.deepEqual(Object.keys(authSites(x.api.store,x.config)[0]).sort(),['handoff','site','state','updated_at']);

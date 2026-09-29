@@ -34,7 +34,7 @@ export const tools={
   runtime_work_migration_status:{schema:migrationId,implemented:true,readOnly:true},
   runtime_work_import_paste:{schema:workImportPasteSchema,implemented:true,readOnly:false},
   runtime_work_import_status:{schema:z.object({import_id:z.string().uuid()}).strict(),implemented:true,readOnly:true},
-  runtime_work_import_scan:{schema:z.object({project_ref:id}).strict(),implemented:true,readOnly:false},
+  runtime_work_import_scan:{schema:z.object({project_ref:id,scope:z.string().trim().max(2000).optional()}).strict(),implemented:true,readOnly:false},
   ...codingTools,
   ...packTools,
   ...swarmTools,

@@ -141,6 +141,18 @@ export class SwarmRuntime{
   deferForAuth(runId:string,workerId:string,leaseToken:string){
     return this.serial(runId,async()=>{this.fresh();const snapshot=(this.store.swarmRun(this.config.project.id,runId) as StoredRun).snapshot,worker=snapshot.workers[workerId];requireCondition(snapshot.status==='running'&&worker?.status==='leased'&&worker.lease_token===leaseToken,'STALE_SWARM_LEASE');worker.status='pending';worker.lease_token=null;worker.lease_expires_at_ms=null;this.persist(snapshot,snapshot.revision);return {status:'waiting_for_auth',run_id:runId,worker_id:workerId,source_auth:blockedAuthSites(this.store,this.config,snapshot.plan.workers.find(item=>item.id===workerId)!.source_urls),next_action:'open_control_center_connections_then_runtime_swarm_tick'};});
   }
+  /** An owned read actor stopped cooperatively. Fence its token, retain evidence, and requeue it. */
+  releaseReadLease(runId:string,workerId:string,leaseToken:string,reason:string){
+    return this.serial(runId,async()=>{
+      this.fresh();requireCondition(['WORK_PAUSED','WORK_CLIENT_PAUSED','WORK_REVISION_CONFLICT','WORK_SUPERVISOR_STOPPED'].includes(reason),'SWARM_LEASE_RELEASE_REASON_INVALID');
+      const snapshot=(this.store.swarmRun(this.config.project.id,runId) as StoredRun).snapshot,worker=snapshot.workers[workerId],definition=snapshot.plan.workers.find(item=>item.id===workerId);
+      requireCondition(['running','needs_human'].includes(snapshot.status)&&worker?.status==='leased'&&worker.lease_token===leaseToken,'STALE_SWARM_LEASE');
+      requireCondition(definition?.effect==='read_only','SWARM_LEASE_RELEASE_EFFECT_UNSAFE');
+      const expected=snapshot.revision;worker.status='pending';worker.lease_token=null;worker.lease_expires_at_ms=null;
+      this.persist(snapshot,expected);this.store.recordSwarmActivity(this.config.project.id,runId,snapshot.revision,workerId,'worker.lease_released',{reason,effect:'read_only',next_action:'resume_same_run'});
+      return {run_id:runId,worker_id:workerId,status:'pending' as const,reason};
+    });
+  }
   private settleNoRunnable(snapshot:SwarmRunSnapshot){
     const workers=Object.values(snapshot.workers),active=workers.some(worker=>worker.status==='leased');
     if(active)return 'WAITING_FOR_LEASED_WORKERS';

@@ -42,10 +42,34 @@ async function writeCursor(environment:NodeJS.ProcessEnv,command:string,args:rea
   const next={...value,mcpServers:{...(servers as Record<string,unknown>),'agent-driver':{command,args:[...args]}}},temporary=path+'.'+randomUUID()+'.tmp';await mkdir(dirname(path),{recursive:true,mode:0o700});await writeFile(temporary,JSON.stringify(next,null,2)+'\n',{mode:0o600});await chmod(temporary,0o600);await rename(temporary,path);await chmod(path,0o600);
 }
 function installed(id:McpRegistrationClient,environment:NodeJS.ProcessEnv){try{resolveSubscriptionClientExecutable(id,environment);return true;}catch{return false;}}
-function runnerArgs(id:Exclude<McpRegistrationClient,'cursor'|'hermes'>,command:string,args:readonly string[]){
+function opencodeConfigPath(environment:NodeJS.ProcessEnv){
+  const root=environment.XDG_CONFIG_HOME??join(environment.HOME??homedir(),'.config');requireCondition(isAbsolute(root),'OPENCODE_MCP_CONFIG_ABSOLUTE_REQUIRED');
+  const json=join(root,'opencode','opencode.json');return existsSync(json)?json:existsSync(json+'c')?json+'c':json;
+}
+function readOpencode(environment:NodeJS.ProcessEnv){
+  const path=opencodeConfigPath(environment);if(!existsSync(path))return {path,value:{} as Record<string,unknown>};
+  const stat=lstatSync(path);requireCondition(stat.isFile()&&!stat.isSymbolicLink()&&stat.size<=256*1024,'OPENCODE_MCP_CONFIG_UNSAFE');
+  let value:Record<string,unknown>;try{value=JSON.parse(readFileSync(path,'utf8')) as Record<string,unknown>;}catch{throw Error('OPENCODE_MCP_CONFIG_REVIEW_REQUIRED');}
+  requireCondition(value&&typeof value==='object'&&!Array.isArray(value),'OPENCODE_MCP_CONFIG_INVALID');return {path,value};
+}
+function opencodeRegistration(environment:NodeJS.ProcessEnv,command:string,args:readonly string[]){
+  const {value}=readOpencode(environment),servers=value.mcp;
+  requireCondition(servers===undefined||servers&&typeof servers==='object'&&!Array.isArray(servers),'OPENCODE_MCP_CONFIG_INVALID');
+  const entry=(servers as Record<string,unknown>|undefined)?.['agent-driver'];if(entry===undefined)return 'not_registered' as const;
+  const typed=entry as {type?:unknown;command?:unknown;enabled?:unknown;environment?:unknown};
+  return typed?.type==='local'&&JSON.stringify(typed.command)===JSON.stringify([command,...args])&&typed.enabled!==false&&typed.environment===undefined?'registered' as const:'conflict' as const;
+}
+async function writeOpencode(environment:NodeJS.ProcessEnv,command:string,args:readonly string[]){
+  requireCondition(opencodeRegistration(environment,command,args)!=='conflict','MCP_REGISTRATION_CONFLICT');
+  const {path,value}=readOpencode(environment);const before=existsSync(path)?readFileSync(path,'utf8'):null;
+  const output=JSON.stringify({...value,mcp:{...(value.mcp as Record<string,unknown>|undefined),'agent-driver':{type:'local',command:[command,...args]}}},null,2)+'\n',temporary=path+'.'+randomUUID()+'.tmp';
+  await mkdir(dirname(path),{recursive:true,mode:0o700});
+  try{await writeFile(temporary,output,{mode:0o600,flag:'wx'});requireCondition((existsSync(path)?readFileSync(path,'utf8'):null)===before,'MCP_REGISTRATION_CONFLICT');await rename(temporary,path);await chmod(path,0o600);}finally{if(existsSync(temporary)){const {unlink}=await import('node:fs/promises');await unlink(temporary);}}
+}
+function runnerArgs(id:'codex'|'claude',command:string,args:readonly string[]){
   if(id==='codex')return ['mcp','add','agent-driver','--',command,...args];
   if(id==='claude')return ['mcp','add','--scope','user','agent-driver','--',command,...args];
-  return ['mcp','add','agent-driver','--global','--',command,...args];
+  throw Error('MCP_CLIENT_INVALID');
 }
 
 /** Registers the absolute Node/CLI entrypoint. No shell is used and client auth stores are never read. */
@@ -58,6 +82,7 @@ export class McpRegistrationController{
       const present=installed(id,this.environment);let registration:McpClientRegistrationView['registration']='not_registered',reason='not_registered';
       try{
         if(id==='cursor'){registration=cursorRegistration(this.environment,this.command,this.args);reason=registration;}
+        else if(id==='opencode'){registration=opencodeRegistration(this.environment,this.command,this.args);reason=registration;}
         else if(id==='hermes'){const doctor=hermesDoctor(hermesHome(this.environment));registration=doctor.agent_driver_mcp==='ready'?'registered':receipts.registrations[id]?.command_fingerprint===signature?'unknown':'not_registered';reason=doctor.agent_driver_mcp;}
         else if(receipts.registrations[id]?.command_fingerprint===signature){registration='registered';reason='registered_by_agent_driver';}
       }catch{registration='conflict';reason='existing_configuration_requires_review';}
@@ -71,6 +96,7 @@ export class McpRegistrationController{
     requireCondition(clientIds.includes(id),'MCP_CLIENT_INVALID');const present=installed(id,this.environment);requireCondition(present,'MCP_CLIENT_UNAVAILABLE');
     const receipts=readReceipts(this.root),signature=fingerprint(this.command,this.args);
     if(id==='cursor')await writeCursor(this.environment,this.command,this.args);
+    else if(id==='opencode')await writeOpencode(this.environment,this.command,this.args);
     else if(id==='hermes'){
       const doctor=hermesDoctor(hermesHome(this.environment));
       if(doctor.agent_driver_mcp==='misconfigured'&&receipts.registrations[id]?.command_fingerprint!==signature)throw Error('MCP_REGISTRATION_CONFLICT');

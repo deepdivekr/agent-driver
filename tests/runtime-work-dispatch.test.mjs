@@ -31,7 +31,7 @@ test('runtime fixture Work -> Pack design -> file executor -> same Work receipt 
   const x=await setup(t),prompt='등록된 자료를 읽고 결과를 확인해줘',request_id='x'.repeat(128);
   const before=await readFile(join(x.root,'source.json'));
   const work=await x.api.call('runtime_work_start',{request_id,prompt});
-  assert.equal(work.dispatch_owner,'connected_agent');assert.equal(work.status,'ready');
+  assert.equal(work.dispatch_owner,'agent-office');assert.equal(work.status,'ready');assert.equal(work.next_action,'runtime_work_execute');
   assert.equal(work.execution_binding.work_id,work.work_id);assert.ok(work.execution_binding.request_id.length<=80);
   const design=await x.api.call('runtime_pack_plan',{prompt,work_id:work.work_id});
   assert.equal(design.requested_family,'research.search');assert.equal(design.dispatch_allowed,false);
@@ -62,7 +62,7 @@ test('runtime contract cached recipe cannot change the selected family or bypass
 test('runtime contract coding Work uses the coding executor, never an eight-family recipe',async t=>{
   const x=await setup(t,'coding.orchestrate');
   const work=await x.api.call('runtime_work_start',{request_id:'coding',prompt:'등록된 프로젝트를 검토해줘'});
-  assert.equal(work.next_action,'runtime_coding_start_with_work_id_and_project_ref');
+  assert.equal(work.next_action,'runtime_work_execute');
   await assert.rejects(x.api.call('runtime_pack_plan',{prompt:work.prompt,work_id:work.work_id}),/WORK_PACK_ROUTE_REQUIRED/);
   assert.equal((await x.api.call('runtime_work_status',{work_id:work.work_id})).runs.length,0);
 });

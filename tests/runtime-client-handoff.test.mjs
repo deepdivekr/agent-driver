@@ -59,7 +59,7 @@ test('API to subscription handoff requires an explicit saved choice and records 
 
 test('API client errors unrelated to authentication or capacity never trigger a subscription retry',async t=>{
   const x=await fixture(t);saveModelSettings(x.path,{revision:0,onboarding_step:2,selection:{...selection,mode:'api',api_to_subscription:true},api_action:'replace',api_key:key},{});
-  let retries=0;const model=new ConfiguredStructuredModel(x.path,{}, {api:()=>({calls:[{http_status:400}],async call(){throw Error('MODEL_PROVIDER_UNAVAILABLE');}}),subscription:()=>({calls:[],async call(){retries++;return {};}})});
+  let retries=0;const model=new ConfiguredStructuredModel(x.path,{}, {api:()=>({calls:[],async call(){this.calls.push({http_status:400,status:'failed'});throw Error('MODEL_PROVIDER_UNAVAILABLE');}}),subscription:()=>({calls:[],async call(){retries++;return {};}})});
   await assert.rejects(model.call('correct','Choose.',{},schema),/MODEL_PROVIDER_UNAVAILABLE/u);assert.equal(retries,0);
 });
 

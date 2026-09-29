@@ -37,15 +37,16 @@ export async function appendSetupActivity(root:string,area:SetupActivityArea,sta
 
 /** Local-only SSE tail. Callers only submit fixed product messages; process output and credentials never enter it. */
 export class SetupActivityStream{
-  private readonly responses=new Set<ServerResponse>();private readonly heartbeats=new Map<ServerResponse,NodeJS.Timeout>();
+  private readonly responses=new Set<ServerResponse>();private readonly heartbeats=new Map<ServerResponse,NodeJS.Timeout>();private closed=false;
   constructor(readonly root:string){}
   async record(area:SetupActivityArea,state:SetupActivityState,message:string){const event=await appendSetupActivity(this.root,area,state,message);this.broadcast(event);return event;}
   attach(response:ServerResponse){
+    if(this.closed){response.writeHead(503,{'content-type':'application/json; charset=utf-8','cache-control':'no-store','connection':'close','x-content-type-options':'nosniff'});response.end(JSON.stringify({error:'SETUP_ACTIVITY_CLOSED'}));return;}
     response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','cache-control':'no-store','connection':'keep-alive','x-content-type-options':'nosniff','x-frame-options':'DENY'});
     response.write(`data: ${JSON.stringify({kind:'snapshot',events:readSetupActivity(this.root),credentials_exposed:false})}\n\n`);this.responses.add(response);
     const timer=setInterval(()=>{if(!response.destroyed)response.write(': keepalive\n\n');},15_000);timer.unref();this.heartbeats.set(response,timer);
     const remove=()=>{clearInterval(timer);this.heartbeats.delete(response);this.responses.delete(response);};response.once('close',remove);response.once('error',remove);
   }
   private broadcast(event:SetupActivity){const payload=`data: ${JSON.stringify({kind:'activity',event,credentials_exposed:false})}\n\n`;for(const response of this.responses)if(!response.destroyed)response.write(payload);}
-  close(){for(const [response,timer] of this.heartbeats){clearInterval(timer);response.end();}this.heartbeats.clear();this.responses.clear();}
+  close(){if(this.closed)return;this.closed=true;for(const [response,timer] of this.heartbeats){clearInterval(timer);response.end();}this.heartbeats.clear();this.responses.clear();}
 }

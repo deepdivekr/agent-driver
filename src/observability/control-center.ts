@@ -14,6 +14,7 @@ import {workHtml} from './work-ui.js';
 import {readWorkBoard,readWorkDetail} from './work-view.js';
 import {workStartSchema,workDefineSchema,workAnswerSchema,workPauseSchema,workJevSchema} from '../work/contracts.js';
 import {WorkRuntime} from '../work/runtime.js';
+import {WorkDispatcher,workExecuteSchema} from '../work/dispatch.js';
 import {WorkImportRuntime,importedCodingReadiness,workImportPasteSchema,workImportScanSchema,workImportAcceptSchema,workImportCodingStartSchema,workImportCodingStepSchema} from '../work/import-runtime.js';
 import {scanProject} from '../work/project-scan.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
@@ -26,6 +27,9 @@ import {HermesWorkRuntime,type HermesWorkOptions} from '../work/hermes.js';
 import {HermesMigrationRuntime} from '../work/hermes-migration.js';
 import {RemoteOffice} from '../work/remote.js';
 import {type RemoteTransport} from '../integrations/remote-openclaw.js';
+import {WorkSupervisor,supervisorActionSchema} from '../work/supervisor.js';
+import {WorkResults} from '../work/results.js';
+import {WorkAdoptionRuntime} from '../work/adoption.js';
 
 export type ControlRunKind='swarm'|'pack'|'task'|'terminal';
 export type ControlLane='queued'|'running'|'done'|'attention';
@@ -91,20 +95,38 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const hermesWork=new HermesWorkRuntime(store,config,options.hermes);
   const migrations=new HermesMigrationRuntime(store,config);
   const remoteOffice=new RemoteOffice(store,config,options.remote);
-  const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config));
+  const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>store.recordClientHandoff(config.project.id,event));
   const workRuntime=new WorkRuntime(store,config,workModel),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);
+  const results=new WorkResults(store);
+  const supervisor=new WorkSupervisor(store,config,workModel,{onResult:id=>results.capture(config.project.id,id)});
+  const adoption=new WorkAdoptionRuntime(store,config,hermesWork,remoteOffice);
+  const dispatcher=new WorkDispatcher(store,config,workModel,hermesWork,supervisor);
   const server=createServer(async (request:IncomingMessage,response:ServerResponse)=>{
+    const rejectStopped=()=>{if(!stopped)return false;response.setHeader('connection','close');reply(response,503,JSON.stringify({error:'CONTROL_CENTER_CLOSING'}),'application/json; charset=utf-8');return true;};
+    if(rejectStopped())return;
     if(request.headers.host!==host){reply(response,403,'forbidden');return;}
     const url=new URL(request.url??'/','http://127.0.0.1'),base=`/${token}/`;if(!url.pathname.startsWith(base)){reply(response,404,'not found');return;}const suffix=url.pathname.slice(base.length);
     if(await serveUiAsset(request,response,suffix))return;
+    if(rejectStopped())return;
     if(await settings.handle(request,response,suffix,host))return;
+    if(rejectStopped())return;
     if(await connections.handle(request,response,suffix,host))return;
+    if(rejectStopped())return;
     if(await fileRoutes.handle(request,response,suffix,host))return;
+    if(rejectStopped())return;
+    if(['work/control','work/adoption/targets','work/adoption/bind','work/adoption/action','work/result/retry'].includes(suffix)){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>8192)throw Error('WORK_REQUEST_TOO_LARGE');}if(rejectStopped())return;const input=JSON.parse(body);
+        const value=suffix==='work/control'?supervisor.action(supervisorActionSchema.parse(input)):suffix==='work/adoption/targets'?adoption.targets(input):suffix==='work/adoption/bind'?adoption.bind(input):suffix==='work/adoption/action'?await adoption.action(input):await results.retryDelivery(config.project.id,input.work_id,input.result_id,input.delivery_id,input.revision);
+        reply(response,200,JSON.stringify(value),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:safeControlText(error instanceof Error?error.message:'WORK_CONTROL_FAILED',300)}),'application/json; charset=utf-8');}return;
+    }
     if(['work/remote/targets','work/remote/register','work/remote/discover','work/remote/link','work/remote/action'].includes(suffix)){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>24000)throw Error('REMOTE_REQUEST_TOO_LARGE')}
-        const input=JSON.parse(body),result=suffix.endsWith('/targets')?remoteOffice.targets():suffix.endsWith('/register')?remoteOffice.register(input):suffix.endsWith('/discover')?await remoteOffice.discover(input):suffix.endsWith('/link')?await remoteOffice.link(input):await remoteOffice.action(input);
+        if(rejectStopped())return;const input=JSON.parse(body),result=suffix.endsWith('/targets')?remoteOffice.targets():suffix.endsWith('/register')?remoteOffice.register(input):suffix.endsWith('/discover')?await remoteOffice.discover(input):suffix.endsWith('/link')?await remoteOffice.link(input):await remoteOffice.action(input);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'REMOTE_REQUEST_INVALID'}),'application/json; charset=utf-8')}return;
     }
@@ -112,7 +134,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>30_000)throw Error('MIGRATION_REQUEST_TOO_LARGE');}
-        const input:unknown=JSON.parse(body),result=suffix.endsWith('/discover')?await migrations.discover(input):suffix.endsWith('/preview')?await migrations.preview(input):suffix.endsWith('/status')?migrations.status(input):suffix.endsWith('/apply')?await migrations.apply(input):migrations.undo(input);
+        if(rejectStopped())return;const input:unknown=JSON.parse(body),result=suffix.endsWith('/discover')?await migrations.discover(input):suffix.endsWith('/preview')?await migrations.preview(input):suffix.endsWith('/status')?migrations.status(input):suffix.endsWith('/apply')?await migrations.apply(input):migrations.undo(input);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'MIGRATION_REQUEST_INVALID'}),'application/json; charset=utf-8');}return;
     }
@@ -120,20 +142,21 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>24_000)throw Error('WORK_REQUEST_TOO_LARGE');}
-        const result=hermesWork.action(JSON.parse(body));reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
+        if(rejectStopped())return;const result=hermesWork.action(JSON.parse(body));reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'HERMES_ACTION_INVALID'}),'application/json; charset=utf-8');}return;
     }
     if(['work/coding/attach','work/coding/turn','work/coding/stop','work/coding/reconcile'].includes(suffix)){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>8_192)throw Error('CODING_DIALOG_REQUEST_TOO_LARGE');}
-        const raw=JSON.parse(body) as unknown;
+        if(rejectStopped())return;const raw=JSON.parse(body) as unknown;
         if(suffix==='work/coding/attach'){
           const input=codingDialogAttachSchema.parse(raw),source=store.workImportForWork(config.project.id,input.work_id);
           if(source?.kind==='project'){
             const ready=importedCodingReadiness(store,config,input.work_id);
             if(!ready?.can_start||ready.project_ref!==input.project_ref)throw Error('WORK_IMPORT_CODING_NOT_READY');
             const observed=await scanProject(ready.project_path);
+            if(rejectStopped())return;
             if(observed.content_sha256!==source.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
             store.approveImportedCodingPlan(config.project.id,input.work_id,input.project_ref);
           }
@@ -152,9 +175,17 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(suffix==='work/import/paste'||suffix==='work/import/scan'||suffix==='work/import/accept'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
-      try{let body='';const max=suffix==='work/import/paste'?70_000:4_096;for await(const chunk of request){body+=String(chunk);if(body.length>max)throw Error('WORK_IMPORT_REQUEST_TOO_LARGE');}
-        const raw=JSON.parse(body) as unknown;
-        const result=suffix==='work/import/paste'?imports.paste(workImportPasteSchema.parse(raw)):suffix==='work/import/scan'?await imports.scan(workImportScanSchema.parse(raw)):await imports.accept(workImportAcceptSchema.parse(raw));
+      try{let body='';const max=suffix==='work/import/paste'?70_000:suffix==='work/import/scan'?32_768:4_096;for await(const chunk of request){body+=String(chunk);if(body.length>max)throw Error('WORK_IMPORT_REQUEST_TOO_LARGE');}
+        if(rejectStopped())return;const raw=JSON.parse(body) as unknown;
+        if(suffix==='work/import/scan'&&request.headers.accept==='application/x-ndjson'){
+            const input=workImportScanSchema.parse(raw);
+            response.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});
+            const send=(event:unknown)=>{if(!response.destroyed)response.write(JSON.stringify(event)+'\n');};
+            try{const result=await imports.scan(input,(stage,analysis_status)=>send({type:'progress',stage,analysis_status}));send({type:'result',result});}
+            catch(error){send({type:'error',error:safeControlText(error instanceof Error?error.message:'WORK_IMPORT_FAILED',300)});}
+            response.end();return;
+          }
+          const result=suffix==='work/import/paste'?imports.paste(workImportPasteSchema.parse(raw)):suffix==='work/import/scan'?await imports.scan(workImportScanSchema.parse(raw)):await imports.accept(workImportAcceptSchema.parse(raw));
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_IMPORT_FAILED'}),'application/json; charset=utf-8');}return;
     }
@@ -162,12 +193,13 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2_048)throw Error('WORK_IMPORT_CODING_REQUEST_TOO_LARGE');}
-        const raw=JSON.parse(body) as unknown,project=config.project.id;
+        if(rejectStopped())return;const raw=JSON.parse(body) as unknown,project=config.project.id;
         if(suffix==='work/import/coding/start'){
           const input=workImportCodingStartSchema.parse(raw),ready=importedCodingReadiness(store,config,input.work_id);
           if(!ready?.can_start||!ready.project_ref)throw Error('WORK_IMPORT_CODING_NOT_READY');
           const source=store.workImportForWork(project,input.work_id)!;
           const observed=await scanProject(ready.project_path);
+          if(rejectStopped())return;
           if(observed.content_sha256!==source.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
           store.approveImportedCodingPlan(project,input.work_id,ready.project_ref);
           const result=await codingRuntime.start({request_id:`import-${input.work_id}`,work_id:input.work_id,project_ref:ready.project_ref});
@@ -181,11 +213,26 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         }
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_IMPORT_CODING_FAILED'}),'application/json; charset=utf-8');}return;
     }
+    if(suffix==='work/execute'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2048)throw Error('WORK_REQUEST_TOO_LARGE');}if(rejectStopped())return;const result=dispatcher.start(workExecuteSchema.parse(JSON.parse(body)));reply(response,202,JSON.stringify(result),'application/json; charset=utf-8');}
+      catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'WORK_EXECUTION_REQUEST_FAILED'}),'application/json; charset=utf-8');}return;
+    }
+    if(suffix==='work/activity'){
+      if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
+      const id=url.searchParams.get('id');if(!id||id.length>128){reply(response,400,'work id required');return;}
+      try{store.officeWorkById(config.project.id,id);}catch{reply(response,404,'work not found');return;}
+      if(clients.size>=32){reply(response,429,'stream limit');return;}
+      response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);let previous='',keepAt=Date.now();
+      const emit=()=>{if(response.destroyed)return;try{const detail=readWorkDetail(store,config,id),payload=JSON.stringify({activity:detail.activity,display_status:detail.display_status,execution:detail.execution,execution_action:detail.execution_action,supervisor:detail.supervisor,schedule:detail.schedule,revision:detail.revision});if(payload!==previous){previous=payload;response.write(`event: activity\ndata: ${payload}\n\n`);}if(Date.now()-keepAt>15000){response.write(': keep-alive\n\n');keepAt=Date.now();}}catch{response.end();}};
+      emit();const timer=setInterval(emit,1500);timer.unref();const cleanup=()=>{clearInterval(timer);clients.delete(response);};response.once('close',cleanup);return;
+    }
     if(suffix==='work/start'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>12_288)throw Error('WORK_REQUEST_TOO_LARGE');}
-        const input=workStartSchema.parse(JSON.parse(body));
+        if(rejectStopped())return;const input=workStartSchema.parse(JSON.parse(body));
         const result=await workRuntime.start(input);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_START_FAILED'}),'application/json; charset=utf-8');}return;
@@ -194,7 +241,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>1024)throw Error('WORK_REQUEST_TOO_LARGE');}
-        const input=workDefineSchema.parse(JSON.parse(body));
+        if(rejectStopped())return;const input=workDefineSchema.parse(JSON.parse(body));
         const result=await workRuntime.define(input);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_DEFINE_FAILED'}),'application/json; charset=utf-8');}return;
@@ -203,7 +250,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>8192)throw Error('WORK_REQUEST_TOO_LARGE');}
-        const input=workAnswerSchema.parse(JSON.parse(body));
+        if(rejectStopped())return;const input=workAnswerSchema.parse(JSON.parse(body));
         if(Object.values(input.answers).some(value=>/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(value)))throw Error('CREDENTIAL_LIKE_INPUT');
         const result=await workRuntime.answer(input);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
@@ -213,7 +260,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2048)throw Error('WORK_REQUEST_TOO_LARGE');}
-        const input=workPauseSchema.parse(JSON.parse(body)),work=store.setIntakePaused(config.project.id,input.work_id,input.revision,input.paused);
+        if(rejectStopped())return;const input=workPauseSchema.parse(JSON.parse(body)),work=store.setIntakePaused(config.project.id,input.work_id,input.revision,input.paused);
         reply(response,200,JSON.stringify({work_id:work.id,paused:work.paused,revision:work.revision,scope:'future_dispatch'}),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_PAUSE_FAILED'}),'application/json; charset=utf-8');}return;
     }
@@ -221,7 +268,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2048)throw Error('WORK_REQUEST_TOO_LARGE');}
-        const input=workJevSchema.parse(JSON.parse(body)),result=workRuntime.jev(input);
+        if(rejectStopped())return;const input=workJevSchema.parse(JSON.parse(body)),result=workRuntime.jev(input);
         reply(response,200,JSON.stringify({work_id:result.work_id,revision:result.revision,jev:result.jev,scope:'future_decisions'}),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_JEV_FAILED'}),'application/json; charset=utf-8');}return;
     }
@@ -229,13 +276,16 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>8192)throw Error('OFFICE_REQUEST_TOO_LARGE');}
-        const input=JSON.parse(body) as Record<string,unknown>;if(typeof input.run_id!=='string'||!/^[a-f0-9-]{36}$/u.test(input.run_id)||!['pause','resume','edit'].includes(String(input.action))||!Number.isSafeInteger(input.revision)||input.worker_id!==undefined&&typeof input.worker_id!=='string'||input.instruction!==undefined&&typeof input.instruction!=='string')throw Error('OFFICE_REQUEST_INVALID');
+        if(rejectStopped())return;const input=JSON.parse(body) as Record<string,unknown>;if(typeof input.run_id!=='string'||!/^[a-f0-9-]{36}$/u.test(input.run_id)||!['pause','resume','edit'].includes(String(input.action))||!Number.isSafeInteger(input.revision)||input.worker_id!==undefined&&typeof input.worker_id!=='string'||input.instruction!==undefined&&typeof input.instruction!=='string')throw Error('OFFICE_REQUEST_INVALID');
         const runId=String(input.run_id),revision=input.revision as number,action=input.action as 'pause'|'resume'|'edit';
         const result=store.officeWork(config.project.id,'coding',runId)?action==='edit'?store.codingDirection(config.project.id,runId,revision,String(input.worker_id??''),String(input.instruction??'')):store.pauseCoding(config.project.id,runId,revision,action==='pause'):store.officeAction(config.project.id,runId,action,revision,input.worker_id as string|undefined,input.instruction as string|undefined);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'OFFICE_ACTION_FAILED'}),'application/json; charset=utf-8');}return;
     }
     if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
+    if(suffix==='work/result/artifact'){
+      try{const value=await results.readArtifact(config.project.id,url.searchParams.get('work_id')??'',url.searchParams.get('result_id')??'',url.searchParams.get('artifact_id')??'',[dirname(config.dbPath),config.project.worktree]);response.writeHead(200,{'content-type':value.media_type,'content-disposition':`attachment; filename*=UTF-8''${encodeURIComponent(value.filename)}`,...headers()});response.end(value.bytes);}catch{reply(response,404,'artifact unavailable');}return;
+    }
     if(suffix==='work/coding/sessions'){
       try{const project_ref=url.searchParams.get('project_ref');const result=await codingDialog.sessions({project_ref});reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');}
       catch(error){reply(response,409,JSON.stringify({error:safeControlText(error instanceof Error?error.message:'CODING_DIALOG_SESSIONS_FAILED',300)}),'application/json; charset=utf-8');}return;
@@ -245,21 +295,28 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(suffix==='work/board'){reply(response,200,JSON.stringify(readWorkBoard(store,config)),'application/json; charset=utf-8');return;}
     if(suffix==='work/detail'){
       const id=url.searchParams.get('id');if(!id||id.length>128){reply(response,400,'work id required');return;}
-      try{reply(response,200,JSON.stringify(readWorkDetail(store,config,id)),'application/json; charset=utf-8');}catch{reply(response,404,'work not found');}return;
+      try{const detail=readWorkDetail(store,config,id);reply(response,200,JSON.stringify({...detail,results:results.capture(config.project.id,id)}),'application/json; charset=utf-8');}catch{reply(response,404,'work not found');}return;
     }
     if(suffix==='work/events'){
+      if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
+      const id=url.searchParams.get('work_id');
+      if(id!==null){if(!id||id.length>128){reply(response,400,'work id required');return;}try{store.officeWorkById(config.project.id,id);}catch{reply(response,404,'work not found');return;}}
+      if(clients.size>=32){reply(response,429,'stream limit');return;}
       response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);lightClients.add(response);
       try{response.write(`event: board\ndata: ${JSON.stringify(readWorkBoard(store,config))}\n\n`);}catch{response.end();lightClients.delete(response);clients.delete(response);return;}
-      request.once('close',()=>{lightClients.delete(response);clients.delete(response)});return;
+      let previous='';
+      const emitActivity=()=>{if(!id||response.destroyed)return;try{const detail=readWorkDetail(store,config,id),payload=JSON.stringify({work_id:id,activity:detail.activity,display_status:detail.display_status,execution:detail.execution,execution_action:detail.execution_action,supervisor:detail.supervisor,schedule:detail.schedule,revision:detail.revision});if(payload!==previous){previous=payload;response.write(`event: activity\ndata: ${payload}\n\n`);}}catch{response.end();}};
+      emitActivity();const activityTimer=id?setInterval(emitActivity,1500):null;activityTimer?.unref();
+      response.once('close',()=>{if(activityTimer)clearInterval(activityTimer);lightClients.delete(response);clients.delete(response)});return;
     }
     if(suffix==='office/snapshot'){reply(response,200,JSON.stringify(readOffice(store,config,readControlCenter(store,config))),'application/json; charset=utf-8');return;}
-    if(suffix==='office/events'){response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);let last='';const emit=()=>{if(response.destroyed)return;try{const snapshot=readOffice(store,config,readControlCenter(store,config)),next=snapshot.latest_revision;if(next!==last){last=next;response.write(`event: snapshot\nid: ${Date.now()}\ndata: ${JSON.stringify(snapshot)}\n\n`);}}catch{response.end();}};emit();const timer=setInterval(emit,poll),keep=setInterval(()=>{if(!response.destroyed)response.write(': keep-alive\n\n');},15_000);request.once('close',()=>{clearInterval(timer);clearInterval(keep);clients.delete(response)});return;}
+    if(suffix==='office/events'){response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);let last='';const emit=()=>{if(response.destroyed)return;try{const snapshot=readOffice(store,config,readControlCenter(store,config)),next=snapshot.latest_revision;if(next!==last){last=next;response.write(`event: snapshot\nid: ${Date.now()}\ndata: ${JSON.stringify(snapshot)}\n\n`);}}catch{response.end();}};emit();const timer=setInterval(emit,poll),keep=setInterval(()=>{if(!response.destroyed)response.write(': keep-alive\n\n');},15_000);response.once('close',()=>{clearInterval(timer);clearInterval(keep);clients.delete(response)});return;}
     if(suffix==='snapshot'){reply(response,200,JSON.stringify(readControlCenter(store,config)),'application/json; charset=utf-8');return;}
-    if(suffix==='events'){response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);let last='';const emit=()=>{if(response.destroyed)return;try{const snapshot=readControlCenter(store,config),next=snapshot.latest_revision;if(next!==last){last=next;response.write(`event: snapshot\nid: ${Date.now()}\ndata: ${JSON.stringify(snapshot)}\n\n`);}}catch{response.end();}};emit();const timer=setInterval(emit,poll),keep=setInterval(()=>{if(!response.destroyed)response.write(': keep-alive\n\n');},15_000);request.once('close',()=>{clearInterval(timer);clearInterval(keep);clients.delete(response)});return;}
+    if(suffix==='events'){response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);let last='';const emit=()=>{if(response.destroyed)return;try{const snapshot=readControlCenter(store,config),next=snapshot.latest_revision;if(next!==last){last=next;response.write(`event: snapshot\nid: ${Date.now()}\ndata: ${JSON.stringify(snapshot)}\n\n`);}}catch{response.end();}};emit();const timer=setInterval(emit,poll),keep=setInterval(()=>{if(!response.destroyed)response.write(': keep-alive\n\n');},15_000);response.once('close',()=>{clearInterval(timer);clearInterval(keep);clients.delete(response)});return;}
     reply(response,404,'not found');
   });
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??0,'127.0.0.1',resolve)});const address=server.address();if(address===null||typeof address==='string'){store.stopPresence(config.project.id,presence);store.close();throw Error('CONTROL_CENTER_BIND_FAILED');}host=`127.0.0.1:${address.port}`;const heartbeat=setInterval(()=>{try{store.heartbeatPresence(config.project.id,presence);}catch{}},2_000);heartbeat.unref();
   let lastBoard='',lastKeep=Date.now();const lightTick=setInterval(()=>{if(!lightClients.size)return;try{const board=readWorkBoard(store,config),payload=JSON.stringify({works:board.works,auth_attention_count:board.auth_attention_count});if(payload!==lastBoard){lastBoard=payload;for(const client of lightClients)if(!client.destroyed)client.write(`event: board\ndata: ${JSON.stringify(board)}\n\n`);}if(Date.now()-lastKeep>=15_000){lastKeep=Date.now();for(const client of lightClients)if(!client.destroyed)client.write(': keep-alive\n\n');}}catch{for(const client of lightClients)client.end();lightClients.clear();}},Math.max(1000,poll));lightTick.unref();
   const hermesTick=setInterval(()=>hermesWork.tick(),1000);hermesTick.unref();
-  const close=async()=>{if(stopped)return;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);clearInterval(hermesTick);settings.close();codingRuntime.close();codingDialog.close();await hermesWork.close();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
+  const close=async()=>{if(stopped)return closed;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);clearInterval(hermesTick);settings.close();codingRuntime.close();codingDialog.close();await supervisor.close();await dispatcher.close();await hermesWork.close();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
 }

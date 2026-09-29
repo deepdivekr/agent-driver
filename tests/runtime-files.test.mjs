@@ -188,11 +188,18 @@ test('runtime contract real MCP broker child verifies CLI parent identity, obser
 });
 test('runtime contract killed MCP broker cannot commit a stale queued write',async t=>{
  const x=fixture(t,{},false),client=new Client({name:'synthetic-cli',version:'1.0.0'}),transport=new StdioClientTransport({command:process.execPath,args:[fileURLToPath(new URL('../dist/terminal/file-entry.js',import.meta.url)),x.path,x.session,'1',x.host],stderr:'pipe'});
+ const previousClose=transport.onclose;let ownedChildClosed=false;
+ transport.onclose=()=>{ownedChildClosed=true;previousClose?.call(transport);};
  try{
   await client.connect(transport);transport.stderr?.resume();const row=x.store.broker(x.session,1),authority={...x.authority,broker:row.identity_json};
   const identity=JSON.parse(row.identity_json);assert.equal(identity.pid,transport.pid);process.kill(transport.pid,'SIGKILL');
-  for(let n=0;n<200&&await liveness(identity)!=='dead';n++)await delay(20);
-  assert.equal(await liveness(identity),'dead');assert.throws(()=>x.store.fileFence(x.config,authority,x.turn),/FILE_OWNER_NOT_ALIVE/);assert.equal(x.store.fileIntents(x.session).length,0);
+  for(let n=0;n<200&&!ownedChildClosed&&await liveness(identity)!=='dead';n++)await delay(20);
+  const observed=await liveness(identity);
+  // A /proc identity can be temporarily unknown while the owned child is reaped.
+  // Its actual transport-close event is independent exit evidence; unknown is
+  // never relabeled dead and the write fence must still reject the operation.
+  assert.ok(observed==='dead'||ownedChildClosed,'owned broker exit was not observed');
+  assert.throws(()=>x.store.fileFence(x.config,authority,x.turn),/FILE_OWNER_NOT_ALIVE/);assert.equal(x.store.fileIntents(x.session).length,0);
  }finally{await client.close();}
 });
 test('runtime contract file dispatch cancellation and changed configuration after durable intent never write',async t=>{

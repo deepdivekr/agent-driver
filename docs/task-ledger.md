@@ -1,5 +1,72 @@
 # Public release ledger
 
+## Phase 103
+
+| ID | Requirement |
+|---|---|
+| RQ-850 | Audit and complete the common Action Layer and current PR changes while preserving original-runtime authority and prior evidence. |
+| RQ-851 | Verify the exact candidate with affected/full quick, installation, dependency/public-boundary checks and current-head remote CI, without long soak. |
+| RQ-852 | Reconcile open PRs/issues and merge the exact reviewed head without bypassing protection or closing unresolved acceptance gates. |
+| RQ-853 | Record exact commit/CI/merge evidence and remaining limits in concise docs, ledger/status and handoff while preserving private state. |
+
+## Phase 102
+
+| ID | Requirement |
+|---|---|
+| RQ-843 | Connect explicitly started new Work to durable bounded operation with execution, leases, checkpoints, restart recovery and observations. |
+| RQ-844 | Carry pause, changed instructions and resume through the same Work; preserve completed steps and uncertain-effect reconciliation. |
+| RQ-845 | Connect imported Work to supported original-runtime observation/control without duplicating bots or changing schedules/delivery. |
+| RQ-846 | Apply configured model continuity with Work-bound receipts and saved model choices; forbid subscription-to-paid-API fallback. |
+| RQ-847 | Persist/display Work results, artifacts and delivery receipts with default app delivery and preserved imported authority. |
+| RQ-848 | Exercise native Control Center execution and verify recovery, intervention and results with honest evidence levels. |
+| RQ-849 | Run affected/quick regressions without soak, apply the verified local candidate preserving private state, and update handoff/docs. |
+
+## Phase 101
+
+| ID | Requirement |
+|---|---|
+| RQ-838 | Derive visible execution state from per-run leases and runtime observations, retaining historical state without presenting abandoned runs as live. |
+| RQ-839 | Add revision-fenced execution through existing runtime contracts; prevent duplicate dispatch and unauthorized effects, and explain missing connections. |
+| RQ-840 | Stream bounded redacted Work activity with last observation and connection state; shorten board titles without losing instructions or drafts. |
+| RQ-841 | Verify execution, expiry, idempotency, isolation, localization and responsive UI; apply the local candidate preserving private state and report unsupported paths. |
+
+| RQ-842 | Restore login through explicit existing-VM preparation, duplicate-start fencing and failed-handoff cleanup without profile reset. |
+
+## Phase 99
+
+| ID | Requirement |
+|---|---|
+| RQ-834 | Support bounded read-only WSL scans of user-selected NAS UNC projects through the existing Windows filesystem session, with actionable errors and credential protection. |
+| RQ-835 | Provide grounded automatic project definitions and observation-first import, keeping explicit code enhancement and runtime connection distinct. |
+| RQ-836 | Show truthful scan/analysis progress and actionable runtime-connection readiness instead of indefinite execution waiting. |
+| RQ-837 | Verify network, privacy, freshness, import and localized UI contracts, read the selected NAS safely and apply the managed local UI with personal state preserved. |
+
+## Phase 98
+
+| ID | Requirement |
+|---|---|
+| RQ-831 | Add an optional natural-language import scope field to workflow/bot project import, with concise Korean/English guidance, preview and stale-preview protection. |
+| RQ-832 | Carry the user's scope through HTTP/MCP scan, approved project analysis, saved import and Work/hand-off instructions; preserve legacy empty-input behavior, source freshness, approvals and Jev policy. |
+| RQ-833 | Verify mixed-project scope propagation, invalid/empty input, model-unavailable behavior, repeated import, and desktop/mobile UI; apply the verified local Control Center preserving personal Work/settings/MCP and document exact evidence. |
+
+## Phase 97
+
+| ID | Requirement |
+|---|---|
+| RQ-828 | Localize setup activity history, live messages and summaries in English; audit remaining product-owned Korean on English connection screens without translating user data or raw provider output. |
+| RQ-829 | Explain Windows AI app to WSL runtime connection in plain language, including when it is optional, where configuration belongs and how the user checks the result; keep details collapsed and avoid misleading automatic-confirmation notices. |
+| RQ-830 | Ensure connection-check actions visibly record start and truthful per-client results, including failures; verify English/Korean desktop/mobile flows and apply the verified local UI preserving Work, model settings and personal MCP. |
+
+## Phase 91
+
+| ID | Requirement |
+|---|---|
+| RQ-810 | Diagnose the installed v0.3.1 page failure and restore Windows browser access without changing unrelated services or saved Work/settings. |
+| RQ-811 | Verify Windows-side Control Center identity before publishing or reusing a WSL URL, retry unpublished UI ports within a bounded limit, and preserve loopback/authentication boundaries. |
+| RQ-812 | Verify collision, timeout, cleanup and reuse paths; record real Windows/WSL evidence separately from injected probes, and publish the fix through PR/CI. |
+| RQ-813 | Provide a visible light/dark toggle across Control Center pages, remember explicit browser choices, preserve unsent input and keep localized controls usable on mobile. |
+| RQ-814 | Verify system and explicit themes, reload/navigation, storage denial and cross-tab changes; apply the verified UI locally while preserving private Work, settings, MCP and upgrade compatibility. |
+
 ## Phase 69
 
 | ID | Requirement |
@@ -200,6 +267,44 @@
 | RQ-796 | Provide browser prerequisites in local-execution onboarding with official setup/auth guidance, explicit bounded checks, optional registration and real setup activity; do not require Aside or Neo. |
 | RQ-797 | Preserve default Playwright when registering optional browsers, preserve existing configuration and environment/credential boundaries, and state reconnect requirements accurately. |
 | RQ-798 | Verify missing/disconnected/ready, registration conflict and security gates, desktop/mobile controls and relevant runtime regressions; document actual native evidence and remaining limitations. |
+
+## Phase 96
+
+| ID | Requirement |
+|---|---|
+| RQ-826 | Group connection explanations into closed, blue-underlined Show explanation disclosures; consolidate browser setup guidance, remove scattered question-mark help and duplicate notices, and preserve visible state, actions, errors, concise permission meaning and Windows configuration instructions inside its existing disclosure. |
+| RQ-827 | Verify Korean/English desktop/mobile disclosure and connection flows using the existing relevant checks; apply the managed UI preserving private Work/settings/MCP and record fixture versus actual Windows evidence. |
+
+## Phase 95
+
+| ID | Requirement |
+|---|---|
+| RQ-823 | Diagnose optional-browser check/register button behavior; distinguish missing, installed/disconnected, reachable/unregistered and registered states, preserving permission, fresh-check, revision and default-Playwright boundaries. |
+| RQ-824 | Present only the next meaningful setup actions with visible progress and success/failure feedback; audit analogous client flows and show concise Windows MCP configuration instructions outside hidden help, without claiming JSON is a terminal command. |
+| RQ-825 | Verify state/action transitions, repeated clicks, consent/revision/security gates and Korean/English desktop/mobile layouts; apply the verified local UI preserving personal settings/Work/MCP and record exact evidence and publication boundaries. |
+
+## Phase 94
+
+| ID | Requirement |
+|---|---|
+| RQ-820 | Audit active Control Center settings, connection, Work/detail and import surfaces for content-dependent card and action placement; identify shared alignment fixes without centering long-form instructions or logs. |
+| RQ-821 | Implement consistent equal-column/row layouts, centered compact card contents and uniform action geometry with responsive behavior, preserving existing controls, disclosures, authentication and user settings. |
+| RQ-822 | Verify actual geometry, interaction and screenshots in Korean/English, desktop/mobile and dark/light; apply the managed local UI with private state preserved and record exact evidence and remaining release boundaries. |
+
+## Phase 93
+
+| ID | Requirement |
+|---|---|
+| RQ-819 | Rename user-facing confirmation tags to “사용자 확인 필요”, align Work and connection displays and English translation, preserve internal status and approval behavior, verify actual rendering and apply the local UI without changing private Work or settings. |
+
+## Phase 92
+
+| ID | Requirement |
+|---|---|
+| RQ-815 | Diagnose and repair official client installation in the MCP runtime environment with bounded, allowlisted downloads and useful failure messages; preserve installed clients and credentials. |
+| RQ-816 | Continue verified installation into the supported official login flow, implement Cursor and OpenCode connection paths using verified CLI contracts, and independently verify authentication without implicit API use. |
+| RQ-817 | Unify concise connection actions, remove documentation-only installation controls, expose official app download pages where needed, and make disclosures/import controls visibly clickable with consistent spacing. |
+| RQ-818 | Verify installer, authentication, registration, security and real desktop/mobile UI paths; apply the verified local UI without replacing private settings, Work or the personal MCP, and record exact evidence and remaining limits. |
 
 ## Phase 87
 

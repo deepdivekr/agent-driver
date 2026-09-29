@@ -41,4 +41,4 @@ export const handoffSchema=z.object({
   failure_cause:z.string().nullable(),next_action:z.string(),delegation:z.object({project_id:identifier,allowed_tools:z.array(z.string()),remaining_turns:z.number().int().nonnegative()}).strict(),
   prepared_kind:z.literal('handoff'),automatic_execution:z.literal(false),
 }).strict();
-export function redact(text:string){return text.replace(/\b(?:sk-(?:proj-)?[\w-]{16,}|apikey_[\w-]{16,}|gh[pousr]_[\w]{20,})\b/g,'[REDACTED]').replace(/(authorization\s*:\s*bearer\s+)\S+/gi,'$1[REDACTED]');}
+export {redact} from '../core/redact.js';

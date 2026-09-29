@@ -2,7 +2,7 @@ import {randomBytes} from 'node:crypto';
 import {type IncomingMessage,type ServerResponse} from 'node:http';
 import {dirname,resolve} from 'node:path';
 import {type HostConfig,workModelDataApproved} from '../interface/config.js';
-import {SubscriptionAuthFlowController} from '../integrations/subscription-auth.js';
+import {SubscriptionAuthFlowController,type SubscriptionClientConnection} from '../integrations/subscription-auth.js';
 import {probeStructuredModel} from '../integrations/model-provider.js';
 import {approveNonInterferingConnection,localConnectionPaths,readLocalConnection,setWorkModelDataApproval} from '../onboarding/connection.js';
 import {ClientBootstrapController} from '../onboarding/client-bootstrap.js';
@@ -18,6 +18,15 @@ export class ControlSettings{
   readonly path:string;private busy=false;private providerProbe:{token:string;fingerprint:string;verification:ApiVerification;expires_at:number}|null=null;
   constructor(readonly config:HostConfig,readonly auth:Pick<SubscriptionAuthFlowController,'connections'|'view'|'start'|'close'>=new SubscriptionAuthFlowController(),readonly environment:NodeJS.ProcessEnv=process.env,readonly fetcher:typeof fetch=fetch,readonly mcp=new McpRegistrationController(dirname(config.path),environment),readonly activity=new SetupActivityStream(dirname(config.path)),readonly bootstrap=new ClientBootstrapController(environment,undefined,fetcher),readonly browsers=new BrowserSetupController(config,{environment})){this.path=modelSettingsPath(config);}
   private connection(){const root=dirname(this.config.path);return resolve(this.config.path)===localConnectionPaths(root).runtimeConfig?{kind:'local' as const,connected:readLocalConnection(root)!==null}: {kind:'host_configured' as const,connected:true};}
+  private async recordClientChecks(clients:SubscriptionClientConnection[],registrations?:Awaited<ReturnType<McpRegistrationController['view']>>['clients']){
+    const names={codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor',hermes:'Hermes'};
+    for(const client of clients){
+      const registration=registrations?.find(row=>row.id===client.id),missing=registration?.installed===false||client.reason==='wsl_native_client_not_found'||client.reason==='client_not_available';
+      const result=missing?'설치 필요':client.status==='signed_out'?'로그인 필요':client.status==='expired'?'다시 로그인 필요':client.status==='ready'?'로그인 확인됨':client.status==='unavailable'?'사용할 수 없음':'확인되지 않음';
+      const registered=registration?.registration,detail=registration&&!missing?' · '+(registered==='registered'?'MCP 등록됨':registered==='not_registered'?'MCP 등록 필요':registered==='conflict'?'설정 검토 필요':'MCP 등록 미확인'):'';
+      await this.activity.record(registrations?'mcp':'ai',client.status==='ready'&&!missing&&(!registration||registered==='registered')?'success':'warning',names[client.id]+': '+result+detail);
+    }
+  }
   private status(scope:ModelScope='global'){
     const saved=readModelSettings(scopedModelSettingsPath(this.path,scope)),global=publicModelSettings(readModelSettings(this.path),this.environment),base=modelScopeBase(this.path,scope,saved?.selection,this.environment);
     const settings=publicModelSettings(saved,base);
@@ -60,11 +69,20 @@ export class ControlSettings{
             }else if(suffix==='settings/browsers/register'&&engine!=='playwright'&&typeof value.revision==='string'){
               result=this.browsers.register(engine,value.revision,value.consent===true);await this.activity.record('runtime','success',`${label} 실행기 등록 완료 · 새 MCP 연결부터 적용`);send(200,result);return true;
             }else{send(400,{error:'BROWSER_SETUP_ACTION_INVALID'});return true;}
-            const ready=result.rows.find(row=>row.engine===engine)?.health==='ready';await this.activity.record('runtime',ready?'success':'warning',`${label} ${ready?'연결 점검 통과':'연결 확인 필요'} · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
+            const row=result.rows.find(row=>row.engine===engine),ready=row?.health==='ready',outcome=ready?(row.registered?'연결됨':'연결 확인됨 · 사용 허용 필요'):row?.reason==='cli_missing'?'CLI 설치 필요':'연결 실패 · 앱 실행과 연결 설정을 확인하세요';
+            await this.activity.record('runtime',ready?'success':'warning',`${label}: ${outcome} · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
           }catch(error){await this.activity.record('runtime','error',`${label} 준비를 완료하지 못했습니다. 설치·실행 상태를 확인하세요.`);throw error;}
           return true;
         }
-        if(suffix==='settings/models'){
+        if(suffix==='settings/mcp/check'){
+          await this.activity.record('mcp','running','앱 설치·로그인·MCP 연결을 확인하는 중입니다.');
+          const [mcp,connections]=await Promise.all([this.mcp.view(),this.auth.connections()]);
+          const bootstrap={...this.bootstrap.view(),connections};
+          await this.recordClientChecks(connections,mcp.clients);
+          for(const client of bootstrap.clients.filter(client=>!connections.some(row=>row.id===client.id)))await this.activity.record('mcp','warning',client.label+': '+(client.installed?'로그인 미확인':'설치 필요'));
+          await this.activity.record('mcp','info','앱 연결 확인을 마쳤습니다. 클라이언트별 결과를 확인하세요.');
+          send(200,{mcp,bootstrap});
+        }else if(suffix==='settings/models'){
           const value=body&&typeof body==='object'?body as Record<string,unknown>:{};
           if(!['openai','anthropic','openrouter','openai_compatible'].includes(String(value.provider))){send(400,{error:'MODEL_PROVIDER_INVALID'});return true;}
           const saved=readModelSettings(path),provider=value.provider as 'openai'|'anthropic'|'openrouter'|'openai_compatible';
@@ -100,11 +118,11 @@ export class ControlSettings{
           else await this.activity.record('ai','success',proposedBody.selection?.mode==='api'?'API 모델 설정을 저장했습니다.':'구독 AI 설정을 저장했습니다.');
           send(200,scope==='coding'?this.status(scope):saved);
         }
-        else if(suffix==='settings/refresh'){await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');const clients=await this.auth.connections();await this.activity.record('ai','success','AI 클라이언트 상태 확인을 마쳤습니다.');send(200,{clients});}
+        else if(suffix==='settings/refresh'){await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');const clients=await this.auth.connections();await this.recordClientChecks(clients);await this.activity.record('ai','info','AI 클라이언트 상태 확인을 마쳤습니다.');send(200,{clients});}
         else if(suffix==='settings/login'){
           const value=body as {client?:unknown;flow?:unknown};
           if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))||!['device','browser'].includes(String(value.flow))){send(400,{error:'INVALID_CLIENT_FLOW'});return true;}
-          await this.activity.record('ai','running','공식 AI 로그인 절차를 시작했습니다.');send(202,await this.auth.start(value.client as 'codex'|'claude'|'hermes',value.flow as 'device'|'browser'));
+          await this.activity.record('ai','running','공식 AI 로그인 절차를 시작했습니다.');send(202,await this.auth.start(value.client as McpRegistrationClient,value.flow as 'device'|'browser'));
         }else if(suffix==='settings/client/install'){
           const value=body as {client?:unknown};if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))){send(400,{error:'CLIENT_INSTALL_TARGET_INVALID'});return true;}
           const client=value.client as McpRegistrationClient,name=({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor CLI',hermes:'Hermes'} as const)[client];
@@ -117,7 +135,13 @@ export class ControlSettings{
               :`${name} 실행 파일 탐지 중`;
             await this.activity.record('setup',stage==='installer_exited'&&observation?.exit_code!==0?'error':stage==='downloaded'||stage==='installer_exited'?'success':'running',message);
           });
-          await this.activity.record('setup','success',`${name} 설치 확인 완료 · ${((Date.now()-started)/1000).toFixed(1)}초`);send(200,result);
+          await this.activity.record('setup','success',`${name} 설치 확인 완료 · ${((Date.now()-started)/1000).toFixed(1)}초`);
+          const connection=(await this.auth.connections()).find(item=>item.id===client);
+          const flow=connection?.supported_login_flows.includes('device')?'device':connection?.supported_login_flows[0];
+          const login=connection?.status==='ready'?{client_id:client,flow:flow??null,state:'completed',reason:'existing_session_reused',credentials_exposed:false}:
+            flow?await this.auth.start(client,flow):{client_id:client,flow:null,state:'unavailable',reason:connection?.reason??'login_contract_unavailable',credentials_exposed:false};
+          await this.activity.record('ai',login.state==='completed'?'success':login.state==='unavailable'||login.state==='failed'?'warning':'running',`${name} ${login.state==='completed'?'기존 로그인 확인됨':login.state==='unavailable'||login.state==='failed'?'설치됨 · 로그인 재확인 필요':'공식 로그인 시작 · 브라우저에서 승인하세요'}`);
+          send(200,{...result,login});
         }else if(suffix==='settings/mcp/register'){
           const value=body as {client?:unknown};if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))){send(400,{error:'MCP_CLIENT_INVALID'});return true;}
           const name=({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor',hermes:'Hermes'} as const)[value.client as McpRegistrationClient];
@@ -132,7 +156,7 @@ export class ControlSettings{
           await this.activity.record('runtime','running','전용 작업 폴더와 로컬 실행 권한을 준비하는 중입니다.');await approveNonInterferingConnection(dirname(this.config.path));await this.activity.record('runtime','success','로컬 실행 연결을 승인했습니다.');send(200,this.status());
         }else send(404,{error:'NOT_FOUND'});
       }finally{this.busy=false;}
-    }catch(error){const message=error instanceof Error&&/^(?:BROWSER_SETUP|MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|CLIENT_INSTALL)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error','클라이언트 설치를 마치지 못했습니다. 공식 안내를 확인해 주세요.');send(message.includes('CONFLICT')||message.includes('BUSY')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
+    }catch(error){if(suffix==='settings/mcp/check'||suffix==='settings/refresh'||suffix==='settings/provider-probe')await this.activity.record(suffix==='settings/mcp/check'?'mcp':'ai','error','연결 상태를 확인하지 못했습니다. 다시 확인해 주세요.');const message=error instanceof Error&&/^(?:BROWSER_SETUP|MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|OPENCODE_MCP_CONFIG|CLIENT_INSTALL)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error',message.startsWith('CLIENT_INSTALL_DOWNLOAD')?'설치 파일 다운로드 실패 · 네트워크를 확인한 뒤 설치를 다시 누르세요.':'설치 완료를 확인하지 못했습니다. 연결 작업 기록과 설치 상태를 다시 확인하세요.');send(message.includes('CONFLICT')||message.includes('BUSY')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
     return true;
   }
   close(){this.auth.close();this.activity.close();}

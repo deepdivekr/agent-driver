@@ -9,8 +9,15 @@ import {hashJson} from '../taskpack/adaptive-spec.js';
 export class ConfiguredStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];
   sampling?:McpSamplingStructuredModel;
-  constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel}={},readonly onHandoff?:(event:ClientRouteEvent)=>void,readonly scope:ModelScope='global'){}
-  forScope(scope:ModelScope){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,scope);if(this.sampling)model.sampling=this.sampling;return model;}
+  constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel}={},readonly onHandoff?:(event:ClientRouteEvent)=>void,readonly scope:ModelScope='global',readonly provenance?:ReturnType<typeof handoffContext>){}
+  forScope(scope:ModelScope){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,scope,this.provenance);if(this.sampling)model.sampling=this.sampling;return model;}
+  /** Bind all successor calls to the same Work/run even if a capability input omits IDs. */
+  forWork(context:{work_id:string;run_id:string;stage_id?:string},scope:ModelScope=this.scope){
+    const binding=handoffContext(context);
+    if(binding.work_id!==context.work_id||binding.run_id!==context.run_id||context.stage_id!==undefined&&binding.stage_id!==context.stage_id)throw Error('CLIENT_HANDOFF_CONTEXT_INVALID');
+    const sink=this.onHandoff?(event:ClientRouteEvent)=>this.onHandoff!({...event,...binding,stage_id:binding.stage_id??event.stage_id}):undefined;
+    const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,sink,scope,binding);if(this.sampling)model.sampling=this.sampling;return model;
+  }
   environment(){return scopedModelConfiguration(this.path,this.scope,this.base).environment;}
   private resolve(context:ReturnType<typeof scopedModelConfiguration>){
     const {saved,environment}=context;
@@ -23,28 +30,29 @@ export class ConfiguredStructuredModel implements StructuredModel{
   async status(){const context=scopedModelConfiguration(this.path,this.scope,this.base);return {...publicModelSettings(context.saved,context.base),model_scope:this.scope,model_source:context.source,...await subscriptionAwareModelFromHostEnvironment({...(this.sampling?{sampling:this.sampling}:{})},context.environment).status()};}
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
     input=structuredClone(input);schema=structuredClone(schema);
+    if(this.provenance)input=input&&typeof input==='object'&&!Array.isArray(input)?{...input,...this.provenance,stage_id:this.provenance.stage_id??handoffContext(input).stage_id}:{value:input,...this.provenance};
     const context=scopedModelConfiguration(this.path,this.scope,this.base),{saved}=context;
     if(saved?.selection.mode==='api'&&saved.selection.api_to_subscription){
-      const env=context.environment,api=this.factories.api?.(env)??structuredModelFromEnvironment(env);
+      const env=context.environment,api=this.factories.api?.(env)??structuredModelFromEnvironment(env),apiStart=api.calls.length;
       try{return await api.call(purpose,instructions,input,schema);}catch(error){
-        const call=api.calls.at(-1),status=call?.http_status;
+        const call=api.calls.slice(apiStart).at(-1),status=call?.http_status;
         if(isNonRetryableClientFailure(error)||call?.failure_kind==='invalid_output'||call?.failure_kind==='json_decode'||call?.failure_kind==='refusal'||status!==undefined&&status>=400&&status<500&&![401,402,403,429].includes(status))throw error;
         const reason:HandoffReason=status===401||status===403?'auth_expired':status===402?'quota_exhausted':status===429?'rate_limited':classifyClientFailure(error);
         const connected=['mcp','codex','claude','opencode'];
         const subscribed={...env,AGENT_DRIVER_LLM_CLIENT:saved.selection.client==='auto'?connected.join(','):[saved.selection.client,...connected.filter(client=>client!==saved.selection.client)].join(',')};
         const onHandoff=(event:ClientRouteEvent)=>this.onHandoff?.(event);
         const options={environment:subscribed,subscriptionOnly:true,...(this.sampling?{sampling:this.sampling}:{}),onHandoff};
-        const alternative=this.factories.subscription?.(options)??subscriptionAwareModelFromHostEnvironment(options,subscribed);
+        const alternative=this.factories.subscription?.(options)??subscriptionAwareModelFromHostEnvironment(options,subscribed),alternativeStart=alternative.calls.length;
         let value:unknown;
         try{value=await alternative.call(purpose,instructions,input,schema);
         }catch(fallbackError){if(!isNonRetryableClientFailure(fallbackError))recordClientRoute(this.onHandoff,{...handoffContext(input),source:'api',target:null,source_model:call?.model??saved.selection.api_model,target_model:null,reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});throw fallbackError;
-        }finally{this.calls.push(...alternative.calls);}
-        const target=alternative.calls.findLast(item=>item.status==='accepted');
+        }finally{this.calls.push(...alternative.calls.slice(alternativeStart));}
+        const target=alternative.calls.slice(alternativeStart).findLast(item=>item.status==='accepted');
         if(!target||!['mcp_sampling','codex','claude','opencode','cursor'].includes(target.provider??''))throw Error('CLIENT_HANDOFF_RECEIPT_MISSING');
         recordClientRoute(this.onHandoff,{...handoffContext(input),source:'api',target:target.provider==='mcp_sampling'?'mcp':target.provider as ClientRouteEvent['target'],source_model:call?.model??saved.selection.api_model,target_model:target.model,reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});
         return value;
-      }finally{this.calls.push(...api.calls);}
+      }finally{this.calls.push(...api.calls.slice(apiStart));}
     }
-    const provider=this.resolve(context);try{return await provider.call(purpose,instructions,input,schema);}finally{this.calls.push(...provider.calls);}
+    const provider=this.resolve(context),start=provider.calls.length;try{return await provider.call(purpose,instructions,input,schema);}finally{this.calls.push(...provider.calls.slice(start));}
   }
 }

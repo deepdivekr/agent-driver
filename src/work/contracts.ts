@@ -3,6 +3,7 @@ import {referenceSelectionSchema} from './reference-selection.js';
 import {basePackFamilyId} from '../taskpacks/base-pack-catalog.js';
 import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 import {initialWorkPlan,validateWorkPlan,workPlanSchema} from './plan.js';
+import {workResultGetSchema,workResultsListSchema} from './results.js';
 
 const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u);
 const sentence=z.string().trim().min(1).max(2000);
@@ -36,6 +37,9 @@ export const workStatusSchema=z.object({work_id:id}).strict();
 export const workContextSchema=z.object({work_id:id,run_id:id.optional(),actor:z.string().regex(/^[a-zA-Z0-9_.:-]{1,80}$/u),reference_ids:z.array(z.string().min(1).max(200)).max(5).default([]),selection:referenceSelectionSchema.optional()}).strict().refine(value=>!value.selection||value.reference_ids.length===0,'Choose explicit reference IDs or semantic selection, not both');
 export const workListSchema=z.object({limit:z.number().int().min(1).max(100).default(30)}).strict();
 export const workPauseSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),paused:z.boolean()}).strict();
+// Shared by the Control Center dispatcher and MCP. No second admission contract.
+export const workExecuteSchema=z.object({work_id:z.string().uuid(),revision:z.number().int().nonnegative(),executor:z.enum(['pack','hermes','client']).default('client'),cost_acknowledged:z.boolean().default(false),timezone:z.string().min(1).max(100).optional()}).strict();
+export const workControlSchema=z.object({work_id:z.string().uuid(),revision:z.number().int().nonnegative(),action:z.enum(['pause','resume','edit','retry']),instruction:z.string().trim().min(1).max(4000).optional(),stage_id:z.string().max(80).optional()}).strict();
 export const workJevSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),enabled:z.boolean(),cost_acknowledged:z.boolean().default(false)}).strict();
 // Pack request IDs are bounded to 80 characters. Preserve legacy longer Work
 // IDs without creating an unbound second Work or a fresh ID on every retry.
@@ -47,9 +51,13 @@ export const workTools={
   runtime_work_define:{schema:workDefineSchema,implemented:true,readOnly:false},
   runtime_work_answer:{schema:workAnswerSchema,implemented:true,readOnly:false},
   runtime_work_status:{schema:workStatusSchema,implemented:true,readOnly:true},
+  runtime_work_results:{schema:workResultsListSchema,implemented:true,readOnly:true},
+  runtime_work_result:{schema:workResultGetSchema,implemented:true,readOnly:true},
   runtime_work_context:{schema:workContextSchema,implemented:true,readOnly:true},
   runtime_work_list:{schema:workListSchema,implemented:true,readOnly:true},
   runtime_work_pause:{schema:workPauseSchema,implemented:true,readOnly:false},
+  runtime_work_execute:{schema:workExecuteSchema,implemented:true,readOnly:false},
+  runtime_work_control:{schema:workControlSchema,implemented:true,readOnly:false},
 } as const;
 
 export function validateWorkProposal(raw:unknown,mode:WorkMode,answered=false){
