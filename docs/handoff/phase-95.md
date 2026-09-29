@@ -11,9 +11,23 @@ The UI exposed download/check/register together, then reported missing consent
 only in the below-panel notice. CLI absence is not proof of GUI absence; Neo
 endpoint failure is not proof that the app is uninstalled. Preserve unknowns.
 
-RQ-824/RQ-825 pending. State-specific actions and nearby feedback must retain
-freshness, revision, explicit profile permission and default Playwright. Show
-the Windows bridge JSON as MCP configuration, not an executable shell command.
+RQ-824 done. Browser actions now follow unchecked -> missing CLI or disconnected
+-> reachable/permission -> connected, without claiming a missing GUI from a
+missing CLI. The explicit Allow & connect action carries profile-use consent;
+checks alone do not register. Completed actions remain disabled after the shared
+action lock releases. Errors and stale revision/freshness instructions are beside
+the relevant row. Login-needed clients no longer show MCP connection alongside
+login; install continues to login and completed AI login refreshes into Manage.
+Windows JSON instructions are visible and expressly not terminal commands.
+
+RQ-825 partial: 75 affected cases plus input integrity passed (76/76), receipt
+tests/evidence/runtime-tests-2026-09-29T03-13-09-576Z.json. Includes 16 localized
+layout combinations and eight browser state/action flows. Build passed; fixture
+auth/registration is not real provider certification. Initial 17/19 run at
+03-07-10-346Z retained: generic feedback hid CLI guidance (production fixed), and
+shared layout fixture kept a ready browser between combinations (fixture isolated).
+Resume by pushing the verified branch and safely applying the managed UI, then
+inspect actual Windows Aside while preserving existing profile/settings/Work.
 
 Current managed product: bf8cfec; UI PID 830711; same private Control Center URL.
 Personal MCP PID 447350, private Work and model settings are preserved. Phase 94

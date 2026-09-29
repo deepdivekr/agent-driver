@@ -82,8 +82,9 @@ async function settled(page,id){await page.waitForFunction(id=>{const button=doc
 
 test('runtime fixture Control Center alignment and compact right actions hold in sixteen localized theme and viewport combinations',async t=>{
   const browser=await chromium.launch({headless:true});t.after(()=>browser.close());await mkdir(evidence,{recursive:true});
-  const f=await fixture(t),before=await readFile(f.paths.runtimeConfig,'utf8'),records=[];
+  const records=[];
   for(const width of [1280,768,375,320])for(const lang of ['ko','en'])for(const theme of ['dark','light']){
+    const f=await fixture(t),before=await readFile(f.paths.runtimeConfig,'utf8');
     const context=await browser.newContext({viewport:{width,height:1000}}),page=await context.newPage(),errors=[];
     await context.addInitScript(({lang,theme})=>{localStorage.setItem('office-lang',lang);localStorage.setItem('office-theme',theme);},{lang,theme});
     page.on('pageerror',error=>errors.push(error.message));await page.goto(f.url);await page.locator('#mcp-clients [data-client=codex] button').waitFor();
@@ -93,14 +94,18 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     const agentSpacing=await statusActionSpacing(page,'#mcp-clients .client');
     assert.equal(await page.locator('#mcp-clients .client-icon svg').count(),5);
     assert.equal(await page.locator('#mcp-clients .client>p').count(),0,'Client descriptions must not clutter the connection list');
-    assert.ok(buttons.filter(b=>b.text===(lang==='ko'?'연결':'Connect')).length===5);
+    await page.locator('#windows-bridge>summary').click();
+    assert.ok(await page.locator('#windows-bridge-help').isVisible());
+    assert.match(await page.locator('#windows-bridge-help').textContent(),lang==='ko'?/터미널에 실행하는 명령이 아닙니다/u:/not a command to run in a terminal/u);
+    assert.equal(buttons.filter(b=>b.text===(lang==='ko'?'연결':'Connect')).length,2,'Only the two signed-in clients should offer registration');
+    assert.equal(await page.locator('#mcp-clients [data-client=opencode] .cact button').count(),1,'Log in first; do not offer registration alongside it');
     assert.equal(await page.getByText(lang==='ko'?'MCP 연결':'Connect MCP',{exact:true}).count(),0);
     await rightEdge(page,'#refresh-mcp,#mcp-next','#step-0');await noOverflow(page);
     if(width===1280)await page.screenshot({path:join(evidence,`agents-${width}-${lang}-${theme}.png`),fullPage:true});
     await page.locator('[data-step="1"]').click();await page.locator('[data-browser=playwright]').waitFor();
-    await page.locator('#browser-setup details>summary').focus();await page.keyboard.press('Enter');
+    await page.locator('#browser-setup>details>summary').focus();await page.keyboard.press('Enter');
     await page.getByRole('button',{name:lang==='ko'?'Aside 연결 확인':'Check Aside connection',exact:true}).click();
-    await page.locator('[data-browser=aside] .badge.ok').waitFor();
+    await page.locator('[data-browser=aside][data-setup-state=permission]').waitFor();
     // A cached ready badge is not evidence that this new check finished rerendering the rows.
     await settled(page,'browser-setup-refresh');
     const optional=await alignedRows(page,'.browser-list .client');
@@ -122,10 +127,10 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     assert.equal(await page.locator('.terminal pre').evaluate(e=>getComputedStyle(e).textAlign),'start');
     assert.deepEqual(errors,[]);
     if([1280,375].includes(width))await page.screenshot({path:join(evidence,`ai-${width}-${lang}-${theme}.png`),fullPage:true});
+    assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),before);
+    assert.ok(f.calls.every(call=>call==='browser:aside'),'Layout checks must not invoke models, change registration or start sign-in');
     records.push({width,lang,theme,agents,optional,ai,buttons,agentSpacing,aiSpacing});await context.close();
   }
-  assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),before);
-  assert.ok(f.calls.every(call=>call==='browser:aside'),'Layout checks must not invoke models, change registration or start sign-in');
   await writeFile(join(evidence,'layout-matrix.json'),JSON.stringify({evidence_level:'fixture_integration',status:'PASS',records},null,2)+'\n');
 });
 

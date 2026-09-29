@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdtemp,rm,mkdir} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,readFile} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {chromium} from 'playwright';
@@ -21,13 +21,13 @@ async function assertDisclosures(page,minimum){
 
 async function fixture(t){
   const root=await mkdtemp(join(tmpdir(),'office-actions-')),paths=await prepareLocalConnection(root),config=loadHostConfig(paths.runtimeConfig),ids=['codex','claude','opencode','cursor','hermes'];
-  const installed=new Set(['codex','claude','hermes']),flows=new Map(),calls=[];
-  const auth={async connections(){return ids.map(id=>({id,status:installed.has(id)?['codex','claude'].includes(id)?'ready':'signed_out':'unavailable',supported_login_flows:[id==='codex'||id==='opencode'?'device':'browser'],connection:this.view(id)}));},view(id){return flows.get(id)??{client_id:id,state:'idle'};},async start(id,flow){assert.ok(installed.has(id));calls.push('login:'+id);const result={client_id:id,flow,state:'waiting',reason:'waiting_for_confirmation',credentials_exposed:false,...(id==='cursor'?{auth_url:'https://cursor.com/loginDeepControl?mode=login&redirectTarget=cli&uuid=fixture&challenge=fixture'}:{device_url:'https://auth.openai.com/codex/device',user_code:'ABCD-1234'})};flows.set(id,result);return result;},close(){}};
+  const installed=new Set(['codex','claude','hermes']),signedIn=new Set(['codex','claude']),flows=new Map(),calls=[];
+  const auth={async connections(){return ids.map(id=>({id,status:installed.has(id)?signedIn.has(id)?'ready':'signed_out':'unavailable',supported_login_flows:[id==='codex'||id==='opencode'?'device':'browser'],connection:this.view(id)}));},view(id){return flows.get(id)??{client_id:id,state:'idle'};},async start(id,flow){assert.ok(installed.has(id));calls.push('login:'+id);const result={client_id:id,flow,state:'waiting',reason:'waiting_for_confirmation',credentials_exposed:false,...(id==='cursor'?{auth_url:'https://cursor.com/loginDeepControl?mode=login&redirectTarget=cli&uuid=fixture&challenge=fixture'}:{device_url:'https://auth.openai.com/codex/device',user_code:'ABCD-1234'})};flows.set(id,result);return result;},close(){}};
   const bootstrap={view(){return {clients:ids.map(id=>({id,label:({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor CLI',hermes:'Hermes'})[id],installed:installed.has(id),managed_install:true,docs_url:'https://example.test/docs'}))};},async install(id,onStage){calls.push('install:'+id);await onStage('downloading');installed.add(id);return this.view();}};
   const mcp={async view(){return {agent_driver:{installed:true},clients:ids.map(id=>({id,automatic:true,registration:'not_registered'})),registered_count:0,windows_bridge:{command:'wsl.exe',args:['--exec','node','mcp']}};}};
   const settings=new ControlSettings(config,auth,{},fetch,mcp,undefined,bootstrap);let host;const server=createServer(async(req,res)=>{if(!await settings.handle(req,res,req.url.slice(1),host)){res.writeHead(404);res.end();}});await new Promise(r=>server.listen(0,'127.0.0.1',r));host='127.0.0.1:'+server.address().port;
   t.after(async()=>{settings.close();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});});
-  return {url:'http://'+host+'/settings',calls,flows,config};
+  return {url:'http://'+host+'/settings',calls,flows,signedIn,config};
 }
 
 test('runtime fixture connection actions align and automatically continue install to login on desktop and mobile',async t=>{
@@ -53,6 +53,22 @@ test('runtime fixture connection actions align and automatically continue instal
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);assert.deepEqual(errors,[]);
     await page.screenshot({path:'tests/evidence/phase92/connections-'+width+'-'+lang+'.png',fullPage:true});await page.locator('#theme-toggle').click();await assertDisclosures(page,5);await context.close();
   }
+});
+
+test('runtime fixture AI setup installs a missing client and refreshes its completed login into Manage without saving model settings',async t=>{
+  const f=await fixture(t),before=await readFile(f.config.path,'utf8'),browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+  const context=await browser.newContext({viewport:{width:375,height:980}}),page=await context.newPage();
+  await context.addInitScript(()=>localStorage.setItem('office-lang','en'));
+  await context.route('https://auth.openai.com/**',route=>route.fulfill({body:'<h1>Device login fixture</h1>',contentType:'text/html'}));
+  await page.goto(f.url);await page.locator('#refresh-mcp:enabled').waitFor();await page.locator('[data-step="2"]').click();await page.locator('#refresh-clients:enabled').waitFor();
+  const card=page.locator('#client-opencode');assert.equal(await card.locator('.cact button').count(),1);assert.equal(await card.locator('.cact button').textContent(),'Install');
+  const popupPromise=context.waitForEvent('page');await card.locator('.cact button').click();const popup=await popupPromise;await popup.waitForURL('https://auth.openai.com/codex/device');
+  await page.locator('#refresh-clients:enabled').waitFor();assert.deepEqual(f.calls,['install:opencode','login:opencode']);
+  assert.equal(await card.locator('.cact button').count(),1);assert.equal(await card.locator('.cact button').textContent(),'Log in');
+  f.signedIn.add('opencode');f.flows.set('opencode',{client_id:'opencode',state:'completed',reason:'fixture_approved',credentials_exposed:false});
+  await card.locator('[data-manage-client=opencode]').waitFor();assert.equal(await card.locator('.badge').textContent(),'Connected');
+  assert.equal(await card.locator('.login-action').count(),0);assert.equal(await readFile(f.config.path,'utf8'),before,'Completing login does not save or switch models');
+  assert.deepEqual(f.calls,['install:opencode','login:opencode']);await popup.close();
 });
 
 test('runtime native import entry is visibly linked and import text/actions have consistent spacing',async t=>{
