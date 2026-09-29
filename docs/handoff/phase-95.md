@@ -20,16 +20,26 @@ the relevant row. Login-needed clients no longer show MCP connection alongside
 login; install continues to login and completed AI login refreshes into Manage.
 Windows JSON instructions are visible and expressly not terminal commands.
 
-RQ-825 partial: 75 affected cases plus input integrity passed (76/76), receipt
+RQ-825 done: 75 affected cases plus input integrity passed (76/76), receipt
 tests/evidence/runtime-tests-2026-09-29T03-13-09-576Z.json. Includes 16 localized
 layout combinations and eight browser state/action flows. Build passed; fixture
 auth/registration is not real provider certification. Initial 17/19 run at
 03-07-10-346Z retained: generic feedback hid CLI guidance (production fixed), and
 shared layout fixture kept a ready browser between combinations (fixture isolated).
-Resume by pushing the verified branch and safely applying the managed UI, then
-inspect actual Windows Aside while preserving existing profile/settings/Work.
+Managed product 8aec224 is applied and PR branch pushed. Upgrade receipt:
+tests/evidence/phase95-ui-upgrade.json; Windows UI/probe receipt:
+tests/evidence/phase95-native.json. Both recorded as independent user_environment
+PASS cases in the private report. Actual Korean/English instructions are visible,
+describe Windows app/IDE MCP configuration and explicitly exclude terminal use.
+The real Aside check succeeded and showed only Allow & connect / 허용하고 연결.
+No permission/registration, login completion or paid model call was performed in
+the personal config. Native browser preferences restored to English/dark/Agents,
+Windows disclosure open and tail closed. Registration completion/missing CLI/auth
+completion are fixture evidence only. Public main merge/release is separate.
 
-Current managed product: bf8cfec; UI PID 830711; same private Control Center URL.
+Current managed product: 8aec224; UI PID 853116; same private Control Center URL.
+Previous UI 830711 stopped only after exact process identity validation, with
+rollback ref refs/agent-office/pre-state-actions-update-20260929 at bf8cfec.
 Personal MCP PID 447350, private Work and model settings are preserved. Phase 94
 passed 71 cases plus integrity and native Windows layout/Manage checks; do not
 reinterpret fixture logins or registrational writes as real browser success.
