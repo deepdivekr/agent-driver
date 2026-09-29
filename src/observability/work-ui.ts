@@ -185,6 +185,17 @@ document.getElementById('copy-migration-prompt').onclick=async()=>{const target=
 document.getElementById('paste-import').onclick=()=>{const text=document.getElementById('import-json').value.trim();if(!text){setMessage('기존 AI의 JSON 답변을 붙여넣어 주세요.');return}importRequest('work/import/paste',{text})};
 document.getElementById('scan-import').onclick=()=>{const path=document.getElementById('import-path').value.trim();if(!path){setMessage('로컬 또는 WSL 프로젝트 경로를 입력해 주세요.');return}const scope=document.getElementById('import-scope').value.trim();importRequest('work/import/scan',{path,...(scope?{scope}:{})})};
 for(const id of ['import-path','import-scope'])document.getElementById(id).addEventListener('input',invalidateImportPreview);
+// A language change reloads the shell. Keep only unsubmitted project inputs,
+// consume them once, and never restore a preview or any approval.
+const importDraftKey='office-import-input:'+location.pathname;
+document.getElementById('lang-toggle').addEventListener('click',event=>{
+if(!importOpen||!['workflow','bot'].includes(importRoute))return;
+try{sessionStorage.setItem(importDraftKey,JSON.stringify({at:Date.now(),route:importRoute,path:document.getElementById('import-path').value,scope:document.getElementById('import-scope').value}))}
+catch{event.stopImmediatePropagation();setMessage('입력을 보존할 수 없어 언어를 바꾸지 않았습니다. 입력 내용을 먼저 복사해 주세요.')}
+},true);
+function restoreImportInputs(){
+try{const saved=sessionStorage.getItem(importDraftKey);sessionStorage.removeItem(importDraftKey);if(!saved)return;const value=JSON.parse(saved);if(!['workflow','bot'].includes(value.route)||typeof value.path!=='string'||value.path.length>2048||typeof value.scope!=='string'||value.scope.length>2000||typeof value.at!=='number'||Date.now()-value.at>300000)return;importOpen=true;setImportRoute(value.route);document.getElementById('import-path').value=value.path;document.getElementById('import-scope').value=value.scope;render()}catch{}
+}
 async function answer(){if(!detail)return;const answers={};for(const node of app.querySelectorAll('[data-question]')){const id=node.dataset.question,choice=node.querySelector('select').value,value=choice==='custom'?node.querySelector('input').value.trim():choice;if(value)answers[id]=value}try{const res=await fetch('work/answer',{method:'POST',headers:{'content-type':'application/json','x-agent-driver':'human-office'},body:JSON.stringify({work_id:detail.id,revision:detail.revision,answers})});const data=await res.json();if(!res.ok)throw Error(data.error||'저장 실패');await loadDetail();setMessage(data.status==='needs_model'?'답변을 저장했습니다. AI 연결을 확인한 뒤 업무 정의를 재개해 주세요.':'선택을 반영했습니다. 실행 배정은 연결된 에이전트가 이어갑니다.')}catch(error){setMessage(String(error.message||error))}}
 async function loadAiConsent(){try{const r=await fetch('settings/status',{cache:'no-store'});if(r.ok){const v=await r.json();aiDataApproved=v.work_model_data?.editable===false?null:Boolean(v.work_model_data?.approved);if(selected&&detail?.work_status==='needs_model')renderDetail()}}catch{}}
 async function allowAiData(){setMessage('AI 전송을 허용하는 중…');try{const r=await fetch('settings/work-data',{method:'POST',headers:{'content-type':'application/json','x-agent-driver':'human-settings'},body:JSON.stringify({approved:true})});const v=await r.json();if(!r.ok)throw Error(v.error||'허용 실패');aiDataApproved=true;await retryDefine()}catch(error){setMessage(String(error.message||error))}}
@@ -193,5 +204,6 @@ document.querySelector('[data-nav="import"]').addEventListener('click',event=>{e
 document.querySelectorAll('[data-layout]').forEach(button=>button.onclick=()=>{layout=button.dataset.layout;try{localStorage.setItem('office-layout',layout)}catch{}renderBoard()});
 document.getElementById('search').addEventListener('input',event=>{query=event.target.value;renderBoard()});
 compactHints(importer);loadAiConsent();if(new URL(location.href).searchParams.get('import')==='1'&&!selected){document.getElementById('open-import').click();const migrationId=new URL(location.href).searchParams.get('migration_id');if(migrationId){setImportRoute('hermes');migrationLoad(migrationId)}}
+restoreImportInputs();
 intake.addEventListener('submit',submitWork);fetch('work/board',{cache:'no-store'}).then(r=>r.json()).then(data=>{board=data;render();if(selected)loadDetail()}).catch(e=>setMessage(String(e.message||e)));const stream=new EventSource('work/events');stream.addEventListener('board',event=>{const next=JSON.parse(event.data),old=board?.works.find(w=>w.id===selected),now=next.works.find(w=>w.id===selected);board=next;if(!selected){if(importOpen)updateNav();else renderBoard()}else if(JSON.stringify(old)!==JSON.stringify(now))loadDetail()});stream.onerror=()=>setMessage('실시간 연결을 다시 시도하는 중입니다.');document.addEventListener('visibilitychange',()=>{if(!document.hidden&&selected)loadDetail()});
 </script></body></html>`;}

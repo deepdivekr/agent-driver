@@ -27,15 +27,27 @@ test('runtime fixture scoped project import uses real HTTP/storage, bilingual re
  await mkdir('tests/evidence/phase98',{recursive:true});
  const original=await readFile(join(project,'bot.js'),'utf8');
  for(const lang of ['ko','en'])for(const width of [1280,390]){
-  await page.addInitScript(({lang})=>{localStorage.setItem('office-lang',lang);localStorage.setItem('office-theme','dark');},{lang});
   await page.setViewportSize({width,height:1000});await page.goto(server.url);
+  await page.evaluate(({lang})=>{localStorage.setItem('office-lang',lang);localStorage.setItem('office-theme','dark');},{lang});await page.reload();
   await page.locator('#open-import').click();await page.locator('[data-import-route="workflow"]').click();
   assert.equal(await page.locator('#import-scope').isVisible(),true);
   assert.equal(await page.locator('label[for="import-scope"]').innerText(),lang==='ko'?'어떤 업무를 가져올까요? · 선택':'What should we import? · optional');
+  if(lang==='en'){
+   assert.equal(await page.locator('[data-import-route="hermes"]').innerText(),'Hermes work');
+   assert.equal(await page.locator('[data-import-route="remote"]').innerText(),'Remote OpenClaw');
+   assert.doesNotMatch(await page.locator('#import-path').getAttribute('placeholder'),/[가-힣]/u);
+  }
   await page.locator('[data-import-route="bot"]').click();
   assert.equal(await page.locator('#import-scope').isVisible(),true);
   const scope='뉴스 알림만 가져와줘.\n결제와 쇼핑몰은 제외. <img src=x onerror=alert(1)> '+lang+width;
   await page.locator('#import-path').fill(project);await page.locator('#import-scope').fill(scope);
+  const other=lang==='ko'?'en':'ko';await page.locator('#lang-toggle').click();
+  await page.waitForFunction(lang=>document.documentElement.lang===lang,other);
+  assert.equal(await page.locator('#import-scope').inputValue(),scope);
+  assert.equal(await page.locator('#import-path').inputValue(),project);
+  assert.equal(await page.locator('#import-scope').isVisible(),true);
+  await page.locator('#lang-toggle').click();await page.waitForFunction(lang=>document.documentElement.lang===lang,lang);
+  assert.equal(await page.locator('#import-scope').inputValue(),scope);
   assert.equal(await page.locator('#import-scope').getAttribute('maxlength'),'2000');
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await page.locator('#import-project').screenshot({path:`tests/evidence/phase98/import-${lang}-${width}.png`});

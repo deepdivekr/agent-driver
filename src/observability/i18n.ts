@@ -4,6 +4,10 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
+ '입력을 보존할 수 없어 언어를 바꾸지 않았습니다. 입력 내용을 먼저 복사해 주세요.':'Language unchanged because your input could not be preserved. Copy it first.',
+ 'Hermes 업무':'Hermes work',
+ '원격 OpenClaw':'Remote OpenClaw',
+ '예: /home/me/projects/my-bot 또는 C:\\projects\\my-bot':'Example: /home/me/projects/my-bot or C:\\projects\\my-bot',
  '어떤 업무를 가져올까요? · 선택':'What should we import? · optional',
  '예: 이 프로젝트에서 뉴스 수집·텔레그램 알림만 가져와줘. 쇼핑몰과 결제 기능은 제외해.':'Example: Import only news collection and Telegram alerts from this project. Exclude the store and payment features.',
  '가져올 기능과 제외할 부분을 적으세요. 비워두면 프로젝트에서 업무를 찾아 제안합니다.':'Describe what to include or exclude. Leave blank to discover workflows in the project.',
