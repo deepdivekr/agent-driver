@@ -20,6 +20,14 @@ Node 22.22.0, npm 11.11.0, package 0.3.1 unchanged.
   aligned. Blue underlined disclosures and keyboard controls remain intact.
 - No authentication, permission, fallback, Task Pack or Work execution policy
   changed. No business Work or paid model call was made for this UI update.
+- Subsequent user reference supersedes centered client names: lightweight inline
+  icons and names are left aligned; state/action columns remain aligned. Client
+  descriptions are removed from the agent-connection list. Button labels remain
+  centered and compact. State/action clearance is at least 16px horizontally or
+  12px vertically when narrow screens stack them.
+- Connected clients expose Manage, which focuses their existing model setting
+  or opens the existing connection panel. It never saves, replaces an unsaved
+  choice, implicitly switches API/subscription mode or invokes a model.
 
 ## Verification and retained failures
 
@@ -46,13 +54,20 @@ Node 22.22.0, npm 11.11.0, package 0.3.1 unchanged.
 
 Affected regressions: 70/70 cases plus input integrity passed. Exact receipt:
 tests/evidence/runtime-tests-2026-09-29T02-26-32-225Z.json.
+After the client-list/spacing refinement, 71/71 cases plus input integrity
+passed (72/72). Exact receipt:
+tests/evidence/runtime-tests-2026-09-29T02-46-46-612Z.json.
+The geometry matrix now checks status/action clearance, all five local vector
+icons and actual Manage focus/navigation while preserving unsaved choices.
 Build, ledger verification and public boundary scan passed (562 files).
 Desktop Korean/dark and mobile English/light AI/browser captures were visually
 reviewed; all 16 geometry combinations include actual browser measurements.
 
-Managed local application remains in progress. Preserve
-the private configuration, global/coding model selections, Work and personal
-MCP process. Apply only the verified product commit with the existing installer,
-reuse the Control Center URL, then inspect the actual Windows browser.
+Initial compact layout 19fdafb was applied to the managed installation with the
+same URL. UI PID 820473 replaced only its identified predecessor; personal MCP
+PID 447350 and private Work/config/global/coding settings were preserved.
+Private receipt: tests/evidence/phase94-ui-upgrade.json. Subsequent reference
+styling and spacing are verified locally but still need managed application and
+actual Windows page inspection. Preserve the same state/process boundaries.
 PR32/public merge and a new immutable release remain separate gates; do not
 overwrite the existing v0.3.1 tag or assets.

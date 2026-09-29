@@ -4,7 +4,7 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
-'설치':'Install','연결':'Connect','MCP 연결':'Connect MCP','다운로드':'Download','연결 확인':'Check connection','인증 열기':'Open login',
+'설치':'Install','연결':'Connect','관리':'Manage','MCP 연결':'Connect MCP','다운로드':'Download','연결 확인':'Check connection','인증 열기':'Open login',
 '인증 화면 준비 중…':'Preparing login…','설치 중… 연결 작업 기록에서 진행 상황을 확인하세요.':'Installing… Follow progress in the setup log.',
 '설치 후 로그인 화면이 자동으로 열립니다.':'The login page opens automatically after installation.',
 'Windows 앱 연결을 선택하거나 Linux·WSL에서 CLI를 설치하세요.':'Connect a Windows app, or install the CLI in Linux / WSL.',
@@ -204,7 +204,7 @@ const EN:Record<string,string>={
 };
 /** Ordered regex rules for text assembled from numbers or names. */
 const RULES:Array<[string,string]>=[
-['^(.+) MCP 연결$','Connect $1 MCP'],['^(.+) 로그인$','Log in to $1'],['^(.+) 다운로드$','Download $1'],
+['^(.+) MCP 연결$','Connect $1 MCP'],['^(.+) 관리$','Manage $1'],['^(.+) 로그인$','Log in to $1'],['^(.+) 다운로드$','Download $1'],
 ['^(.+) 기존 로그인 확인됨$','$1: existing sign-in verified'],['^(.+) 설치됨 · 로그인 재확인 필요$','$1: installed · check sign-in again'],['^(.+) 공식 로그인 시작 · 브라우저에서 승인하세요$','$1: sign-in started · approve in your browser'],
 ['^(Playwright|Aside|BrowserOS Neo) 연결 확인$','Check $1 connection'],['^(Aside|BrowserOS Neo) 연결 등록$','Register $1 connection'],['^(Playwright|Aside|BrowserOS Neo) 확인 중…$','Checking $1…'],
 ['^(\\d+)개$','$1'],['^(\\d+)건$','$1'],['^(\\d+)분 전$','$1m ago'],['^(\\d+)시간 전$','$1h ago'],['^(\\d+)일 전$','$1d ago'],
