@@ -1,0 +1,299 @@
+{
+  "schema_version": 1,
+  "phase": 103,
+  "scope": "Reviewed main integration; not a new tagged release",
+  "versions": {
+    "node": "22.22.0",
+    "npm": "11.11.0",
+    "package": "0.3.1"
+  },
+  "source": {
+    "head_sha": "d39b13a0e87abef28b7c7287cff4ee5a8bebd159",
+    "base_sha": "64e9a2ac6af2f068de0b1cea2b4c1bc6eefc7613",
+    "pull_request": 32,
+    "merge_sha": "6a87a5962049880d3ae39a763709f362e61ef76e",
+    "merged_at": "2026-09-29T11:36:13Z",
+    "merged_tree_equals_tested_head": true,
+    "expected_head_guard": true,
+    "required_check": "runtime",
+    "branch_protection_active": true,
+    "strict_base": true,
+    "bypass_used": false
+  },
+  "local": {
+    "affected": {
+      "status": "PASS",
+      "passed": 62,
+      "total": 62,
+      "unchanged_inputs": true
+    },
+    "repaired_theme": {
+      "status": "PASS",
+      "passed": 5,
+      "total": 5,
+      "product_code_changed": false
+    },
+    "frozen_quick": {
+      "status": "PASS",
+      "passed": 1288,
+      "total": 1288,
+      "evidence_counts": {
+        "unit": 394,
+        "contract_fake": 503,
+        "fixture_integration": 208,
+        "native_integration": 183
+      },
+      "changed_paths": [],
+      "integrity_included": true
+    },
+    "install": {
+      "status": "PASS",
+      "evidence_level": "native_integration",
+      "passed": 5,
+      "total": 5,
+      "scenarios": [
+        "upgrade-0.1.0",
+        "upgrade-0.1.1",
+        "upgrade-0.2.0",
+        "upgrade-0.3.0",
+        "fresh"
+      ],
+      "all_installed_sha": "d39b13a0e87abef28b7c7287cff4ee5a8bebd159",
+      "published_source": false,
+      "work_model": "fixture",
+      "external_model_calls": 0
+    },
+    "production_audit": {
+      "status": "PASS",
+      "vulnerabilities": 0
+    },
+    "public_boundary": {
+      "status": "PASS",
+      "files": 621,
+      "scope": "Pattern scan, not a complete secrecy guarantee"
+    },
+    "ledger": {
+      "status": "PASS",
+      "requirements": 147
+    }
+  },
+  "ci": [
+    {
+      "event": "pull_request",
+      "run_id": 36561062882,
+      "url": "https://github.com/deepdivekr/agent-office/actions/runs/36561062882",
+      "job_id": 109381777856,
+      "status": "PASS",
+      "head_sha": "d39b13a0e87abef28b7c7287cff4ee5a8bebd159",
+      "checkout_kind": "synthetic_merge",
+      "checkout_sha": "bc5da6e7d4020f84775632a27fb9dc6bddbee267",
+      "quick": {
+        "passed": 1288,
+        "total": 1288,
+        "changed_paths": [],
+        "integrity_included": true
+      },
+      "install": {
+        "evidence_level": "native_integration",
+        "passed": 5,
+        "total": 5,
+        "all_installed_sha": "bc5da6e7d4020f84775632a27fb9dc6bddbee267",
+        "published_source": false,
+        "work_model": "fixture",
+        "external_model_calls": 0
+      },
+      "artifact": {
+        "id": 11030341976,
+        "zip_sha256": "415741dbe2187d1161129700ed025d487e85f278d3a4c84eb553c1a1c3c2a429",
+        "download_hash_matched": true
+      },
+      "release": "skipped"
+    },
+    {
+      "event": "push",
+      "run_id": 36561057858,
+      "url": "https://github.com/deepdivekr/agent-office/actions/runs/36561057858",
+      "job_id": 109381760309,
+      "status": "PASS",
+      "head_sha": "d39b13a0e87abef28b7c7287cff4ee5a8bebd159",
+      "checkout_kind": "branch_head",
+      "checkout_sha": "d39b13a0e87abef28b7c7287cff4ee5a8bebd159",
+      "quick": {
+        "passed": 1288,
+        "total": 1288,
+        "changed_paths": [],
+        "integrity_included": true
+      },
+      "install": {
+        "evidence_level": "native_integration",
+        "passed": 5,
+        "total": 5,
+        "all_installed_sha": "d39b13a0e87abef28b7c7287cff4ee5a8bebd159",
+        "published_source": false,
+        "work_model": "fixture",
+        "external_model_calls": 0
+      },
+      "artifact": {
+        "id": 11029633520,
+        "zip_sha256": "45b1218c996c7a9edbc8c82c5822b3fcd74a628e209bace48fd30d7baec63349",
+        "download_hash_matched": true
+      },
+      "release": "skipped"
+    }
+  ],
+  "preserved_initial_ci": {
+    "head_sha": "f774efb54db386250fcaade0574882d9e3f1fc46",
+    "runs": [
+      {
+        "run_id": 36559440344,
+        "event": "pull_request",
+        "status": "FAIL",
+        "passed": 1287,
+        "total": 1288,
+        "failed": 1,
+        "installation_status": "NOT_RUN",
+        "skipped_scenarios": 5,
+        "artifact_zip_sha256": "e4ea03bbc42265561696b1195c216687a87a681867cfe98da2eb88326202d3a2"
+      },
+      {
+        "run_id": 36559435078,
+        "event": "push",
+        "status": "FAIL",
+        "passed": 1287,
+        "total": 1288,
+        "failed": 1,
+        "installation_status": "NOT_RUN",
+        "skipped_scenarios": 5,
+        "artifact_zip_sha256": "0b4adf163babeb8de5a9b5e3cc62ecd93d64f56101dbc0d3c5c9eaaa152f5dce"
+      }
+    ],
+    "failure": {
+      "evidence_level": "native_integration",
+      "status": "FAIL",
+      "test": "Theme change and settings navigation",
+      "cause": "Normal settings bootstrap refresh request was misattributed to a theme action",
+      "repair": "Bind the one exact bootstrap Request; keep first-toggle zero requests and reject every other POST"
+    }
+  },
+  "private_readback": {
+    "evidence_level": "user_environment",
+    "status": "PASS",
+    "work_count_preserved": 12,
+    "settings_models_schedules_preserved": true,
+    "address_preserved": true,
+    "windows_http_status": 200,
+    "mcp_sdk_instructions_and_tools_verified": true,
+    "english_copy_prompt_verified": true,
+    "execute_status_log_results_regions_verified": true,
+    "user_mcp_client_reconnected": false,
+    "private_bot_replayed": false,
+    "external_message_sent": false,
+    "new_paid_api_call": false,
+    "initial_pre_overlay_mcp_gate": {
+      "status": "BLOCKED_ENV",
+      "reason": "MCP_LATEST_INSTALL_REQUIRED",
+      "later_fresh_restart_status": "PASS"
+    },
+    "cumulative_local_report": {
+      "existing_rows_preserved": 13868,
+      "appended_local_rows": 10,
+      "pre_existing_duplicate_ids_preserved": 1,
+      "original_bytes_backed_up": true
+    }
+  },
+  "issues": {
+    "closed_completed": [
+      2,
+      9,
+      18,
+      20
+    ],
+    "retained_open_with_updated_scope": [
+      1,
+      3,
+      4,
+      5,
+      6,
+      14,
+      16,
+      22,
+      24
+    ],
+    "comment_ids": [
+      {
+        "issue": 1,
+        "id": 5889465135
+      },
+      {
+        "issue": 3,
+        "id": 5889465654
+      },
+      {
+        "issue": 2,
+        "id": 5889465391
+      },
+      {
+        "issue": 4,
+        "id": 5889466256
+      },
+      {
+        "issue": 5,
+        "id": 5889466509
+      },
+      {
+        "issue": 6,
+        "id": 5889466814
+      },
+      {
+        "issue": 14,
+        "id": 5889467386
+      },
+      {
+        "issue": 16,
+        "id": 5889467704
+      },
+      {
+        "issue": 9,
+        "id": 5889467122
+      },
+      {
+        "issue": 22,
+        "id": 5889468989
+      },
+      {
+        "issue": 18,
+        "id": 5889468408
+      },
+      {
+        "issue": 20,
+        "id": 5889468714
+      },
+      {
+        "issue": 24,
+        "id": 5889469859
+      }
+    ]
+  },
+  "superseded_pull_request": {
+    "number": 29,
+    "state": "closed",
+    "merged": false,
+    "comment_id": 5889458779,
+    "obsolete_readme_adopted": false,
+    "missing_provider_subscription_allowed": false,
+    "branch_deleted": false
+  },
+  "publication": {
+    "new_tagged_release": false,
+    "immutable_tag": "v0.3.1",
+    "immutable_tag_sha": "49b8ef323bbfa1b08a7fc952b2602c24d7e525bf",
+    "installer_pin_changed": false
+  },
+  "remaining": [
+    "NAS authentication is unavailable; a readable share is not runtime control",
+    "Live cross-executor takeover and native Windows/macOS certification",
+    "External messenger/email delivery acceptance",
+    "Independent holdout, Windows continuous non-interference and reboot/power-loss gates",
+    "Unknown-cause issue22 remains unresolved; long soak excluded from routine checks"
+  ]
+}

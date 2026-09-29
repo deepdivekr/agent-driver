@@ -23,13 +23,41 @@ The first published candidate, `f774efb54db386250fcaade0574882d9e3f1fc46`, passe
 
 The artifacts attribute that failure to the settings page's normal initialization `settings/refresh` request being counted as a theme-triggered write. The regression now binds exactly one initialization request to the settings navigation, asserts no request for the first theme action and rejects every other POST throughout the traversal. It does not whitelist every refresh or disable the request check. All four repaired browser-theme cases plus input stability passed (5/5). Product source/build code did not change for this test correction. Both original CI failures remain failures; a fresh exact-head CI is still required.
 
-At this source checkpoint, final candidate verification and merge are pending. The PR check history and final merge receipt must identify the exact head; an older green or cancelled run cannot substitute for it. Raw local receipts and private settings are not publication artifacts.
+### Final verified integration
+
+The revised head `d39b13a0e87abef28b7c7287cff4ee5a8bebd159` passed the following gates. Input-integrity checks are included in the quick counts, not added again.
+
+| Check | Result | Binding |
+|---|---|---|
+| Affected regressions | 62/62 PASS | Product code retained in the revised head |
+| Repaired browser-theme regressions | 5/5 PASS | Every other POST still rejected |
+| Frozen local full quick | 1,288/1,288 PASS; unchanged inputs | Revised head |
+| Real local fresh/upgrade installation | 5/5 PASS | Each installed SHA equals `d39b13a` |
+| [PR CI](https://github.com/deepdivekr/agent-office/actions/runs/36561062882) | 1,288/1,288 and installs 5/5 PASS | Synthetic merge `bc5da6e7`, head `d39b13a` + base `64e9a2a` |
+| [Push CI](https://github.com/deepdivekr/agent-office/actions/runs/36561057858) | 1,288/1,288 and installs 5/5 PASS | Each installed SHA equals `d39b13a` |
+| Production audit / public boundary / ledger | 0 vulnerabilities / 621 files PASS / 147 requirements PASS | Reviewed candidate |
+
+The local full quick comprises unit 394, contract-fake 503, fixture-integration 208 and native-integration 183 cases. These levels remain distinct. All installation scenarios ran npm, the build, Chromium, MCP and wrapper probes, with fixture Work models and zero external model calls. A pattern-based public-boundary scan is not a complete secret-detection guarantee.
+
+[PR #32](https://github.com/deepdivekr/agent-office/pull/32) merged on 2026-09-29 at 11:36:13 UTC as `6a87a5962049880d3ae39a763709f362e61ef76e`, using an expected-head guard. Active main protection required the GitHub Actions runtime check and an up-to-date base, with no bypass actors. Fetched main's tree matches the tested head. The actual merge SHA differs from the PR's synthetic checkout SHA; they are not interchanged.
+
+The [sanitized machine-readable receipt](../validation/phase103-integration.json) records successful and failed runs, artifact ZIP digests, installation source and issue outcomes. Raw local receipts, application URLs/tokens and private settings are not publication artifacts. Both earlier CI failures and their skipped installation steps remain recorded separately.
+
+## Installed application readback
+
+An idle, identity-fenced local code update preserved all twelve private Works, configuration/model choices, schedules and the same Control Center address. The shared MCP manager restarted only its verified idle owned service. SDK initialization and tool metadata matched the new build; the verification session closed, and the user's disabled MCP client was not reconnected.
+
+Actual Windows-to-WSL HTTP returned 200. BrowserOS Neo readback verified the English migration prompt and the installed Work detail's Run control, execution status, live-log region and results region. Recurring work remained behind schedule/model-usage consent. This was a read-only installed-UI check: no Work was started, original bot replayed or external message sent.
+
+The cumulative local report retained all 13,868 existing rows and appended ten local verification rows, including the initial expected pre-overlay MCP install gate as BLOCKED_ENV. Its original bytes and pre-existing duplicate ID were preserved rather than deduplicated. Initial/final CI observations are retained independently; these observations do not certify every provider, site or operating system.
 
 ## Issue reconciliation
 
-The bounded implementations tracked by #2, #9, #18 and #20 are already included in main. Their prior stacked PRs must not be described as individually merged when GitHub records them as closed/unmerged. Once final integration is verified, close these implementation issues with their acceptance scope intact.
+The bounded implementations tracked by [#2](https://github.com/deepdivekr/agent-office/issues/2), [#9](https://github.com/deepdivekr/agent-office/issues/9), [#18](https://github.com/deepdivekr/agent-office/issues/18) and [#20](https://github.com/deepdivekr/agent-office/issues/20) are included in main and are now closed as completed, with evidence-backed scope comments. Their prior stacked PRs are not described as individually merged when GitHub records them as closed/unmerged.
 
-Keep #1, #3, #4, #5, #6, #14, #16, #22 and #24 open for their actual remaining scope, updating stale descriptions. In particular, later passing repeats do not establish the cause of #22. #24's later bounded startup window changed from five seconds to a maximum fifteen seconds within the original task deadline; that is a design change, not evidence that its original unchanged-limit condition passed.
+[#29](https://github.com/deepdivekr/agent-office/pull/29) is closed as superseded, not merged: its useful verified delta is in #32; its obsolete README/assets and unsafe missing-provider compatibility are excluded. No source branch was deleted.
+
+#1, #3, #4, #5, #6, #14, #16, #22 and #24 remain open; each received an updated completion/remaining-scope comment. Later passing repeats do not establish the cause of #22. #24's bounded startup window changed from five seconds to a maximum fifteen seconds within the original task deadline; that is a design change, not proof of its original unchanged-limit condition.
 
 ## Remaining boundaries
 
