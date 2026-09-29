@@ -67,7 +67,15 @@ Initial compact layout 19fdafb was applied to the managed installation with the
 same URL. UI PID 820473 replaced only its identified predecessor; personal MCP
 PID 447350 and private Work/config/global/coding settings were preserved.
 Private receipt: tests/evidence/phase94-ui-upgrade.json. Subsequent reference
-styling and spacing are verified locally but still need managed application and
-actual Windows page inspection. Preserve the same state/process boundaries.
+styling/spacing source bf8cfec was applied with the same URL, UI PID 830711,
+and preserved private configuration, model selections, Work IDs and personal
+MCP PID 447350. Receipt: tests/evidence/phase94-client-list-upgrade.json.
+Actual Windows Aside verified both languages: five 62px AI rows with aligned
+name starts/status centers/action right edges, 36px text-sized buttons, at least
+16px status/action clearance and five local vector icons. Manage focused the
+existing Codex model selector without changing its value. Browser check and
+refresh actions share the right edge. Original English/dark/Agents pane,
+Windows disclosure and closed tail were restored; no login, registration or
+settings-save action was performed. Receipt: tests/evidence/phase94-native.json.
 PR32/public merge and a new immutable release remain separate gates; do not
 overwrite the existing v0.3.1 tag or assets.

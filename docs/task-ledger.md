@@ -211,6 +211,14 @@
 | RQ-797 | Preserve default Playwright when registering optional browsers, preserve existing configuration and environment/credential boundaries, and state reconnect requirements accurately. |
 | RQ-798 | Verify missing/disconnected/ready, registration conflict and security gates, desktop/mobile controls and relevant runtime regressions; document actual native evidence and remaining limitations. |
 
+## Phase 95
+
+| ID | Requirement |
+|---|---|
+| RQ-823 | Diagnose optional-browser check/register button behavior; distinguish missing, installed/disconnected, reachable/unregistered and registered states, preserving permission, fresh-check, revision and default-Playwright boundaries. |
+| RQ-824 | Present only the next meaningful setup actions with visible progress and success/failure feedback; audit analogous client flows and show concise Windows MCP configuration instructions outside hidden help, without claiming JSON is a terminal command. |
+| RQ-825 | Verify state/action transitions, repeated clicks, consent/revision/security gates and Korean/English desktop/mobile layouts; apply the verified local UI preserving personal settings/Work/MCP and record exact evidence and publication boundaries. |
+
 ## Phase 94
 
 | ID | Requirement |
