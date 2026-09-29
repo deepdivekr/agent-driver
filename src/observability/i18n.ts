@@ -4,6 +4,26 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
+ 'Windows AI 앱 연결 · 선택':'Connect a Windows AI app · optional',
+ 'Cursor 같은 Windows AI 앱의 채팅에서 Agent Office에 업무를 맡기고 싶을 때만 설정하세요. 위에서 WSL 앱을 연결했다면 건너뛰어도 됩니다.':'Use this only to give Agent Office work from a Windows AI app such as Cursor. Skip it if you connected a WSL app above.',
+ '예: Windows AI 앱에서 요청 → WSL의 Agent Office가 도구 실행 → 같은 채팅에서 결과 확인.':'Example: ask in your Windows AI app → Agent Office runs tools in WSL → see the result in the same chat.',
+ '사용할 Windows AI 앱의 설정에서 MCP 서버 추가를 여세요.':'Open Add MCP server in your Windows AI app’s settings.',
+ '이름은 agent-office로 지정하세요. JSON 입력란에는 아래 설정을, 명령·인수가 나뉜 입력란에는 command와 args 값을 각각 넣으세요.':'Name it agent-office. Paste the configuration below into a JSON field, or enter command and args separately if the app uses separate fields.',
+ '저장한 뒤 해당 앱의 MCP 목록에서 연결 상태와 도구 목록을 확인하세요. 이 관제센터에서는 Windows 앱의 등록 여부를 확인할 수 없습니다.':'Save, then check the connection status and tool list in that app’s MCP list. This Control Center cannot verify registration in Windows apps.',
+ '아래 내용은 앱의 연결 설정입니다. PowerShell·WSL 터미널이나 채팅에 실행하는 명령이 아닙니다. 모든 Windows 앱에 공통으로 붙여넣는 기능도 아닙니다.':'This is app connection configuration, not a command to run in PowerShell, WSL or a chat. It is only for apps with MCP support.',
+ '설정 복사':'Copy configuration',
+ '위에서 앱을 연결하거나, Windows AI 앱 연결을 선택하세요.':'Connect an app above, or choose Connect a Windows AI app.',
+ '앱 설치·로그인·MCP 연결을 확인하는 중입니다.':'Checking app installation, login and MCP connection…',
+ '앱 연결 확인을 마쳤습니다. 클라이언트별 결과를 확인하세요.':'App check complete. See each client’s result above.',
+ '연결 상태를 확인하지 못했습니다. 다시 확인해 주세요.':'Could not check connections. Please try again.',
+ '관제센터에 연결하지 못했습니다. 네트워크를 확인한 뒤 다시 누르세요.':'Could not reach the Control Center. Check your connection and try again.',
+ '로그인 확인됨':'Login verified','로그인 미확인':'Login not verified','MCP 등록 미확인':'MCP registration not verified',
+ '연결 실패 · 앱 실행과 연결 설정을 확인하세요':'Connection failed · check the running app and connection settings',
+ 'Playwright 전용 Chromium 다운로드 시작':'Downloading Chromium for Playwright',
+ 'WSL/Linux 실행 환경과 Agent Office 설치를 확인했습니다.':'Checked the WSL/Linux runtime and Agent Office installation.',
+ '코딩 업무가 전역 AI 설정을 사용하도록 저장했습니다.':'Saved: coding work uses global AI settings.',
+ '코딩 전용 AI 설정을 저장했습니다. 전역 설정보다 우선합니다.':'Saved coding AI settings. They override global settings.',
+ '시간 미관측':'Duration not reported',
  '연결됐습니다.':'Connected.',
  '조회 업무에 화면·프로필 사용을 허용합니다.':'Allows screen and profile access for read-only work.',
  'CLI 설치 후 다시 확인하세요.':'Install the CLI, then check again.',
@@ -229,6 +249,14 @@ const EN:Record<string,string>={
 };
 /** Ordered regex rules for text assembled from numbers or names. */
 const RULES:Array<[string,string]>=[
+['^(.+) · 저장된 모델$','$1 · saved model'],
+['^(\\S+) 기본값만$','$1 default only'],
+['^(Playwright|Aside|Neo|BrowserOS Neo) 연결 점검 시작$','Checking $1 connection…'],
+['^(Playwright|Aside|Neo|BrowserOS Neo) 연결 점검 통과 · ([\\d.]+)초$','$1 connection verified · $2s'],
+['^(Playwright|Aside|Neo|BrowserOS Neo) 연결 확인 필요 · ([\\d.]+)초$','$1 connection needs attention · $2s'],
+['^(Playwright|Aside|Neo|BrowserOS Neo) 실행기 등록 완료 · 새 MCP 연결부터 적용$','$1 registered · applies to new MCP connections'],
+['^(Playwright|Aside|Neo|BrowserOS Neo) 준비를 완료하지 못했습니다. 설치·실행 상태를 확인하세요.$','Could not prepare $1. Check its installation and running app.'],
+['^([\\d.]+)초$','$1s'],
 ['^(.+) MCP 연결$','Connect $1 MCP'],['^(.+) 관리$','Manage $1'],['^(.+) 로그인$','Log in to $1'],['^(.+) 다운로드$','Download $1'],
 ['^(.+) 기존 로그인 확인됨$','$1: existing sign-in verified'],['^(.+) 설치됨 · 로그인 재확인 필요$','$1: installed · check sign-in again'],['^(.+) 공식 로그인 시작 · 브라우저에서 승인하세요$','$1: sign-in started · approve in your browser'],
 ['^(Playwright|Aside|BrowserOS Neo) 연결 확인$','Check $1 connection'],['^(Aside|BrowserOS Neo) 연결 등록$','Register $1 connection'],['^(Playwright|Aside|BrowserOS Neo) 확인 중…$','Checking $1…'],
@@ -248,12 +276,13 @@ const RULES:Array<[string,string]>=[
 export const i18nScript=`(()=>{const EN=${JSON.stringify(EN)},RULES=${JSON.stringify(RULES)}.map(([p,r])=>[new RegExp(p,'u'),r]),FLAGS=${JSON.stringify(flagSvgs)};
 let lang='en';try{lang=localStorage.getItem('office-lang')==='ko'?'ko':'en'}catch{}
 document.documentElement.lang=lang;window.officeLang=lang;
-const one=t=>{if(!t||!/[\\uAC00-\\uD7A3]/u.test(t))return null;if(Object.hasOwn(EN,t))return EN[t];for(const [re,r] of RULES)if(re.test(t)){const out=t.replace(re,r);const parts=out.split(' · ').map(p=>Object.hasOwn(EN,p)?EN[p]:p);return parts.join(' · ')}if(t.includes(' · ')){const parts=t.split(' · '),mapped=parts.map(p=>Object.hasOwn(EN,p)?EN[p]:one(p)??p);if(mapped.some((p,i)=>p!==parts[i]))return mapped.join(' · ')}return null};
-const log=t=>t.split('\\n').map(line=>{const m=/^(.*?) \\[([A-Z]+) · (진행|완료|실패|기록)\\] (.*)$/u.exec(line);if(!m)return one(line.trim())??line;return m[1]+' ['+m[2]+' · '+({진행:'running',완료:'done',실패:'failed',기록:'log'})[m[3]]+'] '+(one(m[4])??m[4])}).join('\\n');
+const one=t=>{if(!t||!/[\\uAC00-\\uD7A3]/u.test(t))return null;if(Object.hasOwn(EN,t))return EN[t];if(t.startsWith('현재 확인: '))return 'Checked: '+(one(t.slice(7))??t.slice(7));const named=/^(Playwright|Aside|Neo|BrowserOS Neo|Codex|Claude Code|OpenCode|Cursor|Cursor CLI|Hermes): (.+)$/u.exec(t);if(named){const result=one(named[2]);if(result!==null)return named[1]+': '+result}for(const [re,r] of RULES)if(re.test(t)){const out=t.replace(re,r);const parts=out.split(' · ').map(p=>Object.hasOwn(EN,p)?EN[p]:p);return parts.join(' · ')}if(t.includes(' · ')){const parts=t.split(' · '),mapped=parts.map(p=>Object.hasOwn(EN,p)?EN[p]:one(p)??p);if(mapped.some((p,i)=>p!==parts[i]))return mapped.join(' · ')}return null};
+window.officeText=t=>lang==='en'?(one(t)??t):t;
+const log=t=>t.split('\\n').map(line=>{const m=/^(.*?) \\[([A-Z]+) · (진행|완료|확인 필요|실패|기록|running|done|needs attention|failed|log)\\] (.*)$/u.exec(line);if(!m)return one(line.trim())??line;return m[1]+' ['+m[2]+' · '+(({진행:'running',완료:'done','확인 필요':'needs attention',실패:'failed',기록:'log'})[m[3]]??m[3])+'] '+(one(m[4])??m[4])}).join('\\n');
 const text=node=>{const v=node.nodeValue,t=v.trim();if(!t)return;const p=node.parentElement;if(!p||p.closest('script,style,textarea,[data-i18n-skip]'))return;const out=p.id==='setup-log'?log(v):one(t);if(out!==null&&out!==t&&out!==v)node.nodeValue=p.id==='setup-log'?out:v.replace(t,out)};
 const attrs=el=>{for(const a of ['placeholder','aria-label','title']){const v=el.getAttribute&&el.getAttribute(a);if(v){const out=one(v.trim());if(out!==null)el.setAttribute(a,out)}}};
 const walk=root=>{if(root.nodeType===3){text(root);return}if(root.nodeType!==1||root.closest?.('script,style,[data-i18n-skip]'))return;attrs(root);const w=document.createTreeWalker(root,NodeFilter.SHOW_TEXT|NodeFilter.SHOW_ELEMENT);let n;while((n=w.nextNode())){if(n.nodeType===3)text(n);else attrs(n)}};
-function paintToggle(){const b=document.getElementById('lang-toggle');if(!b)return;b.querySelector('[data-lang-flag]').innerHTML=lang==='en'?FLAGS.us:FLAGS.kr;b.querySelector('[data-lang-code]').textContent=lang==='en'?'EN':'KO';b.setAttribute('aria-label',lang==='en'?'Language: English. Switch to Korean':'언어: 한국어. 영어로 전환');b.title=lang==='en'?'한국어로 보기':'View in English'}
+function paintToggle(){const b=document.getElementById('lang-toggle');if(!b)return;b.querySelector('[data-lang-flag]').innerHTML=lang==='en'?FLAGS.us:FLAGS.kr;b.querySelector('[data-lang-code]').textContent=lang==='en'?'EN':'KO';b.setAttribute('aria-label',lang==='en'?'Language: English. Switch to Korean':'언어: 한국어. 영어로 전환');b.title=lang==='en'?'Switch to Korean':'View in English'}
 function start(){paintToggle();document.getElementById('lang-toggle')?.addEventListener('click',()=>{try{localStorage.setItem('office-lang',lang==='en'?'ko':'en')}catch{}location.reload()});if(lang!=='en')return;document.title=one(document.title)??document.title.replace('업무 현황','Work');walk(document.body);new MutationObserver(list=>{for(const m of list){if(m.type==='characterData')text(m.target);else if(m.type==='attributes')attrs(m.target);else m.addedNodes.forEach(walk)}}).observe(document.body,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['placeholder','aria-label','title']})}
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
 })();`;

@@ -73,7 +73,7 @@ test('runtime fixture browser setup desktop/mobile buttons check download consen
     assert.equal(JSON.parse(await readFile(x.paths.runtimeConfig,'utf8')).browser_executors,undefined,'Checking is not authorization');
     await page.getByRole('button',{name:'Aside 연결 등록',exact:true}).click();await page.locator('#browser-setup-notice').filter({hasText:'MCP를 다시 연결'}).waitFor();assert.equal(await page.getByRole('button',{name:'Aside 연결 등록',exact:true}).count(),0);
     assert.ok(await page.getByRole('button',{name:'Aside 연결됨',exact:true}).isDisabled());
-    await page.locator('.terminal summary').click();assert.match(await page.locator('#setup-log').textContent(),/Aside 실행기 등록 완료/u);assert.match(await page.locator('#setup-log').textContent(),/Playwright 연결 확인 필요/u);assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
+    await page.locator('.terminal summary').click();assert.match(await page.locator('#setup-log').textContent(),/Aside 실행기 등록 완료/u);assert.match(await page.locator('#setup-log').textContent(),/Playwright: 연결 실패/u);assert.deepEqual(errors,[]);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     await page.screenshot({path:'tests/evidence/phase88/browser-setup-'+width+'.png',fullPage:true});await page.close();
   }
 });
