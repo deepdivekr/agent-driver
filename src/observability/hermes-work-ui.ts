@@ -1,6 +1,6 @@
 export function hermesWorkScript(){return `
 let hermesDraft='',hermesBusy=false,hermesRequestId=null,hermesCost=false;
-const hermesLabels={ready:'지시 대기',queued:'실행 대기',starting:'Hermes 연결 중',running:'실행 중',needs_human:'확인 필요',paused:'일시정지',finished:'답변 도착',failed:'연결 또는 실행 실패',reconciliation_required:'중단 결과 확인 필요',detached:'가져오기 연결 해제'};
+const hermesLabels={ready:'지시 대기',queued:'실행 대기',starting:'Hermes 연결 중',running:'실행 중',needs_human:'사용자 확인 필요',paused:'일시정지',finished:'답변 도착',failed:'연결 또는 실행 실패',reconciliation_required:'중단 결과 확인 필요',detached:'가져오기 연결 해제'};
 function renderHermesDetail(){
  const d=detail,h=d.hermes,def=d.definition,lastPlan=[...h.events].reverse().find(e=>e.kind==='plan');let steps=[];try{steps=lastPlan?JSON.parse(lastPlan.summary):[]}catch{}
  const state=d.run_status,title=hermesLabels[state]||state;

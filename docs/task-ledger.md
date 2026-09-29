@@ -211,6 +211,12 @@
 | RQ-797 | Preserve default Playwright when registering optional browsers, preserve existing configuration and environment/credential boundaries, and state reconnect requirements accurately. |
 | RQ-798 | Verify missing/disconnected/ready, registration conflict and security gates, desktop/mobile controls and relevant runtime regressions; document actual native evidence and remaining limitations. |
 
+## Phase 93
+
+| ID | Requirement |
+|---|---|
+| RQ-819 | Rename user-facing confirmation tags to “사용자 확인 필요”, align Work and connection displays and English translation, preserve internal status and approval behavior, verify actual rendering and apply the local UI without changing private Work or settings. |
+
 ## Phase 92
 
 | ID | Requirement |

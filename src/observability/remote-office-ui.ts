@@ -1,6 +1,6 @@
 export function remoteOfficeScript(){return `
 let remoteDraft='',remoteCost=false,remoteRequest=null,remoteBusy=false,remoteTargets=[],remoteCandidates=[];
-const remoteLabels={ready:'다음 지시 대기',running:'서버 실행 접수',needs_human:'결과 확인 필요',reconciliation_required:'서버 상태 대조 필요',unobserved:'상태 확인 전',finished:'서버 실행 종료',aborted:'중단 확인',uncertain:'수신 여부 확인 필요',failed:'실행 실패',sending:'전달 중'};
+const remoteLabels={ready:'다음 지시 대기',running:'서버 실행 접수',needs_human:'사용자 확인 필요',reconciliation_required:'서버 상태 대조 필요',unobserved:'상태 확인 전',finished:'서버 실행 종료',aborted:'중단 확인',uncertain:'수신 여부 확인 필요',failed:'실행 실패',sending:'전달 중'};
 const remoteErrors={REMOTE_CONNECTION_FAILED:'서버에 연결하지 못했습니다. Office 실행 환경의 SSH 키·서버 신뢰 등록·접속 권한을 확인하세요.',REMOTE_REFRESH_OR_REVIEW_REQUIRED:'먼저 서버 상태를 새로 확인하고 이전 결과를 검토해 주세요.',REMOTE_STOP_UNCONFIRMED:'서버가 중단을 확인하지 않았습니다. 상태를 새로 확인하세요.',REMOTE_UNCERTAIN_RUN_REQUIRES_REMOTE_CONFIRMATION:'서버의 종료 여부가 불확실합니다. 같은 지시를 다시 보내지 않습니다.',WORK_REVISION_CONFLICT:'상태가 바뀌었습니다. 최신 상태에서 다시 확인해 주세요.'};
 async function remotePost(action,body={}){const response=await fetch('work/remote/'+action,{method:'POST',headers:{'content-type':'application/json','x-agent-driver':'human-office'},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw Error(remoteErrors[data.error]||data.error||'원격 요청 실패');return data}
 async function remoteDo(fn){if(remoteBusy)return;remoteBusy=true;try{await fn()}catch(error){setMessage(String(error.message||error))}finally{remoteBusy=false}}

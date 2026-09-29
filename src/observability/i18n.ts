@@ -60,7 +60,7 @@ const EN:Record<string,string>={
 '심화 · 결과에 중요한 조건을 먼저 선택':'Guided · choose the conditions that matter first','기존 업무 가져오기':'Import existing work','업무 불러오는 중…':'Loading work…',
 '아직 맡긴 업무가 없습니다. 연결된 에이전트에게 한 줄로 요청하세요.':'No work yet. Ask a connected agent in one line.','조건에 맞는 업무가 없습니다.':'No work matches.',
 '방금':'just now','접수됨':'Received','Task Pack':'Task Pack','Swarm':'Swarm','코딩 업무':'Coding',
-'업무 정의 중':'Defining','AI 연결 필요':'AI connection needed','선택 필요':'Needs choice','실행 대기':'Ready','전달 대기':'Queued','답변 검토 중':'Reviewing answer','사용자 지시 대기':'Waiting for your instruction','종료':'Stopped','결과 확인 필요':'Check result','일시정지':'Pause','일시정지됨':'Paused','사람 확인 필요':'Needs a person','로그인 필요':'Login needed','실행 완료':'Run complete','실패':'Failed','중단 지점 확인 필요':'Check interruption point','근거 부족':'Evidence missing','재시도 대기':'Retry pending','작업 중':'Working','초안 준비':'Draft ready','승인 대기':'Awaiting approval',
+'업무 정의 중':'Defining','AI 연결 필요':'AI connection needed','선택 필요':'Needs choice','실행 대기':'Ready','전달 대기':'Queued','답변 검토 중':'Reviewing answer','사용자 지시 대기':'Waiting for your instruction','종료':'Stopped','결과 확인 필요':'Check result','일시정지':'Pause','일시정지됨':'Paused','사용자 확인 필요':'User confirmation needed','로그인 필요':'Login needed','실행 완료':'Run complete','실패':'Failed','중단 지점 확인 필요':'Check interruption point','근거 부족':'Evidence missing','재시도 대기':'Retry pending','작업 중':'Working','초안 준비':'Draft ready','승인 대기':'Awaiting approval',
 '← 업무 목록':'← Work','업무 읽는 중…':'Reading work…','진행 단계':'Run trace','단계 진척도':'Stage progress','단계별 확인 미지원':'No per-stage verification','선택된 Pack':'Selected pack','아직 선택되지 않음':'Not selected yet','아직 배정되지 않음':'Not assigned yet',
 '작업 제어':'Human control','작업 재개':'Resume','일시정지 미지원':'Pause not supported','실행 이력':'Run history','최근 변경':'Recent changes','클라이언트 인계':'Client handoffs','이어받음':'Taken over','영향 확인 필요':'Effect check needed','미배정':'Unassigned',
 'Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.':'A successful run does not by itself mean every completion check of the work is met.',
@@ -193,7 +193,7 @@ const EN:Record<string,string>={
 'MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.':'MCP registration did not finish. Check the client.','클라이언트 설치를 마치지 못했습니다. 공식 안내를 확인해 주세요.':'Client install did not finish. Check the official guide.',
 // site login page
 '사이트 로그인 · Agent Office':'Site login · Agent Office','현재 작업에 필요한 사이트만 표시됩니다.':'Only sites the current work needs are shown.','로그인 화면:':'Login screen:','준비되지 않음':'Not ready','현재 로그인이 필요한 사이트가 없습니다.':'No site needs a login right now.',
-'로그인이나 사람 확인이 끝날 때까지 해당 worker는 대기합니다.':'The worker waits until the login or human check is done.','로그인 창 열기':'Open login window','로그인 확인':'Check login','연결 상태를 읽지 못했습니다.':'Could not read connection status.','로그인 화면을 여는 중…':'Opening login window…',
+'로그인이나 사용자 확인이 끝날 때까지 해당 worker는 대기합니다.':'The worker waits until login or user confirmation is complete.','로그인 창 열기':'Open login window','로그인 확인':'Check login','연결 상태를 읽지 못했습니다.':'Could not read connection status.','로그인 화면을 여는 중…':'Opening login window…',
 '로그인 창을 열었습니다. 인증을 마친 뒤 로그인 확인을 누르세요.':'Login window opened. Finish signing in, then press Check login.','작업에서 다시 접근합니다.':'The work will try again.','로그인 상태를 확인했습니다.':'Login confirmed.','아직 로그인 완료를 확인하지 못했습니다.':'Login not confirmed yet.','준비됨':'Ready',' · 직접 로그인 중':' · signing in',
 // work view (server)
 '계획 단계':'Planned stage','업무 계획':'Work plan',
