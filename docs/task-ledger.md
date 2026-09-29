@@ -1,5 +1,13 @@
 # Public release ledger
 
+## Phase 91
+
+| ID | Requirement |
+|---|---|
+| RQ-810 | Diagnose the installed v0.3.1 page failure and restore Windows browser access without changing unrelated services or saved Work/settings. |
+| RQ-811 | Verify Windows-side Control Center identity before publishing or reusing a WSL URL, retry unpublished UI ports within a bounded limit, and preserve loopback/authentication boundaries. |
+| RQ-812 | Verify collision, timeout, cleanup and reuse paths; record real Windows/WSL evidence separately from injected probes, and publish the fix through PR/CI. |
+
 ## Phase 69
 
 | ID | Requirement |
