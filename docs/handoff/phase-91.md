@@ -46,4 +46,19 @@ Chromium theme cases. Receipt: tests/evidence/runtime-tests-2026-09-29T00-44-35-
 375px layout, Korean/English controls, keyboard actions and no-POST behavior verified.
 Ledger: 108 RQ. Public-boundary check: no findings. The first PR32 head passed the
 full quick/installer CI; the amended theme head still requires CI before publication.
-Pending: managed local upgrade and actual Windows theme-control verification.
+Local managed installation upgraded from immutable v0.3.1 source 49b8ef3 to verified
+candidate 06a9dd3 using the official installer with an explicit branch ref. Its Git
+checkout remains clean, the original ref is retained privately for rollback, and
+the same Control Center URL is reused. Private config/model settings and the
+existing personal MCP process were verified unchanged. Only the identified UI
+was restarted; current PID 738031. Private receipt: tests/evidence/phase91-ui-upgrade.json.
+
+Actual Windows HTTP 200 and theme button observed through Aside. Clicking changed
+the background to rgb(16, 19, 23), saved dark selection and preserved it when moving
+to site login and back. Receipt: tests/evidence/phase91-installed-theme.json; both
+axes recorded in tests/report.json. The choice is browser-local: the user's separate
+Chrome profile must refresh and click its own theme button once. No model call,
+Work action or settings POST was performed.
+
+Remaining: amended PR32 CI/merge and a subsequent immutable public release. The
+local installed UI candidate and published v0.3.1 remain distinct states.
