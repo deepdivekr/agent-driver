@@ -40,7 +40,7 @@ test('prompt definition exposes file tools without a separate file-manager step 
  const c=await setup(t);let observed=null;
  const model={call:async(purpose,instructions,input)=>{observed={purpose,instructions,input};return {title:'바탕화면 정리',desired_outcome:'분류 근거에 따라 정리하고 결과 확인',completion_checks:[{id:'readback',result:'승인한 파일 이동 확인',evidence:'runtime_files_report의 경로와 해시'}],assumptions:[],route:{kind:'pack',pack_family:'file.pipeline'},requested_effect:'local_file_write',recurrence:{kind:'once',rule:null},questions:[]};}};
  const runtime=new WorkRuntime(c.api.store,c.config,model),work=await runtime.start({request_id:'natural-file-work',prompt:'내 바탕화면 정리해줘'});
- assert.equal(work.status,'ready');assert.equal(work.next_action,'connected_agent_choose_file_tools_or_runtime_pack_plan');assert.equal(observed.input.file_tools.result,'runtime_files_report');assert.ok(observed.instructions.includes('runtime_files_request'));assert.ok(WORK_DEFINITION_INSTRUCTIONS.includes('Existing folder permission does not approve a new move'));
+ assert.equal(work.status,'ready');assert.equal(work.next_action,'runtime_work_execute');assert.equal(observed.input.file_tools.result,'runtime_files_report');assert.ok(observed.instructions.includes('runtime_files_request'));assert.ok(WORK_DEFINITION_INSTRUCTIONS.includes('Existing folder permission does not approve a new move'));
  const detail=await (await fetch(c.server.url+'work/detail?id='+work.work_id)).json();assert.equal(detail.file_activity,null);
 });
 

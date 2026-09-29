@@ -1,0 +1,1 @@
+export function redact(text:string){return text.replace(/\b(?:sk-(?:proj-)?[\w-]{16,}|apikey_[\w-]{16,}|gh[pousr]_[\w]{20,})\b/g,'[REDACTED]').replace(/(authorization\s*:\s*bearer\s+)\S+/gi,'$1[REDACTED]');}

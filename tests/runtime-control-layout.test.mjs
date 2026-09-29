@@ -32,6 +32,9 @@ async function fixture(t){
 }
 
 async function compactButtons(locator){
+  // The live stream can replace a resolved node; wait for the current controls
+  // rather than treating a render boundary as missing product actions.
+  await locator.first().waitFor({state:'visible'});
   const values=await locator.evaluateAll(items=>items.filter(b=>b.checkVisibility()).map(button=>{
     const range=document.createRange();range.selectNodeContents(button);const rect=button.getBoundingClientRect(),style=getComputedStyle(button);
     return {text:button.textContent.trim(),width:rect.width,height:rect.height,extra:rect.width-range.getBoundingClientRect().width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth),align:style.textAlign};
@@ -153,7 +156,7 @@ test('runtime native Work import and detail retain compact right actions, readab
     await page.goto(server.url+'?work='+work);await page.locator('.control-panel').waitFor();await page.locator('#pause').click();
     await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('재개')||document.querySelector('#pause')?.textContent.includes('Resume'));
     await page.locator('#pause').click();await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('일시정지')||document.querySelector('#pause')?.textContent.includes('Pause'));
-    await compactButtons(page.locator('.controls button'));await rightEdge(page,'.controls button','.controls');
+    await compactButtons(page.locator('.control-panel>.controls button'));await rightEdge(page,'.control-panel>.controls button','.control-panel>.controls');
     // The live Work stream can replace the node after a locator resolves. Inspect the current connected node atomically.
     await page.waitForFunction(()=>{const note=document.querySelector('.control-note');return note?.isConnected&&['start','left'].includes(getComputedStyle(note).textAlign);});await noOverflow(page);
     await page.screenshot({path:join(evidence,`work-${width}-${lang}.png`),fullPage:true});assert.deepEqual(errors,[]);await context.close();

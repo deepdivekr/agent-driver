@@ -1,5 +1,46 @@
 # Public release ledger
 
+## Phase 103
+
+| ID | Requirement |
+|---|---|
+| RQ-850 | Audit and complete the common Action Layer and current PR changes while preserving original-runtime authority and prior evidence. |
+| RQ-851 | Verify the exact candidate with affected/full quick, installation, dependency/public-boundary checks and current-head remote CI, without long soak. |
+| RQ-852 | Reconcile open PRs/issues and merge the exact reviewed head without bypassing protection or closing unresolved acceptance gates. |
+| RQ-853 | Record exact commit/CI/merge evidence and remaining limits in concise docs, ledger/status and handoff while preserving private state. |
+
+## Phase 102
+
+| ID | Requirement |
+|---|---|
+| RQ-843 | Connect explicitly started new Work to durable bounded operation with execution, leases, checkpoints, restart recovery and observations. |
+| RQ-844 | Carry pause, changed instructions and resume through the same Work; preserve completed steps and uncertain-effect reconciliation. |
+| RQ-845 | Connect imported Work to supported original-runtime observation/control without duplicating bots or changing schedules/delivery. |
+| RQ-846 | Apply configured model continuity with Work-bound receipts and saved model choices; forbid subscription-to-paid-API fallback. |
+| RQ-847 | Persist/display Work results, artifacts and delivery receipts with default app delivery and preserved imported authority. |
+| RQ-848 | Exercise native Control Center execution and verify recovery, intervention and results with honest evidence levels. |
+| RQ-849 | Run affected/quick regressions without soak, apply the verified local candidate preserving private state, and update handoff/docs. |
+
+## Phase 101
+
+| ID | Requirement |
+|---|---|
+| RQ-838 | Derive visible execution state from per-run leases and runtime observations, retaining historical state without presenting abandoned runs as live. |
+| RQ-839 | Add revision-fenced execution through existing runtime contracts; prevent duplicate dispatch and unauthorized effects, and explain missing connections. |
+| RQ-840 | Stream bounded redacted Work activity with last observation and connection state; shorten board titles without losing instructions or drafts. |
+| RQ-841 | Verify execution, expiry, idempotency, isolation, localization and responsive UI; apply the local candidate preserving private state and report unsupported paths. |
+
+| RQ-842 | Restore login through explicit existing-VM preparation, duplicate-start fencing and failed-handoff cleanup without profile reset. |
+
+## Phase 99
+
+| ID | Requirement |
+|---|---|
+| RQ-834 | Support bounded read-only WSL scans of user-selected NAS UNC projects through the existing Windows filesystem session, with actionable errors and credential protection. |
+| RQ-835 | Provide grounded automatic project definitions and observation-first import, keeping explicit code enhancement and runtime connection distinct. |
+| RQ-836 | Show truthful scan/analysis progress and actionable runtime-connection readiness instead of indefinite execution waiting. |
+| RQ-837 | Verify network, privacy, freshness, import and localized UI contracts, read the selected NAS safely and apply the managed local UI with personal state preserved. |
+
 ## Phase 98
 
 | ID | Requirement |

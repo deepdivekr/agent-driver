@@ -16,7 +16,7 @@ Install and run it as `agent-office`. The old `agent-driver` command remains a c
 <details>
 <summary>Work details and AI connection</summary>
 
-**Work detail** — review the goal, completion checks, planned steps and execution handoff; pause before dispatch.
+**Work detail** — run, pause, resume or update instructions; inspect actual logs and result files.
 
 ![Work detail and controls](docs/images/en/work-detail.png)
 
@@ -30,6 +30,8 @@ Current interface in English and dark mode, with isolated sample work.
 These screenshots show setup and queued work, not completed live-agent runs.
 
 ## Supported environments
+
+See [Work operation](docs/work-operation.md) for the development execution loop and [verification](docs/verification/phase-102-work-operation.md) for actual acceptance results. A locally applied development build is separate from the public v0.3.1 installer below.
 
 | Environment | Status |
 |---|---|
@@ -62,7 +64,7 @@ Missing system libraries produce setup instructions; the installer does not run 
 1. **Clients** — check installation and login, then register MCP.
 2. **Execution** — use the default browser or connect an optional executor.
 3. **AI** — choose a subscription CLI or API. Compatible local models are also supported.
-4. **First Work** — enter one request and follow its progress.
+4. **First Work** — enter a request, open its detail, and click **Run**.
 
 Jev is optional. Without it, the LLM and code handle decisions.
 Website login is requested when a task needs it.
@@ -90,7 +92,18 @@ Windows clients should use the WSL command shown in the Control Center.
 > Resume this project's coding work, then have another CLI review the changes.
 
 A **Work** holds your request, completion checks, progress, and run history.
-Its detail page shows why it stopped and who took over. Pause it, change instructions, and resume.
+
+### From request to result
+
+This flow describes the current source checkout. The installer above remains pinned to the published v0.3.1.
+
+1. **Register** a request. Review the proposed goal and completion checks; registration alone does not run it.
+2. **Run** from the Work detail after confirming model usage.
+3. **Follow** actual execution events in the live log, including any wait or handoff reason.
+4. **Pause, edit, and resume** from the same page. New instructions update the next steps; saved output and evidence remain available.
+5. **Read the result** in the app, with sources and downloads for recorded output files. A saved result is not marked complete until its completion checks pass.
+
+New Work returns results in the app by default. A messenger or email connection is not required.
 
 The nine built-in **Pack families** provide reusable workflow patterns.
 
@@ -121,8 +134,8 @@ An exhausted AI connection can hand work to another permitted connection.
 **Subscription usage never automatically falls back to a paid API.**
 API-to-subscription handoff also follows the configured connections and policy.
 
-Use **Import** to connect existing work. Hermes and remote OpenClaw can keep their original runtime.
-Importing alone does not start work or activate schedules.
+Use **Import** to connect existing work. Supported Hermes and remote OpenClaw connections keep the original runtime, schedule, and messenger delivery.
+Importing alone does not start a duplicate bot or activate a new schedule. Monitoring and control require the original runtime connection, not just a code folder.
 [Work import](docs/work-migration.md) · [Remote management](docs/remote-office.md)
 
 ## Updates and limits

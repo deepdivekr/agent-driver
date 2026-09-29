@@ -49,7 +49,10 @@ export const swarmPlanSchema=swarmPlanDraftSchema.extend({
   format:z.literal(1),
   plan_id:z.string().uuid(),
   goal:sentence.max(8000),
-  planner:z.object({kind:z.literal('llm'),model:z.string().min(1).max(128),input_sha256:z.string().regex(/^[a-f0-9]{64}$/u)}).strict(),
+  planner:z.object({
+    kind:z.literal('llm'),model:z.string().min(1).max(128),input_sha256:z.string().regex(/^[a-f0-9]{64}$/u),
+    worker_timeout_budget:z.object({owner:z.literal('host'),timeout_ms:z.number().int().min(1_000).max(3_600_000),proposed_timeouts_sha256:z.string().regex(/^[a-f0-9]{64}$/u)}).strict().optional(),
+  }).strict(),
   max_concurrency:z.number().int().min(1).max(MAX_SWARM_CONCURRENCY),
   research_mode:swarmResearchModeSchema.nullable().default(null),
   execution_profile:z.object({

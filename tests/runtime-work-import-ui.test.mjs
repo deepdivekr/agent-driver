@@ -19,7 +19,7 @@ test('Work board exposes three import routes and does not activate on preview',(
   assert.match(html,/work\/import\/coding\/step/u);
   assert.match(html,/다음 단계 실행/u);
   assert.match(html,/README 요약·비밀값을 가린 코드 일부·근거 위치를 해당 모델에 보낼 수 있습니다/u);
-  assert.match(html,/개선용 업무 초안을 만듭니다/u);
+  assert.match(html,/기존 봇 유지 · 관제 연결 준비/u);
   assert.match(html,/실행되거나 일정이 켜지지 않습니다/u);
   assert.match(html,/가져온 계획/u);
   assert.match(html,/원본 별도 확인 필요/u);
@@ -60,13 +60,13 @@ test('project scan preview reads analyzed goal and steps, and renders string unk
   };
   vm.runInNewContext(fragment+'\nrenderImportPreview();',context);
   assert.equal(preview.hidden,false);
-  assert.match(preview.innerHTML,/value="Add retry after failure"/u);
-  assert.doesNotMatch(preview.innerHTML,/value="Improve the bot safely"/u);
+  assert.doesNotMatch(preview.innerHTML,/value="Add retry after failure"/u);
+  assert.match(preview.innerHTML,/value="Improve the bot safely"/u);
   assert.match(preview.innerHTML,/Check new messages/u);
   assert.match(preview.innerHTML,/Reply is delivered/u);
   assert.match(preview.innerHTML,/trigger\.timezone/u);
   assert.doesNotMatch(preview.innerHTML,/undefined · undefined/u);
-  assert.match(preview.innerHTML,/개선용 업무 초안/u);
+  assert.match(preview.innerHTML,/원본 실행 연결을 별도로 확인/u);
   assert.match(preview.innerHTML,/maxlength="500"/u);
 });
 
@@ -103,7 +103,7 @@ test('Jev point and its reason use readable, escaped text in both import preview
   const app={innerHTML:'',querySelectorAll:()=>[],addEventListener:()=>{}};
   const detail={id:'11111111-1111-4111-8111-111111111111',title:'메시지 검토',goal:'메시지 확인',prompt:'메시지 확인',work_status:'ready',run_status:null,spec:{completion_checks:[]},stages:[],progress_percent:null,control:null,work_control:null,jev:{enabled:false,can_change:true},jev_recommendations:[recommendation],jev_recommendation_status:'complete',runs:[],completion_note:''};
   const detailContext={app,detail,editing:null,jevCostAcknowledged:false,esc,labels:{},attention:()=>false,updateConnection:()=>{},document:{getElementById:id=>id==='back'?{onclick:null}:null},showBoard:()=>{},setMessage:()=>{}};
-  vm.runInNewContext(helper+workFileScript()+detailFragment+'\nrenderDetail();',detailContext);
+  vm.runInNewContext(helper+workFileScript()+detailFragment+'\nrenderDetailBody();',detailContext);
   assert.match(app.innerHTML,/새 메시지가 긴급한지 판단<\/b> · 예\/아니오 확인/u);
   assert.match(app.innerHTML,/왜 Jev일까요\? 메시지마다 표현이 달라져/u);
   assert.match(app.innerHTML,/코드 분석을 바탕으로 한 예상입니다/u);
@@ -141,6 +141,7 @@ test('import acceptance uses the single cost acknowledgment and skips Jev withou
   assert.equal(calls[0].jev_enabled,false);
   assert.equal(calls[0].cost_acknowledged,false);
   inputs['import-cost'].checked=true;
+  inputs['import-mode']={value:'augment'};
   context.importResult=makeResult();
   await vm.runInNewContext('acceptImport()',context);
   assert.equal(calls.length,2);

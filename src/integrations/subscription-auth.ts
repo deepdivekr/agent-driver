@@ -94,7 +94,7 @@ const clientExecutable=resolveSubscriptionClientExecutable;
 const expiredPattern=/\b(?:expired|expiration|refresh token (?:is )?invalid|session (?:is )?no longer valid)\b/iu;
 const probeSpec:Record<SubscriptionClientId,{args:string[]|null;parse:(text:string)=>Omit<SubscriptionClientStatus,'id'|'structured_bridge'>}>={
   codex:{args:['login','status'],parse:text=>/Logged in using ChatGPT/iu.test(text)?{status:'ready',auth:'subscription',reason:'client_reported_ready'}:expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:/not logged in|login required/iu.test(text)?{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'}},
-  claude:{args:['auth','status'],parse:text=>{try{const value=JSON.parse(text) as {loggedIn?:unknown;authMethod?:unknown;apiProvider?:unknown;apiKeySource?:unknown;subscriptionType?:unknown;error?:unknown;status?:unknown};if(value.loggedIn===true){const subscription=value.apiProvider==='firstParty'&&(value.apiKeySource===undefined||value.apiKeySource===null||value.apiKeySource==='')&&(value.authMethod==='claude.ai'||value.authMethod===undefined&&typeof value.subscriptionType==='string'&&['pro','max','team','enterprise'].includes(value.subscriptionType.toLowerCase()));return {status:subscription?'ready':'unknown',auth:subscription?'subscription':'unknown',reason:subscription?'client_reported_ready':'client_auth_not_subscription'};}if(value.loggedIn===false){const detail=[value.error,value.status].filter(item=>typeof item==='string').join(' ');return expiredPattern.test(detail)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}}catch{}return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}},
+  claude:{args:['auth','status'],parse:text=>{try{const value=JSON.parse(text) as {loggedIn?:unknown;authMethod?:unknown;apiProvider?:unknown;apiKeySource?:unknown;subscriptionType?:unknown;error?:unknown;status?:unknown};if(value.loggedIn===true){const subscription=value.apiProvider==='firstParty'&&(value.apiKeySource===undefined||value.apiKeySource===null||value.apiKeySource==='')&&(value.authMethod==='claude.ai'||value.authMethod==='oauth_token'||value.authMethod===undefined&&typeof value.subscriptionType==='string'&&['pro','max','team','enterprise'].includes(value.subscriptionType.toLowerCase()));return {status:subscription?'ready':'unknown',auth:subscription?'subscription':'unknown',reason:subscription?'client_reported_ready':'client_auth_not_subscription'};}if(value.loggedIn===false){const detail=[value.error,value.status].filter(item=>typeof item==='string').join(' ');return expiredPattern.test(detail)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};}}catch{}return expiredPattern.test(text)?{status:'expired',auth:'unknown',reason:'client_reported_expired'}:{status:'unknown',auth:'unknown',reason:'unrecognized_status'};}},
   opencode:{args:['auth','list'],parse:text=>{
     const clean=text.replace(/\u001b\[[0-9;]*m/gu,''),count=clean.match(/\b(\d+) credentials?\b/iu);
     if(count&&/Credentials/u.test(clean))return Number(count[1])>0?{status:'ready',auth:'unknown',reason:'client_reported_ready'}:{status:'signed_out',auth:'unknown',reason:'client_reported_signed_out'};
@@ -275,7 +275,48 @@ function opencodeOutput(stdout:string){
 function prompt(instructions:string,input:unknown,schema:Record<string,unknown>){
   return instructions+'\n\nReturn only one JSON object matching this JSON Schema. Never call tools, read files, execute commands, or perform side effects.\nSCHEMA:\n'+JSON.stringify(schema)+'\nINPUT:\n'+JSON.stringify(input);
 }
-/** Codex structured output does not accept URI format annotations. Domain validation remains with the caller. */
+const schemaObject=(value:unknown):Record<string,unknown>|null=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
+function localSchemaReference(root:Record<string,unknown>,reference:unknown){
+  if(typeof reference!=='string'||!reference.startsWith('#/'))return null;
+  let value:unknown=root;
+  for(const key of reference.slice(2).split('/').map(part=>part.replace(/~1/gu,'/').replace(/~0/gu,'~'))){const node=schemaObject(value);if(!node||!Object.hasOwn(node,key))return null;value=node[key];}
+  return value;
+}
+function sameJson(left:unknown,right:unknown):boolean{
+  if(Object.is(left,right))return true;
+  if(Array.isArray(left))return Array.isArray(right)&&left.length===right.length&&left.every((value,index)=>sameJson(value,right[index]));
+  const a=schemaObject(left),b=schemaObject(right);return a!==null&&b!==null&&Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(key=>Object.hasOwn(b,key)&&sameJson(a[key],b[key]));
+}
+/** Structural branch selection only. The caller still applies its original domain validator. */
+function schemaShapeMatches(value:unknown,schema:unknown,root:Record<string,unknown>,depth=0):boolean{
+  if(depth>100)return false;
+  if(typeof schema==='boolean')return schema;
+  const node=schemaObject(schema);if(!node)return true;
+  if(node.$ref!==undefined){const target=localSchemaReference(root,node.$ref);if(target===null||!schemaShapeMatches(value,target,root,depth+1))return false;}
+  if(Object.hasOwn(node,'const')&&!sameJson(value,node.const))return false;
+  if(Array.isArray(node.enum)&&!node.enum.some(item=>sameJson(value,item)))return false;
+  const type=Array.isArray(node.type)?node.type:node.type===undefined?null:[node.type];
+  if(type&&!type.some(kind=>kind==='null'?value===null:kind==='array'?Array.isArray(value):kind==='object'?schemaObject(value)!==null:kind==='integer'?typeof value==='number'&&Number.isInteger(value):kind==='number'?typeof value==='number'&&Number.isFinite(value):typeof value===kind))return false;
+  if(Array.isArray(node.allOf)&&!node.allOf.every(child=>schemaShapeMatches(value,child,root,depth+1)))return false;
+  if(Array.isArray(node.anyOf)&&!node.anyOf.some(child=>schemaShapeMatches(value,child,root,depth+1)))return false;
+  if(Array.isArray(node.oneOf)&&node.oneOf.filter(child=>schemaShapeMatches(value,child,root,depth+1)).length!==1)return false;
+  if(node.not!==undefined&&schemaShapeMatches(value,node.not,root,depth+1))return false;
+  const object=schemaObject(value),properties=schemaObject(node.properties);
+  if(object){
+    if(Array.isArray(node.required)&&node.required.some(key=>typeof key==='string'&&!Object.hasOwn(object,key)))return false;
+    for(const [key,item] of Object.entries(object)){
+      if(properties&&Object.hasOwn(properties,key)){if(!schemaShapeMatches(item,properties[key],root,depth+1))return false;}
+      else if(node.additionalProperties===false)return false;
+      else if(schemaObject(node.additionalProperties)&&!schemaShapeMatches(item,node.additionalProperties,root,depth+1))return false;
+    }
+  }
+  if(Array.isArray(value))for(let index=0;index<value.length;index++){
+    const item=Array.isArray(node.prefixItems)&&index<node.prefixItems.length?node.prefixItems[index]:Array.isArray(node.items)?node.items[index]:node.items;
+    if(item!==undefined&&!schemaShapeMatches(value[index],item,root,depth+1))return false;
+  }
+  return true;
+}
+/** Codex requires every property; optional absence is represented only in transport by null. */
 function codexTransportSchema(schema:Record<string,unknown>){
   const copy=structuredClone(schema);
   const visit=(value:unknown)=>{
@@ -289,8 +330,48 @@ function codexTransportSchema(schema:Record<string,unknown>){
       const child=node[key];if(Array.isArray(child))child.forEach(visit);else visit(child);
     }
     for(const key of ['allOf','anyOf','oneOf','prefixItems'])if(Array.isArray(node[key]))(node[key] as unknown[]).forEach(visit);
+    const properties=schemaObject(node.properties);
+    if(properties){
+      const required=Array.isArray(node.required)?node.required.filter((key):key is string=>typeof key==='string'):[];
+      for(const [key,child] of Object.entries(properties))if(!required.includes(key)){
+        // Wrap the entire child, not only its type: enum/const/ref constraints
+        // must remain intact. Existing domain nullability is not a sentinel.
+        if(!schemaShapeMatches(null,child,copy))properties[key]={anyOf:[child,{type:'null'}]};
+      }
+      node.required=[...required,...Object.keys(properties).filter(key=>!required.includes(key))];
+    }
   };
   visit(copy);return copy;
+}
+function codexDomainOutput(value:unknown,schema:Record<string,unknown>){
+  const retainedNulls=(item:unknown):number=>item===null?1:Array.isArray(item)?item.reduce<number>((count,child)=>count+retainedNulls(child),0):schemaObject(item)?Object.values(item as Record<string,unknown>).reduce<number>((count,child)=>count+retainedNulls(child),0):0;
+  const decode=(input:unknown,definition:unknown,depth=0):unknown=>{
+    requireCondition(depth<=100,'CLIENT_STRUCTURED_OUTPUT_INVALID');
+    const node=schemaObject(definition);if(!node)return input;
+    let output=input;
+    if(node.$ref!==undefined){const target=localSchemaReference(schema,node.$ref);if(target!==null)output=decode(output,target,depth+1);}
+    // Choose using the decoded original shapes, never by the transport's added
+    // nullable arm. If branches overlap, retain legitimate domain nulls.
+    for(const keyword of ['anyOf','oneOf'])if(Array.isArray(node[keyword])){
+      const candidates=(node[keyword] as unknown[]).map(branch=>({branch,value:decode(output,branch,depth+1)})).filter(candidate=>schemaShapeMatches(candidate.value,candidate.branch,schema));
+      if(candidates.length)output=candidates.toSorted((a,b)=>retainedNulls(b.value)-retainedNulls(a.value))[0]!.value;
+    }
+    if(Array.isArray(node.allOf))for(const branch of node.allOf)output=decode(output,branch,depth+1);
+    if(Array.isArray(output))return output.map((item,index)=>decode(item,Array.isArray(node.prefixItems)&&index<node.prefixItems.length?node.prefixItems[index]:Array.isArray(node.items)?node.items[index]:node.items,depth+1));
+    const object=schemaObject(output),properties=schemaObject(node.properties);if(!object)return output;
+    const copy={...object},required=Array.isArray(node.required)?node.required:[];
+    for(const [key,item] of Object.entries(object)){
+      if(properties&&Object.hasOwn(properties,key)){
+        const child=properties[key];
+        if(item===null&&!required.includes(key)&&!schemaShapeMatches(null,child,schema))delete copy[key];
+        else copy[key]=decode(item,child,depth+1);
+      }else if(schemaObject(node.additionalProperties))copy[key]=decode(item,node.additionalProperties,depth+1);
+      // Unknown keys are not optional sentinels. Preserve them so strict domain
+      // validation rejects them, rather than silently weakening the allowlist.
+    }
+    return copy;
+  };
+  return decode(value,schema);
 }
 async function invokeCli(id:Exclude<SubscriptionClientId,'hermes'>,environment:NodeJS.ProcessEnv,runner:SafeProcessRunner,instructions:string,input:unknown,schema:Record<string,unknown>){
   const executable=clientExecutable(id,environment),text=prompt(instructions,input,schema),root=await mkdtemp(join(tmpdir(),'agent-driver-model-'));
@@ -299,7 +380,7 @@ async function invokeCli(id:Exclude<SubscriptionClientId,'hermes'>,environment:N
       const schemaPath=join(root,'schema.json');await writeFile(schemaPath,JSON.stringify(codexTransportSchema(schema)),{mode:0o600});
       const selected=environment.AGENT_DRIVER_CODEX_MODEL;
       const result=await runner.run({executable,args:[...(selected?['--model',selected]:[]),'exec','--json','--skip-git-repo-check','--ephemeral','--ignore-user-config','--ignore-rules','--sandbox','read-only','--output-schema',schemaPath,'-'],stdin:text,cwd:root,timeout_ms:60_000});
-      if(result.code!==0)throw Error(`CLIENT_${classifyClientFailure(result.stderr||result.stdout).toUpperCase()}`);return {value:codexOutput(result.stdout),model:selected??'client_default'};
+      if(result.code!==0)throw Error(`CLIENT_${classifyClientFailure(result.stderr||result.stdout).toUpperCase()}`);return {value:codexDomainOutput(codexOutput(result.stdout),schema),model:selected??'client_default'};
     }
     if(id==='claude'){
       const selected=environment.AGENT_DRIVER_CLAUDE_MODEL,transportSchema=structuredClone(schema);delete transportSchema.$schema;

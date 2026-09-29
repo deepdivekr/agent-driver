@@ -10,6 +10,7 @@ import {redact} from '../terminal/contracts.js';
 import {requireCondition} from '../core/contracts.js';
 import {HermesAcp,type HermesTransport,type HermesTransportCallbacks} from '../integrations/hermes-acp.js';
 import {buildContinuityContext,renderContinuityContext} from './continuity-context.js';
+import {type WorkProposal} from './contracts.js';
 
 const clean=(value:unknown,max=2000)=>redact(String(value??''))
   .replace(/\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]*)/giu,'[REDACTED]')
@@ -29,6 +30,18 @@ export function initHermesWorks(store:PackStore){store.hermesState.exec(`
   CREATE TABLE IF NOT EXISTS hermes_turn_context(turn_id TEXT PRIMARY KEY REFERENCES hermes_turn(id),project_id TEXT NOT NULL,work_id TEXT NOT NULL,context_json TEXT NOT NULL,sha256 TEXT NOT NULL,created_at TEXT NOT NULL);
 `);}
 function hasTable(store:PackStore){return Boolean(store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='hermes_work'").get());}
+/** Bind an explicitly selected runtime to the existing Work; never create a duplicate bot. */
+export function bindIntakeHermes(store:PackStore,config:HostConfig,id:string,revision:number){
+  const project=config.project.id,work=store.intakeWork(project,id),spec=work.spec as WorkProposal|null;
+  requireCondition(work.revision===revision&&!work.paused&&work.status==='ready'&&spec,'WORK_NOT_READY');
+  requireCondition(store.officeRuns(project,id).length===0,'WORK_ALREADY_BOUND');
+  initHermesWorks(store);
+  if(store.hermesState.prepare('SELECT 1 FROM hermes_work WHERE project_id=? AND work_id=?').get(project,id))return id;
+  const definition:HermesWorkDefinition={title:spec!.title,goal:spec!.desired_outcome,checks:spec!.completion_checks.map(c=>c.result),steps:spec!.plan?.steps.map(s=>s.goal)??[],family:spec!.route.pack_family??'workflow',history:[],instruction:work.prompt+'\nKeep the selected Task Pack, Work ID '+id+' and existing approval boundaries. Use Agent Office tools when available. Do not start another instance of an imported bot or claim tool results without evidence.'};
+  store.hermesState.prepare('INSERT INTO hermes_work(work_id,project_id,import_key,definition,updated_at) VALUES(?,?,?,?,?)').run(id,project,'intake:'+id,JSON.stringify(definition),now());
+  event(store,project,id,null,'bound','사용자가 Hermes 실행을 선택했습니다. 기존 업무에 실행 경로를 연결했습니다.');
+  return id;
+}
 function row(store:PackStore,project:string,id:string){const value=store.hermesState.prepare('SELECT * FROM hermes_work WHERE project_id=? AND work_id=?').get(project,id) as WorkRow|undefined;requireCondition(value,'HERMES_WORK_NOT_FOUND');return value;}
 function touch(store:PackStore,project:string,id:string,state?:string){const at=now();store.hermesState.prepare('UPDATE hermes_work SET revision=revision+1,state=COALESCE(?,state),updated_at=? WHERE project_id=? AND work_id=?').run(state??null,at,project,id);store.hermesState.prepare('UPDATE office_work SET updated_at=? WHERE project_id=? AND id=?').run(at,project,id);}
 function event(store:PackStore,project:string,id:string,turn:string|null,kind:string,summary:string){store.hermesState.prepare('INSERT INTO hermes_event(project_id,work_id,turn_id,kind,summary,created_at) VALUES(?,?,?,?,?,?)').run(project,id,turn,kind,clean(summary),now());touch(store,project,id);}

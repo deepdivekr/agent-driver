@@ -10,6 +10,7 @@ export const workPlanSchema=z.object({
   source_id:z.string().min(1).max(128).nullable(),
   source_digest:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
   import_scope:z.string().trim().min(1).max(2000).optional(),
+  import_mode:z.enum(['observe','migrate','augment']).optional(),
   provenance:z.enum(['user_request','unverified_external','observed_code_unverified_execution']),
   steps:z.array(z.object({
     id:stepId,goal:z.string().trim().min(1).max(2000),depends_on:z.array(stepId).max(10),

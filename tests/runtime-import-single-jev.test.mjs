@@ -67,7 +67,7 @@ test('runtime fixture import redacts code secrets and reports scan/context cover
  const serialized=JSON.stringify(scan);
  for(const value of ['private-value-do-not-send','opaque-password',secret])assert.ok(!serialized.includes(value));
  assert.ok(serialized.includes('REDACTED'));
- await writeFile(join(project,'large.ts'),'// padding\n'.repeat(6500)+workflow);
+ await writeFile(join(project,'large.ts'),'// padding\n'.repeat(20000)+workflow);
  const limited=await scanProject(project);assert.equal(limited.limits.truncated,true);assert.ok(limited.unknowns.some(x=>x.includes('제한')));
  await writeFile(join(project,'large.ts'),workflow.repeat(70));
  const contexts=await scanProject(project);assert.ok(contexts.limits.context_chars<=32_000);assert.equal(contexts.limits.context_truncated,true);

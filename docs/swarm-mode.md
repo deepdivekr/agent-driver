@@ -54,7 +54,7 @@ Swarm Mode는 LLM planner와 model data 승인이 없으면 `SWARM_LLM_PLANNER_R
 
 ## Standard 조사 정책
 
-`runtime_swarm_start`의 `mode`를 생략하면 `standard`가 적용된다. Standard는 목표 wall time 3분, hard deadline 4분, source worker timeout 75초, 최종 synthesis reserve 35초를 사용한다. 상위 host가 더 작은 시간·worker·동시성 한도를 정했다면 그 한도가 우선한다.
+`runtime_swarm_start`의 `mode`를 생략하면 `standard`가 적용된다. Standard는 목표 wall time 3분, hard deadline 4분, worker timeout 75초, 최종 synthesis reserve 35초를 사용한다. 사용자 host 설정의 시간·worker·동시성 한도가 우선한다. 새 계획은 LLM 초안을 먼저 검증한 뒤 모든 worker(수집·축약·종합)의 timeout을 host `worker_timeout_ms`로 통일한다. 상한을 초과한 초안을 조용히 줄여 통과시키지 않으며, 제안된 timeout 목록의 hash를 planner 감사 정보에 보존한다. 기존 저장 계획·실패 기록은 변경하지 않는다.
 
 - 독립 source worker는 URL 1~2개만 담당하고 같은 dependency stage에 놓는다.
 - source worker는 구조화된 fact card와 출처 근거를 반환한다.

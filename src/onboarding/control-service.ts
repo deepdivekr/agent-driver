@@ -1,5 +1,5 @@
-import {spawn} from 'node:child_process';
-import {readFile,open,unlink,writeFile,rename} from 'node:fs/promises';
+import {spawn,type ChildProcess} from 'node:child_process';
+import {readFile,open,unlink,rename} from 'node:fs/promises';
 import {join} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {randomUUID} from 'node:crypto';
@@ -45,8 +45,39 @@ export async function openControlUrl(url:string){
   return new Promise<boolean>(resolve=>{const child=spawn(executable,args,{stdio:'ignore',windowsHide:true,shell:false});const timer=setTimeout(()=>{child.kill();resolve(false);},5000);child.once('error',()=>{clearTimeout(timer);resolve(false);});child.once('exit',code=>{clearTimeout(timer);resolve(code===0);});});
 }
 export interface ControlServiceRecord{format:1;pid:number;url:string;config:string;started_at:string;}
+export interface ControlServiceStartOptions {
+  /** Host/test injection only; never a setting, model argument or process ID. */
+  spawnChild?:(entry:string,config:string,previous?:string)=>ChildProcess;
+  publishRecord?:(path:string,record:ControlServiceRecord)=>Promise<void>;
+}
+export async function publishControlServiceRecord(path:string,record:ControlServiceRecord){
+  const temporary=path+'.'+randomUUID()+'.tmp',file=await open(temporary,'wx',0o600);
+  try{await file.writeFile(JSON.stringify(record)+'\n');await file.close();await rename(temporary,path);}
+  catch(error){await file.close().catch(()=>{});await unlink(temporary).catch(()=>{});throw error;}
+}
+function waitForOwnedExit(child:ChildProcess,timeout:number):Promise<boolean>{
+  if(child.exitCode!==null||child.signalCode!==null)return Promise.resolve(true);
+  return new Promise(resolve=>{
+    let finished=false;
+    const finish=(confirmed:boolean)=>{if(finished)return;finished=true;clearTimeout(timer);child.off('exit',exited);resolve(confirmed);};
+    const exited=()=>finish(true),timer=setTimeout(()=>finish(child.exitCode!==null||child.signalCode!==null),timeout);
+    child.once('exit',exited);
+    if(child.exitCode!==null||child.signalCode!==null)finish(true);
+  });
+}
+/** Only the just-created ChildProcess handle is signalled. An old record's PID
+ * is never used for failed-start cleanup, and a signal is not proof of exit. */
+async function cleanupFailedControlStart(child:ChildProcess):Promise<boolean>{
+  if(child.pid===undefined||child.exitCode!==null||child.signalCode!==null)return true;
+  // IPC alone can keep the otherwise gracefully closed Node child alive.
+  if(child.connected)try{child.disconnect();}catch{}
+  try{child.kill('SIGTERM');}catch{}
+  if(await waitForOwnedExit(child,2000))return true;
+  try{child.kill('SIGKILL');}catch{}
+  return waitForOwnedExit(child,2000);
+}
 /** One reusable, detached Control Center per local connection. MCP reconnection does not open a window. */
-export async function ensureControlService(root:string){
+export async function ensureControlService(root:string,options:ControlServiceStartOptions={}){
   const paths=await prepareLocalConnection(root),recordPath=join(paths.root,'control-center.json'),lockPath=join(paths.root,'.control-center.lock');
   let prior:ControlServiceRecord|undefined;
   try{prior=JSON.parse(await readFile(recordPath,'utf8')) as ControlServiceRecord;}catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw Error('CONTROL_CENTER_RECORD_INVALID');}
@@ -58,10 +89,21 @@ export async function ensureControlService(root:string){
     try{process.kill(prior.pid,0);throw Error('CONTROL_CENTER_RUNNING_BUT_UNREACHABLE');}catch(error){if((error as NodeJS.ErrnoException).code!=='ESRCH')throw error;}
   }
   let lock;try{lock=await open(lockPath,'wx',0o600);}catch{throw Error('CONTROL_CENTER_START_IN_PROGRESS');}
+  let child:ChildProcess|undefined,startFailure:unknown,lockReleased=false;
   try{
     const entry=fileURLToPath(new URL('./control-service-entry.js',import.meta.url));
-    const child=spawn(process.execPath,[entry,paths.runtimeConfig,...(prior?[prior.url]:[])],{detached:true,stdio:['ignore','ignore','ignore','ipc'],windowsHide:true,shell:false});
-    const record=await new Promise<ControlServiceRecord>((resolve,reject)=>{const timer=setTimeout(()=>{child.kill();reject(Error('CONTROL_CENTER_START_TIMEOUT'));},30_000);child.once('error',()=>{clearTimeout(timer);reject(Error('CONTROL_CENTER_START_FAILED'));});child.once('exit',()=>{clearTimeout(timer);reject(Error('CONTROL_CENTER_START_FAILED'));});child.once('message',message=>{const value=message as ControlServiceRecord&{start_error?:unknown};if(value?.start_error==='CONTROL_CENTER_WINDOWS_UNREACHABLE'){child.kill();clearTimeout(timer);reject(Error(value.start_error));return;}if(!value||value.pid!==child.pid||!validControlUrl(value.url)||value.config!==paths.runtimeConfig){child.kill();clearTimeout(timer);reject(Error('CONTROL_CENTER_START_FAILED'));return;}clearTimeout(timer);resolve(value);});});
-    const temporary=recordPath+'.'+randomUUID()+'.tmp';await writeFile(temporary,JSON.stringify(record)+'\n',{mode:0o600,flag:'wx'});await rename(temporary,recordPath);child.disconnect();child.unref();return {...record,reused:false};
-  }finally{await lock.close();await unlink(lockPath);}
+    child=(options.spawnChild??((entry,config,previous)=>spawn(process.execPath,[entry,config,...(previous?[previous]:[])],{detached:true,stdio:['ignore','ignore','ignore','ipc'],windowsHide:true,shell:false})))(entry,paths.runtimeConfig,prior?.url);
+    const owned=child;
+    const record=await new Promise<ControlServiceRecord>((resolve,reject)=>{const timer=setTimeout(()=>reject(Error('CONTROL_CENTER_START_TIMEOUT')),30_000);owned.once('error',()=>{clearTimeout(timer);reject(Error('CONTROL_CENTER_START_FAILED'));});owned.once('exit',()=>{clearTimeout(timer);reject(Error('CONTROL_CENTER_START_FAILED'));});owned.once('message',message=>{const value=message as ControlServiceRecord&{start_error?:unknown};if(value?.start_error==='CONTROL_CENTER_WINDOWS_UNREACHABLE'){clearTimeout(timer);reject(Error(value.start_error));return;}if(!value||value.pid!==owned.pid||!validControlUrl(value.url)||value.config!==paths.runtimeConfig){clearTimeout(timer);reject(Error('CONTROL_CENTER_START_FAILED'));return;}clearTimeout(timer);resolve(value);});});
+    await (options.publishRecord??publishControlServiceRecord)(recordPath,record);
+    await lock.close();await unlink(lockPath);lockReleased=true;
+    if(child.connected)child.disconnect();child.unref();return {...record,reused:false};
+  }catch(error){
+    startFailure=error;
+    if(child&&!await cleanupFailedControlStart(child)){startFailure=Error('CONTROL_CENTER_FAILED_START_CLEANUP_UNCONFIRMED');throw startFailure;}
+    throw error;
+  }finally{
+    // Do not mask an unconfirmed owned child with a secondary lock-file error.
+    if(!lockReleased){await lock.close().catch(error=>{if(!startFailure)throw error;});await unlink(lockPath).catch(error=>{if(!startFailure)throw error;});}
+  }
 }

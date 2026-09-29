@@ -35,8 +35,12 @@ import {SwarmVisualExecutor} from '../swarm/visual-executor.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {WorkRuntime} from '../work/runtime.js';
+import {workControlSchema,workExecuteSchema} from '../work/contracts.js';
+import {type WorkSupervisor} from '../work/supervisor.js';
+import {WorkResults,workResultGetSchema,workResultsListSchema} from '../work/results.js';
 import {SEMANTIC_DECISION_CATALOG} from '../decision-plane/semantic.js';
 import {WorkImportRuntime} from '../work/import-runtime.js';
+import {workImportExecutionOwner} from '../work/import-authority.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
 import {CodingDialogRuntime} from '../coding/conversation.js';
 import {codingTools} from '../coding/contracts.js';
@@ -68,6 +72,7 @@ export class RuntimeApi{
   readonly windows:WindowsWorkflowRuntime;
   readonly packs:FamilyRuntime;
   readonly work:WorkRuntime;
+  readonly workResults:WorkResults;
   readonly imports:WorkImportRuntime;
   readonly migrations:HermesMigrationRuntime;
   readonly remote:RemoteOffice;
@@ -79,9 +84,14 @@ export class RuntimeApi{
   private closed=false;
   private model:StructuredModel;
   private explicitProviders:boolean;
+  private workSupervisor:WorkSupervisor|null=null;
+  private workSupervisorLoading:Promise<WorkSupervisor>|null=null;
+  private workSupervisorStopping:Promise<void>|null=null;
+  private workAdmissionClosed=false;
   constructor(readonly config:HostConfig,readonly options:RuntimeApiOptions={}){
     this.workflowCompatibility=new WorkflowCompatibility(config);
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
+    this.workResults=new WorkResults(this.store);
     this.files=this.store.localFileExplorer(config.project.id,dirname(config.dbPath));
     this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
     const windowsDriver=options.windows?.driver??(config.windowsExecutor?(config.windowsExecutor.kind==='cua-desktop'?new CuaDesktopDriver(config.windowsExecutor,this.store.desktopState):new CuaFieldDriver(config.windowsExecutor,this.store.desktopState)):undefined);
@@ -109,13 +119,34 @@ export class RuntimeApi{
     this.packs.providers.llm=this.model;this.swarm.providers.planner=new LlmSwarmPlanner(this.model);this.swarm.providers.llm_fallback=new LlmSwarmDecisionFallback(this.model);
   }
   private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
+  /** Execution/control imports the operating loop lazily; status and ordinary tools never start its timer. */
+  private async supervisedWork(){
+    requireCondition(!this.closed,'RUNTIME_API_CLOSED');requireCondition(!this.workAdmissionClosed,'WORK_SUPERVISOR_CLOSED');
+    if(this.workSupervisor)return this.workSupervisor;
+    if(!this.workSupervisorLoading){
+      const loading=import('../work/supervisor.js').then(({WorkSupervisor})=>{
+        requireCondition(!this.closed,'RUNTIME_API_CLOSED');requireCondition(!this.workAdmissionClosed,'WORK_SUPERVISOR_CLOSED');
+        const supervisor=new WorkSupervisor(this.store,this.config,this.model,{api:this,auto_start:false,onResult:workId=>this.workResults.capture(this.config.project.id,workId)});this.workSupervisor=supervisor;return supervisor;
+      });
+      this.workSupervisorLoading=loading;
+    }
+    try{return await this.workSupervisorLoading;}catch(error){this.workSupervisorLoading=null;throw error;}
+  }
+  private stopSupervisedWork(){
+    this.workAdmissionClosed=true;
+    if(!this.workSupervisorStopping){
+      // close() synchronously fences the loop before its first await, preserving any completed in-flight receipt.
+      this.workSupervisorStopping=this.workSupervisor?this.workSupervisor.close():this.workSupervisorLoading?this.workSupervisorLoading.then(supervisor=>supervisor.close(),()=>{}):Promise.resolve();
+    }
+    return this.workSupervisorStopping;
+  }
   close(){
-    if(this.closed)return;this.closed=true;this.packs.close();this.coding.close();this.codingDialog.close();this.windows.close();
-    this.closing=(async()=>{await this.workflowCompatibility.drain();await this.windows.drain();await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
+    if(this.closed)return;this.closed=true;const workClosing=this.stopSupervisedWork();this.packs.close();this.coding.close();this.codingDialog.close();this.windows.close();
+    this.closing=(async()=>{await workClosing;await this.workflowCompatibility.drain();await this.windows.drain();await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
   }
   async drain(){
     // Start admission fences together, before yielding to any one runtime.
-    await Promise.all([this.workflowCompatibility.drain(),this.windows.drain(),this.packs.drain(),this.coding.drain(),this.codingDialog.drain(),this.remote.drain()]);
+    await Promise.all([this.stopSupervisedWork(),this.workflowCompatibility.drain(),this.windows.drain(),this.packs.drain(),this.coding.drain(),this.codingDialog.drain(),this.remote.drain()]);
     if(this.closing)await this.closing;
   }
   private async releaseFinishedVisuals(runId:string){
@@ -178,7 +209,31 @@ export class RuntimeApi{
         case 'runtime_work_start':return this.work.start(args);
         case 'runtime_work_define':return this.work.define(args);
         case 'runtime_work_answer':return this.work.answer(args);
+        case 'runtime_work_execute':{
+          const input=workExecuteSchema.parse(args);requireCondition(input.executor==='client','WORK_EXECUTOR_CHANGED');
+          requireCondition(input.cost_acknowledged,'WORK_MODEL_USAGE_CONSENT_REQUIRED');
+          requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
+          // Invalid admission must not allocate a timer or awaken another queued Work.
+          const work=this.store.intakeWork(this.config.project.id,input.work_id);
+          requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
+          requireCondition(!work.paused&&work.spec&&['ready','running'].includes(work.status),'WORK_NOT_READY');
+          requireCondition(workImportExecutionOwner(this.store,this.config.project.id,input.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
+          const supervisor=await this.supervisedWork();return supervisor.start(input.work_id,input.revision,input.cost_acknowledged,input.timezone);
+        }
+        case 'runtime_work_control':{
+          const input=workControlSchema.parse(args);requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
+          const work=this.store.intakeWork(this.config.project.id,input.work_id);requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
+          if(input.action==='resume'||input.action==='retry')requireCondition(workImportExecutionOwner(this.store,this.config.project.id,input.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
+          const supervisor=await this.supervisedWork(),result=supervisor.action(input);
+          // Pause/edit remain passive. Explicit resume/retry continues the
+          // already approved durable run even when this MCP session is new.
+          // SQLite leases prevent it from duplicating another live owner.
+          if(input.action==='resume'||input.action==='retry')supervisor.activate();
+          return result;
+        }
         case 'runtime_work_status':{const result=this.work.status(args);return {...result,windows_runs:this.windows.forWork(z.object({work_id:z.string().uuid()}).passthrough().parse(args).work_id)};}
+        case 'runtime_work_results':{const input=workResultsListSchema.parse(args);return {work_id:input.work_id,results:this.workResults.list(this.config.project.id,input.work_id,input.limit)};}
+        case 'runtime_work_result':{const input=workResultGetSchema.parse(args);return this.workResults.get(this.config.project.id,input.work_id,input.result_id);}
         case 'runtime_work_context':return this.packs.context(args);
         case 'runtime_work_list':return this.work.list(args);
         case 'runtime_work_pause':return this.work.pause(args);
