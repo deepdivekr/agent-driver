@@ -109,6 +109,9 @@ The existing Work scheduler claims a durable slot and creates a fresh child Work
 for that occurrence. Every child has its own cycle, request, supervisor run and
 output verification. The source Work remains the parent control surface; its
 original business goal and verified completion contract are not rewritten.
+The managed Control Center starts its supervisor again on restart. A bare MCP
+process activates the Work supervisor through execution or schedule activation;
+reading schedule status alone does not start the scheduler.
 Missed slots use the existing coalescing policy and never generate a catch-up
 burst. A restart or retry cannot duplicate a claimed occurrence.
 
@@ -122,6 +125,11 @@ A failed custom child keeps its slot occupied while the user recovers that
 same execution. Verified success releases the slot for the next occurrence.
 Missing parent or child metadata holds the affected schedule; it never falls
 back to rerunning the original Work or stops healthy sibling schedules.
+Pausing a child or its scheduled parent also stops timer observations and the
+next source read or output write within a running Pack. An already admitted
+read can finish and retain its checkpoint. Resuming keeps that same run and its
+completed observations. Paused work does not occupy the timer's execution batch
+ahead of healthy work.
 
 ## Completion and recovery
 
@@ -144,6 +152,12 @@ back to rerunning the original Work or stops healthy sibling schedules.
 - A bounded completion repair can refresh a known no-effect read. Writes and
   uncertain effects retain reconciliation fences. Historical status/events and
   pausing a watch remain available when a changed contract blocks execution.
+- If a custom Pack's known no-effect source failure has recovered in the same
+  durable run, a repeated execution request observes its current status through
+  a fresh read. The earlier failed receipt stays unchanged; the new status
+  receipt has its own evidence ID. If recovery is still pending, the Work stays
+  available for review and retry after its connection or source is restored.
+  This path never replays a Pack write or reconciles an unknown external effect.
 
 The authoritative scope and resumption procedure are in
 [the refactoring plan](custom-pack-refactoring-plan.md) and [AGENTS.md](../AGENTS.md).

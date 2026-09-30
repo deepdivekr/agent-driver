@@ -9,6 +9,7 @@ import {once} from 'node:events';
 import {PackStore} from '../dist/packs/store.js';
 import {FamilyRuntime,PACK_ENGINE_VERSION} from '../dist/packs/runtime.js';
 import {CustomPackRegistry} from '../dist/packs/custom-registry.js';
+import {CustomPackRepeats} from '../dist/work/custom-pack-repeat.js';
 import {parseCsv} from '../dist/packs/data.js';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {snapshotHash} from '../dist/taskpack/contracts.js';
@@ -119,16 +120,17 @@ test('runtime custom Pack: repeated identical recipes, failed executions and und
 
 test('runtime custom Pack: each new cycle obtains fresh run and artifact while retries keep the original cycle version',async t=>{
   const x=await fixture(t),source=await demonstrated(x);x.registry.publishVerified(x.project,source.input,x.host);
+  const repeats=new CustomPackRepeats(x.store,x.registry);
   const first=x.registry.prepareRepeat(x.project,{key:'weekly-records',cycle_id:'week-1'},x.host);
   assert.equal(first.created,true);assert.equal(first.dispatch_allowed,false);assert.equal(first.completion_verified,false);
   assert.equal('result' in first,false);assert.equal('checkpoint' in first,false);assert.equal('observations' in first,false);
-  const work1=ready(x.store,x.project,first.request_id),run1=await x.runtime.call('runtime_pack_run',{request_id:first.request_id,work_id:work1.id,recipe:first.recipe});
+  const work1=repeats.prepare(x.project,{key:'weekly-records',cycle_id:'week-1'},x.host).work,run1=await x.runtime.call('runtime_pack_run',{request_id:first.request_id,work_id:work1.id,recipe:first.recipe});
   assert.equal(run1.status,'succeeded');
   assert.deepEqual(JSON.parse(await readFile(run1.result.artifact.path,'utf8')),[{id:'first',status:'open'}]);
   await writeFile(x.source,JSON.stringify([{id:'second',status:'closed'}]));
   const second=x.registry.prepareRepeat(x.project,{key:'weekly-records',cycle_id:'week-2'},x.host);
   assert.notEqual(first.request_id,second.request_id);
-  const work2=ready(x.store,x.project,second.request_id),run2=await x.runtime.call('runtime_pack_run',{request_id:second.request_id,work_id:work2.id,recipe:second.recipe});
+  const work2=repeats.prepare(x.project,{key:'weekly-records',cycle_id:'week-2'},x.host).work,run2=await x.runtime.call('runtime_pack_run',{request_id:second.request_id,work_id:work2.id,recipe:second.recipe});
   assert.equal(run2.status,'succeeded');assert.notEqual(run1.run_id,run2.run_id);assert.notEqual(run1.result.artifact.path,run2.result.artifact.path);
   assert.deepEqual(JSON.parse(await readFile(run2.result.artifact.path,'utf8')),[{id:'second',status:'closed'}]);
   assert.deepEqual(JSON.parse(await readFile(run1.result.artifact.path,'utf8')),[{id:'first',status:'open'}]);
@@ -184,7 +186,7 @@ test('runtime custom Pack: source-parameter overrides are bounded data and never
   assert.throws(()=>x.registry.prepareRepeat(x.project,{key:'weekly-records',cycle_id:'october',parameters:{records:{period:'2026-11'}}},x.host),/CUSTOM_PACK_CYCLE_CONFLICT/u);
   assert.throws(()=>x.registry.prepareRepeat(x.project,{key:'weekly-records',cycle_id:'november',parameters:{records:{new_parameter:'x'}}},x.host),/CUSTOM_PACK_SOURCE_PARAMETER_UNKNOWN/u);
   assert.throws(()=>x.registry.prepareRepeat(x.project,{key:'weekly-records',cycle_id:'november',parameters:{records:{period:'ghp_'+ 'x'.repeat(32)}}},x.host),/CREDENTIAL_LIKE_INPUT/u);
-  const nextWork=ready(x.store,x.project,next.request_id),nextRun=await x.runtime.call('runtime_pack_run',{request_id:next.request_id,work_id:nextWork.id,recipe:next.recipe});
+  const nextWork=new CustomPackRepeats(x.store,x.registry).prepare(x.project,{key:'weekly-records',cycle_id:'october',parameters:{records:{period:'2026-10'}}},x.host).work,nextRun=await x.runtime.call('runtime_pack_run',{request_id:next.request_id,work_id:nextWork.id,recipe:next.recipe});
   assert.equal(nextRun.status,'succeeded');assert.deepEqual(periods,['2026-09','2026-10']);
   assert.deepEqual(JSON.parse(await readFile(nextRun.result.artifact.path,'utf8')),[{id:'record',period:'2026-10'}]);
   const multiple={...recipe(),deduplicate_by:[],sources:[{id:'records',parameters:{period:'2026-09'}},{id:'records',parameters:{period:'2026-10'}}]},multiSource=await demonstrated(x,multiple);

@@ -74,13 +74,13 @@ export class FamilyRuntime {
     const db=this.store.hermesState,hasCycles=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='office_custom_pack_cycle'").get();
     const cycle=hasCycles?db.prepare('SELECT request_id FROM office_custom_pack_cycle WHERE project_id=? AND request_id=?').get(project,run.request_id):null;
     const binding=owner?customPackWorkBinding(this.store,project,owner.id):null;
+    const host={config_fingerprint:this.config.fingerprint,engine_binding:this.engineBinding()};
+    if(owner)assertCustomPackScheduledRun(this.store,project,owner.id,host);
     if(!binding&&!cycle)return;
     requireCondition(owner&&binding,'CUSTOM_PACK_WORK_BINDING_MISSING');
     requireCondition(run.request_id===binding.request_id,'CUSTOM_PACK_REQUEST_ID_CHANGED');
     requireCondition(snapshotHash(run.recipe)===snapshotHash(binding.recipe),'CUSTOM_PACK_RECIPE_CHANGED');
-    const host={config_fingerprint:this.config.fingerprint,engine_binding:this.engineBinding()};
     assertCustomPackInvocation(this.store,project,owner.id,name,name==='runtime_pack_run'?{request_id:run.request_id,recipe:run.recipe}:{run_id:run.id},host);
-    assertCustomPackScheduledRun(this.store,project,owner.id,host);
   }
   private customRunHold(run:PackRun,name:'runtime_pack_run'|'runtime_pack_watch_tick'){
     try{this.assertCustomRun(run,name);return null;}catch(error){return safeError(error);}
@@ -106,7 +106,7 @@ export class FamilyRuntime {
   private async collectCheckpointed(run:PackRun,recipe:Extract<Recipe,{sources:unknown}>,owner:string,checkpoint:FamilyCheckpoint){
     const rows:Row[]=[],evidence:SourceEvidence[]=[];checkpoint.sources??={};
     for(const [index,requested] of recipe.sources.entries()){
-      this.fresh();this.store.assertPackExecution(this.config.project.id,run.id,owner);
+      this.fresh();this.store.assertPackExecution(this.config.project.id,run.id,owner);this.assertCustomRun(run,'runtime_pack_run');
       const source=this.config.packs!.sources.find(s=>s.id===requested.id);requireCondition(source,'SOURCE_NOT_DELEGATED');
       if(recipe.family==='file.pipeline')requireCondition(source.kind==='file','FILE_PIPELINE_REQUIRES_LOCAL_SOURCE');
       const binding=snapshotHash({source,requested,config:this.config.fingerprint}),key=String(index),saved=checkpoint.sources[key];
@@ -120,10 +120,11 @@ export class FamilyRuntime {
         routeOptions={context_id:`${run.id}:${source.id}`,request:recipe.request,preference,fallback_preferences,
           checkpoint:{load:()=>journal.checkpoint(this.config.project.id,`${run.id}:${index}:${source.id}`),save:value=>journal.saveCheckpoint(this.config.project.id,`${run.id}:${index}:${source.id}`,value)},
           providers:{jev:providers.jev,llm:providers.llm,confidence:providers.policy.confidence,shadow_rate:providers.policy.decision_shadow.provider==='llm'?providers.policy.decision_shadow.sample_rate:0},remembered:journal.remembered(this.config.project.id,routeBinding),
-          guard:()=>{this.fresh();this.store.assertPackExecution(this.config.project.id,run.id,owner);},
+          guard:()=>{this.fresh();this.store.assertPackExecution(this.config.project.id,run.id,owner);this.assertCustomRun(run,'runtime_pack_run');},
           event:event=>{journal.append(this.config.project.id,`${run.id}:${source.id}`,event);if(event.kind==='selected'||event.kind==='handoff')selectedTarget=event.target_id;if(event.kind==='failed')journal.invalidate(this.config.project.id,routeBinding!);this.store.recordRuntimeActivity(this.config.project.id,'pack',run.id,null,`browser.${event.kind}`,`${event.engine} / ${event.environment}${event.from?` from ${event.from}`:''}`,null);},
         };
       }
+      this.assertCustomRun(run,'runtime_pack_run');
       const result=reusable?saved!.result:await collectSource(source,requested.parameters,this.config,routeOptions);
       if(selectedTarget&&routeBinding)this.store.browserExecutors().success(this.config.project.id,routeBinding,selectedTarget);
       rows.push(...result.rows);evidence.push(result.evidence);requireCondition(rows.length<=MAX_ROWS,'SOURCE_TOO_MANY_ROWS');
@@ -135,6 +136,7 @@ export class FamilyRuntime {
   private async checkpointedJudgment(run:PackRun,owner:string,checkpoint:FamilyCheckpoint,row:Row,question:string,labels:Record<string,string>,providers:Awaited<ReturnType<FamilyRuntime['decisionProviders']>>){
     checkpoint.judgments??={};const key=snapshotHash({row,question,labels,confidence:providers.policy.confidence,decision_binding:providers.binding}),saved=checkpoint.judgments[key];
     if(saved&&saved.label!=='unknown')return saved;
+    this.assertCustomRun(run,'runtime_pack_run');
     const decision=await judgeRow(row,question,labels,providers.policy.confidence,providers.jev,providers.llm,providers.plane,`${run.id}:${snapshotHash(row)}`);
     this.store.assertPackExecution(this.config.project.id,run.id,owner);
     requireCondition(decision.failure_reason!=='provider_unavailable','PACK_MODEL_UNAVAILABLE');
@@ -151,7 +153,7 @@ export class FamilyRuntime {
     for(const id of [run.id,`${run.id}-recovered-${digest.slice(0,16)}`]){
       const path=join(root,`${id}.${format}`);
       try{const saved=await readScopedFile(path);if(sha(saved)===digest)return {path,sha256:digest,bytes:saved.length,rows:rows.length,format,csv_formula_escaped:format==='csv',originals_modified:false,reconciled_existing:true};}
-      catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return exportRows(root,id,rows,format,columns);throw error;}
+      catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT'){this.assertCustomRun(run,'runtime_pack_run');return exportRows(root,id,rows,format,columns);}throw error;}
     }
     throw Error('PACK_EXPORT_READBACK_MISMATCH');
   }
@@ -253,6 +255,7 @@ export class FamilyRuntime {
     const begun=this.store.beginPack(this.config.project.id,requestId,recipe,this.engineBinding(),workId);
     const legacyReadFailure=begun.run.status==='failed'&&!isMutation(recipe)&&this.store.packExecution(this.config.project.id,begun.run.id)===null;
     if(!begun.created&&!legacyReadFailure&&!['running','retryable_failure','waiting_auth','paused_config','paused_work'].includes(begun.run.status))return {...this.publicRun(begun.run),deduplicated:true};
+    this.assertCustomRun(begun.run,'runtime_pack_run');
     const claim=this.store.claimPackExecution(this.config.project.id,begun.run.id);
     if(!claim.claimed){
       const current=claim.reason==='attempts_exhausted'&&begun.run.status==='running'?this.store.finishPack(this.config.project.id,begun.run.id,isMutation(recipe)&&begun.run.task_id&&this.store.proposal(begun.run.task_id).state==='consumed'?'reconciliation_required':'failed',{error:'PACK_RECOVERY_EXHAUSTED',write_replayed:false}):begun.run;
@@ -300,16 +303,17 @@ export class FamilyRuntime {
         }
         return finish(prepared.status,{timing:prepared.timing,external_submit:false},prepared.task_id);
       }
-      const source=await this.collectCheckpointed(run,recipe,owner,checkpoint);this.fresh();
+      const source=await this.collectCheckpointed(run,recipe,owner,checkpoint);this.fresh();this.assertCustomRun(run,'runtime_pack_run');
       let rows=recipe.family==='file.pipeline'?normalizeNumericColumns(source.rows,recipe.numeric_columns):source.rows;
       rows=deduplicate(applyFilters(rows,recipe.filters),recipe.deduplicate_by);
       let result:Record<string,unknown>={evidence:source.evidence,collected_rows:source.rows.length,matched_rows:rows.length};
       let status='succeeded';
       const verify=async(checks:EvidenceCheck[]|undefined,records:Row[])=>{
         if(!checks)return;
+        this.assertCustomRun(run,'runtime_pack_run');
         const linked=this.store.officeWork(this.config.project.id,'pack',run.id) as {id:string}|null,initial=linked?this.store.intakeWorkOptional(this.config.project.id,linked.id):null;
         const guard=()=>{
-          this.fresh();this.store.assertPackExecution(this.config.project.id,run.id,owner);
+          this.fresh();this.store.assertPackExecution(this.config.project.id,run.id,owner);this.assertCustomRun(run,'runtime_pack_run');
           if(initial){const current=this.store.intakeWork(this.config.project.id,initial.id);requireCondition(!current.paused,'WORK_PAUSED');requireCondition(current.revision===initial.revision,'WORK_REVISION_CHANGED');}
         };
         guard();
@@ -357,6 +361,7 @@ export class FamilyRuntime {
           const unknown=items.filter(item=>item.label==='unknown').length;result={...result,items,unknown_count:unknown,external_messages_sent:0};if(unknown)status='needs_review';break;
         }
         case 'monitor.watch':{
+          this.assertCustomRun(run,'runtime_pack_run');
           const baseline=watchBaseline(recipe,rows);this.store.scheduleWatch(run.id,recipe.interval_seconds*1000,baseline);result={...result,baseline,scheduler:'while_mcp_connected_or_explicit_tick',external_notifications_sent:0};status='watching';break;
         }
       }
@@ -394,6 +399,7 @@ export class FamilyRuntime {
       this.fresh();
       const held=this.customRunHold(run,'runtime_pack_run');
       if(held){
+        if(held==='WORK_PAUSED'){recovered.push({run_id:run.id,status:'paused_work',reason:held,observed:false,write_replayed:false});continue;}
         // Retire only an unowned recovery candidate so it cannot occupy every
         // recovery batch ahead of healthy legacy work. Preserve its old result.
         const paused=this.store.transaction(()=>{
@@ -414,7 +420,7 @@ export class FamilyRuntime {
     for(const due of this.store.dueWatches(this.config.project.id,now,runId)){
       this.fresh();const run=this.store.packRun(this.config.project.id,String(due.run_id)),recipe=run.recipe;requireCondition(recipe.family==='monitor.watch','INVALID_WATCH_RECIPE');
       const held=this.customRunHold(run,'runtime_pack_watch_tick');
-      if(held){this.store.pauseWatch(this.config.project.id,run.id,true);processed.push({run_id:run.id,status:'custom_contract_held',reason:held,observed:false,evidence:[]});continue;}
+      if(held){if(held!=='WORK_PAUSED')this.store.pauseWatch(this.config.project.id,run.id,true);processed.push({run_id:run.id,status:held==='WORK_PAUSED'?'paused_work':'custom_contract_held',reason:held,observed:false,evidence:[]});continue;}
       if(run.binding!==snapshotHash({recipe,fingerprint:this.engineBinding()})){this.store.pauseWatch(this.config.project.id,run.id,true);processed.push({run_id:run.id,status:'config_changed_paused'});continue;}
       const cycle=Number(due.cycle);if(!this.store.claimWatch(run.id,cycle,now,recipe.interval_seconds*1000))continue;
       const before=JSON.parse(String(due.baseline)) as WatchBaseline;

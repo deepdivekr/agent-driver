@@ -11,7 +11,7 @@ import {workReferenceMap} from './context.js';
 import {type WorkProposal} from './contracts.js';
 import {requireCondition} from '../core/contracts.js';
 import {hashJson,type StructuredModel} from '../taskpack/adaptive-spec.js';
-import {WorkClientToolInputError,type WorkClientTool,type WorkClientToolReceipt} from './client-executor.js';
+import {WorkClientToolInputError,type WorkClientTool,type WorkClientToolReceipt,type WorkClientInvocation,type WorkClientCheckpoint} from './client-executor.js';
 import {readScopedFile,sha,MAX_BYTES,parseCsv} from '../packs/data.js';
 import {declaredSourceContractIssues} from '../packs/source-catalog.js';
 import {PACK_ENGINE_VERSION} from '../packs/runtime.js';
@@ -141,7 +141,7 @@ export class WorkExecutionTools {
   private recoverableSearchOrigins=new Map<string,BrowserPreference>();
   private environmentBlockedQueries=new Set<string>();
   private blockedSocial=new Set<string>();
-  private resultReceipts=new Map<string,{tool_name:'office_result_draft'|'runtime_pack_run';value:Record<string,unknown>}>();
+  private resultReceipts=new Map<string,{tool_name:'office_result_draft'|'runtime_pack_run'|'runtime_pack_status';value:Record<string,unknown>;pack_request_id?:string}>();
   private packIntegrity=new Map<string,{run_id:string;result_sha256:string;sources:SourceIntegrity}>();
   private dispatched=new Map<string,{name:string;input:Record<string,unknown>;coding_stage?:{id:string;attempts:number};reused_coding_run?:string}>();
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly api:RuntimeApi,readonly workId:string,readonly runId:string,readonly spec:WorkProposal,readonly prompt:string,readonly guard:()=>void,readonly model:StructuredModel,readonly options:{browserFactory?:BrowserRouteOptions['factory']}={}){
@@ -152,6 +152,20 @@ export class WorkExecutionTools {
    * invocation is checkpointed. Read observations keep their fresh turn IDs. */
   requestId(name:string,_args:Record<string,unknown>,fallback:string){
     return name==='runtime_pack_run'?customPackWorkBinding(this.store,this.config.project.id,this.workId)?.request_id??fallback:fallback;
+  }
+  /** A status read can observe recovery by the existing Family runtime. This
+   * lookup never resumes the Pack, replaces a failed receipt or grants a write. */
+  packRequestRecovery(invocation:WorkClientInvocation,prior:WorkClientCheckpoint['observations']):{state:'observe_success'|'pending';run_id:string}|null{
+    this.guard();
+    if(invocation.tool_name!=='runtime_pack_run'||invocation.effect!=='local_write'||prior.length===0)return null;
+    const binding=assertCustomPackInvocation(this.store,this.config.project.id,this.workId,invocation.tool_name,{...invocation.arguments,request_id:invocation.request_id},{config_fingerprint:this.config.fingerprint,engine_binding:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})});
+    if(!binding||binding.request_id!==invocation.request_id)return null;
+    const runId=object(prior[0]!.receipt.value)?.run_id;
+    if(typeof runId!=='string'||!prior.every(item=>item.invocation.request_id===binding.request_id&&item.invocation.tool_name==='runtime_pack_run'&&item.invocation.effect==='local_write'&&item.receipt.effect_state==='none'&&item.receipt.retry_safe&&['retryable_failure','waiting_auth','waiting_approval'].includes(item.receipt.status)&&object(item.receipt.value)?.run_id===runId))return null;
+    const run=this.ownPack(runId);
+    if(run.request_id!==binding.request_id||run.task_id!==null||snapshotHash(run.recipe)!==snapshotHash(binding.recipe)||run.binding!==snapshotHash({recipe:run.recipe,fingerprint:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})})||!['portal.collect','file.pipeline','research.search','inbox.triage','monitor.watch'].includes(run.recipe.family))return null;
+    if(run.status==='reconciliation_required')return null;
+    return {state:run.status==='succeeded'||run.recipe.family==='monitor.watch'&&run.status==='watching'?'observe_success':'pending',run_id:run.id};
   }
   /** Same-run host receipts are evidence, never model-proposed URLs or a grant.
    * Restore only completed, dispatched DOM reads; pending/uncertain receipts,
@@ -277,6 +291,19 @@ export class WorkExecutionTools {
     const checkpoint=row?.checkpoint?object(JSON.parse(String(row.checkpoint))):null;
     return Array.isArray(checkpoint?.observations)?checkpoint.observations:checkpoint?.kind==='swarm'&&Array.isArray(checkpoint.final_observations)?checkpoint.final_observations:[];
   }
+  private resultReceipt(requestId:string){
+    const cached=this.resultReceipts.get(requestId);if(cached)return cached;
+    for(const item of this.resultObservations()){
+      const record=object(item),invocation=object(record?.invocation),receipt=object(record?.receipt),value=object(receipt?.value);
+      if(invocation?.request_id!==requestId||receipt?.status!=='succeeded'||!value)continue;
+      if((invocation.tool_name==='office_result_draft'||invocation.tool_name==='runtime_pack_run')&&receipt.effect_state==='verified')return {tool_name:invocation.tool_name as 'office_result_draft'|'runtime_pack_run',value,pack_request_id:undefined};
+      if(invocation.tool_name!=='runtime_pack_status'||invocation.dispatched!==true||invocation.effect!=='read_only'||receipt.effect_state!=='none'||typeof value.run_id!=='string'||object(invocation.arguments)?.run_id!==value.run_id)continue;
+      const run=this.ownPack(value.run_id),host=object(value.host_run_observation);
+      if(host?.request_id!==run.request_id||host.result_matches_stored!==true||host.result_sha256!==hashJson(run.result)||hashJson(value.result)!==hashJson(run.result)||value.status!==run.status)continue;
+      return {tool_name:'runtime_pack_status' as const,value,pack_request_id:run.request_id};
+    }
+    return undefined;
+  }
   private async fileSnapshots(recipe:Record<string,unknown>):Promise<FileSnapshot[]>{
     const requested=Array.isArray(recipe.sources)?recipe.sources:[],ids=[...new Set(requested.flatMap(item=>typeof object(item)?.id==='string'?[String(object(item)!.id)]:[]))];
     const snapshots:FileSnapshot[]=[];
@@ -315,6 +342,7 @@ export class WorkExecutionTools {
     const input=resultReadInput.parse(args),observations=this.resultObservations();
     const exact=observations.find(item=>{const record=object(item),invocation=object(record?.invocation),receipt=object(record?.receipt);return invocation?.request_id===input.request_id&&receipt?.status==='succeeded'&&receipt.effect_state==='verified';});
     if(this.resultReceipts.has(input.request_id))return input;
+    if(this.resultReceipt(input.request_id)?.tool_name==='runtime_pack_status')return input;
     if(exact){
       const invocation=object(object(exact)?.invocation),value=object(object(object(exact)?.receipt)?.value);
       if(invocation?.tool_name==='runtime_pack_run'&&typeof value?.run_id==='string'){
@@ -465,12 +493,7 @@ export class WorkExecutionTools {
     this.guard();this.store.intakeWork(this.config.project.id,this.workId);
     if(name==='office_browser_links')return this.browserLinksPage(args);
     if(name==='office_result_read'){
-      const {request_id,offset,max_bytes}=resultReadInput.parse(args);let source=this.resultReceipts.get(request_id);
-      if(!source){
-        const item=this.resultObservations().find(value=>{const record=object(value),invocation=object(record?.invocation),receipt=object(record?.receipt);return (invocation?.tool_name==='office_result_draft'||invocation?.tool_name==='runtime_pack_run')&&invocation.request_id===request_id&&receipt?.status==='succeeded'&&receipt.effect_state==='verified';});
-        const found=object(item),invocation=object(found?.invocation),value=object(object(found?.receipt)?.value);
-        if(value&&invocation)source={tool_name:invocation.tool_name as 'office_result_draft'|'runtime_pack_run',value};
-      }
+      const {request_id,offset,max_bytes}=resultReadInput.parse(args),source=this.resultReceipt(request_id);
       requireCondition(source,'WORK_RESULT_RECEIPT_NOT_FOUND');const value=source.value;
       let artifact:Record<string,unknown>|null,path:string,sourceRunId:string|null=null;
       if(source.tool_name==='office_result_draft'){
@@ -480,7 +503,12 @@ export class WorkExecutionTools {
         requireCondition(value.task_id===null&&typeof value.run_id==='string','WORK_RESULT_RECEIPT_NOT_FOUND');
         const run=this.ownPack(value.run_id),recordTarget=run.recipe.family==='record.update'?run.recipe.target:null;
         const localDraft=run.status==='draft_ready'&&recordTarget!==null&&object(run.result)?.external_submit===false&&object(run.result)?.originals_modified===false&&this.config.packs?.local_records.some(target=>target.id===recordTarget);
-        requireCondition(run.request_id===request_id&&(run.status==='succeeded'||localDraft)&&run.status===value.status&&run.task_id===null&&hashJson(run.result)===hashJson(value.result),'WORK_RESULT_RECEIPT_NOT_FOUND');
+        requireCondition(run.request_id===(source.tool_name==='runtime_pack_status'?source.pack_request_id:request_id)&&(run.status==='succeeded'||localDraft)&&run.status===value.status&&run.task_id===null&&hashJson(run.result)===hashJson(value.result),'WORK_RESULT_RECEIPT_NOT_FOUND');
+        if(source.tool_name==='runtime_pack_status'){
+          const host={config_fingerprint:this.config.fingerprint,engine_binding:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})};
+          assertCustomPackInvocation(this.store,this.config.project.id,this.workId,'runtime_pack_run',{recipe:run.recipe,request_id:run.request_id},host);
+          requireCondition(run.binding===snapshotHash({recipe:run.recipe,fingerprint:host.engine_binding}),'WORK_RESULT_RECEIPT_NOT_FOUND');
+        }
         artifact=object(object(run.result)?.artifact);
         if(!artifact)throw new WorkClientToolInputError('WORK_RESULT_PACK_ARTIFACT_NOT_AVAILABLE','No file was read. This Pack has a structured result receipt but no output artifact. Use its verified result/items or a separate verified office_result_draft host request_id. Do not rerun the Pack.');
         requireCondition(typeof artifact.path==='string'&&resolve(dirname(artifact.path))===resolve(join(dirname(this.config.dbPath),'pack-artifacts')),'WORK_ARTIFACT_SCOPE_MISMATCH');
@@ -768,7 +796,7 @@ export class WorkExecutionTools {
     }
     const id=requestId&&/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(requestId)?requestId:null;
     let executedContract:ReturnType<typeof executedPackContract>|null=null;
-    let hostRunObservation:{state:string;family:string;result_sha256:string;stored_result_sha256:string;response_result_sha256:string;result_matches_stored:true}|null=null;
+    let hostRunObservation:{state:string;family:string;request_id?:string;result_sha256:string;stored_result_sha256:string;response_result_sha256:string;result_matches_stored:true}|null=null;
     let outputCertificate:Awaited<ReturnType<typeof nativeOutputCertificate>>=null;
     let sourceReadback:ReturnType<typeof savedResearchSourceReadback>=null;
     if(name==='runtime_pack_run'&&data&&status==='succeeded'&&effectState==='verified'&&typeof data.run_id==='string'&&requestId){
@@ -779,9 +807,10 @@ export class WorkExecutionTools {
         const run=this.ownPack(data.run_id),call=this.dispatched.get(requestId);
         if(call?.name===name&&call.input.run_id===run.id&&['succeeded','draft_ready'].includes(run.status)&&run.status===data.status&&hashJson(run.result)===hashJson(data.result)){
           executedContract=executedPackContract(run.recipe);
-          hostRunObservation={state:run.status,family:run.recipe.family,result_sha256:hashJson(run.result),stored_result_sha256:hashJson(run.result),response_result_sha256:hashJson(data.result),result_matches_stored:true};
+          hostRunObservation={state:run.status,family:run.recipe.family,request_id:run.request_id,result_sha256:hashJson(run.result),stored_result_sha256:hashJson(run.result),response_result_sha256:hashJson(data.result),result_matches_stored:true};
           outputCertificate=await nativeOutputCertificate(this.store,this.config,run);
           sourceReadback=savedResearchSourceReadback(this.store,this.config,run);
+          if(run.task_id===null&&object(object(run.result)?.artifact))this.resultReceipts.set(requestId,{tool_name:'runtime_pack_status',value:data,pack_request_id:run.request_id});
         }
       }catch{/* Foreign, changed or unobserved status gains no recipe claim. */}
     }

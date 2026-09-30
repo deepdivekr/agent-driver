@@ -46,6 +46,7 @@ export function assertCustomPackInvocation(store:PackStore,project:string,workId
   requireCondition(!host||host.config_fingerprint===binding.config_fingerprint,'CUSTOM_PACK_CONFIG_CHANGED');
   requireCondition(!host||host.engine_binding===binding.engine_binding,'CUSTOM_PACK_ENGINE_CHANGED');
   const work=store.intakeWork(project,workId);
+  requireCondition(!work.paused,'WORK_PAUSED');
   requireCondition(snapshotHash(currentContract(store,project,work))===binding.work_contract_sha256,'CUSTOM_PACK_WORK_CONTRACT_CHANGED');
   if(name==='runtime_pack_run'){
     requireCondition(snapshotHash(recipeSchema.parse(args.recipe))===snapshotHash(binding.recipe),'CUSTOM_PACK_RECIPE_CHANGED');
@@ -90,7 +91,10 @@ export class CustomPackRepeats {
       // revision history. A source run reference is context, never a receipt.
       for(const direction of contract.user_directions){
         const revision=saved.revision+1,at=new Date().toISOString();
-        this.store.hermesState.prepare('INSERT INTO office_work_revision VALUES(?,?,?,?,?,?)').run(saved.id,revision,'direction_changed',JSON.stringify({...direction,run_id:`custom-pack-${prepared.key}-v${prepared.version}`,created_at:at}),JSON.stringify(saved.answers),at);
+        // The cycle request ID is host-generated and bounded independently of
+        // the user-selected Pack key. Direction provenance must satisfy the
+        // same identifier contract as the final original-request verifier.
+        this.store.hermesState.prepare('INSERT INTO office_work_revision VALUES(?,?,?,?,?,?)').run(saved.id,revision,'direction_changed',JSON.stringify({...direction,run_id:prepared.request_id,created_at:at}),JSON.stringify(saved.answers),at);
         this.store.hermesState.prepare('UPDATE office_intake SET revision=?,updated_at=? WHERE project_id=? AND work_id=?').run(revision,at,project,saved.id);
         saved=this.store.intakeWork(project,saved.id);
       }

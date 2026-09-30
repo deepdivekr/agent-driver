@@ -83,6 +83,9 @@ export interface WorkClientHooks {
   tools:readonly WorkClientTool[];
   /** Host-owned stable identity for a bound operation; never supplied by model output. */
   toolRequestId?:(name:string,args:Record<string,unknown>,fallback:string)=>string;
+  /** Host-only lookup of a positively no-effect, canonical Pack request. A
+   * recovered success is observed with a new read, never another Pack write. */
+  packRequestRecovery?:(invocation:WorkClientInvocation,prior:WorkClientCheckpoint['observations'])=>{state:'observe_success'|'pending';run_id:string}|null|Promise<{state:'observe_success'|'pending';run_id:string}|null>;
   /** Pure host preflight. Typed input rejection is correctable; scope/approval denial never is. */
   validateTool?:(name:string,args:Record<string,unknown>,context:{request_id:string;work_id:string;run_id:string;stage_id:string})=>void|Promise<void>;
   executeTool:(name:string,args:Record<string,unknown>,context:{request_id:string;work_id:string;run_id:string;stage_id:string;signal?:AbortSignal})=>Promise<WorkClientToolReceipt>;
@@ -390,7 +393,7 @@ export class BoundedWorkClientExecutor {
           return result(verified?'succeeded':'awaiting_review',verified?null:'WORK_CLIENT_COMPLETION_REQUIRES_VERIFICATION',verified);
         }
         requireCondition(decision.tool_name!==null&&decision.arguments_json!==null&&decision.wait_reason===null&&decision.completed_checks.length===0,'WORK_CLIENT_DECISION_INVALID');
-        const tool=tools.find(item=>item.name===decision.tool_name);
+        let tool=tools.find(item=>item.name===decision.tool_name);
         let decoded:Record<string,unknown>={unparsed_arguments_json:decision.arguments_json},inputError:unknown;
         try{
           const rawArguments:unknown=JSON.parse(decision.arguments_json);
@@ -404,7 +407,7 @@ export class BoundedWorkClientExecutor {
         const fallbackRequestId=`work-tool-${hashJson({run_id:request.run_id,turn:checkpoint.turn,tool:decision.tool_name,args:decoded,...(stageHash?{stage_id:stageStep?.id,stage_binding:stageHash}:{})}).slice(0,48)}`;
         const requestId=hooks.toolRequestId?hooks.toolRequestId(decision.tool_name,structuredClone(decoded),fallbackRequestId):fallbackRequestId;
         requireCondition(identifier.safeParse(requestId).success,'WORK_CLIENT_TOOL_REQUEST_ID_INVALID');
-        const invocation:WorkClientInvocation={request_id:requestId,turn:checkpoint.turn,stage_id:decision.stage_id??stage,...(stageHash?{stage_binding:stageHash}:{}),tool_name:decision.tool_name,arguments:decoded,effect:tool?.effect??'read_only',dispatched:false};
+        let invocation:WorkClientInvocation={request_id:requestId,turn:checkpoint.turn,stage_id:decision.stage_id??stage,...(stageHash?{stage_binding:stageHash}:{}),tool_name:decision.tool_name,arguments:decoded,effect:tool?.effect??'read_only',dispatched:false};
         if(!inputError)try{await guard();await hooks.validateTool?.(invocation.tool_name,decoded,{request_id:invocation.request_id,work_id:request.work_id,run_id:request.run_id,stage_id:invocation.stage_id});}catch(error){
           if(error instanceof z.ZodError||error instanceof SyntaxError||error instanceof WorkClientToolInputError)inputError=error;else throw error;
         }
@@ -429,10 +432,30 @@ export class BoundedWorkClientExecutor {
             requireCondition(same,'WORK_CLIENT_TOOL_REQUEST_ID_CONFLICT');
             if(prior.some(item=>item.receipt.effect_state==='uncertain'||item.receipt.status==='reconciliation_required'))return result('reconciliation_required','WORK_CLIENT_TOOL_REQUEST_ID_UNCERTAIN');
             const observed=prior[0]!,known=prior.every(item=>item.receipt.status==='succeeded'&&(item.receipt.effect_state==='verified'||item.invocation.effect==='read_only'&&item.receipt.effect_state==='none')&&hashJson(item.receipt)===hashJson(observed.receipt));
-            if(!known)return result(prior.some(item=>item.receipt.effect_state!=='none'||item.invocation.effect!=='read_only')?'reconciliation_required':'awaiting_review','WORK_CLIENT_TOOL_REQUEST_ID_NOT_REUSABLE');
-            checkpoint={...checkpoint,turn:checkpoint.turn+1};await save();
-            await progress({kind:'tool.result',turn:invocation.turn,stage_id:invocation.stage_id,tool_name:tool.name,status:'succeeded',summary:`Reused ${tool.name}'s original successful receipt; no new dispatch, effect or observation.`,reason:'WORK_CLIENT_TOOL_RECEIPT_REUSED'});
-            continue;
+            if(known){
+              checkpoint={...checkpoint,turn:checkpoint.turn+1};await save();
+              await progress({kind:'tool.result',turn:invocation.turn,stage_id:invocation.stage_id,tool_name:tool.name,status:'succeeded',summary:`Reused ${tool.name}'s original successful receipt; no new dispatch, effect or observation.`,reason:'WORK_CLIENT_TOOL_RECEIPT_REUSED'});
+              continue;
+            }
+            const noEffectPack=invocation.tool_name==='runtime_pack_run'&&invocation.effect==='local_write'&&prior.every(item=>item.receipt.effect_state==='none'&&item.receipt.retry_safe&&['retryable_failure','waiting_auth','waiting_approval'].includes(item.receipt.status));
+            const recovery=noEffectPack?await hooks.packRequestRecovery?.(structuredClone(invocation),structuredClone(prior))??null:null;
+            await guard();
+            if(!recovery)return result(prior.some(item=>item.receipt.effect_state!=='none'||item.invocation.effect!=='read_only')?'reconciliation_required':'awaiting_review','WORK_CLIENT_TOOL_REQUEST_ID_NOT_REUSABLE');
+            requireCondition(identifier.safeParse(recovery.run_id).success&&prior.every(item=>item.receipt.value!==null&&typeof item.receipt.value==='object'&&!Array.isArray(item.receipt.value)&&(item.receipt.value as Record<string,unknown>).run_id===recovery.run_id),'WORK_CLIENT_PACK_RECOVERY_RUN_MISMATCH');
+            if(recovery.state==='pending'){
+              checkpoint={...checkpoint,summary:'Pack recovery is pending. Inspect its current status and resolve the reported connection, login or recovery requirement before retrying this Work. No Pack write was repeated.'};await save();
+              await progress({kind:'run.waiting',turn:checkpoint.turn,stage_id:invocation.stage_id,summary:checkpoint.summary,reason:'WORK_CLIENT_PACK_RECOVERY_PENDING'});
+              return result('awaiting_review','WORK_CLIENT_PACK_RECOVERY_PENDING');
+            }
+            requireCondition(recovery.state==='observe_success'&&checkpoint.observations.length<32,'WORK_CLIENT_PACK_RECOVERY_OBSERVATION_LIMIT');
+            const statusTool=tools.find(candidate=>candidate.name==='runtime_pack_status'&&candidate.effect==='read_only');requireCondition(statusTool,'WORK_CLIENT_PACK_RECOVERY_STATUS_UNAVAILABLE');
+            const readArgs={run_id:recovery.run_id},readId=`work-recovery-${hashJson({run_id:request.run_id,turn:checkpoint.turn,tool:'runtime_pack_status',args:readArgs,prior_request_id:invocation.request_id}).slice(0,48)}`;
+            requireCondition(!checkpoint.observations.some(item=>item.invocation.request_id===readId),'WORK_CLIENT_PACK_RECOVERY_READ_ID_REUSED');
+            invocation={...invocation,request_id:readId,tool_name:'runtime_pack_status',arguments:readArgs,effect:'read_only'};tool=statusTool;
+            await guard();await hooks.validateTool?.(invocation.tool_name,invocation.arguments,{request_id:readId,work_id:request.work_id,run_id:request.run_id,stage_id:invocation.stage_id});
+            // Continue through normal pending/progress/dispatch checkpointing.
+            // The old failed receipt remains unchanged and cannot be cited as
+            // successful evidence; the model next receives the actual read.
           }
         }
         if(checkpoint.completion_repair){

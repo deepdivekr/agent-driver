@@ -205,9 +205,17 @@ export class PackStore extends TerminalStore {
       this.connection.prepare('UPDATE family_execution SET owner=NULL,lease_until_ms=0,retry_at_ms=?,auth_waits=auth_waits+? WHERE run_id=?').run(retryAt,Number(status==='waiting_auth'),id);return run;
     });
   }
+  private packPauseFilter(){
+    const own="NOT EXISTS (SELECT 1 FROM office_run o JOIN office_intake w ON w.project_id=o.project_id AND w.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id AND w.paused=1)";
+    // The slot is an independent owner even when custom repeat metadata is
+    // missing. Older standalone Pack databases have no scheduling columns.
+    if(!this.connection.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='office_work_schedule_slot'").get()||!this.connection.prepare('PRAGMA table_info(office_work_schedule_slot)').all().some(column=>column.name==='execution_work_id'))return own;
+    return own+" AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_schedule_slot s ON s.project_id=o.project_id AND s.execution_work_id=o.work_id JOIN office_intake w ON w.project_id=s.project_id AND w.work_id=s.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id AND w.paused=1)";
+  }
   recoverablePacks(project:string,now:number){
     return this.connection.prepare(`SELECT r.* FROM family_run r LEFT JOIN family_execution e ON r.id=e.run_id
       WHERE r.project_id=? AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_lifecycle l ON l.project_id=o.project_id AND l.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id) AND
+      ${this.packPauseFilter()} AND
       ((r.status='retryable_failure' AND (e.attempts IS NULL OR e.attempts-e.auth_waits<?) AND e.retry_at_ms<=?) OR (r.status='running' AND (e.owner IS NULL OR e.lease_until_ms<=?)))
       ORDER BY r.rowid LIMIT 5`).all(project,PACK_MAX_ATTEMPTS,now,now).map(row=>({...row,recipe:JSON.parse(String(row.recipe)),result:JSON.parse(String(row.result))})) as unknown as PackRun[];
   }
@@ -238,7 +246,7 @@ export class PackStore extends TerminalStore {
     requireCondition(row,'PACK_WATCH_NOT_FOUND');
     return {run_id:id,next_ms:Number(row.next_ms),paused:Boolean(row.paused),cycle:Number(row.cycle)};
   }
-  dueWatches(project:string,now:number,runId?:string){return this.connection.prepare(`SELECT w.run_id,w.baseline,w.cycle FROM family_watch w JOIN family_run r ON r.id=w.run_id WHERE r.project_id=? AND w.paused=0 AND w.next_ms<=? ${runId?'AND w.run_id=?':''} AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_lifecycle l ON l.project_id=o.project_id AND l.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id) ORDER BY w.next_ms LIMIT 5`).all(project,now,...(runId?[runId]:[]));}
+  dueWatches(project:string,now:number,runId?:string){return this.connection.prepare(`SELECT w.run_id,w.baseline,w.cycle FROM family_watch w JOIN family_run r ON r.id=w.run_id WHERE r.project_id=? AND w.paused=0 AND w.next_ms<=? ${runId?'AND w.run_id=?':''} AND ${this.packPauseFilter()} AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_lifecycle l ON l.project_id=o.project_id AND l.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id) ORDER BY w.next_ms LIMIT 5`).all(project,now,...(runId?[runId]:[]));}
   claimWatch(id:string,cycle:number,now:number,interval:number){
     // Claim before I/O. Crash skips one interval, never replays a write or storms missed intervals.
     const run=this.connection.prepare('SELECT project_id FROM family_run WHERE id=?').get(id);if(run)assertBoundRunConnected(this,String(run.project_id),'pack',id);

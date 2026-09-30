@@ -60,11 +60,11 @@ async function terminal(x,workId){
   }
   assert.fail(JSON.stringify(supervisorStatus(x.api.store,x.config.project.id,workId)));
 }
-async function publish(x){
+async function publish(x,key='daily_rows'){
   await x.api.call('runtime_work_execute',{work_id:x.original.id,revision:x.original.revision,cost_acknowledged:true});
   const completed=await terminal(x,x.original.id);assert.equal(completed.state,'succeeded',JSON.stringify(completed));
   const [bound]=x.api.store.officeRuns(x.config.project.id,x.original.id);
-  const saved=await x.api.call('runtime_custom_pack_publish',{key:'daily_rows',title:'Daily current records',work_id:x.original.id,supervisor_run_id:completed.run_id,pack_run_id:bound.source_id});
+  const saved=await x.api.call('runtime_custom_pack_publish',{key,title:'Daily current records',work_id:x.original.id,supervisor_run_id:completed.run_id,pack_run_id:bound.source_id});
   assert.equal(saved.pack.state,'ready');return {saved,completed,run:x.api.store.packRun(x.config.project.id,bound.source_id)};
 }
 
@@ -109,6 +109,38 @@ test('a repeated technical success still faces original-goal rejection and canno
   const runs=x.api.store.officeRuns(x.config.project.id,repeat.work_id);assert.equal(runs.length,1,'Original-goal verification failure must not replay a completed local write.');
   assert.equal(x.api.store.packRun(x.config.project.id,runs[0].source_id).status,'succeeded','Family technical success is independent of the original-goal verdict.');
   await assert.rejects(x.api.call('runtime_custom_pack_publish',{key:'rejected',title:'Not verified',work_id:repeat.work_id,supervisor_run_id:end.run_id,pack_run_id:runs[0].source_id}),/CUSTOM_PACK_WORK_NOT_VERIFIED/u);
+});
+
+test('maximum-length custom Pack keys preserve explicit directions through fresh original-goal verification',async t=>{
+  const x=await setup(t),key='a'.repeat(80),directions=[
+    {step_id:'work',instruction:'Preserve both current records and their numeric scores.'},
+    {step_id:'next',instruction:'현재 원본의 모든 행을 보존하고 외부로 전송하지 마세요.'},
+  ];
+  // Host-owned explicit user directions precede the demonstrated execution.
+  // They are input authority, not model-proposed completion evidence.
+  x.api.store.transaction(()=>{
+    for(const [index,direction] of directions.entries()){
+      const revision=x.original.revision+index+1,at=new Date().toISOString();
+      x.api.store.hermesState.prepare('INSERT INTO office_work_revision VALUES(?,?,?,?,?,?)').run(x.original.id,revision,'direction_changed',JSON.stringify({...direction,run_id:randomUUID(),created_at:at}),JSON.stringify(x.original.answers),at);
+      x.api.store.hermesState.prepare('UPDATE office_intake SET revision=?,updated_at=? WHERE project_id=? AND work_id=?').run(revision,at,x.config.project.id,x.original.id);
+    }
+  });
+  x.original=x.api.store.intakeWork(x.config.project.id,x.original.id);
+  const first=await publish(x,key);
+  assert.deepEqual(first.saved.pack.completion_contract.user_directions.map(({step_id,instruction})=>({step_id,instruction})),directions);
+  await writeFile(x.source,JSON.stringify([{id:'A',score:'13'},{id:'B',score:'21'}]));
+  const prepared=await x.api.call('runtime_custom_pack_prepare_repeat',{key,cycle_id:'b'.repeat(80)}),copied=x.api.store.workDirections(x.config.project.id,prepared.work_id);
+  assert.equal(prepared.revision,1+directions.length);
+  assert.deepEqual(copied.map(({step_id,instruction})=>({step_id,instruction})),directions);
+  assert.ok(copied.every(direction=>direction.run_id===prepared.request_id&&direction.run_id.length<=80),'Copied directions retain bounded, host-owned cycle provenance.');
+  await x.api.call('runtime_work_execute',{work_id:prepared.work_id,revision:prepared.revision,cost_acknowledged:true,current_run_only:true});
+  const completed=await terminal(x,prepared.work_id);
+  assert.equal(completed.state,'succeeded',JSON.stringify(completed));assert.equal(completed.result.completion_verified,true);
+  const verified=x.inputs.filter(item=>item.instructions.startsWith('Independently verify'));
+  assert.equal(verified.length,2,'The repeated Work must reach independent original-goal verification.');
+  assert.deepEqual(verified[1].input.original_user_request.user_directions.map(({step_id,instruction})=>({step_id,instruction})),directions);
+  const run=x.api.store.packRun(x.config.project.id,x.api.store.officeRuns(x.config.project.id,prepared.work_id)[0].source_id);
+  assert.deepEqual(JSON.parse(await readFile(run.result.artifact.path,'utf8')),[{id:'A',score:13},{id:'B',score:21}]);
 });
 
 test('custom repeat preflight preserves task authority and rejects a changed recipe, identity or contract before Pack dispatch',async t=>{
