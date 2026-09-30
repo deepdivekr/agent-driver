@@ -26,7 +26,7 @@ Install and run it as `agent-office`. The old `agent-driver` command remains a c
 
 </details>
 
-Current interface in English and dark mode, with isolated sample work.
+v0.3.1 interface in English and dark mode, with isolated sample work.
 These screenshots show setup and queued work, not completed live-agent runs.
 
 ## Supported environments
@@ -66,7 +66,8 @@ Connect your tools once, then submit a Work from the board. See [From request to
 1. **Clients** — check installation and login, then register MCP.
 2. **Execution** — use the default browser or connect an optional executor.
 3. **AI** — choose a subscription CLI or API. Compatible local models are also supported.
-4. **First Work** — submit a request. Its detail page opens and execution begins when the required connections are ready. Guided mode asks for your choices first.
+4. **Delivery (optional)** — save Telegram, Slack or Discord destinations. Results always remain available in the app.
+5. **First Work** — enter instructions, a completion condition and result destinations. Leave the condition blank for AI to derive it. The detail opens immediately; guided mode asks for your choices first.
 
 Jev is optional. Without it, the LLM and code handle decisions.
 Website login is requested when a task needs it.
@@ -106,7 +107,7 @@ The detail page groups source visits and tool activity under outcome-based work 
 
 Missing connections or required choices appear in the detail. Future schedules, external changes, and original-runtime controls keep their own approval boundaries. MCP registration and importing an existing bot do not start a duplicate run.
 
-New Work returns results in the app by default. A messenger or email connection is not required.
+New Work returns results in the app by default. Select multiple saved messenger destinations to receive verified output there too. Click the final delivery stage to change unsent output and future deliveries. [Delivery setup and limits](docs/work-delivery.md)
 
 The nine built-in **Pack families** provide reusable workflow patterns.
 

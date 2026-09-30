@@ -6,11 +6,11 @@ Agent Office는 로컬 MCP 실행 도구이며, 관제센터는 그 상태를 �
 
 설치 에이전트 또는 `install.sh` bootstrap이 `agent-office connect`를 실행하면 관제센터가 백그라운드에서 시작되고 로컬 브라우저의 연결 화면이 열린다. bootstrap은 홈 디렉터리 안에서 공식 저장소, checksum을 확인한 Node.js 22.22.0, npm 11.11.0, 빌드, Chromium과 절대경로 launcher를 준비한다. 기존 서버는 재사용한다. 자동 열기가 실패하면 같은 주소를 반환한다. 터미널을 닫아도 관제센터는 유지된다. MCP 재접속마다 브라우저가 뜨지는 않는다.
 
-한 화면에 한 단계씩: **에이전트(MCP 등록) → 로컬 실행 → AI 연결 → Jev(선택)**. 완료 후 관제센터로 돌아간다. 언제든 **연결 및 설정**으로 다시 들어가 변경할 수 있다. 마지막 저장 단계를 기억하며 API 키 입력 중인 미저장 내용은 기억하지 않는다.
+한 화면에 한 단계씩: **에이전트(MCP 등록) → 로컬 실행 → AI 연결 → Jev(선택) → 결과 수신(선택)**. 완료 후 관제센터로 돌아간다. 언제든 **연결 및 설정**으로 다시 들어가 변경할 수 있다. 마지막 저장 단계를 기억하며 API 키 입력 중인 미저장 내용은 기억하지 않는다. [결과 수신 설정](work-delivery.md)은 여러 메신저를 지원하며 앱 결과도 항상 유지한다.
 
 에이전트 단계는 현재 실행 환경에서 Agent Office 설치를 확인하고 Codex·Claude Code·OpenCode·Cursor CLI·Hermes를 모두 표시한다. 클라이언트가 없으면 공식 설치, 설치됐으면 공식 로그인, 로그인 여부와 별개로 MCP 등록을 진행할 수 있다. 설치와 등록은 각각 사용자가 버튼을 눌러야 시작한다. 등록에는 shell 없이 절대 경로 command/args를 사용한다. 기존의 다른 MCP server는 유지하고, 같은 `agent-driver` 이름에 다른 명령이 있으면 자동 덮어쓰기를 거부한다. 등록 성공은 클라이언트 설정 저장을 뜻하며, 이미 열린 클라이언트의 실제 재연결은 재시작 또는 MCP 새로고침 뒤 관측한다.
 
-관리 설치는 Linux/WSL에서만 제공한다. 고정된 공식 HTTPS origin에서 shell script를 최대 2 MiB까지 내려받아 redirect와 비 shell payload를 거부하고 `/bin/bash`에 파일 인자로 전달한다. pipe나 조립한 shell command는 사용하지 않는다. script와 raw stdout/stderr는 응답·setup journal에 남기지 않고 임시 디렉터리를 제거한다. checksum 고정이나 공급자 서명 검증은 아직 없으므로 공식 설치 안내를 통한 수동 설치도 항상 제공한다.
+관리 설치는 Linux/WSL에서만 제공한다. 고정된 공식 HTTPS origin에서 shell script를 최대 2 MiB까지 내려받아 redirect와 비 shell payload를 거부하고 `/bin/bash`에 파일 인자로 전달한다. pipe나 조립한 shell command는 사용하지 않는다. script와 raw stdout/stderr는 응답·setup journal에 남기지 않고 임시 디렉터리를 제거한다. 공급자 설치 스크립트의 checksum이나 서명 검증은 아직 없다. 별도 앱이 필요한 실행기는 공식 다운로드 페이지를 연다.
 
 화면 하단 **연결 작업 기록**은 사용자가 이 화면에서 실행한 설치·MCP 등록·로컬 실행·AI·Jev 설정의 시작·완료·실패 이벤트를 SSE로 보여준다. 설치·MCP 등록 완료 시 실제 경과 시간을 표시한다. 자동 설치 스크립트의 raw stdout/stderr나 전체 업무 실행 로그를 보여주는 터미널 tail은 아니다. 업무별 실제 계획·진행·인계·결과는 **업무 현황 → 업무 상세**에서 확인한다. API key, 인증 token, 이메일 같은 credential 자료는 기록하지 않는다. 기록은 `~/.agent-office/setup-activity.jsonl`의 최근 120개로 제한하고 로컬 사용자만 읽을 수 있게 저장한다.
 

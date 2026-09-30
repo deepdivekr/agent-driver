@@ -1,4 +1,10 @@
 {
+  "RQ-887": {"status":"partial","note":"Existing app output receipts and original-runtime delivery audited. Private messenger configuration is under implementation; finish connector and settings verification."},
+  "RQ-888": {"status":"partial","note":"Intake conditions are separately persisted and supplied to definition/replanning. Finish HTTP/UI integration and conflict/clarification verification."},
+  "RQ-889": {"status":"partial","note":"Existing WorkResults has durable send/uncertain-state guards. Implement configured multi-target automatic delivery and validate without real recipient messages."},
+  "RQ-890": {"status":"partial","note":"Delivery setup and final-stage modal are being implemented. Verify localized desktop/mobile use after backend integration."},
+  "RQ-891": {"status":"not_run","note":"Run focused behavioral and UI regressions after delivery implementation and preserve failures; no actual external message currently authorized."},
+  "RQ-892": {"status":"not_run","note":"Final release remains gated by interrupted Phase110 regression and actual quote-verification failure; fix and complete final frozen checks before publication."},
   "RQ-881": {"status":"done","evidence":["src/work/plan.ts","src/work/stages.ts","tests/runtime-work-business-plan.test.mjs","tests/runtime-work-business-executor.test.mjs"],"note":"Bounded observable stage plans and receipt/dependency bindings are implemented; imported provenance and legacy storage remain compatible. Subsequent release gates are tracked separately."},
   "RQ-882": {"status":"partial","note":"Stage-bound runtime, resume fences, approved-intake retry and transport fallback implemented; focused cases passed. Actual same-run pause/instruction/resume preserved source receipts and saved output. Completion verifier evidence-budget recovery remains under implementation; rerun final live check."},
   "RQ-883": {"status":"partial","note":"Semantic desktop/mobile stage views and English catalog hints corrected. Redacted URL placeholders no longer render broken source links; focused UI 18/18 passed. Need final completed-Work visual check and frozen full regression."},
