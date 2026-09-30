@@ -224,7 +224,7 @@ export class WorkSupervisor {
       const directions=this.store.workDirections(project,row.work_id);
       const saveCheckpoint=(cp:WorkClientCheckpoint|SupervisedSwarmCheckpoint)=>{checkpoint=cp;const encoded=JSON.stringify(cp);requireCondition(Buffer.byteLength(encoded)<=1_000_000,'WORK_CHECKPOINT_TOO_LARGE');db.prepare('UPDATE office_supervisor SET checkpoint=?,updated_at=? WHERE project_id=? AND run_id=? AND owner=?').run(encoded,now(),project,row.run_id,row.owner);};
       guard();let admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
-      const independentVerifier=createWorkCompletionVerifier(model,{progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{workActivity(this.store,project,row.work_id,'supervisor.verification.audit',JSON.stringify(event));}});
+      const independentVerifier=createWorkCompletionVerifier(model,{guard,progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{workActivity(this.store,project,row.work_id,'supervisor.verification.audit',JSON.stringify(event));}});
       const verifyCompletion:NonNullable<Parameters<BoundedWorkClientExecutor['execute']>[1]['verifyCompletion']>=this.options.verifyCompletion??(async(checks,observations,claim)=>{
         guard();verificationCutpoint=true;
         try{
