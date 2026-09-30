@@ -2,6 +2,8 @@
 
 Status at the local release gate, September 30: local verification passed; protected GitHub CI and published-installer verification follow separately.
 
+Post-publication update: [v0.4.0](https://github.com/deepdivekr/agent-office/releases/tag/v0.4.0) is published at verified merge `7efc862`. Protected main CI passed with1659PASS/1NOT_RUN for missing headed display; local1660PASS covers that fixture. Exact-main CI installation6/6, published-source installation6/6 and the downloaded Release installer asset fresh1/1 passed. [Final receipt](validation/v0.4.0-publication.json) is a supplemental release attachment, not a rewrite of the immutable tag's preceding gate snapshot.
+
 Required gates are tracked by Phase 110, RQ-884–886:
 
 - Frozen full quick regression (long soak excluded).
