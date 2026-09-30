@@ -18,6 +18,7 @@ import {workDispatchOptions} from '../dist/work/dispatch.js';
 import {WorkSchedules} from '../dist/work/schedule.js';
 import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {WorkExecutionTools} from '../dist/work/execution-tools.js';
+import {catalogCompletionFixture} from './helpers/catalog-completion-fixture.mjs';
 
 function payload(recurring=false){return {
   format:1,source:{platform:'chatgpt_work',name:'Disposable catalog workflow',reference:null},
@@ -35,7 +36,7 @@ function model(options={}){let actionCount=0;return {calls:[],inputs:[],async ca
   else if(schema.properties?.action){if(actionCount++===0)await options.firstAction?.();const semantic=schema.required?.includes('completed_stages')??false;result=input.checkpoint.observations.length?
     {action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'The host catalog includes research.search.',completed_checks:[{id:'catalog',evidence_ids:input.checkpoint.observations.at(-1).receipt.evidence_ids}],wait_reason:null,...(semantic?{completed_stages:[{stage_id:'catalog',evidence_ids:input.checkpoint.observations.at(-1).receipt.evidence_ids}]}:{})}:
     {action:'tool',stage_id:'catalog',tool_name:'runtime_pack_catalog',arguments_json:'{}',summary:'Read the configured host catalog.',completed_checks:[],wait_reason:null,...(semantic?{completed_stages:[]}:{})};}
-  else if(schema.properties?.checks){const id=input.checks[0].allowed_evidence_ids[0];result={checks:[{id:'catalog',verdict:'supported',evidence_ids:[id],evidence_quotes:[{evidence_id:id,quote:'research.search'}],reason:'Observed host Pack catalog.'}]};}
+  else if(schema.properties?.findings||schema.properties?.checks)result=catalogCompletionFixture(input,schema);
   else if(instructions.startsWith('Normalize the user'))result={kind:'daily',timezone:'Asia/Seoul',hour:20,minute:0};else throw Error('UNEXPECTED_FIXTURE_SCHEMA');
   this.calls.push({purpose,provider:'contract_fixture',model:'fixture-model',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return result;
 }};}

@@ -53,6 +53,24 @@ test('cross-stage evidence cannot finish a stage and changed stage contracts inv
   assert.deepEqual(currentStageReports(changed,original),[],'A changed dependency invalidates a dependent completion report');
 });
 
+test('replanned same-ID stage exposes only exact current-binding evidence while retaining historical receipts',async()=>{
+  const first=fixture([decision('tool','collect')]);
+  const old=await first.executor.execute(request({max_turns:1}),first.hooks);
+  assert.equal(old.status,'retryable_failure');assert.equal(old.checkpoint.observations.length,1);
+  const previous={stage_id:'collect',binding:stageBinding(plan.steps[0]),evidence_ids:['collect-receipt'],reported_at:new Date().toISOString()};
+  const changed=modelWorkPlan({steps:[{...steps[0],observable_outcome:'The newly requested source value is retained'},steps[1]]},'Produce a grounded comparison','read_only',plan);
+  const next=fixture([decision('wait',null)]),resumed=await next.executor.execute(request({plan:changed,checkpoint:{...old.checkpoint,stage_reports:[previous]}}),next.hooks);
+  assert.equal(resumed.status,'paused');assert.equal(next.executions.length,0);
+  const input=next.model.calls[0].input,context=input.stage_context;
+  assert.equal(input.checkpoint.observations.length,1,'Historical receipt remains available to final Work verification');
+  assert.equal(input.checkpoint.observations[0].invocation.stage_binding,previous.binding);
+  assert.equal(context.stages[0].state,'ready');assert.notEqual(context.stages[0].current_binding,previous.binding);
+  assert.deepEqual(context.stages[0].eligible_evidence_ids,[]);assert.equal(context.stages[0].stale_same_id_receipt_count,1);
+  assert.equal(context.stages[1].state,'blocked');assert.deepEqual(context.allowed_action_stage_ids,['collect']);
+  assert.match(context.warning,/same-ID receipt with a different current stage binding cannot support/u);
+  assert.match(next.model.calls[0].instructions,/CURRENT exact stage binding/u);
+});
+
 test('a completed stage cannot be dispatched again after its execution claim',async()=>{
   const claim={stage_id:'collect',evidence_ids:['collect-receipt']};
   const x=fixture([decision('tool','collect'),decision('tool','collect',[claim]),decision('wait','compare',[claim])]);
@@ -61,6 +79,27 @@ test('a completed stage cannot be dispatched again after its execution claim',as
   assert.deepEqual(x.executions.map(item=>item.stage_id),['collect']);
   assert.deepEqual(result.checkpoint.stage_reports.map(report=>report.stage_id),['collect']);
   assert.match(JSON.stringify(x.model.calls[2].input.validation_error.issues),/WORK_CLIENT_STAGE_ALREADY_COMPLETED/u);
+});
+
+test('same-decision stage claim correction keeps a valid prerequisite and routes only to its newly ready dependent',async()=>{
+  const claim={stage_id:'collect',evidence_ids:['collect-receipt']};
+  const x=fixture([decision('tool','collect'),decision('tool','collect',[claim]),decision('tool','compare',[claim]),decision('complete',null,[{stage_id:'compare',evidence_ids:['compare-receipt']}],[{id:'comparison',evidence_ids:['compare-receipt']}])]);
+  const result=await x.executor.execute(request(),x.hooks);
+  assert.equal(result.status,'awaiting_review');assert.deepEqual(x.executions.map(item=>item.stage_id),['collect','compare']);
+  const initial=x.model.calls[1].input,repair=x.model.calls[2].input;
+  assert.deepEqual(initial.stage_context.allowed_action_stage_ids,['collect']);
+  assert.deepEqual(initial.stage_context.stages[0].if_reported_next_action_stage_ids,['compare']);
+  assert.equal(repair.validation_error.issues.find(issue=>issue.path==='stage_id').message,'WORK_CLIENT_STAGE_ALREADY_COMPLETED');
+  assert.equal(repair.stage_transition.proposed_claims,'evidence_valid_not_outcome_verified');
+  assert.deepEqual(repair.stage_transition.proposed_stage_ids,['collect']);
+  assert.deepEqual(repair.stage_transition.allowed_tool_stage_ids_after_claims,['compare']);
+  assert.deepEqual(result.checkpoint.stage_reports.map(report=>report.stage_id),['collect','compare']);
+
+  const dropped=fixture([decision('tool','collect'),decision('tool','collect',[claim]),decision('tool','compare')]);
+  const rejected=await dropped.executor.execute(request(),dropped.hooks);
+  assert.equal(rejected.status,'failed');assert.equal(rejected.reason,'WORK_CLIENT_DECISION_CORRECTION_FAILED');
+  assert.deepEqual(dropped.executions.map(item=>item.stage_id),['collect']);
+  assert.ok(dropped.events.some(event=>event.validation?.issues.some(issue=>issue.message==='WORK_CLIENT_STAGE_DEPENDENCY_PENDING')));
 });
 
 test('awaiting review resumes the same semantic receipts for verification without replaying source reads or file writes',async()=>{

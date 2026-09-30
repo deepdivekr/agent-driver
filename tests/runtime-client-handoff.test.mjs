@@ -109,8 +109,9 @@ test('an expired selected client with no usable successor leaves a typed no-cand
   assert.deepEqual(events.map(event=>[event.work_id,event.source,event.target,event.reason,event.status]),[['work-3','codex',null,'auth_expired','no_candidate']]);
 });
 
-test('current model catalogs are bounded, key-safe, and keep latest Claude aliases',async()=>{
+test('current model catalogs are bounded, key-safe, and distinguish exact Claude Sonnet 5.5 from provider aliases',async()=>{
   const seen=[];const catalog=await apiModelCatalog('openrouter',key,'',async(url,options)=>{seen.push({url,auth:options.headers.Authorization});return new Response(JSON.stringify({data:[{id:'provider/new-model',name:'New model'},{id:'invalid model'}]}),{status:200});});
   assert.equal(catalog.status,'available');assert.deepEqual(catalog.models,[{id:'provider/new-model',label:'New model'}]);assert.equal(seen[0].url,'https://openrouter.ai/api/v1/models');assert.equal(seen[0].auth,'Bearer '+key);assert.doesNotMatch(JSON.stringify(catalog),new RegExp(key));
-  assert.deepEqual(claudeModelCatalog().models.map(item=>item.id),['sonnet','opus','haiku']);
+  const claude=claudeModelCatalog();assert.deepEqual(claude.models.map(item=>item.id),['claude-sonnet-5-5','sonnet','opus','haiku']);
+  assert.match(claude.models[0].label,/5\.5/u);assert.doesNotMatch(claude.models.find(item=>item.id==='sonnet').label,/5\.5/u);
 });

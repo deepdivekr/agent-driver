@@ -22,6 +22,21 @@ test('runtime contract: canonical normalization preserves contradictory successf
   assert.deepEqual(normalized.completed_checks[0].evidence_ids,['canonical-0','canonical-1','trace-id']);assert.deepEqual(normalized.completed_checks[1].evidence_ids,['canonical-1','canonical-0','trace-id']);assert.deepEqual(original,before);
 });
 
+test('runtime contract: production compound checks retain all source/output and contradictory receipts despite narrow worker citations',()=>{
+  const first=observation(0),second=observation(1);second.receipt.value={title:'Contradictory later title'};
+  const normalized=supervisorCompletionClaim([first,second],claim,'trace-id',true);
+  assert.deepEqual(normalized.completed_checks[0].evidence_ids,['canonical-0','canonical-1','trace-id']);
+  assert.equal(second.receipt.value.title,'Contradictory later title');
+});
+
+test('runtime contract: an empty successful receipt is not falsely widened into observable completion evidence',()=>{
+  const source=observation(0),empty=observation(1);empty.receipt.value={};empty.invocation.tool_name='runtime_files_roots';
+  const normalized=supervisorCompletionClaim([source,empty],claim,'trace-id');
+  assert.deepEqual(normalized.completed_checks[0].evidence_ids,['canonical-0','trace-id']);
+  const citingEmpty={...claim,completed_checks:[{id:'source',evidence_ids:['alias-1']}]};
+  assert.throws(()=>supervisorCompletionClaim([source,empty],citingEmpty,'trace-id'),/WORK_COMPLETION_CLAIM_EVIDENCE_NOT_OBSERVED/u);
+});
+
 test('runtime contract: unknown, foreign, failed or uncertain claim IDs are rejected rather than silently discarded and repaired by real evidence',()=>{
   for(const variant of ['unknown','foreign','failed','uncertain','empty']){
     const first=observation(0),second=observation(1);if(variant==='failed')second.receipt.status='failed';if(variant==='uncertain')second.receipt.effect_state='uncertain';if(variant==='empty')second.receipt.evidence_ids=[];

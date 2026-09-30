@@ -13,6 +13,7 @@ import {prepareLoginVm} from '../dist/swarm/login-vm.js';
 import {BrowserLoginBroker,requireSiteAuth,authSites} from '../dist/swarm/browser-auth.js';
 import {HermesWorkRuntime} from '../dist/work/hermes.js';
 import {WorkDispatcher} from '../dist/work/dispatch.js';
+import {observedCompletionFixture} from './helpers/observed-completion-fixture.mjs';
 const proposal={title:'데이터 조회',desired_outcome:'파일의 결과 확인',completion_checks:[{id:'result',result:'원본과 일치',evidence:'조회 결과'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};
 const recipe={version:1,family:'research.search',request:'자료를 확인해줘',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],query:'',search_fields:['title'],sort:null,limit:10};
 async function setup(t){
@@ -23,13 +24,7 @@ async function setup(t){
  const work=await api.call('runtime_work_start',{request_id:'new-work',prompt:recipe.request});
  let release;const gate=new Promise(resolve=>release=resolve);
  const server=await startControlCenter(config,{workModel:{calls:[],async call(_purpose,instructions,input){
-  if(instructions.startsWith('Independently verify'))return {checks:input.checks.map(check=>{
-   // A controlled-run trace is provenance, not the file contents being checked.
-   // Cite only evidence attached to the actual Pack source observation.
-   const evidence_ids=input.observations.filter(item=>item.tool_name==='runtime_pack_run'&&JSON.stringify(item.value).includes('observed result')).flatMap(item=>item.evidence_ids).filter(id=>check.allowed_evidence_ids.includes(id));
-   assert.ok(evidence_ids.length>0,'Verification requires an actual delegated source observation.');
-   return {id:check.id,verdict:'supported',evidence_use:'observed_result',evidence_ids,evidence_quotes:evidence_ids.map(evidence_id=>({evidence_id,quote:'observed result'})),reason:'Actual delegated file observation.'};
-  })};
+  if(instructions.startsWith('Independently verify'))return observedCompletionFixture(input,{prompt:/자료를 확인해줘/u,needle:'observed result',accept:item=>item.tool_name==='runtime_pack_run'});
   assert.ok(instructions.startsWith('Execute the registered Work'));
   if(input.checkpoint.observations.length){const receipt=input.checkpoint.observations[0].receipt;return {action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Actual source: observed result',completed_checks:input.completion_checks.map(check=>({id:check.id,evidence_ids:receipt.evidence_ids})),wait_reason:null};}
   await gate;return {action:'tool',stage_id:'collect',tool_name:'runtime_pack_run',arguments_json:JSON.stringify({recipe}),summary:'Read the delegated file through the Pack runtime.',completed_checks:[],wait_reason:null};

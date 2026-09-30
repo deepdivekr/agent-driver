@@ -8,7 +8,7 @@ import {snapshotHash,type TaskPackManifest} from './contracts.js';
 import {resolveTargetedLlmExtraction,type JevAcceptancePolicy,type OneLineJevDecider,type OneLineJevDecision,type OneLineJevInput,type SourceAnchoredFieldValue,type TargetedLlmExtractor} from './typesafe-jev.js';
 
 export type BrowserGate='ready'|'waiting_auth'|'waiting_orchestrator';
-export interface BrowserPreparation {gate:BrowserGate;snapshot:unknown;capture_ref:string;detail:Record<string,unknown>;}
+export interface BrowserPreparation {gate:BrowserGate;snapshot:unknown;capture_ref:string;detail:Record<string,unknown>;verified_values?:Record<string,unknown>;verified_values_before_capture?:Record<string,unknown>;verified_values_after_capture?:Record<string,unknown>;capture_sha256?:string;}
 export interface ApprovedBrowserAdapter<T> extends RuntimeAdapter {
   readonly adapterId:string;
   bind(binding:{taskId:string;lease:Lease;targetRef:string}):void;
@@ -17,6 +17,7 @@ export interface ApprovedBrowserAdapter<T> extends RuntimeAdapter {
 }
 export interface PreparedApproval {
   task_id:string; proposal_hash:string; expires_at_ms:number; approval_token:string; capture_ref:string;
+  verified_values?:Record<string,unknown>;verified_values_before_capture?:Record<string,unknown>;verified_values_after_capture?:Record<string,unknown>;capture_sha256?:string;
   timing:readonly {stage:string;executor:string;elapsed_ms:number}[];
 }
 /** Binds a reviewed candidate compiler to a specific Task Pack normalizer. */
@@ -102,7 +103,7 @@ export class ApprovedBrowserProtocol<T> {
       guard(this.store,{taskId:task.id,callerRef,lease,capability:this.capability,observation,maxObservationAgeMs:3_000},performance.now(),false,this.resourceFor(this.store.project(projectId)));
       const observed=performance.now()-observeStarted;timing.push({stage:'owned_browser_observation',executor:this.adapter.adapterId,elapsed_ms:observed});this.store.recordTaskStage(task.id,'owned_browser_observation',this.adapter.adapterId,observed,{origin:observation.origin,account_ref:observation.accountRef});
       const request=this.store.requestProposalApproval(task.id,prepared.snapshot,Date.now()+approvalTtlMs);
-      return {...request,capture_ref:prepared.capture_ref,timing};
+       return {...request,capture_ref:prepared.capture_ref,timing,...(prepared.verified_values?{verified_values:prepared.verified_values}:{}),...(prepared.verified_values_before_capture?{verified_values_before_capture:prepared.verified_values_before_capture}:{}),...(prepared.verified_values_after_capture?{verified_values_after_capture:prepared.verified_values_after_capture}:{}),...(prepared.capture_sha256?{capture_sha256:prepared.capture_sha256}:{})};
     } catch(error) {
       const current=this.store.task(task.id);
       if(['queued','running'].includes(current.status))this.store.pauseBeforeDispatch(task.id,error instanceof Error&&/^[A-Z_]+$/.test(error.message)?error.message:'PREPARE_FAILED');

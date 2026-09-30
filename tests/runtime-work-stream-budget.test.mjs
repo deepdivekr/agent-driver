@@ -7,6 +7,7 @@ import {chromium} from 'playwright';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {RuntimeApi} from '../dist/interface/api.js';
 import {startControlCenter} from '../dist/observability/control-center.js';
+import {observedCompletionFixture} from './helpers/observed-completion-fixture.mjs';
 
 const proposal={title:'Read fixture source',desired_outcome:'Read the delegated source value.',completion_checks:[{id:'result',result:'Source value is observed.',evidence:'Delegated source contents.'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};
 const recipe={version:1,family:'research.search',request:'Read source data',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],query:'',search_fields:['title'],sort:null,limit:10};
@@ -18,10 +19,7 @@ async function setup(t){
   for(let index=0;index<3;index++)works.push(await api.call('runtime_work_start',{request_id:`stream-work-${index}`,prompt:'Read delegated source '+index}));
   let release;const gate=new Promise(resolve=>{release=resolve;});
   const server=await startControlCenter(config,{workModel:{calls:[],async call(_purpose,instructions,input){
-    if(instructions.startsWith('Independently verify'))return {checks:input.checks.map(check=>{
-      const evidence_ids=input.observations.filter(item=>item.tool_name==='runtime_pack_run'&&JSON.stringify(item.value).includes('observed result')).flatMap(item=>item.evidence_ids).filter(id=>check.allowed_evidence_ids.includes(id));
-      assert.ok(evidence_ids.length>0);return {id:check.id,verdict:'supported',evidence_use:'observed_result',evidence_ids,evidence_quotes:evidence_ids.map(evidence_id=>({evidence_id,quote:'observed result'})),reason:'Actual fixture file observation.'};
-    })};
+    if(instructions.startsWith('Independently verify'))return observedCompletionFixture(input,{prompt:/Read delegated source/u,needle:'observed result',accept:item=>item.tool_name==='runtime_pack_run'});
     assert.ok(instructions.startsWith('Execute the registered Work'));
     if(input.checkpoint.observations.length){const receipt=input.checkpoint.observations[0].receipt;return {action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Source value: observed result',completed_checks:input.completion_checks.map(check=>({id:check.id,evidence_ids:receipt.evidence_ids})),wait_reason:null};}
     await gate;return {action:'tool',stage_id:'read',tool_name:'runtime_pack_run',arguments_json:JSON.stringify({recipe}),summary:'Read the delegated fixture source.',completed_checks:[],wait_reason:null};

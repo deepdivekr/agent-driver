@@ -1,5 +1,25 @@
 # Public release ledger
 
+## Phase 113
+
+| ID | Requirement |
+|---|---|
+| RQ-899 | Identify and update installed Codex, Claude and other supported local CLI clients through official bounded update paths, preserving credentials and active sessions; record actual before/after versions and unsupported installation ownership. |
+| RQ-900 | Default new subscription settings to Codex GPT-6.1 Sol with low reasoning and Claude Sonnet 5.5; apply the user's requested defaults locally, refresh actual catalogs, and preserve unrelated API, coding, role and session overrides. |
+| RQ-901 | Add durable periodic CLI maintenance to the existing runtime with an enabled/off setting, duplicate and active-session fences, bounded official update commands, cooldown, model refresh and visible localized progress; never install missing clients automatically. |
+| RQ-902 | Verify update failures, busy deferral, restart/deduplication, configuration preservation and exact model defaults with focused regressions and native observations; update status, tests and handoff without claiming unfinished Phase 112 E2E or publication. |
+
+## Phase 112
+
+| ID | Requirement |
+|---|---|
+| RQ-893 | Define 24 concrete real-use Works, three for each of the eight non-coding Pack families, with observable independent acceptance checks and explicit effect boundaries. |
+| RQ-894 | Prepare an isolated real Office using its normal configuration/model catalog, submit natural-language Works through normal intake and automatic admission, and retain actual Work/run/model/Pack/tool receipts. |
+| RQ-895 | Exercise research, collection, inbox and file pipelines against real sources and saved originals; reconcile result content and hashes independently rather than treating summary generation as Pack completion. |
+| RQ-896 | Exercise actual public-form preparation, existing-record amendment preparation and comparison/staging goals without external effects; verify target identity, observed input values and original preservation. |
+| RQ-897 | Exercise three bounded actual watches through baseline and a real elapsed-time re-observation, distinguish changes, no changes and unavailable sources, and stop only the test watches afterward. |
+| RQ-898 | Repair related common defects with regression coverage, preserve failed attempts, run required verification without soak, and publish a truthful 24-case receipt, remaining limitations and resume handoff. |
+
 ## Phase 111
 
 | ID | Requirement |

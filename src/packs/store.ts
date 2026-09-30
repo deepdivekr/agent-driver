@@ -4,7 +4,8 @@ import {FileExplorer} from '../files/explorer.js';
 import {TerminalStore} from '../terminal/store.js';
 import {requireCondition} from '../core/contracts.js';
 import {snapshotHash} from '../taskpack/contracts.js';
-import {type Recipe} from './contracts.js';
+import {rowSchema,type Recipe,type Row} from './contracts.js';
+import {MAX_BYTES,MAX_ROWS} from './data.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {redact} from '../terminal/contracts.js';
 import {DecisionMemory} from '../decision-plane/memory.js';
@@ -231,21 +232,35 @@ export class PackStore extends TerminalStore {
   pauseWatch(project:string,id:string,paused:boolean){
     this.packRun(project,id);assertBoundRunConnected(this,project,'pack',id);const result=this.connection.prepare('UPDATE family_watch SET paused=? WHERE run_id=?').run(Number(paused),id);requireCondition(result.changes===1,'PACK_WATCH_NOT_FOUND');
   }
-  dueWatches(project:string,now:number){return this.connection.prepare("SELECT w.run_id,w.baseline,w.cycle FROM family_watch w JOIN family_run r ON r.id=w.run_id WHERE r.project_id=? AND w.paused=0 AND w.next_ms<=? AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_lifecycle l ON l.project_id=o.project_id AND l.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id) ORDER BY w.next_ms LIMIT 5").all(project,now);}
+  watchState(project:string,id:string){
+    this.packRun(project,id);assertBoundRunConnected(this,project,'pack',id);
+    const row=this.connection.prepare('SELECT next_ms,paused,cycle FROM family_watch WHERE run_id=?').get(id);
+    requireCondition(row,'PACK_WATCH_NOT_FOUND');
+    return {run_id:id,next_ms:Number(row.next_ms),paused:Boolean(row.paused),cycle:Number(row.cycle)};
+  }
+  dueWatches(project:string,now:number,runId?:string){return this.connection.prepare(`SELECT w.run_id,w.baseline,w.cycle FROM family_watch w JOIN family_run r ON r.id=w.run_id WHERE r.project_id=? AND w.paused=0 AND w.next_ms<=? ${runId?'AND w.run_id=?':''} AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_lifecycle l ON l.project_id=o.project_id AND l.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id) ORDER BY w.next_ms LIMIT 5`).all(project,now,...(runId?[runId]:[]));}
   claimWatch(id:string,cycle:number,now:number,interval:number){
     // Claim before I/O. Crash skips one interval, never replays a write or storms missed intervals.
     const run=this.connection.prepare('SELECT project_id FROM family_run WHERE id=?').get(id);if(run)assertBoundRunConnected(this,String(run.project_id),'pack',id);
     return this.connection.prepare('UPDATE family_watch SET next_ms=?,cycle=cycle+1 WHERE run_id=? AND cycle=? AND paused=0 AND next_ms<=?').run(now+interval,id,cycle,now).changes===1;
   }
-  settleWatch(project:string,id:string,cycle:number,baseline:unknown,kind:string|null,body:unknown){
+  settleWatch(project:string,id:string,cycle:number,baseline:unknown,kind:string|null,body:unknown,observation?:{cycle:number;rows:Row[];evidence:unknown[];observed_at:string;before:unknown;after:unknown}){
     return this.transaction(()=>{
       assertBoundRunConnected(this,project,'pack',id);
       const row=this.connection.prepare('SELECT cycle,paused FROM family_watch WHERE run_id=?').get(id);if(row?.cycle!==cycle||row.paused!==0)return false;
+      if(observation){
+        requireCondition(observation.cycle===cycle&&observation.rows.length<=MAX_ROWS&&observation.rows.every(item=>rowSchema.safeParse(item).success)&&Number.isFinite(Date.parse(observation.observed_at)),'WATCH_OBSERVATION_INVALID');
+        const encoded=JSON.stringify(observation);
+        requireCondition(Buffer.byteLength(encoded)<=MAX_BYTES,'WATCH_OBSERVATION_TOO_LARGE');
+        requireCondition(!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(encoded)&&observation.rows.every(item=>Object.keys(item).every(key=>!/^(?:password|passwd|cookie|authorization|access_token|refresh_token|api_key)$/iu.test(key))),'CREDENTIAL_LIKE_INPUT');
+        const execution=this.packExecution(project,id);requireCondition(execution,'PACK_EXECUTION_NOT_FOUND');
+        this.connection.prepare('UPDATE family_execution SET checkpoint=? WHERE run_id=?').run(JSON.stringify({...execution.checkpoint,watch_tick:observation}),id);
+      }
       this.connection.prepare('UPDATE family_watch SET baseline=? WHERE run_id=?').run(JSON.stringify(baseline),id);
       if(kind)this.connection.prepare('INSERT INTO family_event(project_id,run_id,kind,body,created_at) VALUES (?,?,?,?,?)').run(project,id,kind,JSON.stringify(body),new Date().toISOString());return true;
     });
   }
-  packEvents(project:string,after:number,limit:number){return this.connection.prepare('SELECT * FROM family_event WHERE project_id=? AND id>? ORDER BY id LIMIT ?').all(project,after,limit).map(row=>({...row,body:JSON.parse(String(row.body)) as unknown}));}
+  packEvents(project:string,after:number,limit:number,runId?:string){return this.connection.prepare(`SELECT * FROM family_event WHERE project_id=? AND id>? ${runId?'AND run_id=?':''} ORDER BY id LIMIT ?`).all(project,after,...(runId?[runId]:[]),limit).map(row=>({...row,body:JSON.parse(String(row.body)) as unknown}));}
   taskEventsReadOnly(project:string,limit=1000){
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=2000,'TASK_EVENT_LIMIT_INVALID');this.project(project);
     return this.connection.prepare('SELECT id,project_id,task_id,kind,data_json,created_at FROM event WHERE project_id=? ORDER BY id DESC LIMIT ?').all(project,limit).reverse().map(row=>({...row,id:Number(row.id),data:JSON.parse(String(row.data_json)) as unknown,data_json:undefined}));
@@ -438,6 +453,13 @@ export class PackStore extends TerminalStore {
     const owner=randomUUID(),until=now+90_000;
     const result=this.connection.prepare("UPDATE office_intake SET define_owner=?,define_lease_until_ms=? WHERE project_id=? AND work_id=? AND status IN ('defining','needs_model') AND (define_owner IS NULL OR define_lease_until_ms<=?)").run(owner,until,project,id,now);
     return result.changes===1?owner:null;
+  }
+  renewWorkDefinition(project:string,id:string,owner:string,now=Date.now()){
+    assertWorkConnected(this,project,id);
+    // A slow structured definition may exceed the initial lease. Renew only
+    // while this exact owner still holds an unexpired claim; never revive a
+    // cancelled, replaced or already-finished definition.
+    return this.connection.prepare("UPDATE office_intake SET define_lease_until_ms=? WHERE project_id=? AND work_id=? AND define_owner=? AND define_lease_until_ms>? AND status IN ('defining','needs_model')").run(now+90_000,project,id,owner,now).changes===1;
   }
   finishWorkDefinition(project:string,id:string,owner:string,spec:unknown,questions:unknown[],status:'ready'|'awaiting_details'){
     return this.transaction(()=>{

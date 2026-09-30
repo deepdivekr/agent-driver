@@ -13,7 +13,7 @@ import {safeControlText} from '../observability/safe-text.js';
 import {workProposalSchema,workControlSchema as supervisorActionSchema,type WorkProposal} from './contracts.js';
 import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS,WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS} from './runtime.js';
 import {readWorkIntakeOptions} from './intake-options.js';
-import {BoundedWorkClientExecutor,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint} from './client-executor.js';
+import {BoundedWorkClientExecutor,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientResult} from './client-executor.js';
 import {packTools} from '../packs/contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {activeSwarmWorkerCount,initWorkExecution,workActivity,withWorkActivityContext} from './activity.js';
@@ -21,9 +21,10 @@ import {businessSteps,currentStageReports,stageBinding} from './stages.js';
 import {WorkExecutionTools} from './execution-tools.js';
 import {executeSupervisedSwarm,assessSupervisedStages,type SupervisedSwarmCheckpoint,type SupervisedSwarmHooks} from './swarm-executor.js';
 import {WorkSchedules} from './schedule.js';
-import {captureWorkRunAdmissionCheckpoint,createWorkCompletionVerifier,createWorkRunTraceEvidence} from './completion.js';
+import {captureWorkRunAdmissionCheckpoint,createWorkCompletionVerifier,createWorkRunTraceEvidence,hasObservableCompletionLeaves} from './completion.js';
 import {workImportExecutionOwner} from './import-authority.js';
 import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
+import {connectedSourceCatalog} from '../packs/source-catalog.js';
 
 const now=()=>new Date().toISOString();
 const activeStates=['queued','running','retry_wait'];
@@ -31,17 +32,20 @@ type Row={run_id:string;project_id:string;work_id:string;work_revision:number;st
 export {workControlSchema as supervisorActionSchema} from './contracts.js';
 type CompletionClaim=Parameters<NonNullable<Parameters<BoundedWorkClientExecutor['execute']>[1]['verifyCompletion']>>[2];
 /** A receipt's aliases select that same receipt; they never add more evidence or hide an invalid claim. */
-export function supervisorCompletionClaim(observations:WorkClientCheckpoint['observations'],claim:CompletionClaim,traceId:string):CompletionClaim{
+export function supervisorCompletionClaim(observations:WorkClientCheckpoint['observations'],claim:CompletionClaim,traceId:string,_originalRequestGate=false):CompletionClaim{
   requireCondition(observations.length<=32,'WORK_COMPLETION_OBSERVATION_LIMIT');
   const aliases=new Map<string,string>(),canonical=new Set<string>();
   for(const observation of observations){
-    if(observation.receipt.status!=='succeeded'||observation.receipt.effect_state==='uncertain')continue;
+    if(observation.receipt.status!=='succeeded'||observation.receipt.effect_state==='uncertain'||!hasObservableCompletionLeaves(observation.receipt.value))continue;
     const first=observation.receipt.evidence_ids[0];if(!first)continue;canonical.add(first);
     for(const id of observation.receipt.evidence_ids){requireCondition(!aliases.has(id)||aliases.get(id)===first,'WORK_COMPLETION_EVIDENCE_ALIAS_CONFLICT');aliases.set(id,first);}
   }
   requireCondition(canonical.size<=32&&!aliases.has(traceId),'WORK_COMPLETION_EVIDENCE_ID_CONFLICT');
   return {...claim,completed_checks:claim.completed_checks.map(check=>{
     const claimed=check.evidence_ids.map(id=>{const mapped=aliases.get(id);requireCondition(mapped,'WORK_COMPLETION_CLAIM_EVIDENCE_NOT_OBSERVED');return mapped;});
+    // Compound checks can require source and output receipts from different
+    // stages. A worker's narrow citations must not hide either supporting or
+    // contradictory evidence, even when a separate original-request gate runs.
     return {...check,evidence_ids:[...new Set([...claimed,...canonical,traceId])]};
   })};
 }
@@ -113,6 +117,22 @@ export function supervisorStatus(store:PackStore,project:string,workId:string,co
   const plan=(store.intakeWork(project,workId).spec as WorkProposal|null)?.plan;
   const reports=plan&&cp&&'stage_reports' in cp?currentStageReports(plan,cp.stage_reports??[]):[];
   return {run_id:row.run_id,work_id:row.work_id,revision:row.work_revision,state:row.state,current_run_only:row.current_run_only===1,live,attempts:row.attempts,reason:row.reason,updated_at:row.updated_at,result:row.result?JSON.parse(row.result):null,kind:swarm?'swarm':'client',active_workers:activeWorkers,steps,stage_reports:reports,pending,current_stage:pending?.stage_id??null,can_pause:activeStates.includes(row.state),can_resume:['paused','awaiting_review','waiting_auth','waiting_approval','waiting_model','waiting_connection','retry_wait','failed'].includes(row.state)||rejectedPackBeforeExecution(store,row,config)!==null,can_edit:row.state!=='reconciliation_required'};
+}
+
+/** Only a host-verified no-effect tick for this connected Work may sleep until due.
+ * A model's wait text, an unscoped tick or an unknown write never sets a timer. */
+function watchDueWait(store:PackStore,row:Row,result:WorkClientResult):number|null{
+  try{
+    if(result.status!=='retryable_failure'||result.reason!=='WORK_CLIENT_WATCH_NOT_DUE')return null;
+    const cp=result.checkpoint,last=cp.observations.at(-1),invocation=last?.invocation,receipt=last?.receipt;
+    if(cp.work_id!==row.work_id||cp.run_id!==row.run_id||cp.pending!==null||!invocation||!receipt||invocation.tool_name!=='runtime_pack_watch_tick'||invocation.effect!=='local_write'||invocation.dispatched!==true||receipt.status!=='retryable_failure'||receipt.effect_state!=='none'||receipt.evidence_ids.length!==0||cp.observations.some(item=>item.receipt.effect_state==='uncertain'))return null;
+    const value=receipt.value&&typeof receipt.value==='object'&&!Array.isArray(receipt.value)?receipt.value as Record<string,unknown>:null;
+    const runId=invocation.arguments.run_id;
+    if(typeof runId!=='string'||value?.run_id!==runId||value.status!=='not_due'||value.pending!==true||!Array.isArray(value.processed)||value.processed.length!==0||!Array.isArray(value.recovered)||value.recovered.length!==0||!store.officeRuns(row.project_id,row.work_id).some(item=>item.source_kind==='pack'&&item.source_id===runId))return null;
+    const run=store.packRun(row.project_id,runId),state=store.watchState(row.project_id,runId),reported=value.watch&&typeof value.watch==='object'&&!Array.isArray(value.watch)?value.watch as Record<string,unknown>:null;
+    if(run.recipe.family!=='monitor.watch'||run.status!=='watching'||state.paused||reported?.run_id!==runId||reported.next_ms!==state.next_ms||reported.cycle!==state.cycle||reported.paused!==false||value.ready_at!==new Date(state.next_ms).toISOString())return null;
+    return state.next_ms;
+  }catch{return null;}
 }
 
 /** Durable admission and bounded retries share the same Work ID and receipts. */
@@ -196,7 +216,7 @@ export class WorkSupervisor {
     };
     let toolkit:WorkExecutionTools|null=null,verificationCutpoint=false;
     try{
-      const work=this.store.intakeWork(project,row.work_id);let spec=work.spec as WorkProposal;
+      const work=this.store.intakeWork(project,row.work_id);let spec=work.spec as WorkProposal,validatedReplan=false;
       let model=this.model instanceof ConfiguredStructuredModel?this.model.forWork({work_id:row.work_id,run_id:row.run_id},spec.route.pack_family==='coding.orchestrate'?'coding':'global'):this.model;
       if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
       if(row.replan_required){
@@ -208,7 +228,7 @@ export class WorkSupervisor {
         // Import provenance and runtime ownership are host-owned. A direction
         // change may revise steps/checks, not sever or recreate the source bond.
         if(priorImport){const {source:_source,source_id:_id,source_digest:_digest,provenance:_provenance,import_mode:_mode,import_scope:_scope,...steps}=spec.plan??priorImport;spec={...spec,plan:{...steps,source:priorImport.source,source_id:priorImport.source_id,source_digest:priorImport.source_digest,provenance:priorImport.provenance,...(priorImport.import_mode?{import_mode:priorImport.import_mode}:{}),...(priorImport.import_scope?{import_scope:priorImport.import_scope}:{})}};}
-        const at=now();db.prepare('UPDATE office_intake SET spec=?,updated_at=? WHERE project_id=? AND work_id=? AND revision=?').run(JSON.stringify(spec),at,project,row.work_id,row.work_revision);db.prepare('UPDATE office_work SET title=?,goal=?,updated_at=? WHERE project_id=? AND id=?').run(spec.title,spec.desired_outcome,at,project,row.work_id);db.prepare('UPDATE office_supervisor SET replan_required=0 WHERE project_id=? AND run_id=? AND owner=?').run(project,row.run_id,row.owner);
+        const at=now(),changed=db.prepare('UPDATE office_intake SET spec=?,updated_at=? WHERE project_id=? AND work_id=? AND revision=?').run(JSON.stringify(spec),at,project,row.work_id,row.work_revision);requireCondition(changed.changes===1,'WORK_REVISION_CONFLICT');db.prepare('UPDATE office_work SET title=?,goal=?,updated_at=? WHERE project_id=? AND id=?').run(spec.title,spec.desired_outcome,at,project,row.work_id);db.prepare('UPDATE office_supervisor SET replan_required=0 WHERE project_id=? AND run_id=? AND owner=?').run(project,row.run_id,row.owner);validatedReplan=true;
       }
       // The first interpretation uses the user's default model. Allocate only
       // after a valid task exists, before any tool or independently run worker.
@@ -222,12 +242,34 @@ export class WorkSupervisor {
       toolkit=new WorkExecutionTools(this.store,this.config,this.api,row.work_id,row.run_id,spec,work.prompt,guard,model);
       workActivity(this.store,project,row.work_id,'supervisor.started',row.attempts>1?'저장한 체크포인트를 읽고 실행을 이어갑니다.':'연결된 AI와 실행 도구로 업무를 시작합니다.');
       let checkpoint=row.checkpoint==='null'?null:JSON.parse(row.checkpoint) as WorkClientCheckpoint|SupervisedSwarmCheckpoint;
-      const directions=this.store.workDirections(project,row.work_id);
+      const directions=this.store.workDirections(project,row.work_id),userIntake=readWorkIntakeOptions(this.store,project,row.work_id);
+      const originalUserRequest={prompt:work.prompt,...userIntake,user_directions:directions};
       const saveCheckpoint=(cp:WorkClientCheckpoint|SupervisedSwarmCheckpoint)=>{checkpoint=cp;const encoded=JSON.stringify(cp);requireCondition(Buffer.byteLength(encoded)<=1_000_000,'WORK_CHECKPOINT_TOO_LARGE');db.prepare('UPDATE office_supervisor SET checkpoint=?,updated_at=? WHERE project_id=? AND run_id=? AND owner=?').run(encoded,now(),project,row.run_id,row.owner);};
       guard();let admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
-      const independentVerifier=createWorkCompletionVerifier(model,{guard,progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{workActivity(this.store,project,row.work_id,'supervisor.verification.audit',JSON.stringify(event));}});
+      let completionDenial:{code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED'|'WORK_COMPLETION_BATCH_CONTRADICTS'|'WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL';check_id:string;verdict:'unsupported'|'unknown'}|null=null;
+      let verificationTransportUnavailable:string|null=null;
+      const independentVerifier=createWorkCompletionVerifier(model,{guard,originalUserRequest,literalRefMode:true,progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{
+        workActivity(this.store,project,row.work_id,'supervisor.verification.audit',JSON.stringify(event));
+        if(event.status==='unavailable'&&['STRUCTURED_MODEL_TIMEOUT','STRUCTURED_MODEL_UNAVAILABLE','CLIENT_TIMEOUT','MCP_SAMPLING_UNAVAILABLE','MODEL_PROVIDER_UNAVAILABLE'].includes(event.code))verificationTransportUnavailable=event.code;
+        else if(event.status==='accepted'||event.status==='rejected')verificationTransportUnavailable=null;
+        const id=event.issue?.check_id;
+        if(event.status==='rejected'&&id&&event.code==='WORK_COMPLETION_CHECK_NOT_SUPPORTED'){
+          const verdict=event.checks.find(check=>check.id===id)?.verdict;
+          if(verdict==='unsupported'||verdict==='unknown')completionDenial={code:event.code,check_id:id,verdict};
+        }else if(event.status==='rejected'&&id&&(event.code==='WORK_COMPLETION_BATCH_CONTRADICTS'||event.code==='WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL'))completionDenial={code:event.code,check_id:id,verdict:event.code==='WORK_COMPLETION_BATCH_CONTRADICTS'?'unsupported':'unknown'};
+      }});
       const verifyCompletion:NonNullable<Parameters<BoundedWorkClientExecutor['execute']>[1]['verifyCompletion']>=this.options.verifyCompletion??(async(checks,observations,claim)=>{
-        guard();verificationCutpoint=true;
+        guard();verificationCutpoint=true;completionDenial=null;verificationTransportUnavailable=null;
+        const verifierCallStart=model.calls.length;
+        const verifierBoundary=()=>{
+          const failures=model.calls.slice(verifierCallStart).filter(call=>call.status==='failed').map(call=>call.failure_kind);
+          if(failures.includes('auth_error'))return 'CLIENT_AUTH_EXPIRED';
+          if(failures.includes('quota_exhausted'))return 'CLIENT_QUOTA_EXHAUSTED';
+          if(failures.includes('rate_limited'))return 'CLIENT_RATE_LIMITED';
+          if(failures.includes('model_unsupported'))return 'STRUCTURED_MODEL_UNSUPPORTED';
+          if(failures.some(kind=>kind==='invalid_output'||kind==='refusal'||kind==='json_decode'))return 'CLIENT_STRUCTURED_OUTPUT_INVALID';
+          return null;
+        };
         try{
           // No capability dispatch can occur after this cutpoint. Read the owned
           // durable checkpoint independently; absent history stays unknown.
@@ -238,8 +280,14 @@ export class WorkSupervisor {
           // Independent verification must see the original successful receipts,
           // including inherited sources and possible contradictory evidence. An
           // executor's narrow citation list is not the complete evidence record.
-          const verified=await independentVerifier(checks,[...observations,trace],supervisorCompletionClaim(observations,claim,traceId));
-          guard();return verified;
+          let verified:Awaited<ReturnType<typeof independentVerifier>>;
+          try{verified=await independentVerifier(checks,[...observations,trace],supervisorCompletionClaim(observations,claim,traceId,true));}
+          catch(error){const boundary=verifierBoundary();if(boundary)throw Error(boundary);throw error;}
+          guard();
+          const boundary=verifierBoundary();if(!verified&&boundary)throw Error(boundary);
+          if(!verified&&verificationTransportUnavailable)throw Error(verificationTransportUnavailable);
+          if(!verified&&completionDenial)return {verified:false,repair:completionDenial};
+          return verified;
         }finally{verificationCutpoint=false;}
       });
       if(spec.route.kind==='swarm'){
@@ -280,7 +328,7 @@ export class WorkSupervisor {
               this.finish(row,'awaiting_review','SWARM_WORK_STAGES_INCOMPLETE',{summary:swarm.summary,text:swarm.summary,completion_verified:false,checks:spec.completion_checks,swarm_run_id:swarm.run_id});return;
             }
           }
-          verified=await verifyCompletion(spec.completion_checks,swarm.checkpoint.final_observations,{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:swarm.summary,wait_reason:null,completed_checks:spec.completion_checks.map(check=>({id:check.id,evidence_ids:[readId,draftId]}))});guard();
+          verified=(await verifyCompletion(spec.completion_checks,swarm.checkpoint.final_observations,{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:swarm.summary,wait_reason:null,completed_checks:spec.completion_checks.map(check=>({id:check.id,evidence_ids:[readId,draftId]}))}))===true;guard();
         }
         this.finish(row,swarm.status==='succeeded'&&!verified?'awaiting_review':swarm.status,swarm.status==='succeeded'&&!verified?'WORK_CLIENT_COMPLETION_REQUIRES_VERIFICATION':swarm.reason,{summary:swarm.summary,text:swarm.summary,completion_verified:verified,checks:spec.completion_checks,swarm_run_id:swarm.run_id});return;
       }
@@ -293,10 +341,15 @@ export class WorkSupervisor {
           // by explicit resume. Preserve the interruption as a failed observation,
           // never successful evidence or an instruction to replay the old read.
           const error=row.reason??'WORK_CLIENT_READ_INTERRUPTED';
-          checkpoint={...checkpoint,turn:Math.max(checkpoint.turn,pending.turn+1),observations:[...checkpoint.observations,{invocation:pending,receipt:{status:'retryable_failure' as const,effect_state:'none' as const,evidence_ids:[],retry_safe:false,value:{status:'read_interrupted',error,prior_dispatched:true,result_observation:'unobserved',retry_not_attempted:true}},observed_at:now()}].slice(-32)};
+          checkpoint={...checkpoint,turn:Math.max(checkpoint.turn,pending.turn+1),observations:[...checkpoint.observations,{invocation:pending,receipt:{status:'retryable_failure' as const,effect_state:'none' as const,evidence_ids:[],retry_safe:false,value:{status:'read_interrupted',error,prior_dispatched:true,result_observation:'unobserved',retry_not_attempted:true,...(pending.tool_name==='runtime_pack_local_record_inspect'?{new_validated_read_allowed:true,new_request_id_required:true}:{})}},observed_at:now()}].slice(-32)};
           workActivity(this.store,project,row.work_id,'tool.result',`${pending.tool_name}: interrupted read preserved without replay.`,{stage_id:pending.stage_id,tool_name:pending.tool_name,status:'retryable_failure',reason:error});
         }
-        checkpoint={...checkpoint,pending:null,binding:hashJson({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,checks:spec.completion_checks,tools:toolkit.catalog()})};saveCheckpoint(checkpoint);
+        const nextBinding=hashJson({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,checks:spec.completion_checks,tools:toolkit.catalog()});
+        const staleRepair=validatedReplan||checkpoint.binding!==nextBinding?checkpoint.completion_repair:undefined;
+        if(staleRepair)workActivity(this.store,project,row.work_id,'supervisor.completion_repair_superseded',`Host-validated replan or task-binding change superseded correction episode ${staleRepair.code}/${staleRepair.check_id} (attempt ${staleRepair.attempts}); old binding ${hashJson(checkpoint.binding)}, new binding ${hashJson(nextBinding)}. Original denial and receipts remain in history.`,{run_id:row.run_id,stage_id:'completion.verify',status:'superseded',reason:staleRepair.code});
+        checkpoint={...checkpoint,pending:null,binding:nextBinding};
+        if(staleRepair)delete checkpoint.completion_repair;
+        saveCheckpoint(checkpoint);
       }
       if(checkpoint&&row.resume_wait){
         // Older builds classified every Pack quality review as human approval.
@@ -314,26 +367,28 @@ export class WorkSupervisor {
       }
       // The executor binds immutable initial task/checks. New direction is live context.
       guard();admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
-      const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_directions:directions,execution_policy:'Follow the latest user direction. Keep existing verified receipts. Use this Work ID for all tools. Missing connections need a concrete wait reason.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
+      const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
         {tools:toolkit.catalog(),guard,signal:controller.signal,
           checkpoint:saveCheckpoint,
-          progress:event=>workActivity(this.store,project,row.work_id,event.kind,event.summary,{run_id:row.run_id,stage_id:event.stage_id,...(spec.plan.steps.find(step=>step.id===event.stage_id)?{stage_binding:stageBinding(spec.plan.steps.find(step=>step.id===event.stage_id)!)}:{}),...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.tool_name?{tool_name:event.tool_name}:{}),...(event.reason?{reason:event.reason}:{}),...(event.kind==='tool.started'?{status:'running'}:event.kind==='tool.result'?{status:event.status??'unknown'}:{})}),
+          progress:event=>workActivity(this.store,project,row.work_id,event.kind,event.summary,{run_id:row.run_id,stage_id:event.stage_id,...(spec.plan.steps.find(step=>step.id===event.stage_id)?{stage_binding:stageBinding(spec.plan.steps.find(step=>step.id===event.stage_id)!)}:{}),...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.tool_name?{tool_name:event.tool_name}:{}),...(event.reason?{reason:event.reason}:{}),...(event.validation?{validation:event.validation}:{}),...(event.kind==='tool.started'?{status:'running'}:event.kind==='tool.result'?{status:event.status??'unknown'}:{})}),
           validateTool:async(name,args,context)=>{await toolkit!.validate(name,args,context.request_id);},
           executeTool:async(name,args,context)=>{
             requireCondition(!verificationCutpoint,'WORK_VERIFICATION_ADMISSION_CLOSED');const step=spec.plan.steps.find(value=>value.id===context.stage_id);return withWorkActivityContext({project_id:project,work_id:row.work_id,run_id:row.run_id,stage_id:context.stage_id,operation_id:context.request_id,...(step?{stage_binding:stageBinding(step)}:{})},async()=>{const value=await toolkit!.execute(name,args,context.request_id);return toolkit!.receipt(name,value,context.request_id);});
           },verifyCompletion});
-      let state:string=result.status==='retryable_failure'&&row.attempts<3?'retry_wait':result.status;
-      if(result.status==='retryable_failure'&&row.attempts>=3)state='failed';
+      const watchReadyAt=watchDueWait(this.store,row,result);
+      const verificationRetry=result.reason==='WORK_CLIENT_VERIFICATION_TRANSIENT'&&result.checkpoint.verification_pending!==undefined&&result.checkpoint.verification_pending.transient_failures<3;
+      let state:string=watchReadyAt!==null||verificationRetry?'retry_wait':result.status==='retryable_failure'&&row.attempts<3?'retry_wait':result.status;
+      if(watchReadyAt===null&&!verificationRetry&&result.status==='retryable_failure'&&row.attempts>=3)state='failed';
       if(this.stopped&&result.status==='paused')state='queued';
-      this.finish(row,state,result.reason,{summary:result.summary,text:result.summary,completion_verified:result.completion_verified,checks:spec.completion_checks,model_calls:result.model_calls.length,observations:result.checkpoint.observations.length});
+      this.finish(row,state,result.reason,{summary:result.summary,text:result.summary,completion_verified:result.completion_verified,checks:spec.completion_checks,model_calls:result.model_calls.length,observations:result.checkpoint.observations.length},watchReadyAt);
     }catch(error){const reason=error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'WORK_EXECUTION_FAILED';const state=this.stopped?'queued':['WORK_RECONCILIATION_REQUIRED'].includes(reason)?'reconciliation_required':['WORK_PAUSED','WORK_REVISION_CONFLICT'].includes(reason)?'paused':['CONFIG_CHANGED','MODEL_SETTINGS_CHANGED','SCHEDULE_CONFIGURATION_REQUIRED','SWARM_DIRECTION_REQUIRES_REVIEW','WORK_EXECUTOR_CHANGE_REQUIRES_REVIEW','ORIGINAL_RUNTIME_CONNECTION_REQUIRED'].includes(reason)?'waiting_connection':reason==='STRUCTURED_MODEL_UNSUPPORTED'?'waiting_model':'failed';this.finish(row,state,reason,null);workActivity(this.store,project,row.work_id,'supervisor.stopped',reason,{stage_id:'execution',status:state,reason});
     }finally{clearInterval(heartbeat);await toolkit?.close();}
   }
-  private finish(row:Row,state:string,reason:string|null,result:unknown){
+  private finish(row:Row,state:string,reason:string|null,result:unknown,watchReadyAt:number|null=null){
     const db=this.store.hermesState,current=db.prepare('SELECT state,work_revision FROM office_supervisor WHERE run_id=? AND owner=?').get(row.run_id,row.owner);if(!current)return;
     if(current.work_revision!==row.work_revision&&state!=='reconciliation_required'){db.prepare('UPDATE office_supervisor SET owner=NULL,lease_until_ms=0 WHERE run_id=? AND owner=?').run(row.run_id,row.owner);return;}
     if(current.state==='paused'&&state!=='reconciliation_required')state='paused';
-    db.prepare('UPDATE office_supervisor SET state=?,reason=?,result=COALESCE(?,result),owner=NULL,lease_until_ms=0,resume_wait=0,retry_at_ms=?,updated_at=? WHERE project_id=? AND run_id=? AND owner=?').run(state,reason,result?JSON.stringify(result):null,state==='retry_wait'?Date.now()+Math.min(30000,row.attempts*2000):0,now(),row.project_id,row.run_id,row.owner);
+    db.prepare('UPDATE office_supervisor SET state=?,reason=?,result=COALESCE(?,result),owner=NULL,lease_until_ms=0,resume_wait=0,retry_at_ms=?,attempts=attempts-?,updated_at=? WHERE project_id=? AND run_id=? AND owner=?').run(state,reason,result?JSON.stringify(result):null,watchReadyAt!==null?Math.max(Date.now()+250,watchReadyAt):state==='retry_wait'?Date.now()+Math.min(30000,row.attempts*2000):0,Number(watchReadyAt!==null),now(),row.project_id,row.run_id,row.owner);
     workActivity(this.store,row.project_id,row.work_id,'supervisor.result',`${state} · ${result&&typeof result==='object'&&'summary' in result?String(result.summary):reason??'진행 지점을 저장했습니다.'}`,{stage_id:'execution',status:state,...(reason?{reason}:{})});this.options.onResult?.(row.work_id);
   }
   async close(){this.stopped=true;if(this.timer)clearInterval(this.timer);for(const controller of this.controllers.values())controller.abort();await Promise.allSettled([...this.active.values()]);if(this.api&&!this.options.api){this.api.close();await this.api.drain();}}

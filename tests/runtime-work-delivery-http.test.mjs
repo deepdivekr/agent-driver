@@ -11,6 +11,7 @@ import {startControlCenter} from '../dist/observability/control-center.js';
 import {WorkDeliverySettings,readDeliverySettings} from '../dist/work/delivery-settings.js';
 import {WorkResults} from '../dist/work/results.js';
 import {initWorkSupervisor} from '../dist/work/supervisor.js';
+import {observedCompletionFixture} from './helpers/observed-completion-fixture.mjs';
 
 const telegram={id:'updates',platform:'telegram',label:'My chat',telegram_bot_token:'123456789:'+'A'.repeat(32),telegram_chat_id:'-1001234567890'};
 const slack={id:'team',platform:'slack',label:'Team updates',webhook_url:'https://hooks.slack.com/services/AAAA/BBBB/CCCC'};
@@ -19,7 +20,7 @@ const recipe={version:1,family:'research.search',request:'Read the local records
 function fixtureModel(){const calls=[];return {calls,async call(purpose,instructions,input){
   calls.push(purpose);
   if(instructions.startsWith('Define one durable'))return structuredClone(proposal);
-  if(instructions.startsWith('Independently verify'))return {checks:input.checks.map(check=>{const evidence=check.allowed_evidence_ids.filter(id=>input.observations.some(observation=>observation.tool_name!=='office_controlled_run_trace'&&observation.evidence_ids.includes(id)));return {id:check.id,verdict:'supported',evidence_ids:evidence,evidence_quotes:evidence.map(id=>({evidence_id:id,quote:'Observed source'})),reason:'The local file receipt contains the requested row.'};})};
+  if(instructions.startsWith('Independently verify'))return observedCompletionFixture(input,{prompt:/Read and report the local source/u,needle:'Observed source',accept:item=>item.tool_name==='runtime_pack_run',assertResult:value=>assert.ok(value.observations.some(item=>item.tool_name==='runtime_pack_run'&&JSON.stringify(item.value).includes('23')),'The requested value 23 must be observed.')});
   assert.ok(instructions.startsWith('Execute the registered Work'),instructions);
   const observed=input.checkpoint.observations.find(item=>item.invocation.tool_name==='runtime_pack_run');
   if(observed)return {action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Observed source: 23',completed_checks:input.completion_checks.map(check=>({id:check.id,evidence_ids:observed.receipt.evidence_ids})),wait_reason:null};

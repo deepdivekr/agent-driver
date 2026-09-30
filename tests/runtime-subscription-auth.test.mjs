@@ -161,6 +161,47 @@ test('runtime contract Codex verifier uses extended bounded timeout and records 
   assert.equal(JSON.stringify(model.calls).includes(invocation.stdin),false);
 });
 
+test('runtime contract high-effort Codex decisions keep selected effort and a bounded extended timeout',async()=>{
+  for(const effort of [undefined,'medium','high','xhigh','max','ultra']){
+    const requests=[];const runner={async run(request){requests.push(request);
+      if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+      if(request.args.includes('exec'))throw Error('CLIENT_TIMEOUT');
+      throw Error('unexpected command');
+    }};
+    const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/budget-'+(effort??'default'),...(effort?{AGENT_DRIVER_CODEX_REASONING_EFFORT:effort}:{})}),runner});
+    await assert.rejects(model.call('design','Plan the registered Work.',{work_id:'bounded-planning'},schema),/^Error: STRUCTURED_MODEL_TIMEOUT$/u);
+    const invocation=requests.find(item=>item.args.includes('exec'));
+    assert.equal(invocation.timeout_ms,180000);
+    if(effort)assert.ok(invocation.args.includes('model_reasoning_effort='+effort));
+    assert.equal(model.calls.at(-1).failure_kind,'timeout');
+  }
+});
+
+test('runtime contract low-effort correction budget follows host role, not ordinary worker decisions',async t=>{
+ const root=await mkdtemp(join(tmpdir(),'office-role-budget-'));t.after(()=>rm(root,{recursive:true,force:true}));
+ for(const role of ['planner','worker']){
+   const requests=[],runner={async run(request){requests.push(request);if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};if(request.args.includes('exec'))throw Error('CLIENT_TIMEOUT');throw Error('unexpected command');}};
+   const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_DRIVER_CODEX_REASONING_EFFORT:'low',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/role-'+role}),runner,session:{root,work_id:'bounded-work',run_id:'bounded-run',actor_id:'supervisor',role}});
+   await assert.rejects(model.call('correct','Continue the same Work.',{},schema),/^Error: STRUCTURED_MODEL_TIMEOUT$/u);
+   const invocation=requests.find(request=>request.args.includes('exec'));
+   assert.equal(invocation.timeout_ms,role==='planner'?180000:60000);assert.ok(invocation.args.includes('model_reasoning_effort=low'));
+   assert.equal(model.calls.at(-1).failure_kind,'timeout');
+ }
+});
+
+test('runtime contract evidence-bearing Codex turns extend only their bounded deadline',async()=>{
+  for(const evidence of ['small','가'.repeat(12000)]){
+    const requests=[],runner={async run(request){requests.push(request);if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};if(request.args.includes('exec'))throw Error('CLIENT_TIMEOUT');throw Error('unexpected command');}};
+    const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_DRIVER_CODEX_MODEL:'gpt-6.1-sol',AGENT_DRIVER_CODEX_REASONING_EFFORT:'low',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/evidence-'+evidence.length}),runner});
+    await assert.rejects(model.call('correct','Continue from exact evidence.',{evidence},schema),/^Error: STRUCTURED_MODEL_TIMEOUT$/u);
+    const invocation=requests.find(request=>request.args.includes('exec'));
+    assert.equal(invocation.timeout_ms,Buffer.byteLength(invocation.stdin,'utf8')>=32768?180000:60000);
+    assert.ok(invocation.args.includes('gpt-6.1-sol'));assert.ok(invocation.args.includes('model_reasoning_effort=low'));
+    assert.ok(invocation.args.includes('read-only'));assert.ok(invocation.args.includes('--ignore-rules'));
+    assert.equal(model.calls.at(-1).failure_kind,'timeout');assert.equal(JSON.stringify(model.calls).includes(evidence),false);
+  }
+});
+
 test('runtime subscription model falls from failed Codex to Claude while preserving no-tools structured contracts',async()=>{
   const invocations=[];const runner={async run(request){invocations.push(request);
     if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT\n',stderr:''};

@@ -13,7 +13,9 @@ const fields=z.record(field,z.object({selector,kind:z.enum(['text','select','che
 const remote=z.object({url:z.string().url(),parameters:z.array(key).max(20).default([])});
 export const sourceSchema=z.discriminatedUnion('kind',[
   z.object({id:key,kind:z.literal('file'),path:z.string().min(1),format:z.enum(['json','csv'])}).strict(),
-  remote.extend({id:key,kind:z.literal('http'),format:z.enum(['json','csv'])}).strict(),
+  remote.extend({id:key,kind:z.literal('http'),format:z.enum(['json','csv']),json_fields:z.array(field).min(1).max(100).refine(fields=>new Set(fields).size===fields.length,'duplicate JSON projection field').optional()}).strict().superRefine((source,context)=>{
+    if(source.json_fields&&source.format!=='json')context.addIssue({code:'custom',message:'json_fields requires JSON format'});
+  }),
   remote.extend({id:key,kind:z.literal('browser'),rows:selector,columns:z.record(field,selector),ready:selector,auth_gate:selector,auth_required:z.boolean().default(true),account_selector:selector,account_text:z.string().min(1)}).strict(),
 ]);
 export const targetSchema=z.object({
@@ -33,8 +35,15 @@ export const targetSchema=z.object({
   if(({ 'form.draft-submit':'single_form_submission','record.update':'allowlisted_field_update','choose.stage':'cart_or_draft_only' } as const)[v.family]!==v.effect_boundary)c.addIssue({code:'custom',message:'effect boundary mismatch'});
   if(!Object.hasOwn(v.fields,v.identity_field))c.addIssue({code:'custom',message:'identity field missing'});
 });
+export const localRecordSchema=z.object({
+  id:key,path:z.string().min(1),identity_field:field,
+  fields:z.array(field).min(1).max(100),
+}).strict().superRefine((value,context)=>{
+  if(new Set(value.fields).size!==value.fields.length||value.fields.includes(value.identity_field))context.addIssue({code:'custom',message:'local record editable fields must be unique and exclude identity'});
+  if([value.identity_field,...value.fields].some(name=>/(?:password|token|secret|api.?key|auth|session|cookie)/iu.test(name)))context.addIssue({code:'custom',message:'credential-like local record field forbidden'});
+});
 export const packPolicySchema=z.object({
-  sources:z.array(sourceSchema).max(64).default([]),targets:z.array(targetSchema).max(32).default([]),
+  sources:z.array(sourceSchema).max(64).default([]),targets:z.array(targetSchema).max(32).default([]),local_records:z.array(localRecordSchema).max(32).default([]),
   models:z.enum(['off','jev','jev_llm']).default('off'),
   confidence:z.number().min(.5).max(1).default(.9),
   model_data_approved:z.boolean().default(false),
@@ -45,6 +54,7 @@ export const packPolicySchema=z.object({
 export type PackPolicy=z.infer<typeof packPolicySchema>;
 export type Source=z.infer<typeof sourceSchema>;
 export type Target=z.infer<typeof targetSchema>;
+export type LocalRecord=z.infer<typeof localRecordSchema>;
 export const sourceRequest=z.object({id:key,parameters:z.record(key,z.string().max(400)).default({})}).strict();
 export const filterSchema=z.object({field,op:z.enum(['eq','contains','gte','lte']),value:scalar}).strict();
 const common={version:z.literal(1),request:z.string().trim().min(1).max(8000),browser:browserPreferenceSchema.optional()};
@@ -57,7 +67,7 @@ const relevance=judgment.extend({accept_labels:z.array(key).min(1).max(20)}).str
 const mutation={target:key,values:rowSchema,expected_before_sha256:z.string().regex(/^[a-f0-9]{64}$/).nullable()};
 export const recipeSchema=z.discriminatedUnion('family',[
   z.object({...common,family:z.literal('research.search'),...collection,query:z.string().max(500),search_fields:z.array(field).min(1).max(20),relevance:relevance.nullable().default(null),sort:sort.nullable(),limit:z.number().int().min(1).max(1000),verification:evidenceChecksSchema.optional()}).strict(),
-  z.object({...common,family:z.literal('portal.collect'),...collection,format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict(),
+  z.object({...common,family:z.literal('portal.collect'),...collection,columns:z.array(field).min(1).max(100).refine(columns=>new Set(columns).size===columns.length,'duplicate portal column').optional(),format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict(),
   z.object({...common,family:z.literal('form.draft-submit'),...mutation}).strict(),
   z.object({...common,family:z.literal('record.update'),...mutation}).strict(),
   z.object({...common,family:z.literal('choose.stage'),...mutation}).strict(),
@@ -70,11 +80,12 @@ export type MutationRecipe=Extract<Recipe,{family:'form.draft-submit'|'record.up
 export const packTools={
   runtime_pack_catalog:{schema:z.object({}).strict(),implemented:true,readOnly:true},
   runtime_pack_plan:{schema:z.object({prompt:common.request,work_id:z.string().uuid().optional()}).strict(),implemented:true,readOnly:true},
+  runtime_pack_local_record_inspect:{schema:z.object({work_id:z.string().uuid(),target:key,identity:z.union([z.string().min(1).max(400),z.number().finite()])}).strict(),implemented:true,readOnly:true},
   runtime_pack_run:{schema:z.object({request_id:key,work_id:z.string().uuid().optional(),recipe:recipeSchema}).strict(),implemented:true,readOnly:false},
   runtime_pack_status:{schema:z.object({run_id:key}).strict(),implemented:true,readOnly:true},
   runtime_pack_execute_approved:{schema:z.object({run_id:key}).strict(),implemented:true,readOnly:false},
-  runtime_pack_watch_tick:{schema:z.object({}).strict(),implemented:true,readOnly:false},
+  runtime_pack_watch_tick:{schema:z.object({run_id:key.optional()}).strict(),implemented:true,readOnly:false},
   runtime_pack_watch_pause:{schema:z.object({run_id:key,paused:z.boolean()}).strict(),implemented:true,readOnly:false},
-  runtime_pack_events:{schema:z.object({after:z.number().int().nonnegative().default(0),limit:z.number().int().min(1).max(100).default(50)}).strict(),implemented:true,readOnly:true},
+  runtime_pack_events:{schema:z.object({run_id:key.optional(),after:z.number().int().nonnegative().default(0),limit:z.number().int().min(1).max(100).default(50)}).strict(),implemented:true,readOnly:true},
 } as const;
 export const familyId=basePackFamilyId;

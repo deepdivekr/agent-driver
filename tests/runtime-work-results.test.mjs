@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {catalogCompletionFixture} from './helpers/catalog-completion-fixture.mjs';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,mkdir,readFile,rm,symlink} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -204,7 +205,7 @@ test('runtime fixture SDK MCP exposes read-only persisted results and captures a
   let output;
   if(schema.properties?.title)output={title:'Host Pack catalog',desired_outcome:'Report the registered research.search family',completion_checks:[{id:'catalog',result:'Confirm research.search exists.',evidence:'Observed host catalog ID'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};
   else if(schema.properties?.action){const observation=input.checkpoint.observations.at(-1);output=observation?{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'The observed host catalog includes research.search.',completed_checks:[{id:'catalog',evidence_ids:observation.receipt.evidence_ids}],wait_reason:null}:{action:'tool',stage_id:'catalog',tool_name:'runtime_pack_catalog',arguments_json:'{}',summary:'Read the real local catalog.',completed_checks:[],wait_reason:null};}
-  else if(schema.properties?.checks){const allowed=input.checks[0].allowed_evidence_ids,evidence=input.observations.filter(item=>item.tool_name==='runtime_pack_catalog'&&JSON.stringify(item.value).includes('research.search')).flatMap(item=>item.evidence_ids).filter(id=>allowed.includes(id));assert.ok(evidence.length>0,'The fixture must cite the real observed catalog, not host execution-count evidence.');output={checks:[{id:'catalog',verdict:'supported',evidence_use:'observed_result',evidence_ids:evidence,evidence_quotes:evidence.map(evidence_id=>({evidence_id,quote:'research.search'})),reason:'The observed catalog has this ID.'}]};}
+  else if(schema.properties?.findings||schema.properties?.checks)output=catalogCompletionFixture(input,schema);
   else throw Error('UNEXPECTED_RESULT_FIXTURE_SCHEMA');
   this.calls.push({purpose,status:'accepted',provider:'contract_fixture',model:'fixture'});return output;
  }};

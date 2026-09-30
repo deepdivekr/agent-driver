@@ -4,11 +4,13 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
+import {DatabaseSync} from 'node:sqlite';
 import {z} from 'zod';
 import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS} from '../dist/work/client-executor.js';
 import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
 import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
 import {saveModelSettings,scopedModelSettingsPath} from '../dist/onboarding/model-settings.js';
+import {workActivity} from '../dist/work/activity.js';
 
 const request={work_id:'work-1',run_id:'run-1',prompt:'Find the current physical AI source and report its title.',completion_checks:[{id:'source',result:'Report one source title.',evidence:'A retrieved source.'}]};
 const readTool={name:'browser_read',description:'Read a delegated public source.',input_schema:{type:'object',properties:{url:{type:'string'}},required:['url'],additionalProperties:false},effect:'read_only'};
@@ -22,8 +24,11 @@ const selection={mode:'subscription',client:'codex',client_models:{codex:'saved-
 async function fixture(t){const root=await mkdtemp(join(tmpdir(),'office-client-'));t.after(()=>rm(root,{recursive:true,force:true}));return join(root,'models.json');}
 
 test('bounded client decisions execute real host callbacks and need observed evidence plus host verification',async()=>{
-  const provider=model([choose(),done()]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  const provider=model([choose(),done()]),originalCall=provider.call.bind(provider);provider.call=async(...args)=>{assert.match(args[1],/action=complete proposes independent host verification/u);assert.match(args[1],/Actual requested result receipts and readback must exist/u);return originalCall(...args);};
+  const host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
   assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);assert.equal(host.executions.length,1);
+  assert.deepEqual(provider.inputs[0].completion_gate,{phase:'pre_verification',complete_action:'proposal_for_independent_host_verification',final_flag:'set_by_host_after_verification',closed_trace:'generated_by_host_at_complete_cutpoint',evidence_role:'control_metadata_not_result_evidence',business_receipts:'required_before_complete_proposal'});
+  assert.deepEqual(provider.inputs[1].completion_gate,provider.inputs[0].completion_gate);
   assert.deepEqual(host.executions[0].args,{url:'https://example.test/news'});assert.equal(host.executions[0].context.work_id,request.work_id);assert.equal(host.executions[0].context.run_id,request.run_id);
   assert.equal(host.saved[0].pending.dispatched,false);assert.equal(host.saved[1].pending.dispatched,true);assert.equal(host.saved[2].pending,null);
   assert.equal(provider.inputs[1].checkpoint.observations[0].receipt.value.title,'Physical AI');assert.deepEqual(result.model_calls.map(call=>call.provider),['fixture','fixture']);
@@ -60,6 +65,27 @@ test('a second invalid decision output fails without dispatch and a later invali
   const later=model([bad,choose(),{...done(),tool_name:'browser_read'},done()]),preserved=hooks(),failed=await new BoundedWorkClientExecutor(later).execute(request,preserved);assert.equal(failed.status,'failed');assert.equal(failed.reason,'WORK_CLIENT_DECISION_CORRECTION_BUDGET_EXCEEDED');assert.equal(later.inputs.length,3);assert.equal(later.inputs.filter(input=>input.validation_error).length,1);assert.equal(preserved.executions.length,1);assert.equal(failed.checkpoint.observations.length,1);assert.deepEqual(failed.checkpoint.observations[0].receipt,receipt);
 });
 
+test('decision correction records bounded safe schema paths and output digests without leaking model text or dispatching tools',async()=>{
+  const secret='sk-proj-abcdefghijklmnopqrstu',bad={...choose(),wait_reason:'approval',[secret]:'private model text'};
+  const provider=model([bad,bad]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_DECISION_CORRECTION_FAILED');assert.equal(host.executions.length,0);
+  const events=host.events.filter(event=>event.validation),diagnostics=events.map(event=>event.validation);
+  assert.deepEqual(diagnostics.map(item=>item.code),['WORK_CLIENT_DECISION_OUTPUT_INVALID','WORK_CLIENT_DECISION_CORRECTION_FAILED']);
+  assert.deepEqual(events.map(event=>event.reason),diagnostics.map(item=>item.code));
+  for(const item of diagnostics){assert.match(item.output_sha256,/^[a-f0-9]{64}$/u);assert.ok(item.issues.length>0&&item.issues.length<=8);assert.ok(item.issues.every(issue=>typeof issue.path==='string'&&typeof issue.code==='string'&&typeof issue.message==='string'));}
+  assert.doesNotMatch(JSON.stringify(host.events),new RegExp(secret,'u'));
+  assert.ok(host.events.some(event=>event.summary.includes('no tool dispatched from this decision')));
+  const db=new DatabaseSync(':memory:');
+  try{
+    db.exec('CREATE TABLE office_activity(project_id TEXT,work_id TEXT,kind TEXT,summary TEXT,created_at TEXT,metadata TEXT)');
+    for(const event of events)workActivity({hermesState:db},'project-1','work-1',event.kind,event.summary,{run_id:'run-1',reason:event.reason,validation:event.validation});
+    const rows=db.prepare('SELECT metadata FROM office_activity ORDER BY rowid').all().map(row=>JSON.parse(row.metadata));
+    assert.equal(rows.length,2);assert.deepEqual(rows.map(row=>row.validation.code),diagnostics.map(item=>item.code));
+    assert.ok(rows.every(row=>row.run_id==='run-1'&&row.validation.issues.length>0));
+    assert.doesNotMatch(JSON.stringify(rows),new RegExp(secret,'u'));
+  }finally{db.close();}
+});
+
 test('auth quota and provider failures never invoke output correction, including failure during the only correction',async()=>{
   for(const reason of ['STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_UNSUPPORTED','CLIENT_SUBSCRIPTION_EXHAUSTED']){
     const provider=model([Error(reason),choose()]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);assert.equal(result.status,'waiting_model');if(reason==='STRUCTURED_MODEL_UNSUPPORTED')assert.equal(result.reason,reason);assert.equal(provider.inputs.length,1);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.observations.length,0);
@@ -93,6 +119,15 @@ async function interruptedRead(){
   const first=hooks({async executeTool(){throw Error('WORK_RESULT_RECEIPT_NOT_FOUND');}}),initial=await new BoundedWorkClientExecutor(model([choose()])).execute(request,first);
   assert.equal(initial.checkpoint.pending.dispatched,true);assert.equal(initial.checkpoint.pending.effect,'read_only');return initial;
 }
+test('known local-record inspect error is saved as a failed read receipt, not a phantom interrupted operation',async()=>{
+  const inspectTool={...readTool,name:'runtime_pack_local_record_inspect'},provider=model([choose('runtime_pack_local_record_inspect',{target:'review',identity:70565781})]);
+  const host=hooks({tools:[inspectTool],async executeTool(){throw Error('PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE');}});
+  const result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'retryable_failure');assert.equal(result.reason,'PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE');
+  assert.equal(result.checkpoint.pending,null);assert.equal(result.checkpoint.observations.length,1);
+  const observed=result.checkpoint.observations[0];assert.equal(observed.invocation.dispatched,true);assert.equal(observed.receipt.value.status,'read_failed');assert.equal(observed.receipt.value.error,'PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE');assert.equal(observed.receipt.value.result_observation,'error_returned');assert.equal(observed.receipt.effect_state,'none');assert.deepEqual(observed.receipt.evidence_ids,[]);
+  assert.equal(host.saved.at(-1).pending,null);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/historical runtime_pack_local_record_inspect read_interrupted.*newly validated read-only inspect/u);
+});
 test('a saved read retry is preflighted without falsifying its prior dispatched history, then corrected with fresh evidence',async()=>{
   const initial=await interruptedRead(),provider=model([choose('browser_read',{url:'https://example.test/verified'}),done()]),host=hooks({validateTool(_name,args){if(args.url==='https://example.test/news')throw new WorkClientToolInputError('WORK_RESULT_QUALITY_NOT_VERIFIED','Correct the known failed source check before trying to read that output.');}});
   const result=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:initial.checkpoint},host);
