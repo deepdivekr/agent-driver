@@ -16,14 +16,15 @@ function model(options={}){
     if(input.batch_index){
       if(options.outage&&input.batch_index===2)throw Error('STRUCTURED_MODEL_UNAVAILABLE');
       result={findings:input.observations.flatMap(record=>input.checks.filter(check=>check.allowed_evidence_ids.some(id=>record.evidence_ids.includes(id))).map(check=>{
-        const fact=record.value.fact,relation=options.conflict&&fact==='Beta'?'contradicts':options.uncertain&&fact==='Beta'?'unresolved_material':fact==='Alpha'||fact==='Beta'?'supports':'irrelevant';
-        return {check_id:check.id,record_id:record.record_id,relation,quotes:['supports','contradicts'].includes(relation)?[options.forged&&fact==='Beta'?'UNOBSERVED PRIVATE VALUE':fact]:[],reason:relation==='irrelevant'?'Unrelated source content.':'Observed source value.'};
+        const fact=record.value.fact,relation=options.conflict&&fact==='Beta'?'contradicts':options.uncertain&&fact==='Beta'?'unresolved_material':options.context&&fact==='Unrelated 1'?'context':fact==='Alpha'||fact==='Beta'?'supports':'irrelevant';
+        return {check_id:check.id,record_id:record.record_id,relation,quotes:['supports','context','contradicts'].includes(relation)?[options.forged&&fact==='Beta'&&(!options.recover||!input.correction)?'UNOBSERVED PRIVATE VALUE':fact]:[],reason:relation==='irrelevant'?'Unrelated source content.':'Observed source value.'};
       }))};
       if(options.omit&&input.batch_index===2)result.findings.pop();
+      if(options.malformed&&input.batch_index===2)result.findings[0].quotes=1;
     }else if(input.projection){
-      const findings=input.observations.flatMap(record=>record.findings.filter(finding=>finding.relation==='supports').map(finding=>({id:record.evidence_ids[0],quote:finding.quotes[0]})));
+      const findings=input.observations.flatMap(record=>record.findings.filter(finding=>finding.relation==='supports').map(finding=>({id:record.evidence_ids[0],quote:finding.quotes[0],ref:finding.quote_refs[0]})));
       assert.deepEqual(findings.map(item=>item.quote),['Alpha','Beta'],'Final synthesis sees facts from different original batches.');
-      result={checks:[{id:'combined',verdict:'supported',evidence_ids:findings.map(item=>item.id),evidence_quotes:findings.map(item=>({evidence_id:item.id,quote:options.finalForgery&&item.quote==='Beta'?'UNOBSERVED PRIVATE VALUE':item.quote})),reason:'The two original source receipts contain both values.'}]};
+      result={checks:[{id:'combined',verdict:'supported',evidence_ids:findings.map(item=>item.id),evidence_quote_refs:findings.map(item=>({evidence_id:item.id,quote_ref:options.finalForgery&&item.quote==='Beta'?'q_invalid_reference':item.ref})),reason:'The two original source receipts contain both values.'}]};
     }else throw Error('UNEXPECTED_NON_BATCH_INPUT');
     this.calls.push({purpose,provider:'contract_fixture',model:'fixture-verifier',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return result;
   }};
@@ -58,24 +59,75 @@ test('runtime contract projected evidence keeps verified write state and observa
   assert.equal(provider.inputs.at(-1).manifest.find(record=>record.evidence_ids.includes('source_7')).effect_state,'verified');
 });
 
-for(const [name,option,code] of [['contradiction','conflict','BATCH_CONTRADICTS'],['material uncertainty','uncertain','BATCH_UNRESOLVED_MATERIAL'],['missing pair','omit','BATCH_COVERAGE_INVALID'],['invented excerpt','forged','BATCH_QUOTE_UNOBSERVED'],['provider outage','outage','STRUCTURED_MODEL_UNAVAILABLE']])test(`runtime contract oversized evidence ${name} blocks completion without tool replay`,async()=>{
+test('runtime contract a context-only leaf stays visible but cannot become a positive citation reference',async()=>{
+  const items=observations(),provider=model({context:true}),verify=createWorkCompletionVerifier(provider);
+  assert.equal(await verify(checks,items,claim(items.flatMap(item=>item.receipt.evidence_ids))),true);
+  const context=provider.inputs.at(-1).observations.find(record=>record.evidence_ids.includes('source_1')).findings[0];
+  assert.equal(context.relation,'context');assert.deepEqual(context.quotes,['Unrelated 1']);assert.deepEqual(context.quote_refs,[]);
+});
+
+for(const [name,option,code] of [['contradiction','conflict','BATCH_CONTRADICTS'],['material uncertainty','uncertain','BATCH_UNRESOLVED_MATERIAL'],['missing pair','omit','BATCH_COVERAGE_INVALID'],['malformed response','malformed','VERIFIER_OUTPUT_INVALID'],['invented excerpt','forged','BATCH_QUOTE_UNOBSERVED'],['provider outage','outage','STRUCTURED_MODEL_UNAVAILABLE']])test(`runtime contract oversized evidence ${name} blocks completion without tool replay`,async()=>{
   const items=observations(),provider=model({[option]:true}),audits=[],events=[],verify=createWorkCompletionVerifier(provider,{audit:event=>audits.push(event),progress:event=>events.push(event)});
   assert.equal(await verify(checks,items,claim(items.flatMap(item=>item.receipt.evidence_ids))),false);
   assert.equal(provider.inputs.some(input=>input.projection),false);assert.match(events.at(-1).summary,new RegExp(code,'u'));
   assert.ok(audits.some(event=>event.batch_index&&event.evidence_manifest_sha256&&event.code.includes(code)));
+  if(option==='forged'){
+    const retries=provider.inputs.filter(input=>input.batch_index===2);
+    assert.equal(retries.length,2,'An unobserved quote gets exactly one correction attempt.');
+    assert.equal(retries[1].correction.issue.code,'WORK_COMPLETION_BATCH_QUOTE_UNOBSERVED');
+    assert.equal(audits.filter(event=>event.code==='WORK_COMPLETION_BATCH_QUOTE_UNOBSERVED').length,2);
+    assert.ok(audits.every(event=>!event.issue?.quote_sha256||!JSON.stringify(event).includes('UNOBSERVED PRIVATE VALUE')),'Private output text stays out of audit receipts.');
+  }else if(option==='omit'||option==='malformed'||option==='outage')assert.equal(provider.inputs.filter(input=>input.batch_index===2).length,1,'Schema, coverage and provider failures must not trigger a model retry.');
 });
 
-test('runtime contract final projection cannot cite an unprojected or forged leaf even when the raw receipt contains other facts',async()=>{
+test('runtime contract unobserved batch quote can be corrected once against identical whole receipts',async()=>{
+  const items=observations(),provider=model({forged:true,recover:true}),audits=[],verify=createWorkCompletionVerifier(provider,{audit:event=>audits.push(event)});
+  assert.equal(await verify(checks,items,claim(items.flatMap(item=>item.receipt.evidence_ids))),true);
+  const retries=provider.inputs.filter(input=>input.batch_index===2),{correction,...retryOriginal}=retries[1];
+  assert.equal(retries.length,2);
+  assert.deepEqual(retryOriginal,retries[0],'Correction reuses every original receipt and eligible pair.');
+  assert.equal(correction.issue.record_id,'record_8');
+  assert.equal(correction.issue.quote_index,0);
+  assert.match(correction.issue.quote_sha256,/^[a-f0-9]{64}$/u);
+  assert.equal(correction.issue.quote_bytes,Buffer.byteLength('UNOBSERVED PRIVATE VALUE'));
+  assert.equal(audits[0].status,'rejected');assert.equal(audits.at(-1).status,'accepted');
+  assert.deepEqual(provider.inputs.at(-1).observations.flatMap(record=>record.findings.flatMap(finding=>finding.quotes)).filter(quote=>quote==='Beta'),['Beta']);
+});
+
+test('runtime contract final projection cannot cite an unprojected reference even when the raw receipt contains other facts',async()=>{
   const items=observations(),provider=model({finalForgery:true}),verify=createWorkCompletionVerifier(provider);
   assert.equal(await verify(checks,items,claim(items.flatMap(item=>item.receipt.evidence_ids))),false);
   assert.equal(provider.inputs.filter(input=>input.projection).length,2,'One bounded output-only correction cannot upgrade an invented quote.');
+});
+
+test('runtime contract two different final citation errors stay false after one correction without replay',async()=>{
+  const items=observations(),before=structuredClone(items),ids=items.flatMap(item=>item.receipt.evidence_ids);
+  const two=[{id:'brief_format_verified',result:'Report Alpha.',evidence:'The Alpha receipt.'},{id:'readback_verified',result:'Report Beta.',evidence:'The Beta receipt.'}];
+  const provider={inputs:[],calls:[],async call(purpose,_instructions,input){
+    this.inputs.push(structuredClone(input));let output;
+    if(input.batch_index)output={findings:input.observations.flatMap(record=>input.eligible_pairs.filter(pair=>pair.record_id===record.record_id).map(pair=>{
+      const supported=pair.check_id==='brief_format_verified'&&record.value.fact==='Alpha'||pair.check_id==='readback_verified'&&record.value.fact==='Beta';
+      return {check_id:pair.check_id,record_id:record.record_id,relation:supported?'supports':'irrelevant',quotes:supported?[record.value.fact]:[],reason:supported?'Observed source value.':'Unrelated source.'};
+    }))};
+    else {const first=this.inputs.filter(item=>item.projection).length===1,ref=(checkId,id)=>input.observations.find(record=>record.evidence_ids.includes(id)).findings.find(finding=>finding.check_id===checkId).quote_refs[0];
+      output={checks:[{id:'brief_format_verified',verdict:'supported',evidence_ids:['source_0'],evidence_quote_refs:[{evidence_id:'source_0',quote_ref:first?ref('readback_verified','source_8'):ref('brief_format_verified','source_0')}],reason:'Alpha observed.'},{id:'readback_verified',verdict:'supported',evidence_ids:['source_8'],evidence_quote_refs:[{evidence_id:'source_8',quote_ref:first?ref('readback_verified','source_8'):ref('brief_format_verified','source_0')}],reason:'Beta observed.'}]};
+    }
+    this.calls.push({purpose,provider:'contract_fixture',model:'fixture-verifier',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return output;
+  }};
+  const audits=[],verify=createWorkCompletionVerifier(provider,{audit:event=>audits.push(event)});
+  const selected={...claim(ids),completed_checks:two.map(check=>({id:check.id,evidence_ids:ids}))};
+  assert.equal(await verify(two,items,selected),false);
+  assert.equal(provider.inputs.filter(input=>input.projection).length,2);
+  assert.deepEqual(audits.filter(event=>event.code==='WORK_COMPLETION_BATCH_QUOTE_REF_INVALID').map(event=>event.issue.check_id),['brief_format_verified','readback_verified']);
+  assert.equal(provider.inputs.some(input=>input.projection&&input.correction?.authority?.includes('replay')),true);
+  assert.deepEqual(items,before,'Neither citation correction changes a receipt or dispatches another tool.');
 });
 
 test('runtime contract batch only evaluates each check against its originally allowed receipt IDs',async()=>{
   const items=observations(),two=[...checks,{id:'beta',result:'Report Beta.',evidence:'The Beta receipt.'}],ids=items.flatMap(item=>item.receipt.evidence_ids),provider={inputs:[],calls:[],async call(purpose,_instructions,input){
     this.inputs.push(structuredClone(input));let response;
     if(input.batch_index)response={findings:input.observations.flatMap(record=>input.checks.filter(check=>check.allowed_evidence_ids.some(id=>record.evidence_ids.includes(id))).map(check=>({check_id:check.id,record_id:record.record_id,relation:record.value.fact==='Alpha'||record.value.fact==='Beta'?'supports':'irrelevant',quotes:record.value.fact==='Alpha'||record.value.fact==='Beta'?[record.value.fact]:[],reason:'Exact observed value or irrelevant receipt.'})))};
-    else response={checks:[{id:'combined',verdict:'supported',evidence_ids:['source_0','source_8'],evidence_quotes:[{evidence_id:'source_0',quote:'Alpha'},{evidence_id:'source_8',quote:'Beta'}],reason:'Both values observed.'},{id:'beta',verdict:'supported',evidence_ids:['source_8'],evidence_quotes:[{evidence_id:'source_8',quote:'Beta'}],reason:'Beta observed.'}]};
+    else {const ref=(checkId,evidenceId)=>input.observations.find(record=>record.evidence_ids.includes(evidenceId)).findings.find(finding=>finding.check_id===checkId).quote_refs[0];response={checks:[{id:'combined',verdict:'supported',evidence_ids:['source_0','source_8'],evidence_quote_refs:[{evidence_id:'source_0',quote_ref:ref('combined','source_0')},{evidence_id:'source_8',quote_ref:ref('combined','source_8')}],reason:'Both values observed.'},{id:'beta',verdict:'supported',evidence_ids:['source_8'],evidence_quote_refs:[{evidence_id:'source_8',quote_ref:ref('beta','source_8')}],reason:'Beta observed.'}]};}
     this.calls.push({purpose,provider:'contract_fixture',model:'fixture-verifier',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return response;
   }};
   const both={...claim(ids),completed_checks:[{id:'combined',evidence_ids:ids},{id:'beta',evidence_ids:['source_8']}]};
@@ -95,7 +147,7 @@ test('runtime contract oversized evidence retains a host-sealed negative trace a
   const check=[{id:'no_send',result:'This Office-controlled run dispatched no external-write capabilities.',evidence:'The host-closed controlled-run trace.'}];
   const provider={inputs:[],calls:[],async call(purpose,_instructions,input){this.inputs.push(structuredClone(input));let output;
     if(input.batch_index)output={findings:input.observations.flatMap(record=>input.checks.map(item=>({check_id:item.id,record_id:record.record_id,relation:record.tool_name==='office_controlled_run_trace'?'supports':'irrelevant',quotes:record.tool_name==='office_controlled_run_trace'?['This host-closed Office-controlled run dispatched 0 external_write capabilities through the bound checkpoint.']:[],reason:'Scoped host trace or unrelated source.'})))};
-    else output={checks:[{id:'no_send',verdict:'supported',evidence_use:'controlled_run_constraint',evidence_ids:[traceId],evidence_quotes:[{evidence_id:traceId,quote:'This host-closed Office-controlled run dispatched 0 external_write capabilities through the bound checkpoint.'}],reason:'The host trace is closed and scoped to this run.'}]};
+    else output={checks:[{id:'no_send',verdict:'supported',evidence_use:'controlled_run_constraint',evidence_ids:[traceId],evidence_quote_refs:[{evidence_id:traceId,quote_ref:input.observations.find(record=>record.evidence_ids.includes(traceId)).findings[0].quote_refs[0]}],reason:'The host trace is closed and scoped to this run.'}]};
     this.calls.push({purpose,provider:'contract_fixture',model:'fixture-verifier',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return output;
   }};
   assert.equal(await createWorkCompletionVerifier(provider)(check,[...items,trace],{...claim([traceId]),completed_checks:[{id:'no_send',evidence_ids:[...items.flatMap(item=>item.receipt.evidence_ids),traceId]}]}),true);

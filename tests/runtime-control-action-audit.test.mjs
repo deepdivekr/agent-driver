@@ -21,7 +21,9 @@ async function setup(t,model){
 }
 
 test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabled, allowed toggle and pause persist',async t=>{
-  let calls=0;const x=await setup(t,{calls:[],async call(_purpose,instructions){calls++;if(instructions.startsWith('Execute the registered Work'))return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'This fixture stops before external research at a model boundary.',completed_checks:[],wait_reason:'model'};return spec;}});
+  let calls=0,executionStarted,releaseExecution;const started=new Promise(resolve=>executionStarted=resolve),executionGate=new Promise(resolve=>releaseExecution=resolve);
+  t.after(()=>releaseExecution());
+  const x=await setup(t,{calls:[],async call(_purpose,instructions){calls++;if(instructions.startsWith('Execute the registered Work')){executionStarted();if(calls===2)await executionGate;return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'This fixture stops before external research at a model boundary.',completed_checks:[],wait_reason:'model'};}return spec;}});
   let release;const gate=new Promise(resolve=>release=resolve);t.after(()=>release());
   await x.page.route('**/settings/status',async route=>{await gate;await route.continue();});
   await x.page.goto(x.server.url);
@@ -42,6 +44,9 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   const workId=new URL(x.page.url()).searchParams.get('work');
   const read=async()=>await (await fetch(x.server.url+'work/detail?id='+encodeURIComponent(workId))).json();
   assert.equal((await read()).work_status,'ready');
+  await started;
+  await x.page.waitForFunction(async ({base,id})=>(await (await fetch(base+'work/detail?id='+encodeURIComponent(id))).json()).supervisor?.can_pause,{base:x.server.url,id:workId});
+  assert.equal(calls,2,'Approved intake automatically makes one execution decision before Jev or Pause actions.');
   assert.equal((await read()).jev.enabled,null);
   assert.equal(await x.page.locator('#jev-toggle').isDisabled(),false);
   await x.page.locator('#jev-toggle').click();
@@ -60,12 +65,13 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   assert.equal((await read()).jev.enabled,false);
   await x.page.locator('[data-stage]').first().click();await x.page.locator('#stage-dialog[open]').waitFor();
   await x.page.locator('[data-stage-action="pause"]').click();
+  releaseExecution();
   await x.page.waitForFunction(()=>!document.querySelector('[data-stage-action="resume"]')?.disabled);
   assert.equal((await read()).paused,true);
-  assert.equal(calls,1,'Jev configuration and Pause must not add a model call');
-  assert.match(await x.page.locator('#stage-dialog').innerText(),/이번 회차.*AI 사용량/u);
+  assert.equal(calls,2,'Jev configuration and Pause must not add a model call');
+  assert.match(await x.page.locator('#stage-dialog').innerText(),/기존 결과와 증거는 보존합니다/u);
   await x.page.locator('[data-stage-action="resume"]').click();
-  await x.page.waitForFunction(()=>document.querySelector('#stage-state')?.textContent.includes('AI 연결 대기'));
+  await x.page.waitForFunction(async ({base,id})=>(await (await fetch(base+'work/detail?id='+encodeURIComponent(id))).json()).supervisor?.state==='waiting_model',{base:x.server.url,id:workId});
   assert.equal((await read()).paused,false);
   assert.equal((await read()).supervisor.state,'waiting_model');
   assert.equal((await read()).supervisor.current_run_only,true);
@@ -84,7 +90,7 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   assert.equal(await x.page.locator('.tile').count(),1);
   await x.page.locator('[data-view="done"]').click();
   assert.equal(await x.page.locator('.tile').count(),0);
-  assert.equal(calls,2,'Only explicit current-cycle Resume may add the execution model call');
+  assert.equal(calls,3,'Only explicit current-cycle Resume may add the next execution model call');
 });
 
 test('runtime fixture settings UI locks startup controls, offers retry after failure and unlocks after fresh load',async t=>{
