@@ -55,6 +55,7 @@ test('verified Pack receipt exposes only a durable bound recipe contract, never 
   assert.equal(receipt.effect_state,'verified');assert.equal(receipt.status,'succeeded');
   assert.equal(receipt.value.host_run_observation.state,'succeeded');
   assert.equal(receipt.value.host_run_observation.family,'portal.collect');
+  assert.equal(receipt.value.host_run_observation.request_id,'host-pack-request');
   assert.match(receipt.value.host_run_observation.result_sha256,/^[a-f0-9]{64}$/u);
   assert.equal(receipt.value.host_run_observation.stored_result_sha256,receipt.value.host_run_observation.result_sha256);
   assert.equal(receipt.value.host_run_observation.response_result_sha256,receipt.value.host_run_observation.stored_result_sha256);

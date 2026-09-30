@@ -796,11 +796,11 @@ export class WorkExecutionTools {
     }
     const id=requestId&&/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(requestId)?requestId:null;
     let executedContract:ReturnType<typeof executedPackContract>|null=null;
-    let hostRunObservation:{state:string;family:string;request_id?:string;result_sha256:string;stored_result_sha256:string;response_result_sha256:string;result_matches_stored:true}|null=null;
+    let hostRunObservation:{state:string;family:string;request_id:string;result_sha256:string;stored_result_sha256:string;response_result_sha256:string;result_matches_stored:true}|null=null;
     let outputCertificate:Awaited<ReturnType<typeof nativeOutputCertificate>>=null;
     let sourceReadback:ReturnType<typeof savedResearchSourceReadback>=null;
     if(name==='runtime_pack_run'&&data&&status==='succeeded'&&effectState==='verified'&&typeof data.run_id==='string'&&requestId){
-      try{const run=this.ownPack(data.run_id);if(run.request_id===requestId&&run.status===data.status&&hashJson(run.result)===hashJson(data.result)){executedContract=executedPackContract(run.recipe);hostRunObservation={state:run.status,family:run.recipe.family,result_sha256:hashJson(run.result),stored_result_sha256:hashJson(run.result),response_result_sha256:hashJson(data.result),result_matches_stored:true};}}catch{/* Never expose a contract for an unbound or changed run. */}
+      try{const run=this.ownPack(data.run_id);if(run.request_id===requestId&&run.status===data.status&&hashJson(run.result)===hashJson(data.result)){executedContract=executedPackContract(run.recipe);hostRunObservation={state:run.status,family:run.recipe.family,request_id:run.request_id,result_sha256:hashJson(run.result),stored_result_sha256:hashJson(run.result),response_result_sha256:hashJson(data.result),result_matches_stored:true};}}catch{/* Never expose a contract for an unbound or changed run. */}
     }
     if(name==='runtime_pack_status'&&data&&status==='succeeded'&&typeof data.run_id==='string'&&requestId){
       try{

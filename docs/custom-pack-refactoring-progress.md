@@ -40,6 +40,12 @@ PASS로 바꾸지 않는다. 개인 설치 교체와 새 release는 여전히 �
 최종 build와 복구/identity/실행 도구/통합 회귀 71건이 PASS했다. 기존 185건과
 겹치므로 수치를 합산하지 않는다. ledger 196 RQ, public boundary 758개 파일과
 git diff check도 PASS했다. 이 소스/테스트를 동결하고 quick 및 설치를 검증한다.
+548ab75의 실제 설치/업그레이드는 6/6 PASS였다. 첫 추가 quick receipt
+runtime-tests-2026-09-30T23-37-45-526Z는 1847 PASS / 1 FAIL /
+12 BLOCKED_ENV / 1 NOT_RUN이며 입력 무결성은 PASS였다. 실패는 실행과 상태
+조회 양쪽 host_run_observation의 동일성 검사로, 새 request_id를 상태 조회에만
+추가한 불일치였다. 양쪽에 실제 저장된 동일 Pack 요청 ID를 기록하도록
+수정했고 기존 동일성 검사를 유지한다. 이 최종 보정 뒤 전체 검증을 다시 한다.
 관리되는 관제센터의 재시작은 기존 supervisor를 복구한다. 독립 MCP 프로세스는
 실행/일정 활성화 때 supervisor를 켜므로 status 조회만으로 자동 일정을
 시작하지 않는 기존 운영 범위도 운영 문서에 명시했다.
