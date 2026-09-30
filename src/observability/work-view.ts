@@ -18,6 +18,8 @@ import {supervisorStatus} from '../work/supervisor.js';
 import {importedWorkAdoption} from '../work/adoption.js';
 import {WorkSchedules} from '../work/schedule.js';
 import {workImportExecutionOwner} from '../work/import-authority.js';
+import {readWorkLifecycle} from '../work/lifecycle.js';
+import {taskModelReceiptView} from '../work/task-models.js';
 
 const clean=(value:string,max=800)=>{const text=redact(value).replace(/https?:\/\/[^\s<>"']+/giu,raw=>{try{const url=new URL(raw);return url.origin+url.pathname;}catch{return '[URL]';}});return text.length<=max?text:text.slice(0,max-1)+'…';};
 const verified=(worker:SwarmRunSnapshot['workers'][string])=>worker.status==='succeeded'&&worker.result?.readback?.verified===true&&worker.quality?.accepted===true;
@@ -38,25 +40,57 @@ function boardRow(row:OfficeRow){
 export function readWorkBoard(store:PackStore,config:HostConfig,limit=60){
   const project=config.project.id;store.expireCodingStages(project);store.expireCodingDialogTurns(project);store.expireCodingDialogAdvice(project);
   const files=store.localFileExplorer(project,dirname(config.dbPath));
-  const works=store.officeWorkSummaries(project,limit).map(row=>{const base=boardRow(row),file=files.activity(row.id);const connection=importedConnectionReadiness(store,config,row.id);return {...base,...(connection?{status:connection.state}:{}),...(!base.run&&file?{status:base.paused?'paused':file.status,file_activity:file}:{}),...(hermesBoardRow(store,project,row.id)??{}),...(remoteBoard(store,project,row.id)??{})};});
-  for(const work of works){const adoption=importedWorkAdoption(store,config,work.id);if(adoption){Object.assign(work,{status:adoption.state,adoption,execution:{live:adoption.live,active_workers:adoption.live?1:0,basis:'original_runtime'}});continue;}if(work.run?.kind==='hermes'||work.run?.kind==='remote')continue;const observation=workObservation(store,project,work.id,String(work.status));Object.assign(work,{status:observation.status,execution:observation});if(store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_work_schedule'").get()){const schedule=new WorkSchedules(store,project).status(work.id);if(schedule?.enabled&&['succeeded','completed'].includes(observation.status))Object.assign(work,{status:'scheduled',schedule});}}
+  const works=store.officeWorkSummaries(project,limit).map(row=>{const base=boardRow(row),file=files.activity(row.id);const connection=importedConnectionReadiness(store,config,row.id);return {...base,lifecycle:readWorkLifecycle(store,project,row.id),...(connection?{status:connection.state}:{}),...(!base.run&&file?{status:base.paused?'paused':file.status,file_activity:file}:{}),...(hermesBoardRow(store,project,row.id)??{}),...(remoteBoard(store,project,row.id)??{})};});
+  for(const work of works){if(work.lifecycle.state!=='connected'){Object.assign(work,{status:work.lifecycle.state,execution:{live:false,active_workers:0,basis:'office_control_disconnected'}});continue;}const adoption=importedWorkAdoption(store,config,work.id);if(adoption){Object.assign(work,{status:adoption.state,adoption,execution:{live:adoption.live,active_workers:adoption.live?1:0,basis:'original_runtime'}});continue;}if(work.run?.kind==='hermes'||work.run?.kind==='remote')continue;const observation=workObservation(store,project,work.id,String(work.status));Object.assign(work,{status:observation.status,execution:observation});if(store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_work_schedule'").get()){const schedule=new WorkSchedules(store,project).status(work.id);if(schedule?.enabled&&['succeeded','completed'].includes(observation.status))Object.assign(work,{status:'scheduled',schedule});}}
   const auth_attention_count=authSites(store,config).filter(site=>site.handoff||site.state!=='ready'&&site.state!=='retry_requested').length;
   return {format:1,project_id:project,generated_at:new Date().toISOString(),works,auth_attention_count,read_only:false,coverage:{runtime_only:true,unobserved_work:'not_shown'}};
 }
 
 export function readWorkDetail(store:PackStore,config:HostConfig,id:string){
   const detail=buildWorkDetail(store,config,id);
+  const lifecycle=readWorkLifecycle(store,config.project.id,id),connected=lifecycle.state==='connected';
   const special='hermes' in detail||'remote' in detail;
   const status=String(detail.run_status??('work_status' in detail?detail.work_status:null)??'unobserved');
   const observation=special?null:workObservation(store,config.project.id,id,status);
-  const supervisor=supervisorStatus(store,config.project.id,id),adoption=importedWorkAdoption(store,config,id);
+  const supervisor=supervisorStatus(store,config.project.id,id,config),adoption=importedWorkAdoption(store,config,id);
   const activity=[...workTail(store,config.project.id,id),...(adoption?.activity??[])].sort((a,b)=>a.created_at.localeCompare(b.created_at)).slice(-100);
   const stages=supervisor&&supervisor.kind!=='swarm'?supervisor.steps.map((s,index)=>({id:s.id,label:`단계 ${index+1}`,objective:s.tool,status:s.status,verified:s.status==='succeeded',executor:'client',can_edit:false,attempts:1,owner:null})):null;
   const completionVerified=supervisor?.state==='succeeded'&&supervisor.result?.completion_verified===true;
   const schedule=store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_work_schedule'").get()?new WorkSchedules(store,config.project.id).status(id):null;
   const imported_execution_owner=workImportExecutionOwner(store,config.project.id,id),adoption_eligible=imported_execution_owner==='original_runtime'&&(!('route' in detail)||detail.route?.pack_family!=='coding.orchestrate')&&'run_id' in detail&&!detail.run_id&&!special;
-  return {...detail,display_status:adoption?.state??observation?.status??status,execution:adoption?{live:adoption.live,active_workers:adoption.live?1:0,basis:'original_runtime'}:observation,supervisor,schedule,adoption,imported_execution_owner,adoption_eligible,execution_action:special||adoption||supervisor?null:workDispatchOptions(store,config,id),...((adoption||supervisor)&&'work_control' in detail&&detail.work_control?{work_control:{...detail.work_control,can_pause:false}}:{}),activity,
-    ...(supervisor?{run_status:supervisor.state,completion_verified:completionVerified}:{}),...(supervisor?.kind==='swarm'?{agent_count:supervisor.live?supervisor.active_workers:0}:{}),...(stages?{stages,agent_count:supervisor!.live?1:0,verified_steps:stages.filter(s=>s.verified).length,total_steps:stages.length,progress_percent:completionVerified?100:null,progress_basis:'실제로 수행한 도구 단계 기준 · 완료조건 확인은 결과에 별도 표시'}:!special&&observation&&!observation.live&&'stages' in detail?{agent_count:0,stages:detail.stages.map(s=>['running','leased'].includes(s.status)?{...s,status:'execution_unobserved',owner:null}:s)}:{})};
+  const spec='spec' in detail?detail.spec as WorkProposal|null:null;
+  const metadata=activity.map(row=>({row,metadata:(row as {metadata?:Record<string,unknown>}).metadata}));
+  const observed_sources:Array<{url:string;title:string|null;observed_at:string;tool:string|null;engine:string|null}>=[];
+  for(const {metadata:meta} of metadata){
+    const source=meta?.source;
+    if(!source||typeof source!=='object'||!('url' in source)||typeof source.url!=='string'||!('observed_at' in source)||typeof source.observed_at!=='string')continue;
+    try{const url=new URL(source.url);if(!['http:','https:'].includes(url.protocol)||url.username||url.password)continue;}catch{continue;}
+    const url=clean(source.url,1000),title='title' in source&&typeof source.title==='string'?clean(source.title,200):null;
+    const item={url,title,observed_at:source.observed_at,tool:typeof meta?.tool_name==='string'?clean(meta.tool_name,100):null,engine:typeof meta?.engine==='string'?clean(meta.engine,40):null};
+    const previous=observed_sources.findIndex(value=>value.url===url);if(previous>=0)observed_sources.splice(previous,1);observed_sources.push(item);
+    if(observed_sources.length>20)observed_sources.shift();
+  }
+  const operation=metadata.findLast(({row})=>['models.allocating','models.assigned','models.fallback','models.reused','definition.started','definition.route','definition.finished','definition.failed','definition.blocked','model.started','model.result','tool.started','tool.result','source.observed','search.started','supervisor.verification','supervisor.replanning','supervisor.stopped','supervisor.result','run.waiting','run.result','dispatch.started','dispatch.waiting','dispatch.rejected','dispatch.planning','dispatch.executing','dispatch.failed'].includes(row.kind));
+  // Legacy saved Work definitions can contain only the route and checks. Missing
+  // analysis fields are unobserved, not a new inferred execution contract.
+  const knownText=(value:unknown,max:number)=>typeof value==='string'?clean(value,max):null;
+  const analysis=spec?{status:'work_status' in detail?detail.work_status:null,outcome:knownText(spec.desired_outcome,2000),route_kind:spec.route?.kind??null,pack_family:spec.route?.pack_family??null,requested_effect:spec.requested_effect??null,steps:Array.isArray(spec.plan?.steps)?spec.plan.steps.map(step=>({id:step.id,goal:knownText(step.goal,500),effect:step.effect,depends_on:step.depends_on})):null,assumptions:Array.isArray(spec.assumptions)?spec.assumptions.map(value=>({field:knownText(value.field,100),value:knownText(value.value,500),basis:knownText(value.basis,500)})):null}:null;
+  const current_operation=operation?{kind:operation.row.kind,summary:operation.row.summary,observed_at:operation.row.created_at,metadata:operation.metadata,...(typeof operation.metadata?.tool_name==='string'?{tool_name:clean(operation.metadata.tool_name,100)}:{}),...(typeof operation.metadata?.executor==='string'?{executor:clean(operation.metadata.executor,80)}:{}),...(typeof operation.metadata?.engine==='string'?{engine:clean(operation.metadata.engine,40)}:{})}:null;
+  return {...detail,lifecycle,display_status:adoption?.state??observation?.status??status,execution:adoption?{live:adoption.live,active_workers:adoption.live?1:0,basis:'original_runtime'}:observation,supervisor,schedule,adoption,imported_execution_owner,adoption_eligible:connected&&adoption_eligible,execution_action:!connected||special||adoption||supervisor?null:workDispatchOptions(store,config,id),...((adoption||supervisor)&&'work_control' in detail&&detail.work_control?{work_control:{...detail.work_control,can_pause:false}}:{}),activity,
+    analysis,observed_sources,current_operation,task_models:taskModelReceiptView(store,config.project.id,id),
+    ...(supervisor?{run_status:supervisor.state,completion_verified:completionVerified}:{}),...(supervisor?.kind==='swarm'?{agent_count:supervisor.live?supervisor.active_workers:0}:{}),...(stages?{stages,agent_count:supervisor!.live?1:0,verified_steps:stages.filter(s=>s.verified).length,total_steps:stages.length,progress_percent:completionVerified?100:null,progress_basis:'실제로 수행한 도구 단계 기준 · 완료조건 확인은 결과에 별도 표시'}:!special&&observation?.live&&observation.status==='defining'&&activity.some(row=>row.kind==='definition.started')?{stages:[{id:'definition',label:'업무 분석',objective:'지침·완료조건·실행 계획 구성',status:'defining',verified:false,executor:'AI',can_edit:false,attempts:1,owner:null}],verified_steps:0,total_steps:1,progress_percent:null}:!special&&observation&&!observation.live&&'stages' in detail?{agent_count:0,stages:detail.stages.map(s=>['running','leased'].includes(s.status)?{...s,status:'execution_unobserved',owner:null}:s)}:{}),
+    ...(!connected?{display_status:lifecycle.state,run_status:lifecycle.state,last_observed_status:status,execution:{live:false,active_workers:0,basis:'office_control_disconnected'},agent_count:0,
+      supervisor:supervisor?{...supervisor,live:false,active_workers:0,can_pause:false,can_resume:false,can_edit:false}:null,
+      adoption:adoption?{...adoption,live:false,capabilities:{observe:false,send:false,pause:false,resume:false,review:false,permission:false}}:null,
+      ...('control' in detail&&detail.control?{control:{...detail.control,can_pause:false}}:{}),
+      ...('work_control' in detail&&detail.work_control?{work_control:{...detail.work_control,can_pause:false}}:{}),
+      ...('jev' in detail&&detail.jev?{jev:{...detail.jev,can_change:false}}:{}),
+      ...('coding_attach' in detail&&detail.coding_attach?{coding_attach:{...detail.coding_attach,eligible:false}}:{}),
+      ...('imported_coding' in detail&&detail.imported_coding?{imported_coding:{...detail.imported_coding,can_start:false,can_step:false}}:{}),
+      ...('coding_dialog' in detail&&detail.coding_dialog?{coding_dialog:{...detail.coding_dialog,can_turn:false,can_stop:false,needs_reconcile:false}}:{}),
+      ...('hermes' in detail?{hermes:{...detail.hermes,can_send:false,detached:true,needs_review:false,permission:null}}:{}),
+      ...('remote' in detail?{remote:{...detail.remote,can_send:false,can_stop:false,needs_review:false}}:{}),
+      ...(!special?{stages:(stages??('stages' in detail?detail.stages:[])).map(s=>({...s,can_edit:false,owner:null,...(['running','leased','defining'].includes(s.status)?{status:'execution_unobserved'}:{})}))}:{})}:{} )};
 }
 function buildWorkDetail(store:PackStore,config:HostConfig,id:string){
   const remote=remoteDetail(store,config.project.id,id);if(remote)return remote;
@@ -108,12 +142,10 @@ function buildWorkDetail(store:PackStore,config:HostConfig,id:string){
   codingDialog.older_turns_available=codingDialog.turn_count>turns.length;
   stages=turns.map(turn=>({id:turn.id,label:`Codex 대화 ${turn.ordinal+1}`,objective:clean(turn.instruction,500),status:turn.status,verified:false,executor:'Codex CLI',can_edit:false,attempts:turn.status==='queued'?0:1,owner:turn.status==='running'?'Codex CLI':null}));
     events=store.officeEvents(project,dialog.id).slice(-20).map(item=>({id:String(item.id),kind:item.kind,detail:clean(item.detail,240),worker_id:item.worker_id,created_at:item.created_at}));
-  }else if(workPlan?.steps.length&&workPlan.steps.length>1){
+  }else if(workPlan?.steps.length){
     stages=workPlan.steps.map(step=>({id:step.id,label:workPlan.source==='request'?'계획 단계':'가져온 단계',objective:clean(step.goal,500),status:'pending',verified:false,executor:null,can_edit:false,attempts:0,owner:null}));
   }else if(importedPlan?.steps.length){
     stages=importedPlan.steps.map(step=>({id:step.id,label:'가져온 단계',objective:step.goal,status:'pending',verified:false,executor:null,can_edit:false,attempts:0,owner:null}));
-  }else if(spec?.completion_checks){
-    stages=spec.completion_checks.map(check=>({id:check.id,label:'완료 확인',objective:clean(check.result,500),status:'pending',verified:false,executor:null,can_edit:false,attempts:0,owner:null}));
   }
   if(!latest&&fileActivity){
     runStatus=fileActivity.activity!.status;
@@ -125,7 +157,7 @@ function buildWorkDetail(store:PackStore,config:HostConfig,id:string){
   const activeSwarm=latest?.source_kind==='swarm'&&runStatus!==null&&['running','needs_human'].includes(runStatus);
   const activeCoding=['coding','coding_dialog'].includes(latest?.source_kind??'')&&runStatus!==null&&['ready','running','queued','advising','reconciliation_required'].includes(runStatus);
   const connection=importedConnectionReadiness(store,config,id);
-  const workControl=intake?{paused:intake.paused,revision:intake.revision,can_pause:!connection&&!activePack&&!activeSwarm&&!activeCoding&&['ready','running','needs_model'].includes(intake.status),scope:'future_dispatch' as const}:null;
+  const workControl=intake?{paused:intake.paused,revision:intake.revision,can_pause:!connection&&!activePack&&!activeSwarm&&!activeCoding&&['defining','ready','running','needs_model'].includes(intake.status),scope:'future_dispatch' as const}:null;
   const progress=(swarm||coding)&&stages.length?Math.floor(verifiedSteps*100/stages.length):null;
   const codingAttach={eligible:Boolean(intake?.status==='ready'&&!intake.paused&&spec?.route.kind==='pack'&&spec.route.pack_family==='coding.orchestrate'&&!latest),suggested_project_ref:config.coding?.projects.find(item=>item.root===(imported?.kind==='project'?(imported.body as {scan?:ProjectScan}).scan?.root:undefined))?.id??null,registered_project_refs:config.coding?.projects.map(item=>item.id)??[]};
   return {format:1,id,imported_connection:connection,file_activity:fileActivity,title:clean(record.title,160),goal:clean(record.goal,2000),prompt:intake?clean(intake.prompt,8000):null,work_status:intake?.status??null,mode:intake?.mode??null,revision:intake?.revision??null,paused:Boolean(intake?.paused||control?.paused),jev:intake?{enabled:intake.jev_enabled,cost_consent_at:intake.jev_cost_consent_at,optional:true,can_change:['ready','running'].includes(intake.status)}:null,jev_recommendations:jevRecommendations,jev_recommendation_status:jevRecommendationStatus,work_plan:workPlan,context_metrics:intake?workContextMetrics(store,project,id):null,imported_plan:importedPlan,imported_coding:importedCodingReadiness(store,config,id),coding_attach:codingAttach,coding_dialog:codingDialog,spec:intake?.spec??null,questions:intake?.questions??[],answers:intake?.answers??{},route:spec?.route??null,pack,run_id:latest?.source_id??null,run_status:runStatus,runs,client_handoffs:store.clientHandoffs(project,id),swarm,coding,agent_count:stages.filter(stage=>stage.status==='leased'||stage.status==='running').length,verified_steps:verifiedSteps,total_steps:stages.length,progress_percent:progress,progress_basis:swarm?'독립 확인과 품질 승인된 단계만 계산':coding?'단계 실행·검증 완료 기준이며 업무 완료 조건은 별도 확인':'이 실행 경로는 단계별 독립 검증 진행률을 제공하지 않음',stages,control,work_control:workControl,events,updated_at:record.updated_at,completion_verified:false,completion_note:'Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.'};

@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createServer} from 'node:http';
 import {DatabaseSync} from 'node:sqlite';
 import {browserTargetSchema,browserExecutorsSchema} from '../dist/browser/executor-contracts.js';
-import {RoutedBrowser,eligibleBrowserTargets,assertBrowserUrl} from '../dist/browser/executor-routing.js';
+import {RoutedBrowser,eligibleBrowserTargets,assertBrowserUrl,browserTargets,publicBrowserRecovery} from '../dist/browser/executor-routing.js';
 import {BrowserExecutorJournal} from '../dist/browser/executor-journal.js';
 import {collectSource} from '../dist/packs/sources.js';
 import {loadHostConfig} from '../dist/interface/config.js';
@@ -32,6 +32,22 @@ test('runtime contract browser URL gate rejects credential forwarding, secret qu
   for(const url of ['https://user:pass@example.test/','https://example.test/?token=secret','https://other.test/','javascript:alert(1)'])assert.throws(()=>assertBrowserUrl(url,['https://example.test']));
   assert.equal(assertBrowserUrl('https://example.test/?q=search',['https://example.test']).hostname,'example.test');
 });
+test('runtime contract public recovery goes headless then managed VM then Aside, never Neo or a reverse loop',async()=>{
+  const targets=[target('headless'),target('vm',{environment:'ubuntu_vm'}),target('neo',{engine:'neo',environment:'host_foreground',endpoint:'http://127.0.0.1:9999/mcp',priority:100}),target('aside',{engine:'aside',environment:'host_foreground',executable:'/fixture/aside',priority:1})];
+  const log=[],browser=new RoutedBrowser(config(targets),{...options(t=>fake(t,log,t.id==='aside'?{}:{probeError:'ECONNREFUSED'})),fallback_preferences:publicBrowserRecovery()},['https://example.test']);
+  await browser.open('https://example.test/');assert.equal(browser.target.id,'aside');
+  assert.deepEqual(log.filter(s=>s.endsWith(':probe')),['headless:probe','vm:probe','aside:probe']);await browser.close();
+  assert.deepEqual(publicBrowserRecovery({environment:'ubuntu_vm'}),[{environment:'host_foreground',preferred_engine:'aside'}]);
+  assert.deepEqual(publicBrowserRecovery({environment:'host_foreground'}),[]);
+  assert.deepEqual(publicBrowserRecovery({environment:'owned_headless',preferred_engine:'playwright'}),[]);
+  assert.deepEqual(eligibleBrowserTargets(config(targets),{environment:'host_foreground',preferred_engine:'aside'}).map(t=>t.id),['aside']);
+});
+test('runtime contract configured managed VM appears once without starting a guest or claiming Windows VM support',()=>{
+  const c={...config([target('headless')]),swarm:{visual:{owned_vm:{id:'test-vm'}}}};
+  assert.deepEqual(browserTargets(c).map(t=>[t.id,t.environment]),[['headless','owned_headless'],['login-owned-ubuntu-vm','ubuntu_vm']]);
+  assert.deepEqual(browserTargets({...c,browserExecutors:{targets:[target('vm',{environment:'ubuntu_vm'})]}}).map(t=>t.id),['vm']);
+  assert.equal(browserTargets(config([target('headless')])).length,1);
+});
 test('runtime contract browser transport failure hands off with fresh observation and preserves completed steps',async()=>{
   const log=[],events=[],c=config([target('first'),target('second')]);
   const browser=new RoutedBrowser(c,{...options(t=>fake(t,log,t.id==='first'?{readError:'ECONNRESET'}:{})),event:e=>events.push(e)},['https://example.test']);
@@ -40,8 +56,40 @@ test('runtime contract browser transport failure hands off with fresh observatio
   assert.ok(events.some(e=>e.kind==='handoff'&&e.from==='first'));assert.equal(browser.checkpoint().effect_state,'none');await browser.close();
 });
 
+test('runtime contract read-only technical fallback crosses only explicitly offered registered environments',async()=>{
+  const targets=[target('guest',{environment:'windows_vm'}),target('ubuntu',{environment:'ubuntu_vm'}),target('windows',{environment:'host_foreground'})];
+  const log=[],events=[],browser=new RoutedBrowser(config(targets),{
+    ...options(t=>fake(t,log,t.id==='windows'?{}:{probeError:'ECONNREFUSED'})),
+    preference:{environment:'windows_vm'},fallback_environments:['ubuntu_vm','host_foreground'],event:e=>events.push(e),
+  },['https://example.test']);
+  await browser.open('https://example.test/');
+  assert.equal(browser.target.id,'windows');
+  assert.deepEqual(log.filter(item=>item.endsWith(':probe')),['guest:probe','ubuntu:probe','windows:probe']);
+  assert.ok(events.some(event=>event.kind==='failed'&&event.environment==='windows_vm'));
+  assert.ok(events.some(event=>event.kind==='selected'&&event.environment==='host_foreground'));
+  await browser.close();
+  const without=new RoutedBrowser(config(targets),{...options(t=>fake(t,[],t.id==='guest'?{probeError:'ECONNREFUSED'}:{})),preference:{environment:'windows_vm'}},['https://example.test']);
+  await assert.rejects(without.open('https://example.test/'),/ECONNREFUSED/);await without.close();
+});
+
+test('runtime contract login/access failure and user-pinned engine never cross environments',async()=>{
+  const targets=[target('guest',{environment:'windows_vm'}),target('ubuntu',{environment:'ubuntu_vm'})];
+  const log=[],browser=new RoutedBrowser(config(targets),{
+    ...options(t=>fake(t,log,t.id==='guest'?{readError:'PACK_WAITING_AUTH'}:{})),
+    preference:{environment:'windows_vm'},fallback_environments:['ubuntu_vm'],
+  },['https://example.test']);
+  await browser.open('https://example.test/');await assert.rejects(browser.observe(),/PACK_WAITING_AUTH/);
+  assert.equal(log.includes('ubuntu:open'),false);await browser.close();
+  const pinnedLog=[],pinned=new RoutedBrowser(config(targets),{
+    ...options(t=>fake(t,pinnedLog,t.id==='guest'?{probeError:'ECONNREFUSED'}:{})),
+    preference:{environment:'windows_vm',preferred_engine:'playwright'},fallback_environments:['ubuntu_vm'],
+  },['https://example.test']);
+  await assert.rejects(pinned.open('https://example.test/'),/ECONNREFUSED/);
+  assert.equal(pinnedLog.includes('ubuntu:probe'),false);await pinned.close();
+});
+
 test('runtime contract browser pre-navigation launch and absent binary errors select an eligible replacement',async()=>{
-  for(const error of [Error('browserType.launchPersistentContext: spawn UNKNOWN'),Object.assign(Error('missing executable'),{code:'ENOENT'})]){
+  for(const error of [Error('browserType.launchPersistentContext: spawn UNKNOWN'),Object.assign(Error('missing executable'),{code:'ENOENT'}),Error('page.goto: net::ERR_CONNECTION_RESET at https://example.test/')]){
     const log=[],events=[],browser=new RoutedBrowser(config([target('first'),target('second')]),{...options(t=>t.id==='first'?{...fake(t,log),async open(){throw error;}}:fake(t,log)),event:e=>events.push(e)},['https://example.test']);
     await browser.open('https://example.test/');assert.equal(browser.target.id,'second');assert.ok(events.some(e=>e.kind==='failed'&&e.reason==='executor_unavailable'));await browser.close();
   }

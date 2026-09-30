@@ -64,7 +64,11 @@ test('runtime fixture confirmation tags render on board, list, detail and site l
       // Keep both sides of the confirmation fixture consistent; a real live
       // defining Work must not be relabelled from a stale run_status alone.
       if(url.pathname.endsWith('/work/detail'))return route.fulfill({json:{...detail,run_status:'needs_human',display_status:'needs_human',execution:{...detail.execution,status:'needs_human',live:false,active_workers:0}}});
-      if(url.pathname.endsWith('/connections/status'))return route.fulfill({json:{sites:[{site:'example.test',label:'Test portal',state:'challenge'}],profile_preserved:true,vnc:null}});
+      if(url.pathname.endsWith('/connections/status'))return route.fulfill({json:{
+        sites:[{site:'example.test',label:'Test portal',state:'challenge',profiles:{'fixture-windows':{state:'challenge',handoff:false}}}],
+        targets:[{id:'fixture-windows',environment:'windows',engine:'aside',label:'Windows · Aside',availability:'ready'}],
+        profile_preserved:true,vnc:null,vm_state:'not_configured',busy:false,login_guaranteed:false,
+      }});
       return route.continue();
     });
     const expected=lang==='ko'?'사용자 확인 필요':'User confirmation needed';
@@ -80,6 +84,12 @@ test('runtime fixture confirmation tags render on board, list, detail and site l
     await page.goto(server.url+'connections');
     await page.locator('#sites .badge').filter({hasText:expected}).waitFor();
     assert.equal(await page.locator('#sites .badge').textContent(),expected);
+    assert.equal(await page.locator('#sites .browser-choice').inputValue(),'fixture-windows');
+    assert.equal(await page.locator('#sites button').count(),3);
+    assert.equal(await page.locator('#sites button:disabled').count(),1,'A challenge keeps login controls available but cannot be cleared by retry');
+    assert.equal(await page.getByRole('button',{name:lang==='ko'?'재시도 허용':'Allow retry',exact:true}).isDisabled(),true);
+    assert.equal(await page.getByRole('button',{name:lang==='ko'?'로그인 창 열기':'Open login window',exact:true}).isEnabled(),true);
+    assert.equal(await page.getByRole('button',{name:lang==='ko'?'로그인 확인':'Check login',exact:true}).isEnabled(),true);
     await page.getByText(lang==='ko'?'로그인이나 사용자 확인이 끝날 때까지 해당 worker는 대기합니다.':'The worker waits until login or user confirmation is complete.',{exact:true}).waitFor();
     assert.doesNotMatch(await page.locator('body').innerText(),/사람 확인 필요|Needs a person/u);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);

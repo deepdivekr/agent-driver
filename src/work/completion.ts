@@ -1,5 +1,5 @@
 import {z} from 'zod';
-import {hashJson,type StructuredModel} from '../taskpack/adaptive-spec.js';
+import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientHooks,type WorkClientProgress} from './client-executor.js';
 import {type PackStore} from '../packs/store.js';
@@ -167,6 +167,7 @@ const quoteAudit=(answer:WorkCompletionVerification|null)=>answer?.checks.map(ch
 
 /** No model claim becomes completion without host receipts, grounded excerpts and a separate check. */
 export function createWorkCompletionVerifier(model:StructuredModel,options:WorkCompletionVerifierOptions={}):WorkCompletionVerifier{
+  model=modelForRole(model,'verifier');
   const successes=new Set<string>(),inFlight=new Map<string,Promise<boolean>>();
   return async(checks,observations,claim)=>{
     const turn=Math.max(0,...observations.map(item=>item.invocation.turn+1)),stage_id='completion.verify';

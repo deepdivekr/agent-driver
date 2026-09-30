@@ -7,15 +7,20 @@ import {requireCondition} from '../core/contracts.js';
 import {normalizeCompatibleBaseUrl,type ApiProvider} from '../integrations/model-provider.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
 import {FAST_MODEL_DEFAULTS} from '../integrations/fast-models.js';
+import {type ModelRole} from '../taskpack/adaptive-spec.js';
 
 const modelId=z.string().min(1).max(200).refine(value=>!/[\s\x00-\x1f]/u.test(value)&&!/^(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,}|gh[pousr]_[A-Za-z0-9]{20,})$/u.test(value));
 const key=z.string().min(16).max(4096).refine(value=>!/[\s\x00-\x1f]/u.test(value));
 const provider=z.enum(['openai','anthropic','openrouter','openai_compatible']);
 const clientModels=z.object({codex:modelId.nullable().default(null),claude:modelId.nullable().default(null),opencode:modelId.nullable().default(null)}).strict();
-const choice=z.object({mode:z.enum(['subscription','api']),client:z.enum(['auto','mcp','codex','claude','opencode']),client_models:clientModels.default({codex:null,claude:null,opencode:null}),api_to_subscription:z.boolean().default(false),api_provider:provider.default('openai'),api_model:modelId,api_base_url:z.string().max(2048).default(''),reasoning:z.enum(['low','medium','high']),jev:z.enum(['inherit','on','off'])}).strict();
+const codexEffort=z.enum(['none','minimal','low','medium','high','xhigh','max','ultra']);
+const roleModels=z.object({planner:clientModels.optional(),worker:clientModels.optional(),verifier:clientModels.optional(),synthesis:clientModels.optional()}).strict();
+const choice=z.object({mode:z.enum(['subscription','api']),client:z.enum(['auto','mcp','codex','claude','opencode']),client_models:clientModels.default({codex:null,claude:null,opencode:null}),role_model_mode:z.enum(['inherit','manual','auto']).optional(),role_models:roleModels.optional(),codex_reasoning_effort:codexEffort.nullable().optional(),api_to_subscription:z.boolean().default(false),api_provider:provider.default('openai'),api_model:modelId,api_base_url:z.string().max(2048).default(''),reasoning:z.enum(['low','medium','high']),jev:z.enum(['inherit','on','off'])}).strict();
 const verification=z.object({fingerprint:z.string().length(64),provider:provider,model:modelId,verified_at:z.string().datetime()}).strict();
 const savedSchema=z.object({format:z.literal(1),revision:z.number().int().positive(),selection:choice,onboarding_step:z.number().int().min(0).max(4),inherit_global:z.boolean().optional(),api_key:key.nullable().optional(),openai_key:key.nullable().optional(),jev_key:key.nullable().optional(),api_verification:verification.optional()}).strict();
 export type ModelSettings=z.infer<typeof savedSchema>;
+/** Old role maps predate the mode selector and keep their manual behavior. */
+export const roleModelMode=(selection:ModelSettings['selection']|undefined)=>selection?.role_model_mode??(selection?.role_models?'manual':'inherit');
 export type ApiVerification=z.infer<typeof verification>;
 export const settingsUpdate=z.object({revision:z.number().int().nonnegative(),selection:choice,onboarding_step:z.number().int().min(0).max(4),inherit_global:z.boolean().optional(),api_action:z.enum(['keep','replace','remove']).default('keep'),api_key:key.optional(),openai_action:z.enum(['keep','replace','remove']).default('keep'),openai_key:key.optional(),jev_action:z.enum(['keep','replace','remove']).default('keep'),jev_key:key.optional()}).strict();
 export const modelSettingsPath=(config:Pick<HostConfig,'dbPath'>)=>join(dirname(config.dbPath),'.connection','models.json');
@@ -40,6 +45,20 @@ export function scopedModelConfiguration(path:string,scope:ModelScope='global',b
   const environment=overridden?modelScopeBase(path,scope,saved!.selection,base):base;
   return {saved,base:environment,environment:effectiveModelEnvironment(saved,environment),source:overridden?'coding':'global'} as const;
 }
+/** Role is host-assigned, never read from a page/model's proposed provider name.
+ * API-default operation (including a later auth fallback) keeps saved models.
+ * Null overrides inherit; they never silently downgrade or enable paid calls. */
+export function roleModelConfiguration(path:string,scope:ModelScope,base:NodeJS.ProcessEnv,role:ModelRole){
+  const context=scopedModelConfiguration(path,scope,base),global=scope==='global'?context.saved:readModelSettings(path);
+  const subscription=(context.saved?.selection.mode??(base.AGENT_DRIVER_LLM_CLIENT==='api'?'api':'subscription'))==='subscription';
+  const globalSubscription=(global?.selection.mode??(base.AGENT_DRIVER_LLM_CLIENT==='api'?'api':'subscription'))==='subscription';
+  // A coding override may contain hidden role values copied from the global
+  // form. Its explicit coding client models still take precedence.
+  const overrides=subscription&&globalSubscription&&context.source==='global'&&roleModelMode(context.saved?.selection)==='manual'?context.saved?.selection.role_models?.[role]:undefined;
+  const environment={...context.environment};
+  for(const client of ['codex','claude','opencode'] as const)if(overrides?.[client])environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]=overrides[client]!;
+  return {...context,environment};
+}
 function safeFile(path:string){
   const stat=lstatSync(path);requireCondition(stat.isFile()&&!stat.isSymbolicLink()&&stat.nlink===1,'MODEL_SETTINGS_UNSAFE_FILE');
 }
@@ -58,6 +77,7 @@ export function effectiveModelEnvironment(saved:ModelSettings|null,base:NodeJS.P
   const connected=['mcp','codex','claude','opencode'];
   env.AGENT_DRIVER_LLM_CLIENT=saved.selection.mode==='api'?'api':saved.selection.client==='auto'?connected.join(','):[saved.selection.client,...connected.filter(client=>client!==saved.selection.client)].join(',');
   for(const client of ['codex','claude','opencode'] as const){const name=`AGENT_DRIVER_${client.toUpperCase()}_MODEL`;if(saved.selection.client_models[client])env[name]=saved.selection.client_models[client]!;else delete env[name];}
+  if(saved.selection.codex_reasoning_effort!==undefined){if(saved.selection.codex_reasoning_effort)env.AGENT_DRIVER_CODEX_REASONING_EFFORT=saved.selection.codex_reasoning_effort;else delete env.AGENT_DRIVER_CODEX_REASONING_EFFORT;}
   env.AGENT_DRIVER_API_PROVIDER=saved.selection.api_provider;env.AGENT_DRIVER_API_MODEL=saved.selection.api_model;env.AGENT_DRIVER_API_REASONING=saved.selection.reasoning;
   if(saved.selection.api_provider==='openai_compatible')env.AGENT_DRIVER_API_BASE_URL=normalizeCompatibleBaseUrl(saved.selection.api_base_url);else delete env.AGENT_DRIVER_API_BASE_URL;
   return env;
@@ -72,7 +92,12 @@ export function publicModelSettings(saved:ModelSettings|null,base:NodeJS.Process
   const selectedProvider=saved?.selection.api_provider??defaultProvider;
   const present=Boolean(env.AGENT_DRIVER_API_KEY||(selectedProvider==='openai'?env.OPENAI_API_KEY:selectedProvider==='anthropic'?env.ANTHROPIC_API_KEY:selectedProvider==='openrouter'?env.OPENROUTER_API_KEY:undefined));
   const verified=Boolean(saved?.api_verification&&saved.api_verification.fingerprint===modelSettingsFingerprint(saved,base));
-  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:base.AGENT_DRIVER_LLM_CLIENT==='api'?'api':'subscription',client:'auto',client_models:{codex:null,claude:null,opencode:null},api_to_subscription:false,api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??FAST_MODEL_DEFAULTS[defaultProvider],api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
+  const apiMode=base.AGENT_DRIVER_LLM_CLIENT==='api',preferred=base.AGENT_DRIVER_LLM_CLIENT?.split(',')[0]?.trim();
+  const client:ModelSettings['selection']['client']=apiMode?'auto':preferred==='auto'||preferred==='mcp'||preferred==='codex'||preferred==='claude'||preferred==='opencode'?preferred:'codex';
+  const newCodexDefault=!apiMode&&client==='codex';
+  const ambientEffort=codexEffort.safeParse(base.AGENT_DRIVER_CODEX_REASONING_EFFORT);
+  const ambientModel=(value:string|undefined)=>{const parsed=modelId.safeParse(value);return parsed.success?parsed.data:null;};
+  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:apiMode?'api':'subscription',client,client_models:{codex:ambientModel(base.AGENT_DRIVER_CODEX_MODEL)??(newCodexDefault?'gpt-6-sol':null),claude:ambientModel(base.AGENT_DRIVER_CLAUDE_MODEL),opencode:ambientModel(base.AGENT_DRIVER_OPENCODE_MODEL)},codex_reasoning_effort:ambientEffort.success?ambientEffort.data:newCodexDefault?'high':null,api_to_subscription:false,api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??FAST_MODEL_DEFAULTS[defaultProvider],api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
     api_key_present:present,api_key_stored:Boolean(saved?.api_key??saved?.openai_key),openai_key_present:present,openai_key_stored:Boolean(saved?.api_key??saved?.openai_key),jev_key_present:Boolean(env.TYPESAFE_API_KEY),jev_key_stored:Boolean(saved?.jev_key),
     api_connection:verified?'ready':'unchecked',api_verified_at:verified?saved!.api_verification!.verified_at:null,
     applies_to:'next_model_call',in_flight_calls:'unchanged',external_worker_models:'client_managed',credentials_exposed:false,storage:'local_private_file'};

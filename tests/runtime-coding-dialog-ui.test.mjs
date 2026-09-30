@@ -31,6 +31,9 @@ test('Work detail keeps full Codex response, exact session and supervisor advice
   const x=await setup(t),before=readWorkDetail(x.store,x.config,x.workId);
   assert.equal(before.coding_attach.eligible,true);
   assert.equal(before.coding_dialog,null);
+  assert.equal(before.analysis.outcome,null);
+  assert.equal(before.analysis.steps,null);
+  assert.equal(before.analysis.assumptions,null);
   const dialog=x.store.beginCodingDialog(x.project,'request-1',x.workId,'demo','/fixture/repo','fingerprint','gpt-test',git,session,'기능을 구현한다').dialog;
   const queued=x.store.queueCodingDialogTurn(x.project,dialog.id,dialog.revision,'turn-1','기능을 구현하고 변경사항을 설명해줘');
   const claimed=x.store.claimCodingDialogTurn(x.project,dialog.id,queued.dialog.revision);
@@ -45,6 +48,7 @@ test('Work detail keeps full Codex response, exact session and supervisor advice
   assert.equal(detail.coding_dialog.can_turn,true);
   assert.equal(detail.coding_dialog.turns[0].reply,reply);
   assert.equal(detail.coding_dialog.turns[0].advice,'다음에는 테스트를 검토하는 것이 좋습니다.');
+  assert.equal(detail.analysis.outcome,null,'legacy analysis fields stay unobserved without changing the exact CLI answer');
   assert.equal(detail.progress_percent,null);
   assert.equal(detail.completion_verified,false);
 });

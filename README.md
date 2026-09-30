@@ -31,7 +31,7 @@ These screenshots show setup and queued work, not completed live-agent runs.
 
 ## Supported environments
 
-See [Work operation](docs/work-operation.md) for the development execution loop and [verification](docs/verification/phase-102-work-operation.md) for actual acceptance results. A locally applied development build is separate from the public v0.3.1 installer below.
+See [Work operation](docs/work-operation.md) for the development execution loop and [recent verification](docs/verification/phase-105-work-live-action.md) for actual observations. A locally applied development build is separate from the public v0.3.1 installer below.
 
 | Environment | Status |
 |---|---|
@@ -60,6 +60,8 @@ It prepares a dedicated Node.js, dependencies, and Chromium, then opens the Cont
 Missing system libraries produce setup instructions; the installer does not run privileged commands automatically.
 
 ### Connect in the Control Center
+
+These steps describe the published v0.3.1 installer. For automatic execution in the current source, see [From request to result](#from-request-to-result).
 
 1. **Clients** — check installation and login, then register MCP.
 2. **Execution** — use the default browser or connect an optional executor.
@@ -97,11 +99,12 @@ A **Work** holds your request, completion checks, progress, and run history.
 
 This flow describes the current source checkout. The installer above remains pinned to the published v0.3.1.
 
-1. **Register** a request. Review the proposed goal and completion checks; registration alone does not run it.
-2. **Run** from the Work detail after confirming model usage.
-3. **Follow** actual execution events in the live log, including any wait or handoff reason.
-4. **Pause, edit, and resume** from the same page. New instructions update the next steps; saved output and evidence remain available.
-5. **Read the result** in the app, with sources and downloads for recorded output files. A saved result is not marked complete until its completion checks pass.
+1. **Start work** with one request. The detail opens immediately while AI defines the work and starts its current run using your configured AI allowance.
+2. **Follow** the readable execution timeline: the chosen Pack, observed sources, actual workers, and any wait or handoff reason.
+3. **Adjust** a stage by clicking it. Its dialog offers pause, new instructions, and resume at the supported execution boundary.
+4. **Read the result** in the app, with sources and downloads. A saved result is not marked complete until its completion checks pass.
+
+Missing connections or required choices appear in the detail. Future schedules, external changes, and original-runtime controls keep their own approval boundaries. MCP registration and importing an existing bot do not start a duplicate run.
 
 New Work returns results in the app by default. A messenger or email connection is not required.
 

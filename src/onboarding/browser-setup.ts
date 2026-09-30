@@ -9,7 +9,7 @@ import {nativeProcessRunner,type SafeProcessRunner} from '../integrations/subscr
 
 type Engine='playwright'|'aside'|'neo';
 export const browserSetupGuides={
-  playwright:{label:'Playwright',docs:'https://playwright.dev/docs/browsers',setup:'기본 백그라운드 브라우저입니다. 브라우저 파일이 없으면 준비 버튼을 누르세요.',auth:'별도 서비스 계정은 필요 없습니다. 사이트 로그인은 업무가 요청할 때 진행합니다.'},
+  playwright:{label:'Playwright',docs:'https://playwright.dev/docs/browsers',setup:'기본 백그라운드 브라우저입니다. 브라우저 파일이 없으면 준비 버튼을 누르세요.',auth:'별도 서비스 계정은 필요 없습니다. 사이트 로그인에서 업무 전에 로그인 유지를 준비할 수 있습니다.'},
   aside:{label:'Aside',docs:'https://docs.aside.com/help/get-started',download:'https://aside.com/download',connection:'https://docs.aside.com/help/developers',setup:'사용할 컴퓨터에 Aside를 설치·실행한 뒤 Settings → Developers에서 CLI를 설치하세요.',auth:'Aside의 첫 실행·로그인은 Aside에서 완료하세요. 로컬 연결은 --host local을 사용하며, 사이트 로그인은 별도입니다.'},
   neo:{label:'BrowserOS Neo',docs:'https://www.browseros.com/',download:'https://www.browseros.com/',connection:'https://docs.browseros.com/',setup:'사용할 컴퓨터에 Neo를 설치·실행하고 로컬 MCP 연결을 켜세요. 기본 주소는 127.0.0.1:9010/mcp입니다.',auth:'필요한 첫 실행·로그인은 Neo에서 완료하세요. Agent Office는 비밀번호나 로그인 토큰을 복사하지 않습니다.'},
 } as const;
@@ -24,7 +24,26 @@ export class BrowserSetupController {
   private readonly initialRevision:string;
   constructor(readonly config:HostConfig,readonly dependencies:Dependencies={}){this.platform=dependencies.platform??process.platform;this.environment=dependencies.environment??process.env;this.runner=dependencies.runner??nativeProcessRunner;this.initialRevision=revision(readFileSync(config.path,'utf8'));}
   private raw(){const entry=lstatSync(this.config.path);fail(entry.isFile()&&!entry.isSymbolicLink()&&entry.nlink===1&&entry.size<=16_384,'BROWSER_SETUP_UNSAFE_CONFIG');const text=readFileSync(this.config.path,'utf8');return {text,raw:HostConfigSchema.parse(JSON.parse(text))};}
-  view(){const {text,raw}=this.raw();return {revision:revision(text),default_engine:'playwright',optional:true,rows:(['playwright','aside','neo'] as const).map(engine=>{const checked=this.checks.get(engine),fresh=checked&&Date.now()-checked.at<300_000;return {engine,...browserSetupGuides[engine],registered:engine==='playwright'&&!raw.browser_executors||Boolean(raw.browser_executors?.targets.some(t=>t.engine===engine&&(engine==='playwright'?t.environment==='owned_headless':t.environment==='host_foreground'))),health:fresh?checked.health:'unchecked',reason:fresh?checked.reason:'unchecked',elapsed_ms:checked?.elapsed_ms??null,checked_at:checked?new Date(checked.at).toISOString():null,verified_for_environment:false};}),restart_required:revision(text)!==this.initialRevision,site_login_deferred:true,credentials_exposed:false};}
+  private persist(text:string,next:unknown){
+    HostConfigSchema.parse(next);const output=JSON.stringify(next,null,2)+'\n';
+    fail(Buffer.byteLength(output)<=16_384,'BROWSER_SETUP_CONFIG_TOO_LARGE');
+    const backup=join(dirname(this.config.path),`.browser-setup-${randomUUID()}.backup.json`),temporary=backup+'.tmp';
+    writeFileSync(backup,text,{flag:'wx',mode:0o600});
+    try{writeFileSync(temporary,output,{flag:'wx',mode:0o600});fail(readFileSync(this.config.path,'utf8')===text,'BROWSER_SETUP_CONFLICT');renameSync(temporary,this.config.path);chmodSync(this.config.path,0o600);}finally{if(existsSync(temporary))unlinkSync(temporary);}
+    return this.view();
+  }
+  setSessionMode(targetId:string,expected:string,mode:'isolated'|'persistent',consent:boolean,beforeChange?:(before:BrowserTarget,after:BrowserTarget)=>void){
+    fail(consent===true,'BROWSER_SETUP_CONSENT_REQUIRED');
+    fail(mode==='isolated'||mode==='persistent','BROWSER_SETUP_SESSION_MODE_INVALID');
+    const {text,raw}=this.raw();fail(revision(text)===expected,'BROWSER_SETUP_CONFLICT');
+    const targets=[...raw.browser_executors?.targets??[this.defaultTarget()]],index=targets.findIndex(target=>target.id===targetId),target=targets[index];
+    fail(target?.engine==='playwright'&&target.environment==='owned_headless','BROWSER_SETUP_SESSION_TARGET_INVALID');
+    if((target.session_mode??'isolated')===mode)return {...this.view(),transition:null};
+    const after=browserTargetSchema.parse({...target,session_mode:mode});targets[index]=after;
+    beforeChange?.(target,after);
+    return {...this.persist(text,{...JSON.parse(text) as Record<string,unknown>,browser_executors:{targets}}),transition:{before:target,after}};
+  }
+  view(){const {text,raw}=this.raw();return {revision:revision(text),default_engine:'playwright',optional:true,rows:(['playwright','aside','neo'] as const).map(engine=>{const checked=this.checks.get(engine),fresh=checked&&Date.now()-checked.at<300_000;return {engine,...browserSetupGuides[engine],registered:engine==='playwright'&&!raw.browser_executors||Boolean(raw.browser_executors?.targets.some(t=>t.engine===engine&&(engine==='playwright'?t.environment==='owned_headless':t.environment==='host_foreground'))),health:fresh?checked.health:'unchecked',reason:fresh?checked.reason:'unchecked',elapsed_ms:checked?.elapsed_ms??null,checked_at:checked?new Date(checked.at).toISOString():null,verified_for_environment:false};}),restart_required:revision(text)!==this.initialRevision,site_login_deferred:false,prelogin_available:true,credentials_exposed:false};}
   private defaultTarget(){return browserTargetSchema.parse({id:'playwright',engine:'playwright',environment:'owned_headless',platform:this.platform,profile_ref:'default',priority:50});}
   private async aside(){
     if(this.dependencies.detectAside)return this.dependencies.detectAside();
@@ -68,11 +87,6 @@ export class BrowserSetupController {
     if(!targets.some(t=>t.engine==='playwright'&&t.environment==='owned_headless')){const fallback=this.defaultTarget();if(targets.some(t=>t.id===fallback.id))fallback.id='office-playwright';fail(!targets.some(t=>t.id===fallback.id),'BROWSER_SETUP_TARGET_CONFLICT');targets.push(fallback);}
     fail(!targets.some(t=>t.id===checked.target!.id),'BROWSER_SETUP_TARGET_CONFLICT');
     // Registration augments the host policy, never replaces an existing VM/profile or drops Playwright.
-    const next={...JSON.parse(text) as Record<string,unknown>,browser_executors:{targets:[...targets,checked.target]}};HostConfigSchema.parse(next);const output=JSON.stringify(next,null,2)+'\n';
-    fail(Buffer.byteLength(output)<=16_384,'BROWSER_SETUP_CONFIG_TOO_LARGE');
-    const backup=join(dirname(this.config.path),`.browser-setup-${randomUUID()}.backup.json`),temporary=backup+'.tmp';
-    writeFileSync(backup,text,{flag:'wx',mode:0o600});
-    try{writeFileSync(temporary,output,{flag:'wx',mode:0o600});fail(readFileSync(this.config.path,'utf8')===text,'BROWSER_SETUP_CONFLICT');renameSync(temporary,this.config.path);chmodSync(this.config.path,0o600);}finally{if(existsSync(temporary))unlinkSync(temporary);}
-    return this.view();
+    return this.persist(text,{...JSON.parse(text) as Record<string,unknown>,browser_executors:{targets:[...targets,checked.target]}});
   }
 }

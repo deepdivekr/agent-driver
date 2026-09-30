@@ -41,7 +41,7 @@ export function isInvalidClientOutput(value:unknown){
   return value instanceof SyntaxError||value instanceof Error&&['CLIENT_STRUCTURED_OUTPUT_INVALID','MCP_SAMPLING_INVALID','MODEL_PROVIDER_RESPONSE_INVALID'].includes(value.message);
 }
 export function isNonRetryableClientFailure(value:unknown){
-  return isInvalidClientOutput(value)||value instanceof Error&&['CLIENT_CONNECTION_CHANGED','CLIENT_HANDOFF_PERSIST_FAILED','CLIENT_HANDOFF_RECEIPT_MISSING'].includes(value.message);
+  return isInvalidClientOutput(value)||value instanceof Error&&['CLIENT_CONNECTION_CHANGED','CLIENT_HANDOFF_PERSIST_FAILED','CLIENT_HANDOFF_RECEIPT_MISSING','CLIENT_SESSION_BUSY','CLIENT_SESSION_UNSAFE_STORAGE','CLIENT_SESSION_PERSIST_FAILED'].includes(value.message);
 }
 /** A failed receipt write must not turn an accepted answer into another model call. */
 export function recordClientRoute(sink:((event:ClientRouteEvent)=>void)|undefined,event:ClientRouteEvent){

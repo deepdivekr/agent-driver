@@ -11,10 +11,15 @@ import {ControlSettings} from '../dist/observability/control-settings.js';
 import {BrowserSetupController} from '../dist/onboarding/browser-setup.js';
 import {startControlCenter} from '../dist/observability/control-center.js';
 import {PackStore} from '../dist/packs/store.js';
+import {modelSettingsPath,publicModelSettings,saveModelSettings} from '../dist/onboarding/model-settings.js';
 
 const evidence='tests/evidence/phase94';
-async function fixture(t){
+async function fixture(t,{savedCodexModel,savedCodexEffort}={}){
   const root=await mkdtemp(join(tmpdir(),'office-layout-')),paths=await prepareLocalConnection(root),config=loadHostConfig(paths.runtimeConfig);
+  if(savedCodexModel){
+    const selection=publicModelSettings(null,{}).selection;
+    saveModelSettings(modelSettingsPath(config),{revision:0,onboarding_step:0,selection:{...selection,client_models:{...selection.client_models,codex:savedCodexModel},codex_reasoning_effort:savedCodexEffort}},{});
+  }
   const ids=['codex','claude','opencode','cursor','hermes'],registered=new Set(),calls=[],statusOverrides=new Map();
   const auth={async connections(){return ids.map(id=>({id,status:statusOverrides.get(id)??(['codex','claude'].includes(id)?'ready':'signed_out'),supported_login_flows:['browser'],connection:{client_id:id,state:'idle'}}));},view(id){return {client_id:id,state:'idle'};},async start(){throw Error('No live sign-in in a layout fixture');},close(){}};
   const bootstrap={view(){return {clients:ids.map(id=>({id,label:({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor CLI',hermes:'Hermes'})[id],installed:true,managed_install:true}))};}};
@@ -121,9 +126,13 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     const aiSpacing=await statusActionSpacing(page,'#clients .client');
     assert.equal(await page.locator('#clients .client-icon svg').count(),5);
     assert.equal(await page.locator('#clients .client>p').count(),0);
+    const selectedCodexModel=await page.locator('#codex-model').inputValue(),selectedCodexEffort=await page.locator('#codex-reasoning').inputValue();
+    assert.equal(selectedCodexModel,'gpt-6-sol','A first unsaved subscription setting must propose Sol');
+    assert.equal(selectedCodexEffort,'high');
     await page.locator('#client-codex [data-manage-client=codex]').click();
     await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
-    assert.equal(await page.locator('#codex-model').inputValue(),'','Manage must focus the existing model setting without changing it');
+    assert.equal(await page.locator('#codex-model').inputValue(),selectedCodexModel,'Manage must focus the existing model setting without changing it');
+    assert.equal(await page.locator('#codex-reasoning').inputValue(),selectedCodexEffort);
     await rightEdge(page,'#refresh-clients','#subscription-fields');await rightEdge(page,'#step-2>.actions button','#step-2');await noOverflow(page);
     const models=await page.locator('#codex-model,#claude-model,#opencode-model').evaluateAll(items=>items.map(e=>e.getBoundingClientRect().width));
     assert.ok(models.every(w=>Math.abs(w-models[0])<1),JSON.stringify(models));
@@ -140,7 +149,8 @@ test('runtime fixture Control Center alignment and compact right actions hold in
 test('runtime native Work import and detail retain compact right actions, readable prose and pause/resume interaction',async t=>{
   const f=await fixture(t),store=new PackStore(f.config.dbPath);store.registerProject(f.config.project);
   const work=store.beginWork(f.config.project.id,'layout-work','화면 정렬 검증 업무','quick').work.id;
-  // Intake is initially defining and correctly cannot pause yet. Exercise an actual pausable state without calling a model.
+  // Exercise a saved needs-model state through its actual modal controls,
+  // without pretending a missing definition can invoke a model or execute.
   const owner=store.claimWorkDefinition(f.config.project.id,work);assert.ok(owner);
   store.failWorkDefinition(f.config.project.id,work,owner);store.close();
   const server=await startControlCenter(f.config),browser=await chromium.launch({headless:true});
@@ -153,10 +163,12 @@ test('runtime native Work import and detail retain compact right actions, readab
     await page.locator('[data-import-route=workflow]').click();await compactButtons(page.locator('#scan-import'));await rightEdge(page,'#scan-import','#import-project');
     await page.locator('[data-import-route=hermes]').click();await rightEdge(page,'#migration-discover','#import-hermes');
     await page.locator('[data-import-route=remote]').click();await rightEdge(page,'#remote-discover','#import-remote');await noOverflow(page);
-    await page.goto(server.url+'?work='+work);await page.locator('.control-panel').waitFor();await page.locator('#pause').click();
-    await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('재개')||document.querySelector('#pause')?.textContent.includes('Resume'));
-    await page.locator('#pause').click();await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('일시정지')||document.querySelector('#pause')?.textContent.includes('Pause'));
-    await compactButtons(page.locator('.control-panel>.controls button'));await rightEdge(page,'.control-panel>.controls button','.control-panel>.controls');
+    await page.goto(server.url+'?work='+work);await page.locator('.control-panel').waitFor();await page.locator('[data-stage="next"]').click();await page.locator('#stage-dialog[open]').waitFor();await page.locator('[data-stage-action="pause"]').click();
+    await page.waitForFunction(()=>!document.querySelector('[data-stage-action="resume"]')?.disabled);
+    const paused=await(await fetch(server.url+'work/detail?id='+work)).json();assert.equal(paused.paused,true);assert.equal(paused.supervisor,null);
+    await page.locator('[data-stage-action="resume"]').click();await page.waitForFunction(()=>!document.querySelector('[data-stage-action="pause"]')?.disabled);
+    const resumed=await(await fetch(server.url+'work/detail?id='+work)).json();assert.equal(resumed.paused,false);assert.equal(resumed.supervisor,null,'A missing definition must not execute');assert.equal(resumed.work_status,'needs_model');
+    await compactButtons(page.locator('#stage-dialog .actions button'));await rightEdge(page,'#stage-dialog .actions button','#stage-dialog .actions');await page.locator('#stage-close').click();
     // The live Work stream can replace the node after a locator resolves. Inspect the current connected node atomically.
     await page.waitForFunction(()=>{const note=document.querySelector('.control-note');return note?.isConnected&&['start','left'].includes(getComputedStyle(note).textAlign);});await noOverflow(page);
     await page.screenshot({path:join(evidence,`work-${width}-${lang}.png`),fullPage:true});assert.deepEqual(errors,[]);await context.close();
@@ -164,7 +176,7 @@ test('runtime native Work import and detail retain compact right actions, readab
 });
 
 test('runtime fixture client management opens actual settings without changing the selected API mode or saved configuration',async t=>{
-  const f=await fixture(t),before=await readFile(f.paths.runtimeConfig,'utf8');
+  const f=await fixture(t,{savedCodexModel:'gpt-5.6-luna',savedCodexEffort:'medium'}),before=await readFile(f.paths.runtimeConfig,'utf8'),savedBefore=await readFile(modelSettingsPath(f.config),'utf8');
   for(const id of ['codex','claude','opencode','cursor','hermes']){f.statusOverrides.set(id,'ready');f.registered.add(id);}
   const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage({viewport:{width:375,height:900}});
   await page.addInitScript(()=>localStorage.setItem('office-lang','en'));await page.goto(f.url);
@@ -173,14 +185,17 @@ test('runtime fixture client management opens actual settings without changing t
   await page.waitForFunction(()=>document.activeElement?.matches('#mcp-clients [data-client=cursor]'));
   await page.getByRole('button',{name:'Manage Codex',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-5.6-luna','Manage must retain the persisted model instead of restoring the first-run default');
+  assert.equal(await page.locator('#codex-reasoning').inputValue(),'medium');
   await page.locator('#codex-model').selectOption('fixture-model');
   await page.getByRole('button',{name:'Manage Codex',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
   assert.equal(await page.locator('#codex-model').inputValue(),'fixture-model');
+  assert.equal(await page.locator('#codex-reasoning').inputValue(),'medium');
   await page.locator('#mode').selectOption('api');await settled(page,'save-model');
   await page.locator('[data-step="0"]').click();await settled(page,'refresh-mcp');
   await page.getByRole('button',{name:'Manage Codex',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.id==='mode');
   assert.equal(await page.locator('#mode').inputValue(),'api','Manage must never implicitly switch billing or authentication mode');
-  assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),before);assert.deepEqual(f.calls,[]);await noOverflow(page);
+  assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),before);assert.equal(await readFile(modelSettingsPath(f.config),'utf8'),savedBefore);assert.deepEqual(f.calls,[]);await noOverflow(page);
 });

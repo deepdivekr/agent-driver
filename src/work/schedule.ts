@@ -6,6 +6,7 @@ import {type WorkProposal} from './contracts.js';
 import {requireCondition} from '../core/contracts.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {workImportExecutionOwner} from './import-authority.js';
+import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
 
 const timezone=z.string().min(1).max(100).refine(value=>{try{new Intl.DateTimeFormat('en',{timeZone:value}).format();return value==='UTC'||value.includes('/');}catch{return false;}},'IANA timezone required');
 const hour=z.number().int().min(0).max(23),minute=z.number().int().min(0).max(59);
@@ -67,9 +68,11 @@ export class WorkSchedules {
   private event(workId:string,kind:string,summary:string){if(this.store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_activity'").get())this.store.hermesState.prepare('INSERT INTO office_activity(project_id,work_id,kind,summary,created_at) VALUES(?,?,?,?,?)').run(this.project,workId,kind,safeControlText(summary,500),stamp(this.clock()));}
   status(workId:string):WorkScheduleStatus|null{
     this.store.officeWorkById(this.project,workId);const row=this.find(workId);if(!row)return null;const intake=this.store.intakeWorkOptional(this.project,workId),definition=row.definition?workScheduleSchema.parse(JSON.parse(row.definition)):null,paused=Boolean(intake?.paused);
-    return {work_id:workId,revision:intake?.revision??row.work_revision,state:paused&&row.state==='enabled'?'paused':row.state,enabled:row.state==='enabled'&&!paused,definition,timezone:definition&&definition.kind!=='unsupported'?definition.timezone:null,next_run_at:row.next_run_ms!==null?stamp(row.next_run_ms):null,last_slot:row.last_slot,reason:row.reason,owner:row.state==='original_runtime'?'original_runtime':'office',missed_runs:'coalesce_latest',dst_policy:'skip_gap_first_fold'};
+    const lifecycle=readWorkLifecycle(this.store,this.project,workId);
+    return {work_id:workId,revision:intake?.revision??row.work_revision,state:lifecycle.state!=='connected'?lifecycle.state:paused&&row.state==='enabled'?'paused':row.state,enabled:lifecycle.state==='connected'&&row.state==='enabled'&&!paused,definition,timezone:definition&&definition.kind!=='unsupported'?definition.timezone:null,next_run_at:lifecycle.state==='connected'&&row.next_run_ms!==null?stamp(row.next_run_ms):null,last_slot:row.last_slot,reason:lifecycle.state!=='connected'?(lifecycle.state==='removed'?'WORK_REMOVED':'WORK_DISCONNECTED'):row.reason,owner:row.state==='original_runtime'?'original_runtime':'office',missed_runs:'coalesce_latest',dst_policy:'skip_gap_first_fold'};
   }
   async prepare(workId:string,revision:number,model:StructuredModel,options:{default_timezone?:string}={}){
+    assertWorkConnected(this.store,this.project,workId);
     const work=this.store.intakeWork(this.project,workId),spec=work.spec as WorkProposal|null;requireCondition(work.revision===revision,'WORK_REVISION_CONFLICT');requireCondition(spec,'SCHEDULE_WORK_DEFINITION_REQUIRED');
     const now=this.clock(),old=this.find(workId),rule=spec.recurrence.rule,inputZone=timezone.parse(options.default_timezone??old?.default_timezone??this.defaultTimezone),ruleHash=sha(JSON.stringify({rule,timezone:inputZone}));
     const passive=this.imported(workId)?'original_runtime':spec.recurrence.kind==='once'?'once':null;
@@ -82,21 +85,23 @@ export class WorkSchedules {
     requireCondition(this.find(workId)?.owner===owner,'SCHEDULE_PREPARATION_ALREADY_CLAIMED');this.event(workId,'schedule.preparing','Normalizing the recurring Work schedule.');
     try{
       const definition=workScheduleSchema.parse(await model.call('design',NORMALIZE_SCHEDULE,{rule,default_timezone:inputZone},z.toJSONSchema(workScheduleSchema)));
+      assertWorkConnected(this.store,this.project,workId);
       if(definition.kind==='weekly')requireCondition(new Set(definition.weekdays).size===definition.weekdays.length,'SCHEDULE_WEEKDAY_DUPLICATE');
       requireCondition(this.store.intakeWork(this.project,workId).revision===revision,'WORK_REVISION_CONFLICT');
       const state=definition.kind==='unsupported'?'waiting_config':'disabled',reason=definition.kind==='unsupported'?safeControlText(definition.reason,300):null;
       const saved=db.prepare('UPDATE office_work_schedule SET definition=?,state=?,reason=?,owner=NULL,lease_until_ms=0,updated_at=? WHERE project_id=? AND work_id=? AND owner=? AND lease_until_ms>?').run(JSON.stringify(definition),state,reason,stamp(this.clock()),this.project,workId,owner,this.clock());requireCondition(saved.changes===1,'SCHEDULE_PREPARATION_LEASE_LOST');
       this.event(workId,definition.kind==='unsupported'?'schedule.waiting_config':'schedule.prepared',definition.kind==='unsupported'?reason!:'Recurring schedule is prepared; waiting for the authorized Work start.');
-    }catch(error){const reason=error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'SCHEDULE_NORMALIZATION_UNAVAILABLE';db.prepare("UPDATE office_work_schedule SET state='waiting_config',reason=?,owner=NULL,lease_until_ms=0,updated_at=? WHERE project_id=? AND work_id=? AND owner=?").run(reason,stamp(this.clock()),this.project,workId,owner);this.event(workId,'schedule.waiting_config',reason);}
+    }catch(error){if(readWorkLifecycle(this.store,this.project,workId).state!=='connected')throw error;const reason=error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'SCHEDULE_NORMALIZATION_UNAVAILABLE';db.prepare("UPDATE office_work_schedule SET state='waiting_config',reason=?,owner=NULL,lease_until_ms=0,updated_at=? WHERE project_id=? AND work_id=? AND owner=?").run(reason,stamp(this.clock()),this.project,workId,owner);this.event(workId,'schedule.waiting_config',reason);}
     return this.status(workId);
   }
   enable(workId:string,revision:number,input:{acknowledged:boolean}){
+    assertWorkConnected(this.store,this.project,workId);
     const work=this.store.intakeWork(this.project,workId),row=this.find(workId);requireCondition(work.revision===revision,'WORK_REVISION_CONFLICT');requireCondition(input.acknowledged,'SCHEDULE_WORK_START_REQUIRED');requireCondition(!this.imported(workId),'SCHEDULE_ORIGINAL_RUNTIME_AUTHORITY');requireCondition(!work.paused,'WORK_PAUSED');requireCondition(row&&row.definition,'SCHEDULE_NOT_PREPARED');
     const definition=workScheduleSchema.parse(JSON.parse(row.definition));requireCondition(definition.kind!=='unsupported'&&['disabled','enabled'].includes(row.state),'SCHEDULE_CONFIGURATION_REQUIRED');
     if(row.state==='enabled')return this.status(workId);
     const now=this.clock(),next=nextScheduleSlot(definition,now,row.anchor_ms);this.store.hermesState.prepare("UPDATE office_work_schedule SET state='enabled',work_revision=?,next_run_ms=?,updated_at=? WHERE project_id=? AND work_id=?").run(revision,next,stamp(now),this.project,workId);this.event(workId,'schedule.enabled',`Next scheduled run: ${stamp(next)} (${definition.timezone}).`);return this.status(workId);
   }
-  disable(workId:string,revision:number){const work=this.store.intakeWork(this.project,workId);requireCondition(work.revision===revision,'WORK_REVISION_CONFLICT');requireCondition(!this.imported(workId),'SCHEDULE_ORIGINAL_RUNTIME_AUTHORITY');requireCondition(this.find(workId),'SCHEDULE_NOT_PREPARED');this.store.hermesState.prepare("UPDATE office_work_schedule SET state='disabled',next_run_ms=NULL,updated_at=? WHERE project_id=? AND work_id=?").run(stamp(this.clock()),this.project,workId);this.event(workId,'schedule.disabled','Recurring execution is disabled.');return this.status(workId);}
+  disable(workId:string,revision:number){assertWorkConnected(this.store,this.project,workId);const work=this.store.intakeWork(this.project,workId);requireCondition(work.revision===revision,'WORK_REVISION_CONFLICT');requireCondition(!this.imported(workId),'SCHEDULE_ORIGINAL_RUNTIME_AUTHORITY');requireCondition(this.find(workId),'SCHEDULE_NOT_PREPARED');this.store.hermesState.prepare("UPDATE office_work_schedule SET state='disabled',next_run_ms=NULL,updated_at=? WHERE project_id=? AND work_id=?").run(stamp(this.clock()),this.project,workId);this.event(workId,'schedule.disabled','Recurring execution is disabled.');return this.status(workId);}
   private observedRun(workId:string,runId:string):string|null{
     const db=this.store.hermesState;if(db.prepare("SELECT 1 FROM sqlite_master WHERE name='office_supervisor'").get()){const row=db.prepare('SELECT state FROM office_supervisor WHERE project_id=? AND work_id=? AND run_id=?').get(this.project,workId,runId);if(row)return String(row.state);}
     const run=this.store.officeRuns(this.project,workId).find(value=>value.source_id===runId);if(!run)return null;
@@ -107,8 +112,8 @@ export class WorkSchedules {
   /** Coalesce missed slots into one latest due execution; never accumulate a catch-up burst. */
   due(now=this.clock()):WorkScheduleDue[]{
     requireCondition(Number.isFinite(now),'SCHEDULE_CLOCK_INVALID');const db=this.store.hermesState,items:WorkScheduleDue[]=[];
-    for(const slot of db.prepare("SELECT work_id,slot_key,run_id FROM office_work_schedule_slot WHERE project_id=? AND state='started' LIMIT 100").all(this.project))if(slot.run_id){const state=this.observedRun(String(slot.work_id),String(slot.run_id));if(state&&terminalStates.has(state))this.finish(String(slot.work_id),String(slot.slot_key),String(slot.run_id));}
-    for(const row of db.prepare("SELECT s.* FROM office_work_schedule s JOIN office_intake w ON w.work_id=s.work_id AND w.project_id=s.project_id WHERE s.project_id=? AND s.state='enabled' AND (s.next_run_ms<=? OR EXISTS(SELECT 1 FROM office_work_schedule_slot old WHERE old.project_id=s.project_id AND old.work_id=s.work_id AND old.state='claimed' AND old.run_id IS NULL AND old.lease_until_ms<=?)) AND w.paused=0 ORDER BY s.next_run_ms LIMIT 100").all(this.project,now,now) as ScheduleRow[]){
+    for(const slot of db.prepare("SELECT work_id,slot_key,run_id FROM office_work_schedule_slot WHERE project_id=? AND state='started' LIMIT 100").all(this.project))if(slot.run_id&&readWorkLifecycle(this.store,this.project,String(slot.work_id)).state==='connected'){const state=this.observedRun(String(slot.work_id),String(slot.run_id));if(state&&terminalStates.has(state))this.finish(String(slot.work_id),String(slot.slot_key),String(slot.run_id));}
+    for(const row of db.prepare("SELECT s.* FROM office_work_schedule s JOIN office_intake w ON w.work_id=s.work_id AND w.project_id=s.project_id WHERE s.project_id=? AND s.state='enabled' AND (s.next_run_ms<=? OR EXISTS(SELECT 1 FROM office_work_schedule_slot old WHERE old.project_id=s.project_id AND old.work_id=s.work_id AND old.state='claimed' AND old.run_id IS NULL AND old.lease_until_ms<=?)) AND w.paused=0 AND NOT EXISTS (SELECT 1 FROM office_work_lifecycle l WHERE l.project_id=s.project_id AND l.work_id=s.work_id) ORDER BY s.next_run_ms LIMIT 100").all(this.project,now,now) as ScheduleRow[]){
       if(this.imported(row.work_id))continue;
       const busy=db.prepare("SELECT 1 FROM office_work_schedule_slot WHERE project_id=? AND work_id=? AND (state='started' OR state='reconciliation_required' OR state='claimed' AND lease_until_ms>?)").get(this.project,row.work_id,now);if(busy)continue;
       const definition=workScheduleSchema.parse(JSON.parse(row.definition!));if(definition.kind==='unsupported')continue;
@@ -121,6 +126,7 @@ export class WorkSchedules {
   }
   claim(input:WorkScheduleDue):WorkScheduleClaim|null{
     const now=this.clock(),db=this.store.hermesState;db.exec('SAVEPOINT office_schedule_claim');try{
+      assertWorkConnected(this.store,this.project,input.work_id);
       const due=this.due(now).find(value=>value.work_id===input.work_id&&value.slot_key===input.slot_key);if(!due){db.exec('RELEASE office_schedule_claim');return null;}
       requireCondition(due.work_revision===input.work_revision,'WORK_REVISION_CONFLICT');
       const row=this.find(input.work_id)!,definition=workScheduleSchema.parse(JSON.parse(row.definition!));requireCondition(definition.kind!=='unsupported','SCHEDULE_CONFIGURATION_REQUIRED');

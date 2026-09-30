@@ -3,8 +3,9 @@ import assert from 'node:assert/strict';
 import {mkdtemp,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {createHash} from 'node:crypto';
 import {z} from 'zod';
-import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema} from '../dist/work/client-executor.js';
+import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS} from '../dist/work/client-executor.js';
 import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
 import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
 import {saveModelSettings,scopedModelSettingsPath} from '../dist/onboarding/model-settings.js';
@@ -178,10 +179,59 @@ test('large browser bodies and UI trees compact independently without discarding
   assert.ok(value._office_compaction.changes.some(change=>/tree/u.test(change.path)));assert.ok(value._office_compaction.changes.some(change=>/sources\/\d\/text/u.test(change.path)));
 });
 
-test('an oversized immutable artifact metadata value is an explicit boundary instead of a lossy replacement',async()=>{
-  let dispatched=0;const host=hooks({async executeTool(){dispatched++;return {...receipt,value:{artifact:{path:'/local/'.repeat(3000),sha256:'e'.repeat(64)},title:'Physical AI'}};}});
-  const result=await new BoundedWorkClientExecutor(model([choose()])).execute(request,host);
-  assert.equal(result.status,'retryable_failure');assert.equal(result.reason,'WORK_CLIENT_TOOL_METADATA_BUDGET_EXCEEDED');assert.equal(result.checkpoint.observations.length,0);assert.equal(dispatched,1);
+const oversizedMetadata={artifact:{path:'/local/'.repeat(3000),sha256:'e'.repeat(64)},title:'Physical AI'};
+const oversizedReceipt=()=>({...receipt,value:structuredClone(oversizedMetadata)});
+const metadataHash=()=>createHash('sha256').update(JSON.stringify(oversizedMetadata)).digest('hex');
+const waitAfterMetadata={action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'The read result was too large to hand off; keep existing evidence and await a smaller read.',completed_checks:[],wait_reason:'configuration'};
+function assertMetadataFailure(observed){
+  assert.equal(observed.invocation.dispatched,true);assert.equal(observed.invocation.effect,'read_only');assert.equal(observed.receipt.status,'retryable_failure');assert.equal(observed.receipt.effect_state,'none');assert.equal(observed.receipt.retry_safe,false);assert.deepEqual(observed.receipt.evidence_ids,[]);
+  assert.equal(observed.receipt.value.status,'normalization_failed');assert.equal(observed.receipt.value.error,'WORK_CLIENT_TOOL_METADATA_BUDGET_EXCEEDED');assert.equal(observed.receipt.value.receipt_received,true);assert.equal(observed.receipt.value.original_receipt_status,'succeeded');assert.equal(observed.receipt.value.raw_value_bytes,Buffer.byteLength(JSON.stringify(oversizedMetadata)));assert.equal(observed.receipt.value.raw_value_sha256,metadataHash());assert.equal(observed.receipt.value.correction_required,true);
+  assert.ok(Buffer.byteLength(JSON.stringify(observed.receipt.value))<16000);assert.equal(observed.receipt.value.artifact,undefined);assert.equal(observed.receipt.value.title,undefined);assert.ok(!JSON.stringify(observed.receipt.value).includes('/local/'));
+}
+
+test('an oversized immutable read metadata value preserves a dispatched failed observation instead of losing history or issuing success evidence',async()=>{
+  let dispatched=0;const host=hooks({async executeTool(){dispatched++;return oversizedReceipt();}}),provider=model([choose()]);
+  const result=await new BoundedWorkClientExecutor(provider).execute({...request,max_turns:1},host);
+  assert.equal(result.status,'retryable_failure');assert.equal(result.reason,'WORK_CLIENT_TURN_BUDGET_REACHED');assert.equal(result.completion_verified,false);assert.equal(result.checkpoint.observations.length,1);assert.equal(result.checkpoint.turn,1);assert.equal(result.checkpoint.pending,null);assert.equal(dispatched,1);assertMetadataFailure(result.checkpoint.observations[0]);assert.deepEqual(host.saved.at(-1),result.checkpoint);assert.ok(host.events.some(event=>event.kind==='tool.result'&&event.status==='retryable_failure'&&event.reason==='WORK_CLIENT_TOOL_METADATA_BUDGET_EXCEEDED'));
+});
+
+test('metadata normalization failure remains failed evidence while the next bounded turn may choose a smaller fresh read',async()=>{
+  const provider=model([choose(),choose('browser_read',{url:'https://example.test/smaller'}),done()]);let dispatched=0;
+  const host=hooks({async executeTool(name,args,context){this.executions.push({name,args,context});return ++dispatched===1?oversizedReceipt():receipt;}}),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'succeeded');assert.equal(host.executions.length,2);assert.equal(result.checkpoint.observations.length,2);assertMetadataFailure(result.checkpoint.observations[0]);assert.deepEqual(result.checkpoint.observations[1].receipt,receipt);assert.deepEqual(provider.inputs[1].checkpoint.observations[0],result.checkpoint.observations[0]);assert.equal(provider.inputs[1].checkpoint.pending,null);
+});
+
+test('an already retryable no-effect read keeps its original status in the failed metadata observation without receiving evidence IDs',async()=>{
+  const host=hooks({async executeTool(){return {...oversizedReceipt(),status:'retryable_failure',evidence_ids:[]};}}),result=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,max_turns:1},host),observed=result.checkpoint.observations[0];
+  assert.equal(result.completion_verified,false);assert.equal(result.checkpoint.pending,null);assert.equal(observed.invocation.dispatched,true);assert.equal(observed.receipt.status,'retryable_failure');assert.equal(observed.receipt.value.original_receipt_status,'retryable_failure');assert.equal(observed.receipt.value.raw_value_sha256,metadataHash());assert.equal(observed.receipt.effect_state,'none');assert.equal(observed.receipt.retry_safe,false);assert.deepEqual(observed.receipt.evidence_ids,[]);
+});
+
+test('a normalized metadata failure cannot support completion or trigger an automatic replay after checkpoint resume',async()=>{
+  const first=hooks({async executeTool(){return oversizedReceipt();}}),initial=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,max_turns:1},first);
+  let verifications=0;const impossible=hooks({async verifyCompletion(){verifications++;return true;}}),rejected=await new BoundedWorkClientExecutor(model([done()])).execute({...request,checkpoint:initial.checkpoint,resume_wait:true},impossible);
+  assert.equal(rejected.status,'failed');assert.equal(rejected.reason,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING');assert.equal(rejected.completion_verified,false);assert.equal(verifications,0);assert.equal(impossible.executions.length,0);assert.deepEqual(rejected.checkpoint.observations,initial.checkpoint.observations);
+  const provider=model([waitAfterMetadata]),passive=hooks(),waited=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:initial.checkpoint,resume_wait:true},passive);assert.equal(waited.status,'paused');assert.equal(passive.executions.length,0);assert.equal(provider.inputs[0].checkpoint.turn,1);assertMetadataFailure(provider.inputs[0].checkpoint.observations[0]);
+});
+
+for(const path of ['retry','reconcile'])test(`saved read ${path} metadata normalization failure is persisted before the next model turn without discarding the original dispatch`,async()=>{
+  const initial=await interruptedRead(),provider=model([waitAfterMetadata]);let reconciliations=0;
+  const host=hooks({...(path==='reconcile'?{async reconcileTool(invocation){reconciliations++;assert.deepEqual(invocation,initial.checkpoint.pending);return oversizedReceipt();}}:{}),async executeTool(name,args,context){this.executions.push({name,args,context});return oversizedReceipt();}}),result=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:initial.checkpoint},host);
+  assert.equal(result.status,'paused');assert.equal(result.completion_verified,false);assert.equal(result.checkpoint.pending,null);assert.equal(result.checkpoint.turn,1);assert.equal(host.executions.length,path==='retry'?1:0);assert.equal(reconciliations,path==='reconcile'?1:0);assert.deepEqual(result.checkpoint.observations[0].invocation,initial.checkpoint.pending);assertMetadataFailure(result.checkpoint.observations[0]);assert.deepEqual(provider.inputs[0].checkpoint.observations,result.checkpoint.observations);assert.ok(host.saved.some(checkpoint=>checkpoint.pending===null&&checkpoint.observations.length===1));
+});
+
+test('metadata failure from a read returning during pause is saved before the pause guard and is not redispatched on explicit resume',async()=>{
+  let paused=false;const host=hooks({async guard(){if(paused)throw Error('WORK_PAUSED');},async executeTool(){paused=true;return oversizedReceipt();}}),stopped=await new BoundedWorkClientExecutor(model([choose()])).execute(request,host);
+  assert.equal(stopped.status,'paused');assert.equal(stopped.checkpoint.pending,null);assertMetadataFailure(stopped.checkpoint.observations[0]);assert.deepEqual(host.saved.at(-1),stopped.checkpoint);
+  const after=hooks(),resumed=await new BoundedWorkClientExecutor(model([waitAfterMetadata])).execute({...request,checkpoint:stopped.checkpoint,resume_wait:true},after);assert.equal(resumed.status,'paused');assert.equal(after.executions.length,0);assert.deepEqual(resumed.checkpoint.observations,stopped.checkpoint.observations);
+});
+
+test('metadata fallback never clears a write dispatch or turns invalid schemas and unknown effects into a no-effect tombstone',async()=>{
+  for(const kind of ['external_write','local_write']){const tool={...writeTool,effect:kind},host=hooks({tools:[tool],async executeTool(){return {...oversizedReceipt(),effect_state:'verified',retry_safe:false};}}),result=await new BoundedWorkClientExecutor(model([choose(tool.name,{text:'test'})])).execute(request,host);assert.equal(result.status,'reconciliation_required');assert.equal(result.reason,'WORK_CLIENT_TOOL_METADATA_BUDGET_EXCEEDED');assert.equal(result.checkpoint.pending.dispatched,true);assert.equal(result.checkpoint.observations.length,0);assert.equal(result.completion_verified,false);}
+  for(const raw of [{...oversizedReceipt(),retry_safe:'invalid'},{...oversizedReceipt(),status:'reconciliation_required',effect_state:'uncertain'},{...oversizedReceipt(),effect_state:'verified'}]){const host=hooks({async executeTool(){return raw;}}),result=await new BoundedWorkClientExecutor(model([choose()])).execute(request,host);assert.equal(result.checkpoint.pending.dispatched,true);assert.equal(result.checkpoint.observations.length,0);assert.equal(result.completion_verified,false);}
+});
+
+test('oversized terminal authentication, approval and failed receipts retain their existing boundary instead of becoming correctable metadata observations',async()=>{
+  for(const status of ['waiting_auth','waiting_approval','failed','reconciliation_required']){const host=hooks({async executeTool(){return {...oversizedReceipt(),status};}}),provider=model([choose()]),result=await new BoundedWorkClientExecutor(provider).execute(request,host);assert.equal(result.reason,'WORK_CLIENT_TOOL_METADATA_BUDGET_EXCEEDED');assert.equal(result.checkpoint.pending.dispatched,true);assert.equal(result.checkpoint.observations.length,0);assert.equal(result.completion_verified,false);assert.equal(provider.inputs.length,1);}
 });
 
 test('a host Zod refine rejection is checkpointed as not dispatched then corrected in the next bounded model turn',async()=>{
@@ -206,6 +256,18 @@ test('repeating the same rejected input cannot become a blind dispatch or an unb
   const result=await new BoundedWorkClientExecutor(provider).execute(request,host);
   assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_REPEATED_INVALID_TOOL_INPUT');assert.equal(provider.inputs.length,2);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.pending,null);
   assert.ok(result.checkpoint.observations.every(item=>item.invocation.dispatched===false&&item.receipt.value.status==='not_dispatched'));
+});
+
+test('an explicit resumed read may use identical arguments after the host capability is fixed, while an unchanged rejection stays bounded',async()=>{
+  const blocked=hooks({validateTool(){throw new WorkClientToolInputError('BROWSER_NO_AVAILABLE_EXECUTOR','The registered read-only connection needs repair.');}});
+  const first=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,max_turns:1},blocked);
+  assert.equal(first.checkpoint.pending,null);assert.equal(first.checkpoint.observations.length,1);assert.equal(first.checkpoint.observations[0].invocation.dispatched,false);assert.equal(blocked.executions.length,0);
+  const unchanged=hooks({validateTool:blocked.validateTool}),stillBlocked=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,checkpoint:first.checkpoint,resume_wait:true},unchanged);
+  assert.equal(stillBlocked.status,'failed');assert.equal(stillBlocked.reason,'WORK_CLIENT_REPEATED_INVALID_TOOL_INPUT');assert.equal(unchanged.executions.length,0);
+  let validations=0;const fixed=hooks({validateTool(){validations++;}}),provider=model([choose(),done()]);
+  const resumed=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:first.checkpoint,resume_wait:true,context:{user_directions:[{instruction:'The registered browser connection was corrected. Retry the same read-only source.'}]}},fixed);
+  assert.equal(resumed.status,'succeeded');assert.equal(validations,1);assert.equal(fixed.executions.length,1);assert.deepEqual(fixed.executions[0].args,first.checkpoint.observations[0].invocation.arguments);assert.deepEqual(resumed.checkpoint.observations[0],first.checkpoint.observations[0]);assert.equal(resumed.checkpoint.observations[1].receipt.status,'succeeded');assert.equal(resumed.checkpoint.observations[1].invocation.dispatched,true);
+  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/Do not repeat unchanged invalid input under unchanged constraints/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/one newly validated read-only attempt/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/does not bypass a permission\/login\/challenge denial/u);assert.doesNotMatch(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/never repeat the exact rejected input/u);
 });
 
 test('malformed tool JSON and unavailable capabilities can be corrected before any host invocation',async()=>{

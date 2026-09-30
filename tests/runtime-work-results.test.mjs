@@ -5,14 +5,18 @@ import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import vm from 'node:vm';
+import {taskModelUiScript} from '../dist/observability/task-model-ui.js';
 import {PackStore} from '../dist/packs/store.js';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {collectSource} from '../dist/packs/sources.js';
 import {exportRows} from '../dist/packs/data.js';
 import {WorkResults} from '../dist/work/results.js';
 import {WorkImportRuntime} from '../dist/work/import-runtime.js';
+import {initHermesWorks} from '../dist/work/hermes.js';
+import {RemoteOffice} from '../dist/work/remote.js';
 import {renderWorkResults,workResultsScript} from '../dist/observability/work-results-ui.js';
 import {workHtml} from '../dist/observability/work-ui.js';
+import {i18nScript} from '../dist/observability/i18n.js';
 import {readWorkDetail,readWorkBoard} from '../dist/observability/work-view.js';
 import {RuntimeApi} from '../dist/interface/api.js';
 import {connectMcp} from '../dist/interface/mcp.js';
@@ -51,6 +55,10 @@ function recordPastedResult(x,fixture){
 function updateImportMode(x,fixture,mode){
  const spec=structuredClone(fixture.work.spec);if(mode===undefined)delete spec.plan.import_mode;else spec.plan.import_mode=mode;
  x.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE project_id=? AND work_id=?').run(JSON.stringify(spec),x.config.project.id,fixture.work.id);
+}
+function bindResultHermes(x,fixture,importKey){
+ initHermesWorks(x.store);
+ x.store.hermesState.prepare('INSERT INTO hermes_work(project_id,work_id,import_key,definition,updated_at) VALUES(?,?,?,?,?)').run(x.config.project.id,fixture.work.id,importKey,'{}',new Date().toISOString());
 }
 test('runtime native SQLite and local file output survive reopen, deduplicate and stay Work scoped',async t=>{
  const x=await setup(t),project=x.config.project.id;
@@ -119,8 +127,7 @@ test('runtime contract valid older accepted pasted draft without import mode kee
  const output=recordPastedResult(x,fixture);assert.equal(output.deliveries.length,1);assert.equal(output.deliveries[0].authority,'office');assert.equal(output.deliveries[0].channel,'app');
 });
 test('runtime contract intake Hermes binding does not invent an original sender for a pasted Office draft',async t=>{
- const x=await setup(t),fixture=await pastedResultWork(x);x.store.hermesState.exec('CREATE TABLE hermes_work(project_id TEXT,work_id TEXT,import_key TEXT)');
- x.store.hermesState.prepare('INSERT INTO hermes_work VALUES(?,?,?)').run(x.config.project.id,fixture.work.id,`intake:${fixture.work.id}`);
+ const x=await setup(t),fixture=await pastedResultWork(x);bindResultHermes(x,fixture,`intake:${fixture.work.id}`);
  const output=recordPastedResult(x,fixture);assert.equal(output.deliveries.length,1);assert.equal(output.deliveries[0].channel,'app');
 });
 for(const variant of ['project','observe','augment','adoption','remote','hermes','invalid_legacy','invalid_evidence','invalid_dependency'])test(`runtime contract ${variant} import retains original result delivery authority`,async t=>{
@@ -129,8 +136,12 @@ for(const variant of ['project','observe','augment','adoption','remote','hermes'
  if(variant==='project')x.store.hermesState.prepare('UPDATE office_import SET kind=? WHERE id=?').run('project',fixture.importId);
  if(variant==='observe'||variant==='augment')updateImportMode(x,fixture,variant);
  if(variant==='adoption'){x.store.hermesState.exec('CREATE TABLE office_work_adoption(project_id TEXT,work_id TEXT)');x.store.hermesState.prepare('INSERT INTO office_work_adoption VALUES(?,?)').run(project,fixture.work.id);}
- if(variant==='remote'){x.store.hermesState.exec('CREATE TABLE office_remote_work(project_id TEXT,work_id TEXT)');x.store.hermesState.prepare('INSERT INTO office_remote_work VALUES(?,?)').run(project,fixture.work.id);}
- if(variant==='hermes'){x.store.hermesState.exec('CREATE TABLE hermes_work(project_id TEXT,work_id TEXT,import_key TEXT)');x.store.hermesState.prepare('INSERT INTO hermes_work VALUES(?,?,?)').run(project,fixture.work.id,'original:scheduled-job');}
+ if(variant==='remote'){
+  const remote=new RemoteOffice(x.store,x.config,{async call(){assert.fail('Result authority inspection must not contact the original runtime.');}});
+  const target=remote.register({name:'Original result runtime',host:'example.invalid',user:'agent',entry:'/app/openclaw.mjs'});
+  x.store.hermesState.prepare('INSERT INTO office_remote_work(project_id,work_id,target_id,kind,source_id,title) VALUES(?,?,?,?,?,?)').run(project,fixture.work.id,target.id,'job','original-job','Original scheduled job');
+ }
+ if(variant==='hermes')bindResultHermes(x,fixture,'original:scheduled-job');
  if(variant.startsWith('invalid_')){
   const body=structuredClone(x.store.workImport(project,fixture.importId).body);
   if(variant==='invalid_legacy')delete body.provenance;
@@ -167,16 +178,20 @@ test('runtime contract completed client output captures only real successful too
 
 test('runtime unit supervisor UI uses actual activity for motion, distinguishes waits and renders one schedule in English',()=>{
  const html=workHtml('unit-nonce'),script=html.match(/<script nonce="unit-nonce">([\s\S]*?)<\/script>/u)[1];
- const fragment=script.slice(script.indexOf('let activityStream='),script.indexOf('function render(){'));
- const translations={'AI가 다음 단계를 판단 중':'AI is choosing the next step','실행 도구 작업 중':'Execution tool is working','실행 중 · 다음 기록 대기':'Running · waiting for the next event'};
- const context={document:{documentElement:{lang:'en'}},window:{officeText:value=>translations[value]??value},app:{addEventListener(){}},esc:value=>String(value).replace(/[&<>"']/gu,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])),labels:{running:'Running',waiting_auth:'Sign-in required',awaiting_review:'Review completion',paused:'Paused'},tone:()=>'',encodeURIComponent,Date,Intl};
- vm.runInNewContext(fragment+workResultsScript,context);
+ const fragment=script.slice(script.indexOf('let activityStream='),script.indexOf('const stageDialog='));
+ const reasonStart=script.indexOf('function executionReason'),reasonEnd=script.indexOf('function observedExecutor');assert.ok(reasonStart>=0&&reasonEnd>reasonStart);
+ const dependencies=script.slice(reasonStart,reasonEnd);
+ const dialog={open:false,innerHTML:''};
+ const context={document:{documentElement:{lang:'en'},readyState:'loading',addEventListener(){},getElementById:id=>id==='stage-dialog'?dialog:null},localStorage:{getItem:()=> 'en'},window:{},app:{addEventListener(){}},esc:value=>String(value).replace(/[&<>"']/gu,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])),labels:{running:'Running',waiting_auth:'Sign-in required',awaiting_review:'Review completion',paused:'Paused'},tone:()=>'',encodeURIComponent,Date,Intl};
+ vm.runInNewContext(i18nScript+dependencies+fragment+workResultsScript,context);
  context.sample={supervisor:{state:'running',live:true,can_pause:true,can_resume:false,can_edit:true},activity:[{kind:'model.started',created_at:'2026-09-29T05:00:00Z'}],stages:[]};
- const running=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(running,/data-busy="true"/);assert.match(running,/AI is choosing/);assert.match(running,/Save instruction/);assert.doesNotMatch(running,/[가-힣]/u);
+ const running=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(running,/data-busy="true"/);assert.match(running,/AI is choosing/);assert.doesNotMatch(running,/data-supervisor-action|[가-힣]/u);
+ vm.runInNewContext("detail=sample;modalStageId='next';renderStageDialog()",context);assert.match(dialog.innerHTML,/data-stage-action="edit"/);assert.match(dialog.innerHTML,/지침 저장/u);
  context.sample.activity=[{kind:'model.result'}];assert.match(vm.runInNewContext('liveStageHtml(sample)',context),/data-busy="false"/);
  context.sample.supervisor.live=false;assert.equal(vm.runInNewContext('liveStageHtml(sample)',context),'');
  context.sample.supervisor={state:'waiting_auth',live:false,reason:'BROWSER_AUTH_REQUIRED',can_pause:false,can_resume:true,can_edit:true};
- const waiting=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(waiting,/Complete authentication in Site login/);assert.match(waiting,/Resume/);assert.doesNotMatch(waiting,/data-busy="true"|[가-힣]/u);
+ const waiting=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(waiting,/Complete authentication in Site login/);assert.doesNotMatch(waiting,/data-busy="true"|data-supervisor-action|[가-힣]/u);
+ vm.runInNewContext('renderStageDialog()',context);assert.match(dialog.innerHTML,/data-stage-action="resume"/);
  context.sample.schedule={state:'enabled',owner:'office',next_run_at:'2026-09-30T11:00:00Z',timezone:'Asia/Seoul'};
  const combined=vm.runInNewContext('scheduleHtml(sample)+workResultsHtml(sample)',context);assert.equal((combined.match(/class="panel work-schedule"/gu)||[]).length,1);assert.match(combined,/Asia\/Seoul/);assert.match(combined,/Next run/);
  const old=vm.runInNewContext('activityViewKey(sample)',context);context.sample.supervisor.updated_at='2026-09-29T06:00:00Z';assert.notEqual(vm.runInNewContext('activityViewKey(sample)',context),old);
@@ -214,10 +229,10 @@ test('runtime fixture SDK MCP exposes read-only persisted results and captures a
 });
 
 test('runtime unit supervised Work detail uses its real run identity and hides legacy dispatch guidance in every state',()=>{
- const html=workHtml('detail-contract'),script=html.match(/<script nonce="detail-contract">([\s\S]*?)<\/script>/u)[1],body=script.slice(script.indexOf('function renderDetailBody()'),script.indexOf('let activityStream='));
+ const html=workHtml('detail-contract'),script=html.match(/<script nonce="detail-contract">([\s\S]*?)<\/script>/u)[1],analysis=script.slice(script.indexOf('function activitySummary'),script.indexOf('function renderDetailBody')),body=script.slice(script.indexOf('function renderDetailBody()'),script.indexOf('let activityStream='));
  const app={innerHTML:'',querySelectorAll(){return [];}},back={};
- const context={app,document:{getElementById:id=>id==='back'?back:null},updateConnection(){},showBoard(){},liveStageHtml(){return '';},fileWorkPanel(){return '';},editing:null,aiDataApproved:false,attention:()=>false,labels:{running:'진행 중',awaiting_review:'완료조건 확인 필요',paused:'일시정지됨'},esc:value=>String(value??'').replace(/[&<>"']/gu,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))};
- vm.runInNewContext(body,context);
+ const context={app,document:{getElementById:id=>id==='back'?back:null},window:{officeText:value=>value},updateConnection(){},showBoard(){},liveStageHtml(){return '';},fileWorkPanel(){return '';},editing:null,aiDataApproved:false,attention:()=>false,labels:{running:'진행 중',awaiting_review:'완료조건 확인 필요',paused:'일시정지됨'},esc:value=>String(value??'').replace(/[&<>"']/gu,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))};
+ vm.runInNewContext(taskModelUiScript+analysis+body,context);
  for(const state of ['running','awaiting_review','paused']){
   context.detail={id:'work-identity',title:'Observed Work',goal:'Actual source',work_status:'ready',display_status:state,run_id:null,supervisor:{run_id:'sup-actual-identity',state},stages:[],runs:[],questions:[],events:[],verified_steps:0,total_steps:0,agent_count:0,progress_percent:null};
   vm.runInNewContext('renderDetailBody()',context);

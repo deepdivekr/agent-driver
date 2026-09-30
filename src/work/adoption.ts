@@ -9,6 +9,7 @@ import {RemoteOffice,remoteDetail} from './remote.js';
 import {initWorkExecution,workActivity,workTail} from './activity.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {workImportExecutionOwner} from './import-authority.js';
+import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
 
 const uuid=z.string().uuid(),revision=z.number().int().nonnegative(),fingerprint=z.string().regex(/^[a-f0-9]{64}$/u);
 export const workAdoptionTargetsSchema=z.object({work_id:uuid}).strict();
@@ -82,19 +83,22 @@ export class WorkAdoptionRuntime{
     const input=workAdoptionTargetsSchema.parse(raw),work=this.source(input.work_id),project=this.config.project.id,ids:string[]=[];
     if(table(this.store,'hermes_work'))ids.push(...this.store.hermesState.prepare("SELECT work_id FROM hermes_work WHERE project_id=? AND state!='detached' ORDER BY updated_at DESC LIMIT 100").all(project).map(row=>String(row.work_id)));
     if(table(this.store,'office_remote_work'))ids.push(...this.store.hermesState.prepare('SELECT work_id FROM office_remote_work WHERE project_id=? ORDER BY work_id LIMIT 100').all(project).map(row=>String(row.work_id)));
-    const targets=ids.filter(id=>id!==work.id).flatMap(id=>{const owner=this.store.hermesState.prepare('SELECT work_id FROM office_work_adoption WHERE project_id=? AND target_work_id=?').get(project,id);if(owner&&owner.work_id!==work.id)return [];const target=runtimeTarget(this.store,project,id);return target?[{id:target.id,runtime:target.runtime,title:target.title,revision:target.revision,fingerprint:target.fingerprint,state:target.state,scope:target.scope,connection:target.connection}]:[];});
+    const targets=ids.filter(id=>id!==work.id&&readWorkLifecycle(this.store,project,id).state==='connected').flatMap(id=>{const owner=this.store.hermesState.prepare('SELECT work_id FROM office_work_adoption WHERE project_id=? AND target_work_id=?').get(project,id);if(owner&&owner.work_id!==work.id)return [];const target=runtimeTarget(this.store,project,id);return target?[{id:target.id,runtime:target.runtime,title:target.title,revision:target.revision,fingerprint:target.fingerprint,state:target.state,scope:target.scope,connection:target.connection}]:[];});
     return {work_id:work.id,revision:work.revision,targets,binding:importedWorkAdoption(this.store,this.config,work.id),execution:false,
       next_action:targets.length?'select_registered_original_runtime':'register_hermes_or_remote_runtime_connection'};
   }
   bind(raw:unknown){
     const input=workAdoptionBindSchema.parse(raw),work=this.source(input.work_id),project=this.config.project.id;
+    assertWorkConnected(this.store,project,work.id);
+    const target=runtimeTarget(this.store,project,input.target_work_id);requireCondition(target,'WORK_ADOPTION_TARGET_NOT_REGISTERED');
+    assertWorkConnected(this.store,project,target.id);
     const previous=binding(this.store,project,work.id);
     if(previous){requireCondition(previous.target_work_id===input.target_work_id&&previous.target_fingerprint===input.target_fingerprint,'WORK_ADOPTION_BINDING_CONFLICT');return {...this.status(work.id),deduplicated:true};}
     requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');requireCondition(work.id!==input.target_work_id,'WORK_ADOPTION_SELF_REFERENCE');
-    const target=runtimeTarget(this.store,project,input.target_work_id);requireCondition(target,'WORK_ADOPTION_TARGET_NOT_REGISTERED');
     requireCondition(target.revision===input.target_revision&&target.fingerprint===input.target_fingerprint,'WORK_ADOPTION_TARGET_CHANGED');
     requireCondition(target.connection!=='detached','WORK_ADOPTION_TARGET_DETACHED');
     this.store.transaction(()=>{
+      assertWorkConnected(this.store,project,work.id);assertWorkConnected(this.store,project,target.id);
       requireCondition(this.source(work.id).revision===input.revision,'WORK_REVISION_CONFLICT');
       requireCondition(!this.store.hermesState.prepare('SELECT 1 FROM office_work_adoption WHERE project_id=? AND target_work_id=?').get(project,target.id),'WORK_ADOPTION_TARGET_ALREADY_BOUND');
       this.store.hermesState.prepare('INSERT INTO office_work_adoption VALUES(?,?,?,?,?,0,?)').run(work.id,project,target.id,target.runtime,target.fingerprint,new Date().toISOString());
@@ -105,6 +109,7 @@ export class WorkAdoptionRuntime{
   status(id:string){const source=this.source(id),adoption=importedWorkAdoption(this.store,this.config,id);requireCondition(adoption,'WORK_ADOPTION_CONNECTION_REQUIRED');return {work_id:id,revision:source.revision,adoption};}
   async action(raw:unknown){
     const input=workAdoptionActionSchema.parse(raw),source=this.source(input.work_id),link=binding(this.store,this.config.project.id,source.id);requireCondition(link,'WORK_ADOPTION_CONNECTION_REQUIRED');
+    assertWorkConnected(this.store,this.config.project.id,source.id);assertWorkConnected(this.store,this.config.project.id,link.target_work_id);
     requireCondition(source.revision===input.revision&&link.revision===input.binding_revision,'WORK_REVISION_CONFLICT');
     const target=runtimeTarget(this.store,this.config.project.id,link.target_work_id);requireCondition(target&&target.fingerprint===link.target_fingerprint,'WORK_ADOPTION_BINDING_CHANGED');
     // Repeated send is resolved by its existing receipt before testing a changed runtime revision.

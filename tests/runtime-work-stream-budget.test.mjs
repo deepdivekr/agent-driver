@@ -40,7 +40,7 @@ test('runtime native HTTP multiplexes board and selected Work activity on one re
   while(!text.includes('event: activity')){const part=await reader.read();assert.equal(part.done,false);text+=decoder.decode(part.value);}
   assert.match(text,/event: board/u);assert.match(text,/event: activity/u);
   const activity=JSON.parse(text.split('event: activity\ndata: ')[1].split('\n\n')[0]);assert.equal(activity.work_id,id);
-  assert.deepEqual(activity.activity.map(event=>event.kind),['received','defined']);assert.equal(activity.display_status,'ready');
+  assert.equal(activity.activity.some(event=>event.kind==='received'),true);assert.equal(activity.activity.some(event=>event.kind==='defined'),true);assert.equal(activity.activity.some(event=>event.kind==='definition.started'),true);assert.equal(activity.activity.some(event=>event.kind==='definition.finished'),true);assert.equal(activity.display_status,'ready');
   await x.server.close();let part;do{part=await reader.read();}while(!part.done);assert.equal(part.done,true);
 });
 
@@ -57,10 +57,10 @@ test('runtime fixture three same-origin browser tabs execute concurrently and ke
   });
   const pages=await Promise.all(x.works.map(()=>context.newPage()));
   await Promise.all(pages.map((page,index)=>page.goto(x.server.url+'?work='+x.works[index].work_id,{waitUntil:'domcontentloaded'})));
-  await Promise.all(pages.map(page=>page.locator('#execution-consent').waitFor({timeout:7000})));
+  await Promise.all(pages.map(page=>page.locator('#execute-work').waitFor({timeout:7000})));
   for(const [index,page] of pages.entries()){
     const streams=await page.evaluate(()=>window.__workStreams);assert.equal(streams.active,1);assert.equal(streams.peak,1);
-    assert.deepEqual(streams.urls,['work/events?work_id='+x.works[index].work_id]);await page.locator('#execution-consent').check();
+    assert.deepEqual(streams.urls,['work/events?work_id='+x.works[index].work_id]);assert.equal(await page.locator('#execution-consent').count(),0);assert.equal(await page.locator('#execute-work').isEnabled(),true);
   }
   const responses=pages.map(page=>page.waitForResponse(response=>response.url().endsWith('/work/execute')&&response.request().method()==='POST',{timeout:7000}));
   await Promise.all(pages.map(page=>page.locator('#execute-work').click({timeout:7000})));
@@ -72,7 +72,7 @@ test('runtime fixture three same-origin browser tabs execute concurrently and ke
   for(const work of x.works){const detail=await (await fetch(x.server.url+'work/detail?id='+work.work_id)).json();assert.equal(detail.supervisor.state,'succeeded');assert.equal(detail.runs.length,1);}
   const page=pages[0];await page.locator('#back').click();await page.locator('#prompt').waitFor();
   let streams=await page.evaluate(()=>window.__workStreams);assert.equal(streams.active,1);assert.equal(streams.peak,1);assert.equal(streams.urls.at(-1),'work/events');
-  await page.locator('[data-work="'+x.works[0].work_id+'"]').click();await page.locator('#work-tail-output').waitFor();
+  await page.locator('[data-work="'+x.works[0].work_id+'"]').click();await page.locator('#work-timeline').waitFor();assert.equal(await page.locator('#work-tail-output').isVisible(),false);
   streams=await page.evaluate(()=>window.__workStreams);assert.equal(streams.active,1);assert.equal(streams.peak,1);assert.equal(streams.urls.at(-1),'work/events?work_id='+x.works[0].work_id);
   await page.evaluate(()=>{Object.defineProperty(document,'hidden',{get:()=>true,configurable:true});document.dispatchEvent(new Event('visibilitychange'));});
   assert.equal((await page.evaluate(()=>window.__workStreams)).active,0);

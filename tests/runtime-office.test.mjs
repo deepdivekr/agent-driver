@@ -51,12 +51,12 @@ test('minimal Work detail edits a future stage without losing draft, desktop and
     await page.getByRole('heading',{name:'진행 단계'}).waitFor();
     if(width===1280){
       await page.locator('[data-stage="write"]').click();
-      await page.locator('#instruction').fill('카드뉴스 대신 요약문으로 제공해줘');
+      await page.locator('#stage-dialog[open]').waitFor();await page.locator('#stage-instruction').fill('카드뉴스 대신 요약문으로 제공해줘');
       x.store.recordSwarmActivity(x.config.project.id,run.run_id,0,null,'test.heartbeat',{summary:'new activity'});
       await page.waitForTimeout(2200);
-      assert.equal(await page.locator('#instruction').inputValue(),'카드뉴스 대신 요약문으로 제공해줘');
-      assert.equal(await page.evaluate(()=>document.activeElement?.id),'instruction');
-      await page.getByRole('button',{name:'다음 배정에 적용'}).click();
+      assert.equal(await page.locator('#stage-instruction').inputValue(),'카드뉴스 대신 요약문으로 제공해줘');
+      assert.equal(await page.evaluate(()=>document.activeElement?.id),'stage-instruction');
+      await page.locator('[data-stage-action="edit"]').click();await page.locator('#stage-close').click();
       await page.locator('[data-stage="write"] small').filter({hasText:'카드뉴스 대신 요약문으로 제공해줘'}).waitFor();
     }
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,JSON.stringify(await page.evaluate(()=>[...document.querySelectorAll('*')].filter(el=>el.getBoundingClientRect().right>innerWidth).slice(0,8).map(el=>({tag:el.tagName,class:el.className,width:el.getBoundingClientRect().width,right:el.getBoundingClientRect().right})))));
@@ -98,20 +98,20 @@ test('minimal Work desk shows live stage truth without visual previews or invent
   assert.equal(await page.locator('.tile').count(),1);
   await page.locator('.tile').click();
   await page.getByRole('heading',{name:'진행 단계'}).waitFor();
-  assert.equal(await page.getByRole('heading',{name:'작업 제어'}).count(),1);
-  assert.equal(await page.getByText('선택된 Pack').count(),1);
+  assert.equal(await page.getByRole('heading',{name:'실행 요약'}).count(),1);
+  assert.equal(await page.getByText('계획의 Pack').count(),1);
   assert.equal(await page.getByText('Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.').count(),1);
   assert.equal(await page.locator('img,canvas,video').count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
 });
 
 test('one-line dashboard intake opens the new Work without a preview or horizontal overflow',async t=>{
-  const x=await setup(t),fake={calls:[],async call(){return {title:'도쿄 호텔 검색',desired_outcome:'조건에 맞는 숙소 후보를 찾는다',completion_checks:[{id:'candidates',result:'숙소 후보를 확인한다',evidence:'출처와 조회 시각'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
+  const x=await setup(t),fake={calls:[],async call(_purpose,instructions){if(instructions.startsWith('Execute the registered Work'))return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'This fixture stops before external research.',completed_checks:[],wait_reason:'connection'};return {title:'도쿄 호텔 검색',desired_outcome:'조건에 맞는 숙소 후보를 찾는다',completion_checks:[{id:'candidates',result:'숙소 후보를 확인한다',evidence:'출처와 조회 시각'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
   const server=await startControlCenter(x.config,{workModel:fake}),browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close()});
   const page=await koPage(browser,{viewport:{width:390,height:850}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(server.url);
   await page.getByPlaceholder('한 줄로 어떤 업무를 맡길까요?').fill('도쿄 호텔 찾아줘');
-  await page.getByRole('button',{name:'업무 접수'}).click();
+  await page.getByRole('button',{name:'업무 시작'}).click();
   await page.getByRole('heading',{name:'도쿄 호텔 검색'}).waitFor();
   assert.equal(await page.getByText('완료 조건 · 숙소 후보를 확인한다').count(),1);
   assert.equal(await page.locator('img,canvas,video').count(),0);
@@ -120,11 +120,11 @@ test('one-line dashboard intake opens the new Work without a preview or horizont
 });
 
 test('dashboard can retry the same durable Work after a model interruption',async t=>{
-  const x=await setup(t);let calls=0;const fake={calls:[],async call(){if(++calls===1)throw Error('model offline');return {title:'복구된 업무',desired_outcome:'자료를 확인한다',completion_checks:[{id:'readback',result:'자료 확인',evidence:'출처와 시각'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
+  const x=await setup(t);let calls=0;const fake={calls:[],async call(_purpose,instructions){if(instructions.startsWith('Execute the registered Work'))return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'This fixture stops before external research.',completed_checks:[],wait_reason:'connection'};if(++calls===1)throw Error('model offline');return {title:'복구된 업무',desired_outcome:'자료를 확인한다',completion_checks:[{id:'readback',result:'자료 확인',evidence:'출처와 시각'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
   const server=await startControlCenter(x.config,{workModel:fake}),browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close()});
   const page=await koPage(browser);await page.goto(server.url);
   await page.getByPlaceholder('한 줄로 어떤 업무를 맡길까요?').fill('자료 확인해줘');
-  await page.getByRole('button',{name:'업무 접수'}).click();
+  await page.getByRole('button',{name:'업무 시작'}).click();
   await page.getByRole('button',{name:'업무 정의 재시도'}).waitFor();
   const first=await (await fetch(new URL('work/board',server.url))).json();
   assert.equal(first.works.length,1);

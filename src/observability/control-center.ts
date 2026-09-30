@@ -9,12 +9,13 @@ import {readSwarmDashboard} from '../swarm/dashboard.js';
 import {BrowserConnections} from './browser-connections.js';
 import {ControlSettings} from './control-settings.js';
 import {authSites,blockedAuthSites} from '../swarm/browser-auth.js';
+import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 import {readOffice} from './office.js';
 import {workHtml} from './work-ui.js';
 import {readWorkBoard,readWorkDetail} from './work-view.js';
-import {workStartSchema,workDefineSchema,workAnswerSchema,workPauseSchema,workJevSchema} from '../work/contracts.js';
+import {workStartActionSchema,workDefineSchema,workAnswerActionSchema,workReconnectSchema,workPauseActionSchema,workJevSchema} from '../work/contracts.js';
 import {WorkRuntime} from '../work/runtime.js';
-import {WorkDispatcher,workExecuteSchema} from '../work/dispatch.js';
+import {WorkDispatcher,workDispatchOptions,workExecuteSchema} from '../work/dispatch.js';
 import {WorkImportRuntime,importedCodingReadiness,workImportPasteSchema,workImportScanSchema,workImportAcceptSchema,workImportCodingStartSchema,workImportCodingStepSchema} from '../work/import-runtime.js';
 import {scanProject} from '../work/project-scan.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
@@ -27,9 +28,11 @@ import {HermesWorkRuntime,type HermesWorkOptions} from '../work/hermes.js';
 import {HermesMigrationRuntime} from '../work/hermes-migration.js';
 import {RemoteOffice} from '../work/remote.js';
 import {type RemoteTransport} from '../integrations/remote-openclaw.js';
-import {WorkSupervisor,supervisorActionSchema} from '../work/supervisor.js';
+import {WorkSupervisor,supervisorActionSchema,supervisorStatus} from '../work/supervisor.js';
 import {WorkResults} from '../work/results.js';
 import {WorkAdoptionRuntime} from '../work/adoption.js';
+import {workActivity} from '../work/activity.js';
+import {changeWorkLifecycle,lifecycleActionSchema} from '../work/lifecycle.js';
 
 export type ControlRunKind='swarm'|'pack'|'task'|'terminal';
 export type ControlLane='queued'|'running'|'done'|'attention';
@@ -41,6 +44,7 @@ export interface ControlActivity {id:string;run_id:string;run_kind:ControlRunKin
 export interface ControlHealth {id:string;label:string;state:'active'|'configured'|'optional'|'stale'|'unobserved'|'not_configured';detail:string;}
 export interface ControlCenterSnapshot {format:1;project_id:string;generated_at:string;health:ControlHealth[];runs:ControlRun[];activities:ControlActivity[];latest_revision:string;coverage:{agent_driver_only:true;outside_runtime:'unobserved'};read_only:true;website_connections?:ReturnType<typeof authSites>;}
 export interface ControlCenterServer {url:string;closed:Promise<void>;close():Promise<void>;}
+export interface ControlCenterReloadStatus {state:'idle'|'reloading'|'restored'|'failed';reason:string|null;}
 
 const terminalStatuses=new Set(['succeeded','cancelled','failed','session_closed','process_exited']);
 const lane=(status:string):ControlLane=>['queued','pending','starting','input_ready','waiting_orchestrator'].includes(status)?'queued':['running','streaming','leased','verifying'].includes(status)?'running':['succeeded','completed','turn_completed','approved'].includes(status)?'done':'attention';
@@ -81,16 +85,39 @@ export function readControlCenter(store:PackStore,config:HostConfig,now=Date.now
   ];
   const latestRevision=[swarm.latest_event_id,runtimeActivities.at(-1)?.id??0,taskEvents.at(-1)?.id??0,...swarm.runs.map(run=>`${run.run_id}:${run.revision}`),...managedSurfaces.map(item=>`${item.id}:${item.state}:${item.updated_at}`),...runs.flatMap(run=>run.actors.filter(actor=>actor.lease_stale).map(actor=>`${run.id}:${actor.id}:stale`)),...presences.map(p=>Date.parse(p.heartbeat_at)||0)].join(':');
   const website_connections=authSites(store,config);
-  for(const run of runs.filter(run=>run.kind==='swarm'&&run.status==='running')){const snapshot=store.swarmRun(project,run.id).snapshot as import('../swarm/contracts.js').SwarmRunSnapshot;for(const actor of run.actors.filter(actor=>actor.status==='pending')){const definition=snapshot.plan.workers.find(worker=>worker.id===actor.id);if(definition&&blockedAuthSites(store,config,definition.source_urls).length){actor.status='waiting_for_auth';actor.lane='attention';actor.activity='Sign in via Website connections';}}}
+  for(const run of runs.filter(run=>run.kind==='swarm'&&run.status==='running')){
+    const snapshot=store.swarmRun(project,run.id).snapshot as import('../swarm/contracts.js').SwarmRunSnapshot;
+    const office=store.officeWork(project,'swarm',run.id) as {id:string}|null,work=office?store.intakeWorkOptional(project,office.id):null;
+    const workBrowser=browserPreferenceSchema.optional().parse((work?.spec as {browser?:unknown}|null)?.browser);
+    for(const actor of run.actors.filter(actor=>actor.status==='pending')){
+      const definition=snapshot.plan.workers.find(worker=>worker.id===actor.id);
+      if(definition&&blockedAuthSites(store,config,definition.source_urls,workBrowser??definition.browser).length){actor.status='waiting_for_auth';actor.lane='attention';actor.activity='Sign in via Website connections';}
+    }
+  }
   return {format:1,project_id:project,generated_at:new Date(now).toISOString(),health,runs,activities,website_connections,latest_revision:latestRevision+JSON.stringify(website_connections),coverage:{agent_driver_only:true,outside_runtime:'unobserved'},read_only:true};
 }
 
 function headers(nonce?:string){return {'cache-control':'no-store','content-security-policy':`default-src 'none'; connect-src 'self'; font-src 'self'; img-src 'self' blob:; style-src 'unsafe-inline'; script-src ${nonce?`'nonce-${nonce}'`:`'none'`}; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`,'referrer-policy':'no-referrer','x-content-type-options':'nosniff','x-frame-options':'DENY'};}
 function reply(response:ServerResponse,status:number,body:string,type='text/plain; charset=utf-8',nonce?:string){response.writeHead(status,{'content-type':type,...headers(nonce)});response.end(body);}
-export async function startControlCenter(config:HostConfig,options:{port?:number;poll_ms?:number;capability_token?:string;workModel?:StructuredModel;coding?:CodingRuntimeOptions;hermes?:HermesWorkOptions;remote?:RemoteTransport}={}):Promise<ControlCenterServer>{
+/** Conservative, project-scoped restart admission; historical labels alone are not live leases. */
+export function controlCenterReloadBlockedReason(store:PackStore,project:string,at=Date.now()){
+  const db=store.hermesState,exists=(table:string)=>Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
+  if(db.prepare("SELECT 1 FROM office_intake WHERE project_id=? AND status='defining' AND define_owner IS NOT NULL AND define_lease_until_ms>? LIMIT 1").get(project,at))return 'WORK_ANALYSIS_IN_PROGRESS';
+  if(exists('office_supervisor')){
+    if(db.prepare("SELECT 1 FROM office_supervisor WHERE project_id=? AND state IN ('queued','running','retry_wait') LIMIT 1").get(project))return 'WORK_EXECUTION_ACTIVE';
+    if(db.prepare("SELECT 1 FROM office_supervisor WHERE project_id=? AND (state='reconciliation_required' OR CASE WHEN json_valid(checkpoint)=0 THEN 1 ELSE json_extract(checkpoint,'$.pending.dispatched')=1 AND COALESCE(json_extract(checkpoint,'$.pending.effect'),'unknown')<>'read_only' END) LIMIT 1").get(project))return 'WORK_RECONCILIATION_REQUIRED';
+  }
+  if(exists('office_execution')&&db.prepare("SELECT 1 FROM office_execution WHERE project_id=? AND ((owner IS NOT NULL AND lease_until_ms>?) OR state='reconciliation_required') LIMIT 1").get(project,at))return 'WORK_EXECUTION_ACTIVE';
+  if(exists('hermes_turn')&&db.prepare("SELECT 1 FROM hermes_turn WHERE project_id=? AND status IN ('queued','starting','running','needs_human') LIMIT 1").get(project))return 'WORK_EXECUTION_ACTIVE';
+  if(db.prepare('SELECT 1 FROM family_execution e JOIN family_run r ON r.id=e.run_id WHERE r.project_id=? AND e.owner IS NOT NULL AND e.lease_until_ms>? LIMIT 1').get(project,at))return 'WORK_EXECUTION_ACTIVE';
+  if(db.prepare("SELECT 1 FROM coding_stage s JOIN coding_run r ON r.id=s.run_id WHERE r.project_id=? AND s.owner IS NOT NULL AND s.lease_until_ms>? LIMIT 1").get(project,at)||db.prepare('SELECT 1 FROM coding_dialog_turn t JOIN coding_dialog d ON d.id=t.dialog_id WHERE d.project_id=? AND t.owner IS NOT NULL AND t.lease_until_ms>? LIMIT 1').get(project,at))return 'WORK_EXECUTION_ACTIVE';
+  if(db.prepare("SELECT 1 FROM swarm_run r,json_each(r.snapshot,'$.workers') w WHERE r.project_id=? AND json_extract(w.value,'$.status')='leased' AND json_extract(w.value,'$.lease_expires_at_ms')>? LIMIT 1").get(project,at))return 'WORK_EXECUTION_ACTIVE';
+  return null;
+}
+export async function startControlCenter(config:HostConfig,options:{port?:number;poll_ms?:number;capability_token?:string;workModel?:StructuredModel;coding?:CodingRuntimeOptions;hermes?:HermesWorkOptions;remote?:RemoteTransport;onReload?:()=>Promise<void>;reloadStatus?:()=>ControlCenterReloadStatus}={}):Promise<ControlCenterServer>{
   if(options.capability_token!==undefined&&!/^[a-f0-9]{48}$/u.test(options.capability_token))throw Error('CONTROL_CENTER_CAPABILITY_INVALID');
-  const token=options.capability_token??randomBytes(24).toString('hex'),store=new PackStore(config.dbPath);try{store.registerProject(config.project);}catch(error){store.close();throw error;}const presence=store.startPresence(config.project.id,'dashboard',{transport:'loopback-read-only'}),clients=new Set<ServerResponse>(),lightClients=new Set<ServerResponse>(),poll=options.poll_ms??500;let host='',done:()=>void=()=>undefined,stopped=false;const closed=new Promise<void>(resolve=>done=resolve);
-  const connections=new BrowserConnections(store,config),settings=new ControlSettings(config);
+  const token=options.capability_token??randomBytes(24).toString('hex'),store=new PackStore(config.dbPath);try{store.registerProject(config.project);}catch(error){store.close();throw error;}const presence=store.startPresence(config.project.id,'dashboard',{transport:'loopback-read-only'}),clients=new Set<ServerResponse>(),lightClients=new Set<ServerResponse>(),poll=options.poll_ms??500;let host='',done:()=>void=()=>undefined,stopped=false,reloading=false,inflightMutations=0;const closed=new Promise<void>(resolve=>done=resolve);
+  const connections=new BrowserConnections(store,config,{reloadAvailable:Boolean(options.onReload)}),settings=new ControlSettings(config);
   const fileRoutes=new FileExplorerRoutes(store.localFileExplorer(config.project.id,dirname(config.dbPath)));
   const hermesWork=new HermesWorkRuntime(store,config,options.hermes);
   const migrations=new HermesMigrationRuntime(store,config);
@@ -98,22 +125,53 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>store.recordClientHandoff(config.project.id,event));
   const workRuntime=new WorkRuntime(store,config,workModel),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);
   const results=new WorkResults(store);
-  const supervisor=new WorkSupervisor(store,config,workModel,{onResult:id=>results.capture(config.project.id,id)});
+  const supervisor=new WorkSupervisor(store,config,workModel,{auto_start:false,onResult:id=>results.capture(config.project.id,id)});
   const adoption=new WorkAdoptionRuntime(store,config,hermesWork,remoteOffice);
   const dispatcher=new WorkDispatcher(store,config,workModel,hermesWork,supervisor);
+  const runtimeReady=()=>{const state=options.reloadStatus?.().state;return !stopped&&!reloading&&(state===undefined||state==='idle'||state==='restored');};
+  const activateReadySupervisor=()=>{if(runtimeReady())supervisor.activate();};
+  const runtimeConfiguration=()=>({runtime_reload_available:Boolean(options.onReload),runtime_configuration:options.reloadStatus?.()??{state:reloading?'reloading':'idle',reason:null}});
+  const finishIntake=(work:ReturnType<WorkRuntime['status']>,intent:{execute:boolean;cost_acknowledged:boolean;timezone?:string})=>{
+    if(!intent.execute)return {...work,admission:{requested:false,accepted:false,deduplicated:false,state:'registered',reason:null}};
+    const previous=supervisorStatus(store,config.project.id,work.work_id,config);
+    if(previous)return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,accepted:false,deduplicated:true,state:previous.state,run_id:previous.run_id,reason:previous.reason}};
+    if(work.definition_status!=='ready'||work.paused){const reason=work.reason??(work.paused?'WORK_PAUSED':work.definition_status==='awaiting_details'?'WORK_DETAILS_REQUIRED':work.definition_status==='defining'?'WORK_DEFINITION_IN_PROGRESS':'WORK_DEFINITION_REQUIRED');workActivity(store,config.project.id,work.work_id,'dispatch.waiting',`Work start is waiting: ${reason}`,{stage_id:'admission',status:work.definition_status,reason});return {...work,admission:{requested:true,accepted:false,deduplicated:false,state:work.definition_status,reason}};}
+    try{const route=workDispatchOptions(store,config,work.work_id),admission=dispatcher.start({work_id:work.work_id,revision:work.revision,executor:route.executor??'client',cost_acknowledged:intent.cost_acknowledged,current_run_only:true,...(intent.timezone?{timezone:intent.timezone}:{})});return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,...admission}};}
+    catch(error){const reason=error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'WORK_EXECUTION_REQUEST_FAILED';return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,accepted:false,deduplicated:false,state:'blocked',reason}};}
+  };
   const server=createServer(async (request:IncomingMessage,response:ServerResponse)=>{
-    const rejectStopped=()=>{if(!stopped)return false;response.setHeader('connection','close');reply(response,503,JSON.stringify({error:'CONTROL_CENTER_CLOSING'}),'application/json; charset=utf-8');return true;};
+    const rejectStopped=()=>{if(!stopped&&(runtimeReady()||request.method==='GET'))return false;response.setHeader('connection','close');reply(response,503,JSON.stringify({error:stopped?'CONTROL_CENTER_CLOSING':options.reloadStatus?.().state==='failed'?'CONTROL_CENTER_RELOAD_FAILED':'CONTROL_CENTER_RELOADING'}),'application/json; charset=utf-8');return true;};
     if(rejectStopped())return;
     if(request.headers.host!==host){reply(response,403,'forbidden');return;}
     const url=new URL(request.url??'/','http://127.0.0.1'),base=`/${token}/`;if(!url.pathname.startsWith(base)){reply(response,404,'not found');return;}const suffix=url.pathname.slice(base.length);
+    const managementAction=request.method==='POST'||request.method==='GET'&&(['settings/mcp','settings/bootstrap','settings/models','settings/coding/models','connections/status','work/coding/sessions'].includes(suffix));
+    if(managementAction)inflightMutations++;
+    try{
     if(await serveUiAsset(request,response,suffix))return;
     if(rejectStopped())return;
+    if(suffix==='work/reconnect'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>2048)throw Error('WORK_REQUEST_TOO_LARGE');}if(rejectStopped())return;const input=workReconnectSchema.parse(JSON.parse(body));if(input.work_id)store.officeWorkById(config.project.id,input.work_id);
+        if(!options.onReload)throw Error('CONTROL_CENTER_RELOAD_UNAVAILABLE');if(inflightMutations>1)throw Error('MANAGEMENT_ACTION_IN_PROGRESS');const busy=settings.reloadBlockedReason??connections.reloadBlockedReason;if(busy)throw Error(busy);if(!remoteOffice.idle)throw Error('REMOTE_ACTION_IN_PROGRESS');if(!dispatcher.idle)throw Error('WORK_EXECUTION_ACTIVE');const reason=controlCenterReloadBlockedReason(store,config.project.id);if(reason)throw Error(reason);
+        supervisor.suspendForReload();reloading=true;if(input.work_id)workActivity(store,config.project.id,input.work_id,'runtime.reconnect_requested','Applying the saved runtime settings; existing Work records and checkpoints are preserved.',{stage_id:'connection',status:'reconnecting'});
+        response.once('finish',()=>setImmediate(()=>{void options.onReload!().catch(()=>{if(stopped)return;reloading=false;activateReadySupervisor();if(input.work_id)workActivity(store,config.project.id,input.work_id,'runtime.reconnect_failed','Applying runtime settings failed. No Work was replayed.',{stage_id:'connection',status:'blocked',reason:'CONTROL_CENTER_RELOAD_FAILED'});});}));reply(response,202,JSON.stringify({state:'reconnecting',execution_started:false,work_id:input.work_id??null}),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'CONTROL_CENTER_RELOAD_FAILED'}),'application/json; charset=utf-8');}return;
+    }
     if(await settings.handle(request,response,suffix,host))return;
     if(rejectStopped())return;
     if(await connections.handle(request,response,suffix,host))return;
     if(rejectStopped())return;
     if(await fileRoutes.handle(request,response,suffix,host))return;
     if(rejectStopped())return;
+    if(suffix==='work/lifecycle'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>2048)throw Error('WORK_REQUEST_TOO_LARGE');}if(rejectStopped())return;
+        const value=changeWorkLifecycle(store,config.project.id,lifecycleActionSchema.parse(JSON.parse(body)));
+        reply(response,200,JSON.stringify(value),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'WORK_LIFECYCLE_REQUEST_INVALID'}),'application/json; charset=utf-8');}return;
+    }
     if(['work/control','work/adoption/targets','work/adoption/bind','work/adoption/action','work/result/retry'].includes(suffix)){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
@@ -225,15 +283,24 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       try{store.officeWorkById(config.project.id,id);}catch{reply(response,404,'work not found');return;}
       if(clients.size>=32){reply(response,429,'stream limit');return;}
       response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);let previous='',keepAt=Date.now();
-      const emit=()=>{if(response.destroyed)return;try{const detail=readWorkDetail(store,config,id),payload=JSON.stringify({activity:detail.activity,display_status:detail.display_status,execution:detail.execution,execution_action:detail.execution_action,supervisor:detail.supervisor,schedule:detail.schedule,revision:detail.revision});if(payload!==previous){previous=payload;response.write(`event: activity\ndata: ${payload}\n\n`);}if(Date.now()-keepAt>15000){response.write(': keep-alive\n\n');keepAt=Date.now();}}catch{response.end();}};
+      const emit=()=>{if(response.destroyed)return;try{const detail=readWorkDetail(store,config,id),payload=JSON.stringify({activity:detail.activity,display_status:detail.display_status,execution:detail.execution,execution_action:detail.execution_action,supervisor:detail.supervisor,schedule:detail.schedule,revision:detail.revision,lifecycle:detail.lifecycle,...runtimeConfiguration()});if(payload!==previous){previous=payload;response.write(`event: activity\ndata: ${payload}\n\n`);}if(Date.now()-keepAt>15000){response.write(': keep-alive\n\n');keepAt=Date.now();}}catch{response.end();}};
       emit();const timer=setInterval(emit,1500);timer.unref();const cleanup=()=>{clearInterval(timer);clients.delete(response);};response.once('close',cleanup);return;
     }
     if(suffix==='work/start'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>12_288)throw Error('WORK_REQUEST_TOO_LARGE');}
-        if(rejectStopped())return;const input=workStartSchema.parse(JSON.parse(body));
-        const result=await workRuntime.start(input);
+        if(rejectStopped())return;const {execute,cost_acknowledged,timezone,...input}=workStartActionSchema.parse(JSON.parse(body));
+        if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
+        const intent={execute,cost_acknowledged,...(timezone?{timezone}:{})};
+        const recordStart=(work:ReturnType<WorkRuntime['status']>)=>{if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The user requested this Work run using the configured AI allowance. Future recurring runs and external changes remain separately gated.',{stage_id:'admission',status:'requested'});};
+        if(request.headers.accept==='application/x-ndjson'){
+          response.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8',...headers()});const send=(event:unknown)=>{if(!response.destroyed)response.write(JSON.stringify(event)+'\n');};
+          try{const work=await workRuntime.start(input,registered=>{recordStart(registered);send({type:'registered',work:registered});});if(stopped||reloading||options.reloadStatus?.().state==='reloading')throw Error(stopped?'CONTROL_CENTER_CLOSING':'CONTROL_CENTER_RELOADING');send({type:'result',result:finishIntake(work,intent)});}
+          catch(error){send({type:'error',error:safeControlText(error instanceof Error?error.message:'WORK_START_FAILED',300)});}
+          response.end();return;
+        }
+        const work=await workRuntime.start(input,recordStart);if(rejectStopped())return;const result=finishIntake(work,intent);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_START_FAILED'}),'application/json; charset=utf-8');}return;
     }
@@ -250,9 +317,10 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>8192)throw Error('WORK_REQUEST_TOO_LARGE');}
-        if(rejectStopped())return;const input=workAnswerSchema.parse(JSON.parse(body));
+        if(rejectStopped())return;const {execute,cost_acknowledged,timezone,...input}=workAnswerActionSchema.parse(JSON.parse(body));
+        if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
         if(Object.values(input.answers).some(value=>/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(value)))throw Error('CREDENTIAL_LIKE_INPUT');
-        const result=await workRuntime.answer(input);
+        const work=await workRuntime.answer(input);if(rejectStopped())return;const result=finishIntake(work,{execute,cost_acknowledged,...(timezone?{timezone}:{})});
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_ANSWER_FAILED'}),'application/json; charset=utf-8');}return;
     }
@@ -260,8 +328,13 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2048)throw Error('WORK_REQUEST_TOO_LARGE');}
-        if(rejectStopped())return;const input=workPauseSchema.parse(JSON.parse(body)),work=store.setIntakePaused(config.project.id,input.work_id,input.revision,input.paused);
-        reply(response,200,JSON.stringify({work_id:work.id,paused:work.paused,revision:work.revision,scope:'future_dispatch'}),'application/json; charset=utf-8');
+        if(rejectStopped())return;const {execute,cost_acknowledged,timezone,...input}=workPauseActionSchema.parse(JSON.parse(body));
+        if(execute&&input.paused)throw Error('WORK_RESUME_ACTION_REQUIRED');if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
+        const work=store.setIntakePaused(config.project.id,input.work_id,input.revision,input.paused);
+        if(!execute){reply(response,200,JSON.stringify({work_id:work.id,paused:work.paused,revision:work.revision,scope:'future_dispatch'}),'application/json; charset=utf-8');return;}
+        workActivity(store,config.project.id,work.id,'dispatch.requested','The user requested the resumed current Work run using the configured AI allowance; future recurring runs remain separately gated.',{stage_id:'admission',status:'requested'});
+        const result=finishIntake(workRuntime.status({work_id:work.id}),{execute,cost_acknowledged,...(timezone?{timezone}:{})});
+        reply(response,200,JSON.stringify({...result,scope:'current_run_request'}),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_PAUSE_FAILED'}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/jev'){
@@ -295,7 +368,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(suffix==='work/board'){reply(response,200,JSON.stringify(readWorkBoard(store,config)),'application/json; charset=utf-8');return;}
     if(suffix==='work/detail'){
       const id=url.searchParams.get('id');if(!id||id.length>128){reply(response,400,'work id required');return;}
-      try{const detail=readWorkDetail(store,config,id);reply(response,200,JSON.stringify({...detail,results:results.capture(config.project.id,id)}),'application/json; charset=utf-8');}catch{reply(response,404,'work not found');}return;
+      try{const detail=readWorkDetail(store,config,id);reply(response,200,JSON.stringify({...detail,...runtimeConfiguration(),results:results.capture(config.project.id,id)}),'application/json; charset=utf-8');}catch{reply(response,404,'work not found');}return;
     }
     if(suffix==='work/events'){
       if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
@@ -305,7 +378,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);lightClients.add(response);
       try{response.write(`event: board\ndata: ${JSON.stringify(readWorkBoard(store,config))}\n\n`);}catch{response.end();lightClients.delete(response);clients.delete(response);return;}
       let previous='';
-      const emitActivity=()=>{if(!id||response.destroyed)return;try{const detail=readWorkDetail(store,config,id),payload=JSON.stringify({work_id:id,activity:detail.activity,display_status:detail.display_status,execution:detail.execution,execution_action:detail.execution_action,supervisor:detail.supervisor,schedule:detail.schedule,revision:detail.revision});if(payload!==previous){previous=payload;response.write(`event: activity\ndata: ${payload}\n\n`);}}catch{response.end();}};
+      const emitActivity=()=>{if(!id||response.destroyed)return;try{const detail=readWorkDetail(store,config,id),payload=JSON.stringify({work_id:id,activity:detail.activity,display_status:detail.display_status,execution:detail.execution,execution_action:detail.execution_action,supervisor:detail.supervisor,schedule:detail.schedule,revision:detail.revision,lifecycle:detail.lifecycle,...runtimeConfiguration()});if(payload!==previous){previous=payload;response.write(`event: activity\ndata: ${payload}\n\n`);}}catch{response.end();}};
       emitActivity();const activityTimer=id?setInterval(emitActivity,1500):null;activityTimer?.unref();
       response.once('close',()=>{if(activityTimer)clearInterval(activityTimer);lightClients.delete(response);clients.delete(response)});return;
     }
@@ -314,9 +387,10 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(suffix==='snapshot'){reply(response,200,JSON.stringify(readControlCenter(store,config)),'application/json; charset=utf-8');return;}
     if(suffix==='events'){response.writeHead(200,{'content-type':'text/event-stream; charset=utf-8','connection':'keep-alive',...headers()});clients.add(response);let last='';const emit=()=>{if(response.destroyed)return;try{const snapshot=readControlCenter(store,config),next=snapshot.latest_revision;if(next!==last){last=next;response.write(`event: snapshot\nid: ${Date.now()}\ndata: ${JSON.stringify(snapshot)}\n\n`);}}catch{response.end();}};emit();const timer=setInterval(emit,poll),keep=setInterval(()=>{if(!response.destroyed)response.write(': keep-alive\n\n');},15_000);response.once('close',()=>{clearInterval(timer);clearInterval(keep);clients.delete(response)});return;}
     reply(response,404,'not found');
+    }finally{if(managementAction)inflightMutations--;}
   });
-  await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??0,'127.0.0.1',resolve)});const address=server.address();if(address===null||typeof address==='string'){store.stopPresence(config.project.id,presence);store.close();throw Error('CONTROL_CENTER_BIND_FAILED');}host=`127.0.0.1:${address.port}`;const heartbeat=setInterval(()=>{try{store.heartbeatPresence(config.project.id,presence);}catch{}},2_000);heartbeat.unref();
+  await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??0,'127.0.0.1',resolve)});const address=server.address();if(address===null||typeof address==='string'){store.stopPresence(config.project.id,presence);store.close();throw Error('CONTROL_CENTER_BIND_FAILED');}host=`127.0.0.1:${address.port}`;activateReadySupervisor();const heartbeat=setInterval(()=>{try{store.heartbeatPresence(config.project.id,presence);activateReadySupervisor();}catch{}},2_000);heartbeat.unref();
   let lastBoard='',lastKeep=Date.now();const lightTick=setInterval(()=>{if(!lightClients.size)return;try{const board=readWorkBoard(store,config),payload=JSON.stringify({works:board.works,auth_attention_count:board.auth_attention_count});if(payload!==lastBoard){lastBoard=payload;for(const client of lightClients)if(!client.destroyed)client.write(`event: board\ndata: ${JSON.stringify(board)}\n\n`);}if(Date.now()-lastKeep>=15_000){lastKeep=Date.now();for(const client of lightClients)if(!client.destroyed)client.write(': keep-alive\n\n');}}catch{for(const client of lightClients)client.end();lightClients.clear();}},Math.max(1000,poll));lightTick.unref();
-  const hermesTick=setInterval(()=>hermesWork.tick(),1000);hermesTick.unref();
-  const close=async()=>{if(stopped)return closed;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);clearInterval(hermesTick);settings.close();codingRuntime.close();codingDialog.close();await supervisor.close();await dispatcher.close();await hermesWork.close();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
+  const hermesTick=setInterval(()=>{if(runtimeReady())hermesWork.tick();},1000);hermesTick.unref();
+  const close=async()=>{if(stopped)return closed;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);clearInterval(hermesTick);settings.close();codingRuntime.close();codingDialog.close();await supervisor.close();await dispatcher.close();await hermesWork.close();await remoteOffice.drain();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
 }

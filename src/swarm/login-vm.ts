@@ -32,7 +32,8 @@ export interface LoginVmOperations {
 const operations:LoginVmOperations={running:ownedLoginVmRunning,launch:launchUbuntuBrowserVm,attempts:60,wait:async()=>{await delay(1000);},ready:async spec=>{
   try{const response=await fetch(`http://127.0.0.1:${spec.devtools_port}/json/version`,{signal:AbortSignal.timeout(800),redirect:'error'});const data=await response.json() as {Browser?:string;webSocketDebuggerUrl?:string};return response.ok&&typeof data.Browser==='string'&&typeof data.webSocketDebuggerUrl==='string';}catch{return false;}
 }};
-/** Only an explicit local login action calls this. Reuse the existing disk/profile; never provision or reset it. */
+/** Explicit login or selected managed-guest execution only. Reuse the existing
+ * disk/profile; never provision/reset it or boot during a catalog/status read. */
 export async function prepareLoginVm(config:HostConfig,ops:LoginVmOperations=operations){
   const spec=await loginVmSpec(config),key=join(spec.storage_root,spec.id);
   const pending=starts.get(key);if(pending)return pending;

@@ -11,6 +11,7 @@ import {WorkImportRuntime,importedConnectionReadiness} from '../dist/work/import
 import {HermesWorkRuntime,importHermesWork} from '../dist/work/hermes.js';
 import {RemoteOffice} from '../dist/work/remote.js';
 import {WorkAdoptionRuntime,importedWorkAdoption} from '../dist/work/adoption.js';
+import {changeWorkLifecycle,readWorkLifecycle} from '../dist/work/lifecycle.js';
 
 const remoteTarget={name:'Disposable original runtime',host:'example.invalid',user:'agent',entry:'/app/openclaw.mjs'};
 async function fixture(t){
@@ -54,11 +55,30 @@ test('runtime fixture adoption actions reject stale revision, changed runtime id
  assert.throws(()=>x.runtime.bind({...request,revision:request.revision+1}),/REVISION_CONFLICT/u);
  assert.throws(()=>x.runtime.bind({...request,target_revision:request.target_revision+1}),/TARGET_CHANGED/u);
  assert.throws(()=>x.runtime.bind({...request,target_work_id:randomUUID()}),/NOT_REGISTERED/u);
+ x.store.registerProject({...x.config.project,id:'foreign-project'});
+ const foreignTarget=importHermesWork(x.store,'foreign-project','foreign-original',x.hermes.status(target).definition);
+ assert.throws(()=>x.runtime.bind({...request,target_work_id:foreignTarget}),/NOT_REGISTERED/u);
  x.runtime.bind(request);await assert.rejects(x.runtime.action({...action(x,'pause'),target_revision:9999}),/REVISION_CONFLICT/u);
  const definition=x.hermes.status(target).definition;x.store.hermesState.prepare('UPDATE hermes_work SET definition=? WHERE work_id=?').run(JSON.stringify({...definition,instruction:'Changed original binding'}),target);
  assert.equal(importedWorkAdoption(x.store,x.config,x.imported.work_id).connection,'binding_changed');
  await assert.rejects(x.runtime.action(action(x,'pause')),/BINDING_CHANGED/u);assert.equal(x.hermes.status(target).hermes.paused,false);
  const foreign=new WorkAdoptionRuntime(x.store,{...x.config,project:{...x.config.project,id:'foreign-project'}},x.hermes,x.remote);assert.throws(()=>foreign.targets({work_id:x.imported.work_id}),/WORK_NOT_FOUND/u);
+});
+for(const lifecycleAction of ['disconnect','remove'])for(const subject of ['source','target'])test(`runtime fixture ${lifecycleAction} of adoption ${subject} fences new and repeated binding plus original commands`,async t=>{
+ const x=await fixture(t),target=addHermes(x),request=bind(x,target),project=x.config.project.id;
+ x.runtime.bind(request);
+ const command=action(x,'pause'),id=subject==='source'?x.imported.work_id:target,lifecycle=readWorkLifecycle(x.store,project,id);
+ const original=x.hermes.status(target),binding=x.store.hermesState.prepare('SELECT * FROM office_work_adoption WHERE project_id=? AND work_id=?').get(project,x.imported.work_id);
+ changeWorkLifecycle(x.store,project,{work_id:id,revision:lifecycle.revision,work_revision:lifecycle.work_revision,action:lifecycleAction,confirmed:true});
+ const error=lifecycleAction==='remove'?/WORK_REMOVED/u:/WORK_DISCONNECTED/u;
+ assert.throws(()=>x.runtime.bind(request),error);
+ await assert.rejects(x.runtime.action(command),error);
+ assert.deepEqual(x.hermes.status(target),original);
+ assert.deepEqual(x.store.hermesState.prepare('SELECT * FROM office_work_adoption WHERE project_id=? AND work_id=?').get(project,x.imported.work_id),binding);
+ assert.deepEqual(x.requests,[]);assert.deepEqual(x.calls,[]);
+ x.store.hermesState.prepare('DELETE FROM office_work_adoption WHERE project_id=? AND work_id=?').run(project,x.imported.work_id);
+ assert.throws(()=>x.runtime.bind(request),error);
+ assert.equal(x.store.hermesState.prepare('SELECT COUNT(*) n FROM office_work_adoption WHERE project_id=? AND work_id=?').get(project,x.imported.work_id).n,0);
 });
 test('runtime fixture adopted send requires model consent and reuses one original-runtime request receipt',async t=>{
  const x=await fixture(t),target=addHermes(x);x.runtime.bind(bind(x,target));

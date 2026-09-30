@@ -1,29 +1,55 @@
 import {type PackStore} from '../packs/store.js';
 import {safeControlText} from '../observability/safe-text.js';
+import {z} from 'zod';
+
+const activityMetadataSchema=z.object({
+  stage_id:z.string().max(100).optional(),worker_id:z.string().max(100).optional(),tool_name:z.string().max(100).optional(),status:z.string().max(80).optional(),
+  pack_family:z.string().max(100).optional(),route_kind:z.string().max(40).optional(),executor:z.string().max(160).optional(),
+  engine:z.string().max(40).optional(),environment:z.string().max(80).optional(),reason:z.string().max(160).optional(),
+  model_provider:z.string().max(60).optional(),model_name:z.string().max(200).optional(),model_effort:z.enum(['low','medium','high']).optional(),
+  model_role:z.enum(['planner','worker','verifier','synthesis']).optional(),model_continuity:z.enum(['new_session','resumed_session','checkpoint_only']).optional(),
+  source:z.object({url:z.string().url().max(2048),title:z.string().max(200),observed_at:z.string().datetime()}).strict().optional(),
+}).strict();
+export type WorkActivityMetadata=z.infer<typeof activityMetadataSchema>;
+/** Only explicit host fields, never arguments, page bodies or provider reasoning. */
+function safeMetadata(raw:unknown):WorkActivityMetadata|undefined{
+  const parsed=activityMetadataSchema.safeParse(raw);if(!parsed.success)return undefined;
+  const metadata=Object.fromEntries(Object.entries(parsed.data).filter(([key])=>key!=='source').map(([key,value])=>[key,safeControlText(String(value),160)])) as WorkActivityMetadata;
+  if(parsed.data.source){const source=parsed.data.source,url=safeControlText(source.url,2048);try{new URL(url);metadata.source={url,title:safeControlText(source.title,200),observed_at:source.observed_at};}catch{/* Sensitive or invalid URLs are not public source evidence. */}}
+  return metadata;
+}
 
 export function initWorkExecution(store:PackStore){
   store.hermesState.exec(`CREATE TABLE IF NOT EXISTS office_execution(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,owner TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,state TEXT NOT NULL,reason TEXT,updated_at TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS office_activity(id INTEGER PRIMARY KEY AUTOINCREMENT,project_id TEXT NOT NULL,work_id TEXT NOT NULL,kind TEXT NOT NULL,summary TEXT NOT NULL,created_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS office_activity(id INTEGER PRIMARY KEY AUTOINCREMENT,project_id TEXT NOT NULL,work_id TEXT NOT NULL,kind TEXT NOT NULL,summary TEXT NOT NULL,created_at TEXT NOT NULL,metadata TEXT);
     CREATE INDEX IF NOT EXISTS office_activity_work ON office_activity(project_id,work_id,id);
     CREATE INDEX IF NOT EXISTS runtime_activity_owner ON runtime_activity(project_id,owner_kind,owner_id,id);`);
+  if(!store.hermesState.prepare('PRAGMA table_info(office_activity)').all().some(column=>column.name==='metadata'))store.hermesState.exec('ALTER TABLE office_activity ADD COLUMN metadata TEXT');
 }
 export function hasExecutionTable(store:PackStore){return Boolean(store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_execution'").get());}
 export function executionRecord(store:PackStore,project:string,id:string){
   return hasExecutionTable(store)?store.hermesState.prepare('SELECT owner,lease_until_ms,state,reason,updated_at FROM office_execution WHERE project_id=? AND work_id=?').get(project,id) as {owner:string|null;lease_until_ms:number;state:string;reason:string|null;updated_at:string}|undefined:undefined;
 }
-export function workActivity(store:PackStore,project:string,id:string,kind:string,summary:string){
-  store.hermesState.prepare('INSERT INTO office_activity(project_id,work_id,kind,summary,created_at) VALUES(?,?,?,?,?)').run(project,id,kind,safeControlText(summary,800),new Date().toISOString());
+export function workActivity(store:PackStore,project:string,id:string,kind:string,summary:string,metadata?:WorkActivityMetadata){
+  const safe=metadata?safeMetadata(metadata):undefined;
+  store.hermesState.prepare('INSERT INTO office_activity(project_id,work_id,kind,summary,created_at,metadata) VALUES(?,?,?,?,?,?)').run(project,id,kind,safeControlText(summary,800),new Date().toISOString(),safe?JSON.stringify(safe):null);
 }
-export interface WorkLog {id:string;kind:string;summary:string;created_at:string;source:string;}
+export interface WorkLog {id:string;kind:string;summary:string;created_at:string;source:string;metadata?:WorkActivityMetadata;}
+/** Saved worker states are live evidence only while their run and lease remain valid. */
+export function activeSwarmWorkerCount(snapshot:{status:string;workers:Record<string,{status:string;lease_token?:string|null;lease_expires_at_ms?:number|null}>},atMs=Date.now()){
+  if(snapshot.status!=='running')return 0;
+  return Object.values(snapshot.workers).filter(worker=>worker.status==='leased'&&typeof worker.lease_token==='string'&&worker.lease_token.trim().length>0&&typeof worker.lease_expires_at_ms==='number'&&Number.isFinite(worker.lease_expires_at_ms)&&worker.lease_expires_at_ms>atMs).length;
+}
 /** Bounded reads of this Work only. No raw provider stdout, credentials or reasoning. */
 export function workTail(store:PackStore,project:string,id:string):WorkLog[]{
   store.officeWorkById(project,id);
   const db=store.hermesState,rows:WorkLog[]=[];
   const read=(table:string,sql:string,params:(string|number)[])=>{
     if(!db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table))return;
-    for(const row of db.prepare(sql).all(...params))rows.push({id:`${table}:${row.id}`,kind:safeControlText(String(row.kind),100),summary:safeControlText(String(row.summary??''),800),created_at:String(row.created_at),source:table});
+    for(const row of db.prepare(sql).all(...params)){let metadata:WorkActivityMetadata|undefined;try{metadata=typeof row.metadata==='string'?safeMetadata(JSON.parse(row.metadata)):undefined;}catch{/* Historical malformed telemetry is not execution evidence. */}rows.push({id:`${table}:${row.id}`,kind:safeControlText(String(row.kind),100),summary:safeControlText(String(row.summary??''),800),created_at:String(row.created_at),source:table,...(metadata?{metadata}:{})});}
   };
-  read('office_activity','SELECT id,kind,summary,created_at FROM office_activity WHERE project_id=? AND work_id=? ORDER BY id DESC LIMIT 80',[project,id]);
+  const hasMetadata=db.prepare('PRAGMA table_info(office_activity)').all().some(column=>column.name==='metadata');
+  read('office_activity',`SELECT id,kind,summary,created_at${hasMetadata?',metadata':''} FROM office_activity WHERE project_id=? AND work_id=? ORDER BY id DESC LIMIT 80`,[project,id]);
   read('office_work_revision',"SELECT revision AS id,kind,kind AS summary,created_at FROM office_work_revision WHERE work_id=? ORDER BY revision DESC LIMIT 20",[id]);
   for(const run of store.officeRuns(project,id).slice(0,3)){
     read('office_event','SELECT id,kind,detail AS summary,created_at FROM office_event WHERE project_id=? AND run_id=? ORDER BY id DESC LIMIT 50',[project,run.source_id]);
@@ -41,9 +67,9 @@ export function workObservation(store:PackStore,project:string,id:string,storedS
     const lease=store.packExecution(project,run.source_id);
     if(lease?.owner&&lease.lease_until_ms>now){live=true;workers=1;basis='pack_execution_lease';}
   }else if(run?.source_kind==='swarm'){
-    const snapshot=store.swarmRun(project,run.source_id).snapshot as {status:string;workers:Record<string,{status:string;lease_expires_at_ms:number|null}>};
-    workers=Object.values(snapshot.workers).filter(w=>w.status==='leased'&&(w.lease_expires_at_ms??0)>now).length;
-    if(workers&&snapshot.status==='running'){live=true;basis='swarm_worker_lease';}
+    const snapshot=store.swarmRun(project,run.source_id).snapshot as Parameters<typeof activeSwarmWorkerCount>[0];
+    workers=activeSwarmWorkerCount(snapshot,now);
+    if(workers){live=true;basis='swarm_worker_lease';}
   }else if(run?.source_kind==='coding'){
     workers=store.codingStages(project,run.source_id).filter(s=>s.status==='running'&&s.owner&&s.lease_until_ms>now).length;
     if(workers){live=true;basis='coding_stage_lease';}

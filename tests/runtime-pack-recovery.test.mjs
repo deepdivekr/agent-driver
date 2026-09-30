@@ -16,7 +16,7 @@ const request=(family='research.search',sources=['records'])=>({version:1,family
 async function base(t,options={}){
   const root=await mkdtemp(join(tmpdir(),'driver-pack-recovery-')),configPath=join(root,'host.json'),data=join(root,'records.json');
   await writeFile(data,JSON.stringify([{id:'local',value:7}]));
-  await writeFile(configPath,JSON.stringify({schema_version:1,project_id:'recovery-project',caller_ref:'recovery-agent',account_ref:'account-a',worktree:root,data_dir:join(root,'runtime'),environment:options.origin?'fixture':'production',...(options.origin?{fixture_url:`${options.origin}/lab/account-a/`}:{}),packs:{models:options.models??'off',model_data_approved:options.models==='jev',sources:options.sources??[{id:'records',kind:'file',path:'records.json',format:'json'}],targets:options.targets??[]}}));
+  await writeFile(configPath,JSON.stringify({schema_version:1,project_id:'recovery-project',caller_ref:'recovery-agent',account_ref:'account-a',worktree:root,data_dir:join(root,'runtime'),environment:options.origin?'fixture':'production',...(options.origin?{fixture_url:`${options.origin}/lab/account-a/`}:{}),...(options.browser_executors?{browser_executors:options.browser_executors}:{}),packs:{models:options.models??'off',model_data_approved:options.models==='jev',sources:options.sources??[{id:'records',kind:'file',path:'records.json',format:'json'}],targets:options.targets??[]}}));
   const owned=[];
   t.after(async()=>{try{for(const resource of owned.reverse()){resource.close();if(resource.drain)await resource.drain();}}finally{await rm(root,{recursive:true,force:true});}});
   return {root,configPath,data,config:loadHostConfig(configPath),own(resource){owned.push(resource);return resource;}};
@@ -134,8 +134,8 @@ test('contract exhausted interrupted attempts are finalized by watchdog tick ins
 test('fixture authentication wait stays distinct, does not automatically retry, and resumes the same request after login',{timeout:30000},async t=>{
   let loggedIn=false,hits=0;
   const origin=await serverFor(t,(req,res)=>{if(req.url==='/table'){hits++;res.setHeader('content-type','text/html');res.end(loggedIn?'<span id=ready>Ready</span><span id=account>account-a</span><table><tbody><tr><td class=id>observed</td></tr></tbody></table>':'<span class=auth>Login required</span>');}else res.end('ok');});
-  const x=await base(t,{origin,sources:[{id:'records',kind:'browser',url:`${origin}/table`,parameters:[],rows:'tbody tr',columns:{id:'.id'},ready:'#ready',auth_gate:'.auth',account_selector:'#account',account_text:'account-a'}]}),api=x.own(new RuntimeApi(x.config));
-  const recipe=request(),waiting=await api.call('runtime_pack_run',{request_id:'auth-recovery',recipe});assert.equal(waiting.status,'waiting_auth');
+  const x=await base(t,{origin,browser_executors:{targets:[{id:'fixture-owned',engine:'playwright',environment:'owned_headless',platform:process.platform,profile_ref:'fixture-owned'}]},sources:[{id:'records',kind:'browser',url:`${origin}/table`,parameters:[],rows:'tbody tr',columns:{id:'.id'},ready:'#ready',auth_gate:'.auth',account_selector:'#account',account_text:'account-a'}]}),api=x.own(new RuntimeApi(x.config));
+  const recipe={...request(),browser:{environment:'owned_headless',preferred_engine:'playwright'}},waiting=await api.call('runtime_pack_run',{request_id:'auth-recovery',recipe});assert.equal(waiting.status,'waiting_auth');
   for(let i=0;i<3;i++)assert.equal((await api.call('runtime_pack_run',{request_id:'auth-recovery',recipe})).status,'waiting_auth');
   const authenticationWait=api.store.packExecution(x.config.project.id,waiting.run_id);assert.equal(authenticationWait.auth_waits,4);assert.equal(authenticationWait.attempts,4);
   const before=hits;const tick=await api.packs.tick(Date.now()+60000);assert.deepEqual(tick.recovered,[]);assert.equal(hits,before);
@@ -156,8 +156,12 @@ test('native SIGKILL during second source preserves first checkpoint and resumes
   const exited=once(child,'exit');child.kill('SIGKILL');await exited;unblock=true;
   const api=x.own(new RuntimeApi(loadHostConfig(x.configPath)));const interrupted=api.store.packRuns(x.config.project.id)[0],execution=api.store.packExecution(x.config.project.id,interrupted.id);
   assert.equal(interrupted.status,'running');assert.equal(Object.keys(execution.checkpoint.sources).length,1);
-  await new Promise(resolve=>setTimeout(resolve,Math.max(0,execution.lease_until_ms-Date.now()+50)));
-  const done=await api.call('runtime_pack_run',{request_id:'native-kill',recipe});assert.equal(done.status,'succeeded');assert.equal(done.run_id,interrupted.id);assert.deepEqual(hits,{first:1,second:2});assert.equal(api.store.packExecution(x.config.project.id,done.run_id).attempts,2);
+  // Timers are monotonic, but persisted leases use wall time. Recheck the actual
+  // expiry after waking so WSL clock corrections cannot replay before expiry.
+  const leaseWaitDeadline=performance.now()+PACK_LEASE_MS+5000;
+  while(Date.now()<=execution.lease_until_ms&&performance.now()<leaseWaitDeadline)await new Promise(resolve=>setTimeout(resolve,Math.min(1000,Math.max(1,execution.lease_until_ms-Date.now()+25))));
+  assert.ok(Date.now()>execution.lease_until_ms,'Killed owner lease must expire before recovery admission');
+  const done=await api.call('runtime_pack_run',{request_id:'native-kill',recipe});assert.equal(done.status,'succeeded',JSON.stringify({done,execution:api.store.packExecution(x.config.project.id,interrupted.id),hits,now:Date.now()}));assert.equal(done.run_id,interrupted.id);assert.deepEqual(hits,{first:1,second:2});assert.equal(api.store.packExecution(x.config.project.id,done.run_id).attempts,2);
 });
 
 test('contract all three write families refuse to replay a consumed approval during recovery',async t=>{

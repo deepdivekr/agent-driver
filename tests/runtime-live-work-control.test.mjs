@@ -74,12 +74,12 @@ test('runtime browser Work execute and event tail work on mobile without losing 
  page.on('pageerror',error=>errors.push(error.message));await page.addInitScript(()=>{if(!localStorage.getItem('office-lang'))localStorage.setItem('office-lang','ko');});
  await page.goto(x.server.url+'?work='+x.work.work_id);
  if(!await page.locator('#execute-work').count())await page.getByText('데이터 조회',{exact:true}).first().click();
- await page.locator('#execution-consent').check();await page.locator('#execute-work').click();
+ assert.equal(await page.locator('#execution-consent').count(),0);assert.equal(await page.locator('#execute-work').isEnabled(),true);await page.locator('#execute-work').click();
  await page.waitForFunction(()=>document.getElementById('work-tail-output')?.textContent.includes('supervisor.started'));
  x.release();await page.waitForFunction(()=>document.getElementById('work-tail-output')?.textContent.includes('supervisor.result'));
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  await page.getByRole('button',{name:'언어: 한국어. 영어로 전환'}).click();
- await page.getByRole('heading',{name:'Work execution log'}).waitFor();
+ await page.getByRole('heading',{name:'Execution timeline'}).waitFor();
  assert.doesNotMatch(await page.locator('.work-tail').innerText(),/[가-힣]/u);
  assert.deepEqual(errors,[]);
 });

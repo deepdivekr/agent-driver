@@ -7,10 +7,10 @@ import {snapshotHash} from '../taskpack/contracts.js';
 import {optionalTypeSafeTransportFromHostEnvironment,type JevSystemOneTransport} from '../taskpack/typesafe-jev.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {structuredModelFromEnvironment} from '../integrations/model-provider.js';
-import {packTools,recipeSchema,type Recipe,type MutationRecipe,type Row} from './contracts.js';
+import {packTools,recipeSchema,type Recipe,type MutationRecipe,type Row,type Source} from './contracts.js';
 import {PackStore,PACK_MAX_ATTEMPTS,type PackRun} from './store.js';
-import {collect,collectSource,type SourceEvidence} from './sources.js';
-import {browserCatalog,type BrowserRouteOptions} from '../browser/executor-routing.js';
+import {collectSource,type SourceEvidence} from './sources.js';
+import {browserCatalog,publicBrowserRecovery,type BrowserRouteOptions} from '../browser/executor-routing.js';
 import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 import {applyFilters,deduplicate,sortRows,exportRows,encodeCsv,MAX_ROWS,MAX_BYTES,readScopedFile,sha} from './data.js';
 import {judgeRow,ROW_DECISION_CATALOG,rowDecisionProfile,type LabelResult} from './judgment.js';
@@ -25,6 +25,7 @@ import {selectWorkReferences} from '../work/reference-selection.js';
 import {WINDOWS_WORKFLOWS} from '../desktop/windows-workflows.js';
 import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {workExecutionBinding,type WorkProposal} from '../work/contracts.js';
+import {assertBoundRunConnected} from '../work/lifecycle.js';
 
 const isMutation=(r:Recipe):r is MutationRecipe=>'target' in r;
 function safeError(error:unknown){
@@ -75,6 +76,11 @@ export class FamilyRuntime {
     requireCondition(!workBrowser||!recipeBrowser||workBrowser.environment===recipeBrowser.environment,'BROWSER_WORK_ENVIRONMENT_CONFLICT');
     return workBrowser??recipeBrowser;
   }
+  private sourceBrowserRoute(run:PackRun,source:Extract<Source,{kind:'browser'}>){
+    const requested=this.browserPreference(run),publicDefault=!requested||requested.environment==='owned_headless'&&!requested.preferred_engine;
+    const preference:BrowserRouteOptions['preference']=source.auth_required&&publicDefault?{environment:'host_foreground',preferred_engine:'aside'}:requested;
+    return {preference,fallback_preferences:source.auth_required?[]:publicBrowserRecovery(preference)};
+  }
   private publicRun(run:PackRun){const status=this.effectiveStatus(run);return {run_id:run.id,family:run.recipe.family,status,result:run.result,task_id:run.task_id,
     ...(run.task_id?{write_status:this.store.task(run.task_id).status}:{}),next_action:run.status==='running'?'wait_or_resume_same_request':status==='paused_work'?'resume_work_then_repeat_same_request':status==='needs_replan'?'read_updated_work_then_create_new_recipe':status==='paused_config'?'restore_bound_config_then_repeat_request':status==='retryable_failure'?'runtime_pack_run_same_request_or_tick':status==='waiting_auth'?'complete_login_then_repeat_same_request':status==='reconciliation_required'?'read_authoritative_result_no_write_retry':status==='waiting_approval'?'trusted_human_channel_must_approve':status==='approved'?'runtime_pack_execute_approved':'inspect_result'};}
   private async collectCheckpointed(run:PackRun,recipe:Extract<Recipe,{sources:unknown}>,owner:string,checkpoint:FamilyCheckpoint){
@@ -87,11 +93,11 @@ export class FamilyRuntime {
       let reusable=!!saved&&saved.binding===binding&&saved.digest===snapshotHash(saved.result)&&Date.now()-Date.parse(saved.result.evidence.observed_at)>=0&&Date.now()-Date.parse(saved.result.evidence.observed_at)<=CHECKPOINT_MAX_AGE_MS;
       if(reusable&&source.kind==='file')reusable=sha(await readScopedFile(source.path))===saved!.result.evidence.content_sha256;
       let routeOptions:Partial<BrowserRouteOptions>|undefined,selectedTarget:string|undefined,routeBinding:string|undefined;
-      if(!reusable&&source.kind==='browser'&&this.config.browserExecutors){
-        const preference=this.browserPreference(run);
+      if(!reusable&&source.kind==='browser'){
+        const {preference,fallback_preferences}=this.sourceBrowserRoute(run,source);
         routeBinding=snapshotHash({config:this.config.fingerprint,source,preference:preference??null,request:recipe.request});
         const providers=await this.decisionProviders(run),journal=this.store.browserExecutors();
-        routeOptions={context_id:`${run.id}:${source.id}`,request:recipe.request,preference,
+        routeOptions={context_id:`${run.id}:${source.id}`,request:recipe.request,preference,fallback_preferences,
           checkpoint:{load:()=>journal.checkpoint(this.config.project.id,`${run.id}:${index}:${source.id}`),save:value=>journal.saveCheckpoint(this.config.project.id,`${run.id}:${index}:${source.id}`,value)},
           providers:{jev:providers.jev,llm:providers.llm,confidence:providers.policy.confidence,shadow_rate:providers.policy.decision_shadow.provider==='llm'?providers.policy.decision_shadow.sample_rate:0},remembered:journal.remembered(this.config.project.id,routeBinding),
           guard:()=>{this.fresh();this.store.assertPackExecution(this.config.project.id,run.id,owner);},
@@ -303,9 +309,11 @@ export class FamilyRuntime {
   }
   private async executeApproved(id:string){
     const run=this.store.packRun(this.config.project.id,id);requireCondition(isMutation(run.recipe)&&run.task_id,'PACK_WRITE_NOT_PREPARED');
+    assertBoundRunConnected(this.store,this.config.project.id,'pack',id);
     const targetId=run.recipe.target;requireCondition(this.config.packs!.targets.find(target=>target.id===targetId)?.draft_only!==true,'PACK_DRAFT_ONLY');
     requireCondition(run.binding===snapshotHash({recipe:run.recipe,fingerprint:this.engineBinding()}),'CONFIG_CHANGED');
     if(this.store.task(run.task_id).status==='succeeded')return this.publicRun(this.store.finishPack(this.config.project.id,id,'succeeded',{reconciled_from_durable_task:true},run.task_id));
+    assertBoundRunConnected(this.store,this.config.project.id,'pack',id);
     const result=await writeProtocol(this.store,this.config,run.recipe).executeApproved(run.task_id) as {status:string};
     if(result.status==='succeeded')this.store.cachePack(this.config.project.id,run.recipe,this.engineBinding());
     return this.publicRun(this.store.finishPack(this.config.project.id,id,result.status,result,run.task_id));
@@ -331,7 +339,15 @@ export class FamilyRuntime {
       const cycle=Number(due.cycle);if(!this.store.claimWatch(run.id,cycle,now,recipe.interval_seconds*1000))continue;
       const before=JSON.parse(String(due.baseline)) as WatchBaseline;
       try{
-        const source=await collect(recipe,this.config);this.fresh();const rows=deduplicate(applyFilters(source.rows,recipe.filters),recipe.deduplicate_by),after=watchBaseline(recipe,rows);
+        const source:{rows:Row[];evidence:SourceEvidence[]}={rows:[],evidence:[]};
+        for(const requested of recipe.sources){
+          this.fresh();assertBoundRunConnected(this.store,this.config.project.id,'pack',run.id);
+          const configured=this.config.packs!.sources.find(item=>item.id===requested.id);requireCondition(configured,'SOURCE_NOT_DELEGATED');
+          const routeOptions=configured.kind==='browser'?{...this.sourceBrowserRoute(run,configured),request:recipe.request,guard:()=>{this.fresh();assertBoundRunConnected(this.store,this.config.project.id,'pack',run.id);}}:undefined;
+          const collected=await collectSource(configured,requested.parameters,this.config,routeOptions);
+          source.rows.push(...collected.rows);source.evidence.push(collected.evidence);requireCondition(source.rows.length<=MAX_ROWS,'SOURCE_TOO_MANY_ROWS');
+        }
+        this.fresh();const rows=deduplicate(applyFilters(source.rows,recipe.filters),recipe.deduplicate_by),after=watchBaseline(recipe,rows);
         const changed=recipe.mode==='any_change'?before.digest!==after.digest:Object.entries(after.minima).some(([group,value])=>before.minima[group]!==undefined&&value<before.minima[group]!);
         this.store.settleWatch(this.config.project.id,run.id,cycle+1,after,changed?'changed':before.error?'recovered':null,{before,after,evidence:source.evidence,external_notifications_sent:0});processed.push({run_id:run.id,status:changed?'changed':'unchanged'});
       }catch(error){const code=safeError(error);this.store.settleWatch(this.config.project.id,run.id,cycle+1,{...before,error:code},before.error===code?null:'unavailable',{error:code});processed.push({run_id:run.id,status:'unavailable'});}

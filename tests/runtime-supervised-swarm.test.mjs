@@ -9,6 +9,10 @@ import {loadHostConfig} from '../dist/interface/config.js';
 import {executeSupervisedSwarm,supervisedSwarmCheckpointSchema} from '../dist/work/swarm-executor.js';
 import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {WorkResults} from '../dist/work/results.js';
+import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
+import {modelSettingsPath,saveModelSettings} from '../dist/onboarding/model-settings.js';
+import {allocateWorkModels} from '../dist/work/task-models.js';
+import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 
 const goal='Research six physical AI sources, preserve citations and summarize their common findings.';
 const draft=()=>{const sources=Array.from({length:6},(_,i)=>({id:`source-${i+1}`,role:'Read one source',objective:`Read https://example.test/source-${i+1} and report the observed evidence.`,stage:'source_read',source_urls:[`https://example.test/source-${i+1}`],executor:'sub_agent',depends_on:[],required_capabilities:[],effect:'read_only',completion_evidence:['Source-backed fact cards.'],max_steps:12,timeout_ms:75000}));return {summary:'Read six sources in parallel, reduce and synthesize.',workers:[...sources,{...sources[0],id:'reduce',role:'Reduce evidence',objective:'Combine all source facts without losing their evidence.',stage:'reduction',source_urls:[],depends_on:sources.map(worker=>worker.id)},{...sources[0],id:'final',role:'Synthesize results',objective:'Produce the final source-backed digest.',stage:'synthesis',source_urls:[],depends_on:['reduce']}]};};
@@ -21,7 +25,7 @@ async function setup(t,options={}){
     calls.push({purpose,provider:'fixture',model:'fixture-llm',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});
     if(instructions.startsWith('Define one durable'))return proposal;
     if(instructions.startsWith('Independently verify'))return {checks:input.checks.map(check=>({id:check.id,verdict:options.finalUnsupported?'unknown':'supported',evidence_ids:[check.allowed_evidence_ids[0]],evidence_quotes:[{evidence_id:check.allowed_evidence_ids[0],quote:'Physical AI evidence-backed result.'}],reason:options.finalUnsupported?'The requested extra field was not observed.':'The independently read-back final result contains a source-backed summary.'}))};
-    if(purpose==='design')return draft();
+    if(purpose==='design')return options.plan??draft();
     if(instructions.startsWith('Revise only the allowed existing worker')){
       await options.rebaseHook?.(input);
       const targets=options.rebaseTargets??(input.required_worker_ids.length?input.required_worker_ids:['final']);
@@ -64,6 +68,25 @@ function saveDirection(x,runId,stepId,instruction){
   return {revision,directions:x.api.store.workDirections(project,work.id)};
 }
 
+test('runtime fixture automatic task models reach Swarm planner source synthesis and quality without replacing shared providers',async t=>{
+  const x=await setup(t),path=modelSettingsPath(x.api.config),roles=['planner','worker','verifier','synthesis'],candidates=roles.map(role=>({id:'codex-'+hashJson(role).slice(0,16),client:'codex',model:role+'-auto',label:role})),seen=[];
+  saveModelSettings(path,{revision:0,onboarding_step:3,selection:{mode:'subscription',client:'codex',role_model_mode:'auto',client_models:{codex:'base-model',claude:null,opencode:null},api_model:'unused-api',reasoning:'high',jev:'off'}},{});
+  const sharedPlanner=x.api.swarm.providers.planner,sharedFallback=x.api.swarm.providers.llm_fallback;
+  const configured=new ConfiguredStructuredModel(path,{}, {api:()=>{throw Error('NO_PAID_API');},taskCandidates:async()=>candidates,subscription:options=>({calls:[],async call(purpose,instructions,input){
+    const model=options.environment.AGENT_DRIVER_CODEX_MODEL;seen.push({instructions,model,session:options.session});
+    const value=instructions.startsWith('Assign the four')?{assignments:roles.map((role,i)=>({role,candidate_id:candidates[i].id,reason:'Fits this role.'}))}:await x.model.call(purpose,instructions,input);
+    this.calls.push({purpose,provider:'codex',model,status:'accepted',elapsed_ms:1,input_sha256:hashJson(input),input_tokens:10,output_tokens:5,total_tokens:15});return value;
+  }})}).forWork({work_id:x.work.work_id,run_id:'supervisor-test'});
+  const model=await allocateWorkModels(x.api.store,x.api.config.project.id,x.work.work_id,configured,{goal},()=>{});
+  const result=await executeSupervisedSwarm(x.api,model,{work_id:x.work.work_id,request_id:'auto-swarm',goal,max_parallel:3},x.hooks);
+  assert.equal(result.status,'succeeded',JSON.stringify(result));assert.equal(x.peak(),3);
+  assert.equal(seen.find(r=>r.instructions.startsWith('You are the supervisor')).model,'planner-auto');
+  const grounded=seen.filter(r=>r.instructions.startsWith('Create a concise'));assert.ok(grounded.some(r=>r.model==='worker-auto'));assert.ok(grounded.some(r=>r.model==='synthesis-auto'));assert.ok(new Set(grounded.map(r=>r.session.actor_id)).size>=8);
+  assert.ok(seen.filter(r=>r.instructions.startsWith('Score each')).every(r=>r.model==='verifier-auto'));
+  assert.equal(x.api.swarm.providers.planner,sharedPlanner);assert.equal(x.api.swarm.providers.llm_fallback,sharedFallback);
+  const view=x.api.swarm.withProviders({planner:sharedPlanner});assert.equal(view.runLocks,x.api.swarm.runLocks,'control and report mutations must share the same lock map');
+});
+
 test('runtime contract supervised Swarm executes three parallel source workers and dependent model workers through existing quality gates',async t=>{
   const x=await setup(t),result=await executeSupervisedSwarm(x.api,x.model,{work_id:x.work.work_id,request_id:'supervised-swarm',goal,max_parallel:3},x.hooks);
   assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);assert.equal(x.peak(),3);
@@ -80,6 +103,24 @@ test('runtime contract supervised Swarm executes three parallel source workers a
     assert.ok(worker.observations.every(item=>item.invocation.effect==='read_only'&&item.receipt.effect_state==='none'));
     assert.ok(worker.observations[0].receipt.value.sources?.length>0||worker.observations[0].receipt.value.predecessors?.length>0);
   }
+});
+
+test('runtime fixture single-worker adaptive research verifies completion and writes the same evidence-backed Work result',async t=>{
+  const plan={summary:'One bounded source is enough.',workers:[draft().workers[0]]},x=await setup(t,{plan}),results=new WorkResults(x.api.store),s=new WorkSupervisor(x.api.store,x.api.config,x.model,{api:x.api,tick_ms:20});
+  t.after(()=>s.close());s.start(x.work.work_id,x.work.revision,true);let end;
+  for(let i=0;i<300;i++){end=supervisorStatus(x.api.store,x.api.config.project.id,x.work.work_id);if(['succeeded','failed','awaiting_review'].includes(end?.state))break;await delay(20);}
+  assert.equal(end.state,'succeeded',JSON.stringify(end));assert.equal(end.result.completion_verified,true);
+  const cp=JSON.parse(x.api.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint);
+  assert.equal(cp.peak_active_workers,1);assert.equal(cp.final_observations[0].receipt.value.required_workers,1);assert.equal(cp.final_observations[0].receipt.value.fact_cards.length,1);
+  const output=results.capture(x.api.config.project.id,x.work.work_id).find(result=>result.source_kind==='client');assert.equal(output.work_completion_verified,true);assert.equal(output.artifacts.length,1);assert.equal(x.reads.length,2);
+  await s.close();
+});
+
+test('runtime fixture small adaptive graph synthesizes directly and reopens with stable workers without replay',async t=>{
+  const all=draft().workers,plan={summary:'Compare two sources.',workers:[...all.slice(0,2),{...all.at(-1),depends_on:all.slice(0,2).map(worker=>worker.id)}]},x=await setup(t,{plan});
+  const first=await executeSupervisedSwarm(x.api,x.model,{work_id:x.work.work_id,request_id:'small-adaptive',goal},x.hooks);assert.equal(first.status,'succeeded');assert.equal(first.checkpoint.completed_workers.length,3);assert.equal(x.reads.length,4);
+  const before=x.model.calls.length,second=await executeSupervisedSwarm(x.api,x.model,{work_id:x.work.work_id,request_id:'small-adaptive',goal,checkpoint:first.checkpoint},x.hooks);
+  assert.equal(second.run_id,first.run_id);assert.equal(x.model.calls.length,before);assert.equal(x.reads.length,4);
 });
 
 test('runtime fixture Work-level Swarm completion requires separate checks and saves an actual Office result artifact',async t=>{

@@ -14,7 +14,7 @@ Host 설정의 `swarm.visual.enabled: true`는 `runtime_swarm_start`와 `runtime
 
 작업 완료·lease 만료·실행 종료 시 브라우저 context를 회수한다. 관제센터는 registry의 run/worker 결속으로 독립 화면을 자동 표시하고, 실행 중 화면과 종료된 마지막 프레임을 구분한다. 브라우저가 필요 없는 reduction/synthesis는 상태 타일만 갖는다. 일반 LLM client가 별도 브라우저로 직접 조사하면 그 화면은 이 wall의 증거가 아니다.
 
-Swarm Mode는 하나의 큰 목표를 LLM Supervisor가 작은 작업 그래프로 나누고, 상위 MCP client가 각 작업마다 별도 sub-agent를 소환하도록 강제하는 실행 모드다. “여러 agent가 알아서 협업한다”는 선언이 아니라 계획·임대·보고·검증이 durable state에 결속된 프로토콜이다.
+Swarm Mode는 LLM Supervisor가 목표에 필요한 만큼의 작업 그래프를 설계하는 실행 모드다. 한 명으로 충분하면 한 명만 배정하며, 독립적인 조사가 필요할 때 병렬로 분리한다. 계획·임대·보고·검증은 durable state에 결속된다.
 
 ```text
 자연어 목표
@@ -28,15 +28,21 @@ Swarm Mode는 하나의 큰 목표를 LLM Supervisor가 작은 작업 그래프�
   → 코드가 완료·권한·승인을 다시 검사
 ```
 
-## 왜 sub-agent 소환이 필수인가
+## 작업 분할과 담당자 재사용
 
-`runtime_swarm_plan`은 worker가 2개 미만인 계획을 거부한다. `runtime_swarm_start`와 `runtime_swarm_tick`이 반환하는 각 dispatch에는 `spawn_sub_agent_required=true`가 들어가며, Agent Driver가 worker 결과를 대신 만들어내지 않는다. Hermes, Codex 또는 다른 MCP orchestrator는 `dispatches[]`의 각 항목으로 별도 실행 문맥을 만들고, client·host 상한 안에서 가능한 한 동시에 시작한 뒤 `runtime_swarm_report`로 각 결과를 돌려준다.
+`runtime_swarm_plan`은 최소 한 명의 worker를 허용한다. Standard에서 source reader가 여러 명이면 결과를 모으는 synthesis가 필요하지만, 별도 reducer는 선택 사항이다. 승인된 근거·scope·budget·의존성 검사는 그대로 적용된다.
+
+외부 MCP 경로의 dispatch는 `spawn_sub_agent_required=true`를 유지한다. 이는 실제 담당 실행 문맥이 필요하다는 계약이며, 매 판단마다 새 담당자를 만들라는 뜻은 아니다. Hermes, Codex 또는 다른 MCP orchestrator는 같은 worker의 문맥을 이어 사용하고, 독립 dispatch는 client·host 상한 안에서 병렬 실행한 뒤 `runtime_swarm_report`로 보고한다. Office가 직접 운영하는 Work도 완료된 worker와 관측 receipt를 재실행하지 않는다.
+
+Office에 결속된 Codex·Claude의 짧은 판단 호출은 동일 Work/run/worker/role의 CLI 세션을 재개한다. 모델·지침·출력 계약이 바뀌거나 세션이 유효하지 않으면 저장된 체크포인트로 새 문맥을 시작한다. 다른 Work, provider, 검증 역할과는 세션을 공유하지 않는다. 세션 ID 저장은 프로세스 상주나 토큰 비용 면제를 뜻하지 않는다. 지원하지 않는 클라이언트는 기존 체크포인트 경로를 유지한다.
+
+구독 기본 설정의 **역할별 모델 → Auto · 태스크별 자동 배분**을 선택하면 실행 전에 LLM이 연결된 구독 모델 후보 안에서 계획·실행·검증·종합 역할을 배분한다. 기본값 유지도 유효한 선택이다. 결과는 해당 Work의 지침·설정과 함께 저장하며 같은 조건에서는 재사용한다. Swarm은 이 Work에 결속된 모델 뷰를 사용하고 원래 런타임의 실행 잠금을 공유하므로, 다른 Work의 배분이나 전역 provider를 덮어쓰지 않는다. 후보·응답이 없으면 기본 모델로 진행하되 세션 저장·잠금 등 안전 오류는 숨기지 않는다. API 모드와 코딩 전용 설정에는 적용하지 않으며, 모델 배분 자체가 worker 수를 늘리거나 실행 권한을 추가하지 않는다. 상세 화면의 배분 계획과 실제 사용 모델은 구분한다.
 
 현재 adapter는 **orchestrator pull 방식**이다. 즉 Agent Driver가 Kimi/Codex/Hermes의 비공개 spawn API를 내장하지 않는다. 실제 동시 sub-agent 수는 MCP client의 실행 능력과 host 설정 양쪽의 제한을 받는다.
 
 ## 300명의 의미
 
-300은 범용 `max_logical_workers` 절대 상한이다. OS 프로세스 300개를 한꺼번에 띄운다는 뜻이 아니다. Standard 조사는 출처 범위가 충분할 때 최소 8, 최대 24 logical worker를 계획하고, 목표 동시성은 16이다. 실제 배치는 host 정책과 MCP client 상한 중 더 낮은 값을 준수한다. 논리 worker는 SQLite에 남고 dependency stage 단위로 실행된다.
+300은 범용 `max_logical_workers` 절대 상한이다. OS 프로세스 300개를 한꺼번에 띄운다는 뜻이 아니다. Standard는 1명부터 필요한 규모로 계획하며, 기본 상한은 24명, 목표 동시성 상한은 16이다. 인원수를 채우려고 작업을 나누지 않는다. 실제 배치는 host 정책과 MCP client 상한 중 더 낮은 값을 준수한다. 논리 worker는 SQLite에 남고 dependency stage 단위로 실행된다.
 
 ```json
 {
@@ -58,7 +64,7 @@ Swarm Mode는 LLM planner와 model data 승인이 없으면 `SWARM_LLM_PLANNER_R
 
 - 독립 source worker는 URL 1~2개만 담당하고 같은 dependency stage에 놓는다.
 - source worker는 구조화된 fact card와 출처 근거를 반환한다.
-- reducer와 synthesis worker는 source worker 뒤에 놓아 수집 단계와 종합 단계를 겹치지 않는다.
+- 필요한 reducer와 synthesis worker는 source worker 뒤에 놓는다. 작은 그래프는 reducer 없이 source 결과를 바로 종합할 수 있다.
 - 새 source worker가 synthesis reserve를 침범할 예정이면 추가 수집을 멈추고 이미 확보한 evidence로 종합한다.
 - hard deadline을 넘긴 run은 `completed`로 표시하지 않고 `partial_evidence` 또는 검토 상태로 남긴다.
 

@@ -5,6 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {request as httpRequest} from 'node:http';
+import {setTimeout as delay} from 'node:timers/promises';
 import {chromium} from 'playwright';
 import {prepareLocalConnection} from '../dist/onboarding/connection.js';
 import {setWorkModelDataApproval} from '../dist/onboarding/connection.js';
@@ -32,7 +33,7 @@ test('runtime native Control Center serves the licensed font only through its ex
 test('runtime fixture Pretendard renders Korean on Work, settings and connections at desktop and mobile widths without remote fonts',async t=>{
   const root=await mkdtemp(join(tmpdir(),'office-font-ui-')),paths=await prepareLocalConnection(root);
   await setWorkModelDataApproval(paths.runtimeConfig,true);
-  const model={calls:[],async call(){return {title:'주간 기술 소식',desired_outcome:'최근 기술 소식을 출처와 함께 요약한다',completion_checks:[{id:'sources',result:'공식 출처 확인',evidence:'원문 링크'},{id:'summary',result:'핵심 내용 요약',evidence:'출처가 포함된 요약문'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
+  const model={calls:[],async call(_purpose,instructions){if(instructions.startsWith('Execute the registered Work'))return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'This typography fixture stops before external research.',completed_checks:[],wait_reason:'model'};return {title:'주간 기술 소식',desired_outcome:'최근 기술 소식을 출처와 함께 요약한다',completion_checks:[{id:'sources',result:'공식 출처 확인',evidence:'원문 링크'},{id:'summary',result:'핵심 내용 요약',evidence:'출처가 포함된 요약문'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
   const server=await startControlCenter(loadHostConfig(paths.runtimeConfig),{workModel:model});
   const browser=await chromium.launch({headless:true});
   t.after(async()=>{await browser.close();await server.close();await rm(root,{recursive:true,force:true});});
@@ -57,12 +58,20 @@ test('runtime fixture Pretendard renders Korean on Work, settings and connection
     await page.setViewportSize({width,height:1000});await page.goto(server.url+suffix);
     if(suffix===detailSuffix)await page.getByRole('heading',{name:'주간 기술 소식',exact:true}).waitFor();
     else if(!suffix)await page.locator('.tile').waitFor();
-    await page.evaluate(async()=>{await document.fonts.load('600 20px "Pretendard Variable"','업무 연결 설정');await document.fonts.ready;});
+    await page.locator('h1').waitFor({state:'visible'});
+    await page.evaluate(async()=>{await document.fonts.load('600 20px "Pretendard Variable"','업무 연결 설정');await document.fonts.ready;await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));});
     assert.equal(await page.evaluate(()=>[...document.fonts].some(f=>f.family==='Pretendard Variable'&&f.status==='loaded')),true);
     const cdp=await page.context().newCDPSession(page);await cdp.send('DOM.enable');await cdp.send('CSS.enable');
-    const {root:dom}=await cdp.send('DOM.getDocument'),{nodeId}=await cdp.send('DOM.querySelector',{nodeId:dom.nodeId,selector:'h1'});
-    const {fonts}=await cdp.send('CSS.getPlatformFontsForNode',{nodeId});
-    assert.ok(fonts.some(f=>f.isCustomFont&&f.familyName.includes('Pretendard')),'heading must use downloaded font glyphs, not merely list a CSS fallback');
+    // Locale/navigation can replace the heading just after fonts.ready. Probe the
+    // current, painted node; the assertion still requires actual custom glyphs.
+    let fonts=[];
+    for(let attempt=0;attempt<20;attempt++){
+      const {root:dom}=await cdp.send('DOM.getDocument'),{nodeId}=await cdp.send('DOM.querySelector',{nodeId:dom.nodeId,selector:'h1'});
+      if(nodeId)({fonts}=await cdp.send('CSS.getPlatformFontsForNode',{nodeId}));
+      if(fonts.some(f=>f.isCustomFont&&f.familyName.includes('Pretendard')))break;
+      await delay(50);
+    }
+    assert.ok(fonts.some(f=>f.isCustomFont&&f.familyName.includes('Pretendard')),'heading must use downloaded font glyphs, not merely list a CSS fallback: '+JSON.stringify({width,suffix,fonts,heading:await page.locator('h1').innerText(),css:await page.locator('h1').evaluate(node=>getComputedStyle(node).fontFamily)}));
     await cdp.detach();
     const borders=await page.locator('.nav[aria-current=page],.nav.on,.control-note,.coding-reconcile').evaluateAll(nodes=>nodes.map(node=>{const s=getComputedStyle(node);return {widths:[s.borderLeftWidth,s.borderRightWidth,s.borderTopWidth,s.borderBottomWidth],colors:[s.borderLeftColor,s.borderRightColor,s.borderTopColor,s.borderBottomColor],shadow:s.boxShadow};}));
     for(const border of borders){assert.equal(new Set(border.widths).size,1);assert.equal(new Set(border.colors).size,1);assert.equal(border.shadow,'none');}

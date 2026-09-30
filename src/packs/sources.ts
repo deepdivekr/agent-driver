@@ -9,6 +9,12 @@ import {parseData,readScopedFile,responseBytes,sha,MAX_ROWS} from './data.js';
 import {RoutedBrowser,type BrowserRouteOptions} from '../browser/executor-routing.js';
 
 export interface SourceEvidence {source_id:string;request_sha256:string;content_sha256:string;observed_at:string;rows:number;elapsed_ms:number;executor:string;}
+function sourceBrowserError(error:unknown):never{
+  // A locked persistent profile is retryable, never permission to remove locks
+  // or copy its cookies into another profile.
+  if(error instanceof Error&&/ProcessSingleton|SingletonLock|profile directory.*in use/iu.test(error.message))throw Error('PACK_BROWSER_PROFILE_BUSY',{cause:error});
+  throw error;
+}
 export async function collectSource(source:Source,parameters:Record<string,string>,config:HostConfig,routeOptions?:Partial<BrowserRouteOptions>):Promise<{rows:Row[];evidence:SourceEvidence}>{
   const start=performance.now();let rows:Row[],contentHash:string,executor=source.kind==='browser'?'playwright':source.kind==='http'?'http_get':'local_file';
   if(source.kind==='file'){
@@ -20,13 +26,13 @@ export async function collectSource(source:Source,parameters:Record<string,strin
     if(source.kind==='http'){
       const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(15000),headers:{Accept:source.format==='json'?'application/json':'text/csv'}});
       const bytes=await responseBytes(response);contentHash=sha(bytes);rows=parseData(bytes.toString('utf8'),source.format);
-    }else if(config.browserExecutors){
+    }else if(config.browserExecutors||routeOptions?.preference||routeOptions?.fallback_preferences?.length){
       const browser=new RoutedBrowser(config,{profile_key:source.id,context_id:randomUUID(),...routeOptions},[url.origin]);
       try{
         await browser.open(url.toString());
         rows=(await browser.extract({...source,max_rows:MAX_ROWS})).map(row=>rowSchema.parse(row));
         contentHash=snapshotHash(rows);executor=browser.target!.engine;
-      }finally{await browser.close();}
+      }catch(error){sourceBrowserError(error);}finally{await browser.close();}
     }else{
       const owned=new OwnedPersistentPage(join(config.project.profileRef,'pack-sources',source.id),join(config.project.profileRef,'pack-captures'));
       try{
@@ -39,12 +45,7 @@ export async function collectSource(source:Source,parameters:Record<string,strin
           const values:Row={};for(const [field,selector]of Object.entries(source.columns)){const cell=nodes.nth(i).locator(selector);requireCondition(await cell.count()===1,'SOURCE_FIELD_AMBIGUOUS');values[field]=(await cell.innerText()).trim();}rows.push(rowSchema.parse(values));
         }
         contentHash=snapshotHash(rows);
-      }catch(error){
-        // Another run can briefly own the same persistent source profile.
-        // Never remove Chromium locks or copy its cookies to another profile.
-        if(error instanceof Error&&/ProcessSingleton|SingletonLock|profile directory.*in use/iu.test(error.message))throw Error('PACK_BROWSER_PROFILE_BUSY');
-        throw error;
-      }finally{await owned.close();}
+      }catch(error){sourceBrowserError(error);}finally{await owned.close();}
     }
   }
   // Credentials cannot be persisted as collected rows, or forwarded to models.

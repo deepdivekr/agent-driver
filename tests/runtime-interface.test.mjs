@@ -72,9 +72,11 @@ test('runtime native C01 CLI and SDK stdio share capability semantics with indep
   assert.equal(x.fixture.snapshot(x.spec.runId).effects.filter(e=>e.kind==='save').length,2);
   const catalog=await m.client.listTools();assert.equal(catalog.tools.length,Object.keys(tools).length+1);assert.deepEqual(catalog.tools.map(t=>t.name).sort(),[...Object.keys(tools),'runtime_task_intake'].sort());
   const swarmStart=catalog.tools.find(t=>t.name==='runtime_swarm_start'),swarmTick=catalog.tools.find(t=>t.name==='runtime_swarm_tick'),swarmActivity=catalog.tools.find(t=>t.name==='runtime_swarm_activity');
-  assert.match(m.client.getInstructions(),/independent research, comparisons, or requests that need multiple sources, call runtime_swarm_start/);
-  assert.match(m.client.getInstructions(),/dispatches item as a separate sub-agent/);
-  assert.match(swarmStart.description,/Defaults to standard mode/);assert.match(swarmStart.description,/concurrently/);
+  assert.match(m.client.getInstructions(),/Choose runtime_swarm_start when parallel independent work or separate verification adds value/);
+  assert.match(m.client.getInstructions(),/multiple URLs alone do not require decomposition/);
+  assert.match(m.client.getInstructions(),/Use or resume a dedicated execution context for each returned worker/);
+  assert.match(m.client.getInstructions(),/Run independent dispatches concurrently within client and host limits/);
+  assert.match(swarmStart.description,/Defaults to standard/);assert.match(swarmStart.description,/one worker is valid/);assert.match(swarmStart.description,/concurrently/);
   assert.match(swarmTick.description,/dispatches concurrently/);assert.match(swarmTick.description,/legacy dispatch field remains/);
   assert.deepEqual(tools.runtime_swarm_start.schema.parse({request_id:'research-001',goal:'Compare the primary sources.'}),{request_id:'research-001',goal:'Compare the primary sources.',context:{},mode:'standard'});
   assert.equal(swarmActivity.annotations.readOnlyHint,false);assert.deepEqual(tools.runtime_swarm_activity.schema.parse({run_id:'11111111-1111-4111-8111-111111111111',worker_id:'source-1',lease_token:'22222222-2222-4222-8222-222222222222',activity:{kind:'started',summary:'Begin source review.'}}).activity,{kind:'started',summary:'Begin source review.',endpoint:null});

@@ -41,6 +41,7 @@ import {WorkResults,workResultGetSchema,workResultsListSchema} from '../work/res
 import {SEMANTIC_DECISION_CATALOG} from '../decision-plane/semantic.js';
 import {WorkImportRuntime} from '../work/import-runtime.js';
 import {workImportExecutionOwner} from '../work/import-authority.js';
+import {assertWorkConnected} from '../work/lifecycle.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
 import {CodingDialogRuntime} from '../coding/conversation.js';
 import {codingTools} from '../coding/contracts.js';
@@ -182,8 +183,23 @@ export class RuntimeApi{
     return {...result,dispatches,dispatch:dispatches[0]??null};
   }
   private scoped(taskId:string){const task=this.store.task(taskId);requireCondition(task.project_id===this.config.project.id,'TASK_SCOPE_MISMATCH');return task;}
+  /** Detachment is an Office admission fence, not a command to its original bot. */
+  private assertWorkToolConnection(name:string,args:unknown){
+    const tool=tools[name as keyof typeof tools];
+    if(!tool||tool.readOnly&&name!=='runtime_pack_plan'&&name!=='runtime_work_remote_refresh'&&!name.startsWith('runtime_files_'))return;
+    const input=tool.schema.parse(args) as Record<string,unknown>,workIds=new Set<string>();
+    if(typeof input.work_id==='string')workIds.add(input.work_id);
+    if(typeof input.run_id==='string'){
+      const kind=name.startsWith('runtime_swarm_')?'swarm':name.startsWith('runtime_pack_')?'pack':name.startsWith('runtime_coding_')?'coding':null;
+      if(kind){const bound=this.store.officeWork(this.config.project.id,kind,input.run_id) as {id:string}|null;if(bound)workIds.add(bound.id);}
+      if(name.startsWith('runtime_windows_')){const bound=this.store.desktopState.prepare('SELECT work_id FROM windows_workflow_run WHERE project_id=? AND id=?').get(this.config.project.id,input.run_id);if(bound)workIds.add(String(bound.work_id));}
+    }
+    if(name.startsWith('runtime_coding_')&&typeof input.dialog_id==='string'){const bound=this.store.officeWork(this.config.project.id,'coding_dialog',input.dialog_id) as {id:string}|null;if(bound)workIds.add(bound.id);}
+    for(const id of workIds)assertWorkConnected(this.store,this.config.project.id,id);
+  }
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');
+    this.assertWorkToolConnection(name,args);
     if(name.startsWith('runtime_workflow_'))return this.workflowCompatibility.call(name,args);
     if(name.startsWith('runtime_windows_'))return this.windows.call(name,args);
     if(name.startsWith('runtime_files_'))return this.files.call(name,args);
@@ -218,7 +234,7 @@ export class RuntimeApi{
           requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
           requireCondition(!work.paused&&work.spec&&['ready','running'].includes(work.status),'WORK_NOT_READY');
           requireCondition(workImportExecutionOwner(this.store,this.config.project.id,input.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
-          const supervisor=await this.supervisedWork();return supervisor.start(input.work_id,input.revision,input.cost_acknowledged,input.timezone);
+          const supervisor=await this.supervisedWork();return supervisor.start(input.work_id,input.revision,input.cost_acknowledged,input.timezone,input.current_run_only);
         }
         case 'runtime_work_control':{
           const input=workControlSchema.parse(args);requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');

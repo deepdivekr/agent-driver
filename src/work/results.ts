@@ -4,6 +4,7 @@ import {open,realpath} from 'node:fs/promises';
 import {basename,isAbsolute,relative,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
+import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {requireCondition} from '../core/contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
@@ -107,11 +108,13 @@ export class WorkResults {
     const input=workResultGetSchema.parse({work_id:workId,result_id:resultId});this.store.officeWorkById(project,input.work_id);
     const row=this.store.hermesState.prepare('SELECT * FROM office_result WHERE project_id=? AND work_id=? AND id=?').get(project,workId,resultId) as ResultRow|undefined;requireCondition(row,'WORK_RESULT_NOT_FOUND');
     const body=JSON.parse(row.body) as {summary:string;text:string;completion_verified?:boolean;artifacts:Array<WorkResultArtifact&{path:string}>;sources:WorkResult['sources']};
-    const deliveries=(this.store.hermesState.prepare('SELECT * FROM office_result_delivery WHERE project_id=? AND work_id=? AND result_id=? ORDER BY rowid').all(project,workId,resultId) as DeliveryRow[]).map(delivery=>({id:delivery.id,channel:delivery.channel,authority:delivery.authority,status:delivery.status,target_alias:delivery.target_alias,connector_id:delivery.connector_id,revision:delivery.revision,attempts:delivery.attempts,reason:delivery.reason,receipt_id:delivery.receipt_id,updated_at:delivery.updated_at,can_retry:delivery.status==='failed'&&delivery.authority==='office'&&delivery.connector_id!==null&&this.connectors.has(delivery.connector_id)}));
+    const connected=readWorkLifecycle(this.store,project,workId).state==='connected';
+    const deliveries=(this.store.hermesState.prepare('SELECT * FROM office_result_delivery WHERE project_id=? AND work_id=? AND result_id=? ORDER BY rowid').all(project,workId,resultId) as DeliveryRow[]).map(delivery=>({id:delivery.id,channel:delivery.channel,authority:delivery.authority,status:delivery.status,target_alias:delivery.target_alias,connector_id:delivery.connector_id,revision:delivery.revision,attempts:delivery.attempts,reason:delivery.reason,receipt_id:delivery.receipt_id,updated_at:delivery.updated_at,can_retry:connected&&delivery.status==='failed'&&delivery.authority==='office'&&delivery.connector_id!==null&&this.connectors.has(delivery.connector_id)}));
     return {id:row.id,project_id:project,work_id:workId,run_id:row.run_id,source_kind:row.source_kind,work_revision:row.work_revision,source_status:row.source_status,verification:row.verification,summary:body.summary,text:body.text,artifacts:body.artifacts.map(artifact=>({id:artifact.id,label:artifact.label,sha256:artifact.sha256,bytes:artifact.bytes,media_type:artifact.media_type,download_available:isAbsolute(artifact.path)})),sources:body.sources,content_sha256:row.content_sha256,created_at:row.created_at,work_completion_verified:body.completion_verified===true,deliveries};
   }
   /** Read persisted output only. This does not call a model, rerun a Pack, or send a message. */
   capture(project:string,workId:string):WorkResult[]{
+    if(readWorkLifecycle(this.store,project,workId).state!=='connected')return this.list(project,workId);
     const revision=this.revision(project,workId);
     for(const run of this.store.officeRuns(project,workId).slice(0,20)){
       if(!['pack','swarm','coding','coding_dialog'].includes(run.source_kind))continue;
@@ -155,6 +158,7 @@ export class WorkResults {
   }
   /** An explicit user instruction and an available connector are required before external delivery. */
   requestDelivery(project:string,workId:string,resultId:string,input:{channel:ResultDeliveryChannel;connector_id:string;target_alias:string;acknowledged:boolean}){
+    assertWorkConnected(this.store,project,workId);
     this.get(project,workId,resultId);requireCondition(input.acknowledged,'RESULT_DELIVERY_CONFIRMATION_REQUIRED');
     requireCondition(!this.importedDelivery(project,workId),'RESULT_ORIGINAL_DELIVERY_AUTHORITY');
     const connector=this.connectors.get(input.connector_id);requireCondition(connector&&connector.channel===input.channel,'RESULT_DELIVERY_CONNECTOR_UNAVAILABLE');
@@ -163,6 +167,7 @@ export class WorkResults {
     const id=randomUUID();db.prepare('INSERT INTO office_result_delivery(id,result_id,project_id,work_id,channel,authority,status,target_alias,connector_id,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(id,resultId,project,workId,input.channel,'office','pending',input.target_alias,input.connector_id,at());return id;
   }
   async deliver(project:string,workId:string,resultId:string,deliveryId:string,revision:number){
+    assertWorkConnected(this.store,project,workId);
     const result=this.get(project,workId,resultId),db=this.store.hermesState,row=db.prepare('SELECT * FROM office_result_delivery WHERE project_id=? AND work_id=? AND result_id=? AND id=?').get(project,workId,resultId,deliveryId) as DeliveryRow|undefined;
     requireCondition(row&&row.authority==='office'&&row.channel!=='app','RESULT_DELIVERY_NOT_ALLOWED');requireCondition(row.revision===revision,'RESULT_DELIVERY_REVISION_CONFLICT');requireCondition(['pending','failed'].includes(row.status),'RESULT_DELIVERY_NOT_RETRYABLE');
     const connector=row.connector_id?this.connectors.get(row.connector_id):undefined;requireCondition(connector&&row.target_alias,'RESULT_DELIVERY_CONNECTOR_UNAVAILABLE');
@@ -176,6 +181,7 @@ export class WorkResults {
   }
   /** Retry the stored delivery, not the original Work. Uncertain sends require reconciliation. */
   async retryDelivery(project:string,workId:string,resultId:string,deliveryId:string,revision:number){
+    assertWorkConnected(this.store,project,workId);
     const delivery=this.get(project,workId,resultId).deliveries.find(item=>item.id===deliveryId);requireCondition(delivery?.can_retry,'RESULT_DELIVERY_NOT_RETRYABLE');return this.deliver(project,workId,resultId,deliveryId,revision);
   }
   /** Download only a recorded file inside explicitly delegated roots, with independent readback. */
