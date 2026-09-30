@@ -111,6 +111,14 @@ for(const [language,width] of [['en',1280],['en',390],['ko',1280],['ko',390]])te
   const first=x.page.locator('[data-stage="collect"]');assert.match(await first.innerText(),language==='en'?/Executed · awaiting verification/u:/실행 완료 · 검증 대기/u);await first.click();await x.page.locator('#stage-dialog[open]').waitFor();assert.match(await x.page.locator('#stage-state').innerText(),language==='en'?/awaiting verification/u:/검증 대기/u);assert.equal(await x.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);assert.deepEqual(x.errors,[]);
 });
 
+for(const [language,width] of [['en',1280],['ko',390]])test(`runtime fixture ${language}/${width} verification timeout explains preserved results`,{timeout:20000},async t=>{
+  const x=await fixture(t,{mode:'running',language,width});
+  event(x.d,'supervisor.verification.audit',{},JSON.stringify({status:'unavailable',code:'STRUCTURED_MODEL_TIMEOUT'}));
+  await x.page.goto(x.url+'?work='+x.d.id);await x.page.locator('#work-timeline').waitFor();
+  assert.match(await x.page.locator('#work-timeline').innerText(),language==='en'?/Completion verification timed out\. Existing results are preserved\./u:/완료 검증 AI의 응답 시간이 초과됐습니다\. 기존 결과는 보존됩니다\./u);
+  assert.equal(await x.page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);assert.deepEqual(x.errors,[]);
+});
+
 for(const [language,width] of [['en',1280],['ko',390]])test(`runtime fixture ${language}/${width} redacted source placeholders are never clickable URLs`,{timeout:20000},async t=>{
   const x=await fixture(t,{mode:'running',language,width}),safe='https://example.org/safe-article',redacted='https://example.org/news/:redacted',encoded='https://example.org/news/%3Aredacted';
   x.d.observed_sources=[{url:safe,title:'Public article',observed_at:at,tool:'office_browser_read',engine:'playwright'},{url:redacted,title:'Observed source with a private-looking path',observed_at:at,tool:'office_browser_read',engine:'playwright'}];

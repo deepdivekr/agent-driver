@@ -261,7 +261,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
             requireCondition(Buffer.byteLength(JSON.stringify(batchInput))<=evidenceBatchLimit,'WORK_COMPLETION_EVIDENCE_BUDGET_EXCEEDED');
             await emit('model.started',`Inspecting original evidence batch ${index+1}/${batches.length} for every completion check.`);
             try{
-              await guarded();const raw=await model.call('correct',WORK_COMPLETION_BATCH_INSTRUCTIONS,batchInput,z.toJSONSchema(evidenceBatchSchema));await guarded();
+              await guarded();const raw=await model.call('verify',WORK_COMPLETION_BATCH_INSTRUCTIONS,batchInput,z.toJSONSchema(evidenceBatchSchema));await guarded();
               requireCondition(Buffer.byteLength(JSON.stringify(raw)??'null')<=maxBatchOutputBytes,'WORK_COMPLETION_BATCH_OUTPUT_BUDGET_EXCEEDED');
               const answer=evidenceBatchSchema.parse(raw),expected=new Set(batch.flatMap(entry=>inputs.filter(check=>check.allowed_evidence_ids.some(id=>entry.ids.includes(id))).map(check=>`${check.id}/${entry.record_id}`)));
               requireCondition(answer.findings.length===expected.size,'WORK_COMPLETION_BATCH_COVERAGE_INVALID');
@@ -292,7 +292,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
           const attemptInput=correction?{...input,correction}:input,initialCalls=model.calls.length;
           requireCondition(Buffer.byteLength(JSON.stringify(attemptInput))<=80000,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
           let raw:unknown;
-          try{await guarded();raw=await model.call('correct',WORK_COMPLETION_VERIFICATION_INSTRUCTIONS+(oversized?'\n'+WORK_COMPLETION_PROJECTED_INSTRUCTIONS:'')+(correction?' The previous verifier output violated the host constraint described in correction. This is the only correction attempt. Re-evaluate all checks, fix the typed verdict/IDs/quoted leaf values against the SAME observations, and never upgrade unsupported or unknown just to pass. Do not call tools, repeat an operation or invent missing evidence.':''),attemptInput,z.toJSONSchema(workCompletionVerificationSchema));await guarded();}
+          try{await guarded();raw=await model.call('verify',WORK_COMPLETION_VERIFICATION_INSTRUCTIONS+(oversized?'\n'+WORK_COMPLETION_PROJECTED_INSTRUCTIONS:'')+(correction?' The previous verifier output violated the host constraint described in correction. This is the only correction attempt. Re-evaluate all checks, fix the typed verdict/IDs/quoted leaf values against the SAME observations, and never upgrade unsupported or unknown just to pass. Do not call tools, repeat an operation or invent missing evidence.':''),attemptInput,z.toJSONSchema(workCompletionVerificationSchema));await guarded();}
           catch(error){if(error instanceof CompletionGuardError)throw error;await auditEvent({attempt,status:'unavailable',code:codeOf(error),input_sha256:hashJson(attemptInput),evidence_manifest_sha256:manifestHash,checks:[]});return reject(codeOf(error));}
           const accepted=model.calls.slice(initialCalls).at(-1);let answer:WorkCompletionVerification|null=null;
           const audit=async(status:WorkCompletionAuditEvent['status'],code:string,issue?:WorkCompletionAuditIssue)=>{
