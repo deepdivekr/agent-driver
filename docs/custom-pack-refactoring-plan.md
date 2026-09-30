@@ -1,6 +1,6 @@
 # 커스텀 Pack 신뢰성 리팩토링 — Source of Truth
 
-Status: R0–R5 implemented; post-refactor review corrections and merge validation in progress.
+Status: R0–R5 and post-refactor corrections implemented; available local validation complete; authorized protected-branch merge pending required CI.
 Baseline: 0b11f1850a2afa846f191ce356aa4f486284b41f.
 Branch: refactor/custom-pack-reliability.
 
