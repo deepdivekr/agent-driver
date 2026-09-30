@@ -1,11 +1,12 @@
 # 커스텀 Pack 신뢰성 리팩토링 — Source of Truth
 
-Status: R0–R4 implemented; R5 final validation and authorized push in progress.
+Status: R0–R5 implemented and available checks complete; verification limits recorded.
 Baseline: 0b11f1850a2afa846f191ce356aa4f486284b41f.
 Branch: refactor/custom-pack-reliability.
 
 이 문서는 제품 방향, 구현 범위, 수용 기준의 기준 문서다.
 진행 상태와 실제 검증 결과는 custom-pack-refactoring-progress.md에 기록한다.
+최종 검증 수치와 입력 해시는 custom-pack-refactoring-validation.json에 저장한다.
 대화 요약이나 이전 제안이 이 문서와 충돌하면 이 문서를 우선한다.
 사용자의 새 명시적 지시가 방향을 바꾸면 근거와 함께 이 문서를 갱신한다.
 
