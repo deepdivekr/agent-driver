@@ -33,6 +33,12 @@ test('runtime contract provider, authentication and quota failures never initiat
   const logs=workTail(x.api.store,x.config.project.id,work.work_id);assert.equal(logs.some(log=>log.kind==='definition.correction_started'),false);
  }
 });
+test('runtime definition exposes only the typed unsupported-model code, never provider text',async t=>{
+ const model=scripted(new Error('STRUCTURED_MODEL_UNSUPPORTED')),x=await fixture(t,model),work=await x.api.call('runtime_work_start',{request_id:'unsupported-model',prompt:'요청한 출처를 조사해줘'});
+ assert.equal(work.status,'needs_model');assert.equal(work.reason,'STRUCTURED_MODEL_UNSUPPORTED');assert.equal(model.calls.length,1);
+ const logs=workTail(x.api.store,x.config.project.id,work.work_id);assert.ok(logs.some(log=>log.kind==='definition.failed'&&log.metadata.reason==='STRUCTURED_MODEL_UNSUPPORTED'));
+ assert.equal(logs.some(log=>log.kind==='definition.correction_started'),false);
+});
 test('runtime contract failed correction provider call stops immediately and keeps the durable Work for reconnection',async t=>{
  const model=scripted(proposal({kind:'swarm',pack_family:'research.search'}),new Error('Authentication expired')),x=await fixture(t,model),work=await x.api.call('runtime_work_start',{request_id:'correction-auth',prompt:'요청한 출처를 병렬 조사해줘'});assert.equal(work.status,'needs_model');assert.equal(work.reason,'MODEL_OR_DEFINITION_UNAVAILABLE');assert.equal(model.calls.length,2);assert.equal(x.api.store.intakeWork(x.config.project.id,work.work_id).prompt,work.prompt);assert.deepEqual(work.runs,[]);
  assert.ok(workTail(x.api.store,x.config.project.id,work.work_id).some(log=>log.kind==='definition.correction_failed'));
@@ -44,6 +50,6 @@ test('runtime contract output correction cannot silently change the route kind, 
  }
 });
 test('runtime contract exported proposal validator is reusable by replanning and valid outputs make no extra call',async()=>{
- const input={prompt:'새 지침에 따라 병렬 조사'},events=[],model=scripted(proposal()),valid=proposal();assert.equal((await validateOrCorrectWorkProposal(valid,'quick',false,{model,instructions:WORK_DEFINITION_INSTRUCTIONS,input})).route.kind,'swarm');assert.equal(model.calls.length,0);
- const corrected=await validateOrCorrectWorkProposal(proposal({kind:'swarm',pack_family:'research.search'}),'quick',false,{model,instructions:WORK_DEFINITION_INSTRUCTIONS,input,onDiagnostic:event=>events.push(event)});assert.deepEqual(corrected.route,{kind:'swarm',pack_family:null});assert.equal(model.calls.length,1);assert.equal(model.calls[0].input.original_input.prompt,input.prompt);assert.deepEqual(events.map(event=>event.kind),['invalid_output','correction_started','correction_finished']);
+ const input={prompt:'새 지침에 따라 병렬 조사'},events=[],roles=[],model=scripted(proposal()),valid=proposal();model.forRole=role=>{roles.push(role);return model;};assert.equal((await validateOrCorrectWorkProposal(valid,'quick',false,{model,instructions:WORK_DEFINITION_INSTRUCTIONS,input})).route.kind,'swarm');assert.equal(model.calls.length,0);
+ const corrected=await validateOrCorrectWorkProposal(proposal({kind:'swarm',pack_family:'research.search'}),'quick',false,{model,instructions:WORK_DEFINITION_INSTRUCTIONS,input,onDiagnostic:event=>events.push(event)});assert.deepEqual(corrected.route,{kind:'swarm',pack_family:null});assert.equal(model.calls.length,1);assert.equal(model.calls[0].input.original_input.prompt,input.prompt);assert.deepEqual(events.map(event=>event.kind),['invalid_output','correction_started','correction_finished']);assert.deepEqual(roles,['planner']);
 });

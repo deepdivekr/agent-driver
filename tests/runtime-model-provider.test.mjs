@@ -29,6 +29,27 @@ for(const [provider,expectedUrl] of [
   assert.equal(model.calls[0].provider,provider);assert.equal(model.calls[0].status,'accepted');assert.equal(JSON.stringify(model.calls).includes(secret),false);
 });
 
+for(const provider of ['openai','anthropic','openrouter','openai_compatible'])test(`runtime contract ${provider} verification output budget is distinct from correction`,async()=>{
+  const requests=[],fetcher=async(_url,options)=>{requests.push(JSON.parse(String(options.body)));return new Response(JSON.stringify(response(provider)),{status:200});};
+  const environment={AGENT_DRIVER_API_PROVIDER:provider,AGENT_DRIVER_API_KEY:secret,AGENT_DRIVER_API_MODEL:'fixture-model',...(provider==='openai_compatible'?{AGENT_DRIVER_API_BASE_URL:'https://models.example.test/v1'}:{})};
+  const model=structuredModelFromEnvironment(environment,fetcher);
+  await model.call('correct','Correct.',{},schema);await model.call('verify','Verify.',{},schema);
+  const limit=provider==='openai'?'max_output_tokens':'max_tokens';assert.deepEqual(requests.map(item=>item[limit]),[1500,12000]);
+  assert.deepEqual(model.calls.map(item=>item.purpose),['correct','verify']);
+});
+
+test('runtime contract API verifier timeout has safe typed failure and no paid fallback',async()=>{
+  const model=structuredModelFromEnvironment({AGENT_DRIVER_API_PROVIDER:'openai',AGENT_DRIVER_API_KEY:secret,AGENT_DRIVER_API_MODEL:'fixture-model'},async()=>{throw new DOMException('private response detail','TimeoutError');});
+  await assert.rejects(model.call('verify','Verify.',{},schema),/^Error: STRUCTURED_MODEL_TIMEOUT$/u);
+  assert.equal(model.calls[0].failure_kind,'timeout');assert.equal(JSON.stringify(model.calls).includes('private response detail'),false);
+});
+
+test('runtime contract API verifier preserves a response-body timeout instead of misclassifying the JSON output',async()=>{
+  const model=structuredModelFromEnvironment({AGENT_DRIVER_API_PROVIDER:'openai',AGENT_DRIVER_API_KEY:secret,AGENT_DRIVER_API_MODEL:'fixture-model'},async()=>({ok:true,status:200,json:async()=>{throw new DOMException('private body detail','TimeoutError');}}));
+  await assert.rejects(model.call('verify','Verify.',{},schema),/^Error: STRUCTURED_MODEL_TIMEOUT$/u);
+  assert.equal(model.calls[0].failure_kind,'timeout');assert.equal(JSON.stringify(model.calls).includes('private body detail'),false);
+});
+
 test('runtime provider probe proves an exact schema response and does not treat HTTP success as readiness',async()=>{
   const environment={AGENT_DRIVER_API_PROVIDER:'openrouter',AGENT_DRIVER_API_KEY:secret,AGENT_DRIVER_API_MODEL:'openai/gpt-5-mini'};
   const ok=await probeStructuredModel(environment,async()=>new Response(JSON.stringify(response('openrouter')),{status:200}));assert.equal(ok.status,'ready');assert.equal(ok.credentials_exposed,false);

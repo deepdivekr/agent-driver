@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {referenceSelectionSchema} from './reference-selection.js';
 import {basePackFamilyId} from '../taskpacks/base-pack-catalog.js';
 import {browserPreferenceSchema} from '../browser/executor-contracts.js';
-import {initialWorkPlan,validateWorkPlan,workPlanSchema} from './plan.js';
+import {hasBusinessStages,initialWorkPlan,modelWorkPlan,modelWorkPlanSchema,validateWorkPlan,workPlanSchema} from './plan.js';
 import {workResultGetSchema,workResultsListSchema} from './results.js';
 
 const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u);
@@ -16,7 +16,7 @@ export const workQuestionSchema=z.object({
   recommended_id:z.string().nullable(),
   required:z.boolean(),
 }).strict();
-export const workProposalSchema=z.object({
+const workProposalFields=z.object({
   title:sentence.max(160),
   desired_outcome:sentence,
   completion_checks:z.array(z.object({id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),result:sentence.max(500),evidence:sentence.max(500)}).strict()).min(1).max(8),
@@ -27,18 +27,28 @@ export const workProposalSchema=z.object({
   recurrence:z.object({kind:z.enum(['once','recurring']),rule:sentence.max(300).nullable()}).strict(),
   questions:z.array(workQuestionSchema).max(4),
 }).strict();
-export type WorkProposal=z.infer<typeof workProposalSchema>&{plan:z.infer<typeof workPlanSchema>};
-const storedWorkProposalSchema=workProposalSchema.extend({plan:workPlanSchema.optional()}).strict();
+// A new model definition must describe observable business stages. Old saved
+// Works and imported plans remain readable through the separate storage form.
+export const workProposalSchema=workProposalFields.extend({plan:modelWorkPlanSchema}).strict();
+export type WorkProposal=z.infer<typeof workProposalFields>&{plan:z.infer<typeof workPlanSchema>};
+const storedWorkProposalSchema=workProposalFields.extend({plan:workPlanSchema.optional()}).strict();
 
-export const workStartSchema=z.object({request_id:id,prompt:z.string().trim().min(1).max(8000).refine(value=>!/[\r\n]/u.test(value),'ONE_LINE_REQUIRED'),intake_mode:workModeSchema.default('quick')}).strict();
+export const workStartSchema=z.object({request_id:id,prompt:z.string().trim().min(1).max(8000).refine(value=>!/[\r\n]/u.test(value),'ONE_LINE_REQUIRED'),intake_mode:workModeSchema.default('quick'),completion_condition:z.string().trim().max(2000).optional(),delivery_target_ids:z.array(id).max(10).refine(value=>new Set(value).size===value.length,'DUPLICATE_DELIVERY_TARGET').optional()}).strict();
 export const workDefineSchema=z.object({work_id:id}).strict();
 export const workAnswerSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),answers:z.record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),z.string().trim().min(1).max(800)).refine(value=>Object.keys(value).length<=4)}).strict();
+// Human Control Center actions may combine registration with ONE explicit run.
+// The MCP intake contracts above remain registration-only.
+const intakeAction={execute:z.boolean().default(false),cost_acknowledged:z.boolean().default(false),timezone:z.string().min(1).max(100).optional()};
+export const workStartActionSchema=workStartSchema.extend(intakeAction).strict();
+export const workAnswerActionSchema=workAnswerSchema.extend(intakeAction).strict();
+export const workReconnectSchema=z.object({work_id:id.optional()}).strict();
 export const workStatusSchema=z.object({work_id:id}).strict();
 export const workContextSchema=z.object({work_id:id,run_id:id.optional(),actor:z.string().regex(/^[a-zA-Z0-9_.:-]{1,80}$/u),reference_ids:z.array(z.string().min(1).max(200)).max(5).default([]),selection:referenceSelectionSchema.optional()}).strict().refine(value=>!value.selection||value.reference_ids.length===0,'Choose explicit reference IDs or semantic selection, not both');
 export const workListSchema=z.object({limit:z.number().int().min(1).max(100).default(30)}).strict();
 export const workPauseSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),paused:z.boolean()}).strict();
+export const workPauseActionSchema=workPauseSchema.extend(intakeAction).strict();
 // Shared by the Control Center dispatcher and MCP. No second admission contract.
-export const workExecuteSchema=z.object({work_id:z.string().uuid(),revision:z.number().int().nonnegative(),executor:z.enum(['pack','hermes','client']).default('client'),cost_acknowledged:z.boolean().default(false),timezone:z.string().min(1).max(100).optional()}).strict();
+export const workExecuteSchema=z.object({work_id:z.string().uuid(),revision:z.number().int().nonnegative(),executor:z.enum(['pack','hermes','client']).default('client'),cost_acknowledged:z.boolean().default(false),current_run_only:z.boolean().default(true).describe('Defaults to this cycle only. Set false only after the user separately agreed to future recurring executions and their configured model usage; review any original-platform schedule first. A timezone is not schedule consent.'),timezone:z.string().min(1).max(100).optional()}).strict();
 export const workControlSchema=z.object({work_id:z.string().uuid(),revision:z.number().int().nonnegative(),action:z.enum(['pause','resume','edit','retry']),instruction:z.string().trim().min(1).max(4000).optional(),stage_id:z.string().max(80).optional()}).strict();
 export const workJevSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),enabled:z.boolean(),cost_acknowledged:z.boolean().default(false)}).strict();
 // Pack request IDs are bounded to 80 characters. Preserve legacy longer Work
@@ -76,4 +86,19 @@ export function validateWorkProposal(raw:unknown,mode:WorkMode,answered=false){
   }
   if(new Set(questions.map(question=>question.id)).size!==questions.length)throw Error('WORK_QUESTION_ID_DUPLICATE');
   return {...proposal,questions};
+}
+
+/** Interpret an LLM proposal without granting its metadata or evidence claims
+ * authority. Missing plan remains a compatibility path for older model
+ * fixtures/providers; the model-facing JSON schema requires one.
+ */
+export function validateModelWorkProposal(raw:unknown,mode:WorkMode,answered=false,previous:WorkProposal|null=null):WorkProposal{
+  const candidate=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw as Record<string,unknown>:null;
+  const fields={...candidate};delete fields.plan;
+  const proposed=validateWorkProposal(fields,mode,answered);
+  if(previous&&hasBusinessStages(previous.plan)&&(!candidate||!Object.hasOwn(candidate,'plan')))throw Error('WORK_PLAN_REQUIRED_FOR_REPLAN');
+  const plan=candidate&&Object.hasOwn(candidate,'plan')?
+    modelWorkPlan(candidate.plan,proposed.desired_outcome,proposed.requested_effect,previous?.plan??null):
+    previous?.plan?validateWorkPlan({...previous.plan,revision:previous.plan.revision+1}):proposed.plan;
+  return {...proposed,plan};
 }

@@ -11,6 +11,7 @@ import {requireCondition} from '../core/contracts.js';
 import {HermesAcp,type HermesTransport,type HermesTransportCallbacks} from '../integrations/hermes-acp.js';
 import {buildContinuityContext,renderContinuityContext} from './continuity-context.js';
 import {type WorkProposal} from './contracts.js';
+import {assertWorkConnected} from './lifecycle.js';
 
 const clean=(value:unknown,max=2000)=>redact(String(value??''))
   .replace(/\b(?:password|passwd|api[_-]?key|access[_-]?token|refresh[_-]?token|authorization)\s*[=:]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]*)/giu,'[REDACTED]')
@@ -32,6 +33,7 @@ export function initHermesWorks(store:PackStore){store.hermesState.exec(`
 function hasTable(store:PackStore){return Boolean(store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='hermes_work'").get());}
 /** Bind an explicitly selected runtime to the existing Work; never create a duplicate bot. */
 export function bindIntakeHermes(store:PackStore,config:HostConfig,id:string,revision:number){
+  assertWorkConnected(store,config.project.id,id);
   const project=config.project.id,work=store.intakeWork(project,id),spec=work.spec as WorkProposal|null;
   requireCondition(work.revision===revision&&!work.paused&&work.status==='ready'&&spec,'WORK_NOT_READY');
   requireCondition(store.officeRuns(project,id).length===0,'WORK_ALREADY_BOUND');
@@ -46,7 +48,7 @@ function row(store:PackStore,project:string,id:string){const value=store.hermesS
 function touch(store:PackStore,project:string,id:string,state?:string){const at=now();store.hermesState.prepare('UPDATE hermes_work SET revision=revision+1,state=COALESCE(?,state),updated_at=? WHERE project_id=? AND work_id=?').run(state??null,at,project,id);store.hermesState.prepare('UPDATE office_work SET updated_at=? WHERE project_id=? AND id=?').run(at,project,id);}
 function event(store:PackStore,project:string,id:string,turn:string|null,kind:string,summary:string){store.hermesState.prepare('INSERT INTO hermes_event(project_id,work_id,turn_id,kind,summary,created_at) VALUES(?,?,?,?,?,?)').run(project,id,turn,kind,clean(summary),now());touch(store,project,id);}
 export function importHermesWork(store:PackStore,project:string,key:string,definition:HermesWorkDefinition){
-  initHermesWorks(store);const old=store.hermesState.prepare('SELECT work_id FROM hermes_work WHERE project_id=? AND import_key=?').get(project,key);if(old)return String(old.work_id);
+  initHermesWorks(store);const old=store.hermesState.prepare('SELECT work_id FROM hermes_work WHERE project_id=? AND import_key=?').get(project,key);if(old){assertWorkConnected(store,project,String(old.work_id));return String(old.work_id);}
   const id=randomUUID(),at=now();store.hermesState.exec('SAVEPOINT hermes_import');try{
     store.hermesState.prepare('INSERT INTO office_work VALUES(?,?,?,?,?,?)').run(id,project,definition.title,definition.goal,at,at);
     store.hermesState.prepare('INSERT INTO hermes_work(work_id,project_id,import_key,definition,updated_at) VALUES(?,?,?,?,?)').run(id,project,key,JSON.stringify(definition),at);
@@ -80,6 +82,7 @@ export class HermesWorkRuntime {
   status(id:string){return hermesWorkDetail(this.store,this.config.project.id,id);}
   action(raw:unknown){
     const input=actionSchema.parse(raw),project=this.config.project.id,work=row(this.store,project,input.work_id);
+    assertWorkConnected(this.store,project,input.work_id);
     requireCondition(work.state!=='detached','HERMES_WORK_DETACHED');
     if(input.action==='send'&&input.request_id){const old=this.store.hermesState.prepare('SELECT * FROM hermes_turn WHERE project_id=? AND request_id=?').get(project,input.request_id) as TurnRow|undefined;if(old){requireCondition(old.work_id===input.work_id&&old.instruction===input.instruction,'HERMES_REQUEST_ID_CONFLICT');return this.status(input.work_id);}}
     requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
@@ -112,13 +115,14 @@ export class HermesWorkRuntime {
     const project=this.config.project.id;this.store.hermesState.exec('BEGIN IMMEDIATE');let turn:TurnRow|undefined;
     try{
       if(this.store.hermesState.prepare("SELECT 1 FROM hermes_turn WHERE project_id=? AND status IN ('starting','running','needs_human')").get(project)){this.store.hermesState.exec('COMMIT');return;}
-      turn=this.store.hermesState.prepare("SELECT t.* FROM hermes_turn t JOIN hermes_work w ON w.work_id=t.work_id WHERE t.project_id=? AND t.status='queued' AND w.paused=0 ORDER BY t.created_at,t.id LIMIT 1").get(project) as TurnRow|undefined;
+      turn=this.store.hermesState.prepare("SELECT t.* FROM hermes_turn t JOIN hermes_work w ON w.work_id=t.work_id WHERE t.project_id=? AND t.status='queued' AND w.paused=0 AND NOT EXISTS (SELECT 1 FROM office_work_lifecycle l WHERE l.project_id=t.project_id AND l.work_id=t.work_id) ORDER BY t.created_at,t.id LIMIT 1").get(project) as TurnRow|undefined;
       if(turn)this.store.hermesState.prepare("UPDATE hermes_turn SET status='starting',owner=?,updated_at=? WHERE id=? AND status='queued'").run(ownerIdentity(),now(),turn.id);
       this.store.hermesState.exec('COMMIT');
     }catch(error){this.store.hermesState.exec('ROLLBACK');throw error;}if(!turn)return;
     this.current=turn;this.replyBuffer='';let promptSent=false;
     try{
       const work=row(this.store,project,turn.work_id),definition=JSON.parse(work.definition) as HermesWorkDefinition;
+      assertWorkConnected(this.store,project,work.work_id);
       const cwd=join(dirname(this.config.dbPath),'hermes-workspaces',work.work_id);await mkdir(cwd,{recursive:true,mode:0o700});
       const callbacks:HermesTransportCallbacks={update:params=>this.update(turn!,params),permission:(params,respond)=>this.requestPermission(turn!,params,respond)};
       const executable=this.options.executable??join(homedir(),'.hermes','hermes-agent','venv','bin','hermes-acp');
@@ -129,7 +133,7 @@ export class HermesWorkRuntime {
       await transport.request('initialize',{protocolVersion:1,clientInfo:{name:'agent-driver-personal',version:'0.1.1'},clientCapabilities:{fs:{readTextFile:false,writeTextFile:false},terminal:false}},150_000);
       if(work.session_id){const loaded=await transport.request('session/load',{sessionId:work.session_id,cwd,mcpServers:[]});requireCondition(loaded!==null,'HERMES_SESSION_NOT_FOUND');turn.session_id=work.session_id;}
       else{const made=await transport.request('session/new',{cwd,mcpServers:[]});requireCondition(typeof made?.sessionId==='string'&&made.sessionId.length<=160,'HERMES_SESSION_INVALID');turn.session_id=made.sessionId;this.store.hermesState.prepare('UPDATE hermes_work SET session_id=? WHERE project_id=? AND work_id=?').run(turn.session_id,project,work.work_id);}
-      requireCondition(!this.stopped&&!row(this.store,project,work.work_id).paused,'HERMES_PAUSED_BEFORE_PROMPT');
+      assertWorkConnected(this.store,project,work.work_id);requireCondition(!this.stopped&&!row(this.store,project,work.work_id).paused,'HERMES_PAUSED_BEFORE_PROMPT');
       const currentWork=row(this.store,project,work.work_id);
       const prior=this.store.hermesState.prepare('SELECT * FROM hermes_turn WHERE project_id=? AND work_id=? AND id<>? ORDER BY created_at,rowid LIMIT 129').all(project,work.work_id,turn.id) as TurnRow[];
       requireCondition(prior.length<=128,'CONTINUITY_HISTORY_REVIEW_REQUIRED');

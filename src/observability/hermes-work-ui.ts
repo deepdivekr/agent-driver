@@ -23,8 +23,10 @@ function renderHermesDetail(){
  document.getElementById('hermes-send').onclick=()=>{const input=document.getElementById('hermes-instruction').value.trim();if(input.length<3){setMessage('이번에 실행할 지시를 입력해 주세요.');return}if(!document.getElementById('hermes-cost').checked){setMessage('Hermes 모델 사용량 안내를 확인해 주세요.');return}hermesRequestId??=crypto.randomUUID();hermesAction('send',{request_id:hermesRequestId,instruction:input,cost_acknowledged:true})};
 }
 async function hermesAction(action,extra={}){
- if(hermesBusy||!detail?.hermes)return;const target=detail.id;hermesBusy=true;setMessage('요청을 저장하는 중…');
+ if(hermesBusy||!detail?.hermes)return;if(!workLifecycleConnected(detail)){setMessage('Office 연결이 해제되어 있습니다. 원본 작업은 변경하지 않습니다.');return;}const target=detail.id;hermesBusy=true;setMessage('요청을 저장하는 중…');
  try{const response=await fetch('work/hermes/action',{method:'POST',headers:{'content-type':'application/json','x-agent-driver':'human-office'},body:JSON.stringify({work_id:target,revision:detail.revision,action,...extra})}),data=await response.json();if(!response.ok)throw Error(data.error||'Hermes 요청 실패');if(selected!==target)return;if(action==='send'){hermesDraft='';hermesRequestId=null;hermesCost=false}detail=data;renderHermesDetail();setMessage(action==='send'?'지시를 접수했습니다. Hermes의 진행과 답변이 여기에 표시됩니다.':action==='review'?'새 지시를 보낼 수 있습니다. 자동 재실행은 하지 않습니다.':'요청을 반영했습니다.')}
  catch(error){await loadDetail();setMessage(String(error.message||error))}finally{hermesBusy=false;if(detail?.hermes&&document.activeElement?.id!=='hermes-instruction')renderHermesDetail()}
 }
+const renderConnectedHermesDetail=renderHermesDetail;
+renderHermesDetail=function(){renderConnectedHermesDetail();mountWorkLifecycle(detail);if(!workLifecycleConnected(detail))app.querySelectorAll('.control-panel button,.control-panel input,.control-panel textarea').forEach(node=>{node.disabled=true});};
 `;}

@@ -19,7 +19,7 @@ function fixture(queue){const model=fixtureModel(queue),events=[],verify=createW
 
 test('completion contract: live-looking browser data requires a separate typed judgment and exact observed excerpts',async()=>{
   const {verify,model,events}=fixture([supported()]);assert.equal(await verify(checks,[observe()],claim),true);
-  assert.equal(model.inputs.length,1);assert.equal(model.inputs[0].instructions,WORK_COMPLETION_VERIFICATION_INSTRUCTIONS);assert.equal(model.inputs[0].purpose,'correct');
+  assert.equal(model.inputs.length,1);assert.equal(model.inputs[0].instructions,WORK_COMPLETION_VERIFICATION_INSTRUCTIONS);assert.equal(model.inputs[0].purpose,'verify');
   assert.deepEqual(model.inputs[0].input.checks[0].allowed_evidence_ids,['source-1']);assert.equal(model.inputs[0].input.observations[0].value.title,'Physical AI');
   assert.ok(!JSON.stringify(model.inputs[0].input).includes(claim.summary));assert.ok(!JSON.stringify(model.inputs[0].input).includes('requested-not-observed'));assert.equal(events.at(-1).model,'fixture-verifier');
 });

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {settingsHtml} from '../dist/observability/settings-ui.js';
 import {workHtml} from '../dist/observability/work-ui.js';
-import {BrowserConnections} from '../dist/observability/browser-connections.js';
+import {connectionHtml} from '../dist/observability/browser-connections.js';
 
 test('first-run settings does not preselect Work data sharing',()=>{
   const html=settingsHtml('safe-nonce');
@@ -25,9 +25,9 @@ test('closed Work is not described as verified and its displayed run ID is the a
 });
 
 test('site-login actions preserve the language switch and clear the first loading state by status',async()=>{
-  const connection=new BrowserConnections({},{}),response={html:'',writeHead(){},end(body){this.html=body;}};
-  assert.equal(await connection.handle({method:'GET'},response,'connections','127.0.0.1:9999'),true);
-  assert.match(response.html,/document\.querySelectorAll\('#sites button'\)/u);
+  const response={html:connectionHtml('safe-nonce')};
+  assert.match(response.html,/document\.querySelectorAll\('main button'\)/u);
+  assert.match(response.html,/\['theme-toggle','lang-toggle'\]\.includes\(button.id\)/u);
   assert.doesNotMatch(response.html,/document\.querySelectorAll\('button'\)/u);
   assert.match(response.html,/refresh\(\)\.then\(ok=>\{if\(ok\)/u);
 });

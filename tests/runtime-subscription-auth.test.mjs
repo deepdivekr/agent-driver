@@ -141,6 +141,26 @@ test('runtime subscription model uses MCP client sampling first without tools or
   assert.equal(model.calls[0].provider,'mcp_sampling');assert.equal(model.calls[0].auth,'client_subscription');
 });
 
+test('runtime contract verification budget is scoped to verify and MCP sampling keeps corrections bounded',async()=>{
+  const requests=[];const sampling=new McpSamplingStructuredModel({available:()=>true,async createMessage(params,options){requests.push({params,options});return {model:'fixture',stopReason:'endTurn',content:{type:'text',text:'{"choice":"A"}'}};}});
+  await sampling.call('correct','Choose.',{},schema);await sampling.call('verify','Verify.',{},schema);
+  assert.deepEqual(requests.map(item=>[item.params.maxTokens,item.options.timeout]),[[1500,60000],[12000,180000]]);
+  assert.ok(requests.every(item=>item.params.includeContext==='none'&&item.params.temperature===0));
+});
+
+test('runtime contract Codex verifier uses extended bounded timeout and records typed timeout without raw output',async()=>{
+  const requests=[];const runner={async run(request){requests.push(request);
+    if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+    if(request.args.includes('exec'))throw Error('CLIENT_TIMEOUT');
+    throw Error('unexpected command');
+  }};
+  const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex'}),runner});
+  await assert.rejects(model.call('verify','Inspect original evidence.',{stage_id:'completion.verify'},schema),/^Error: STRUCTURED_MODEL_TIMEOUT$/u);
+  const invocation=requests.find(item=>item.args.includes('exec'));
+  assert.equal(invocation.timeout_ms,180000);assert.equal(model.calls.at(-1).purpose,'verify');assert.equal(model.calls.at(-1).failure_kind,'timeout');
+  assert.equal(JSON.stringify(model.calls).includes(invocation.stdin),false);
+});
+
 test('runtime subscription model falls from failed Codex to Claude while preserving no-tools structured contracts',async()=>{
   const invocations=[];const runner={async run(request){invocations.push(request);
     if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT\n',stderr:''};

@@ -1,0 +1,140 @@
+{
+  "schema_version": 1,
+  "phase": 104,
+  "base_commit": "96df3107eb46b91f593042427fe83b0e91b823f3",
+  "scope": "Issue consolidation; not universal release certification",
+  "closed_as_duplicate": [
+    {
+      "number": 1,
+      "state": "closed",
+      "state_reason": "duplicate",
+      "closed_at": "2026-09-29T12:21:55Z"
+    },
+    {
+      "number": 3,
+      "state": "closed",
+      "state_reason": "duplicate",
+      "closed_at": "2026-09-29T12:22:52Z"
+    },
+    {
+      "number": 4,
+      "state": "closed",
+      "state_reason": "duplicate",
+      "closed_at": "2026-09-29T12:22:53Z"
+    },
+    {
+      "number": 5,
+      "state": "closed",
+      "state_reason": "duplicate",
+      "closed_at": "2026-09-29T12:22:54Z"
+    },
+    {
+      "number": 14,
+      "state": "closed",
+      "state_reason": "duplicate",
+      "closed_at": "2026-09-29T12:22:56Z"
+    },
+    {
+      "number": 16,
+      "state": "closed",
+      "state_reason": "duplicate",
+      "closed_at": "2026-09-29T12:22:57Z"
+    },
+    {
+      "number": 24,
+      "state": "closed",
+      "state_reason": "duplicate",
+      "closed_at": "2026-09-29T12:22:58Z"
+    }
+  ],
+  "active_issues": [
+    {
+      "number": 22,
+      "url": "https://github.com/deepdivekr/agent-office/issues/22",
+      "title": "Investigate intermittent prepare_only resume returning ready_to_resume",
+      "state": "open"
+    },
+    {
+      "number": 6,
+      "url": "https://github.com/deepdivekr/agent-office/issues/6",
+      "title": "Remaining release acceptance: domain, cross-executor, native Windows and recovery (consolidated)",
+      "state": "open"
+    }
+  ],
+  "withdrawn_requirements": 0,
+  "unfinished_scope_target": 6,
+  "unknown_cause_defect": 22,
+  "source_runtime_test_installer_changes": false,
+  "verification": [
+    {
+      "name": "merged-main quick CI",
+      "status": "PASS",
+      "run_id": 36565091910,
+      "job_id": 109394955560,
+      "passed": 1288,
+      "blocked_env": 0,
+      "not_run": 0,
+      "per_case_levels": "Retained in original CI artifact; not a single native certification"
+    },
+    {
+      "name": "fresh import with input integrity",
+      "status": "PASS",
+      "evidence_level": "native_integration",
+      "passed": 2,
+      "input_changed": false
+    },
+    {
+      "name": "schema6 source preserved / quarantined copy schema8 with input integrity",
+      "status": "PASS",
+      "evidence_level": "native_integration",
+      "passed": 2,
+      "input_changed": false
+    },
+    {
+      "name": "Previously unreported isolated native TAP observations preserved",
+      "status": "PASS",
+      "evidence_level": "native_integration",
+      "passed": 4,
+      "input_integrity": "unobserved",
+      "original_stdout_sha256": "unobserved",
+      "source_receipt_sha256": "c600669de23bd543087b77ecd2c76adca617706b791a596c2f874b5b8c3fd0b3",
+      "rerun": false,
+      "effect_scope": "Owned local synthetic fixtures only; no production workflow or issue22 causal attribution"
+    },
+    {
+      "name": "GitHub issue state readback",
+      "status": "PASS",
+      "evidence_level": "user_environment",
+      "closed": 7,
+      "active": 2
+    }
+  ],
+  "report": {
+    "prior_rows": 13906,
+    "new_native_rows": 8,
+    "isolated_native_rows_with_unobserved_input_integrity": 4,
+    "new_audit_pass_rows": 3,
+    "retained_audit_recorder_fail_rows": 1,
+    "total_rows": 13918,
+    "prior_reconstructed_sha256": "5c25a205e6214fc451199bbf28ce36c4e2eef16bf8b8009a400ef8faf401858f",
+    "isolated_append_prior_rows": 13914,
+    "isolated_append_prior_sha256": "05356759c0e75fea53d782457cd6ca8d1547ac981f62fe964e9f5be1df6441b4",
+    "isolated_append_receipt": "tests/evidence/phase104-native-isolated-append.json",
+    "final_sha256": "fcd654c8696bd5ebf1e499ac25a33c19376a4e80b3d6840f2762f25053dd790b"
+  },
+  "history": {
+    "phase24_original_fail_preserved": true,
+    "original_cause": "unknown",
+    "original_final_effect_count": "unobserved",
+    "phase26_two_hour": "Historical handoff reports completion; original final receipt unavailable for independent revalidation",
+    "current_head_two_hour": "NOT_RUN",
+    "original_five_second_acceptance": "NOT_MET; maximum15s design distinct"
+  },
+  "authority": {
+    "paid_model_calls": 0,
+    "original_bots_replayed": 0,
+    "external_messages_sent": 0,
+    "user_mcp_client_reconnected": false,
+    "new_release": false
+  }
+}

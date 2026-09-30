@@ -12,16 +12,17 @@ import {chromium} from 'playwright';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {RuntimeApi} from '../dist/interface/api.js';
 import {PackStore} from '../dist/packs/store.js';
-import {authProfile,authSite,authSites,requireSiteAuth,setSiteAuth,blockedAuthSites,detectAuthGate,BrowserLoginBroker,connectOwnedBrowser} from '../dist/swarm/browser-auth.js';
+import {browserHostCompatible} from '../dist/browser/executor-contracts.js';
+import {authProfile,authSite,authSites,requireSiteAuth,setSiteAuth,blockedAuthSites,detectAuthGate,BrowserLoginBroker,connectOwnedBrowser,siteLoginTargets,readyAuthTargets} from '../dist/swarm/browser-auth.js';
 import {SwarmVisualExecutor} from '../dist/swarm/visual-executor.js';
 import {startControlCenter,readControlCenter} from '../dist/observability/control-center.js';
 const koPage=async(browser,options)=>{const page=await browser.newPage(options);await page.addInitScript(()=>{try{localStorage.setItem('office-lang','ko')}catch{}});return page;};
 
-async function setup(t,{allProtected=false,fixtureOrigin=null,owned=true,deferCleanup=false}={}){
+async function setup(t,{allProtected=false,fixtureOrigin=null,owned=true,deferCleanup=false,browserPreference}={}){
   const root=await mkdtemp(join(tmpdir(),'driver-browser-auth-')),path=join(root,'host.json');
   await writeFile(path,JSON.stringify({schema_version:1,project_id:'auth-test',caller_ref:'test',account_ref:'account-a',worktree:root,data_dir:'data',environment:fixtureOrigin?'fixture':'production',...(fixtureOrigin?{fixture_url:`${fixtureOrigin}/fixture/account-a/`}:{}),swarm:{enabled:true,model_data_approved:true,max_logical_workers:8,max_concurrency:6,visual:{enabled:true,max_contexts:6,...(owned?{owned_vm:{id:'test-owned',storage_root:join(root,'vm'),devtools_port:49222,vnc_port:45901}}:{})}}}));
   const urls=fixtureOrigin?Array.from({length:6},(_,i)=>`${fixtureOrigin}/worker-${i}`):['https://x.com/search','https://www.reddit.com/r/ASTSpaceMobile/',...Array.from({length:4},(_,i)=>allProtected?'https://x.com/home':`https://example.test/${i}`)];
-  const worker=(id,stage,source_urls,depends_on=[])=>({id,role:id,objective:'Read source',stage,source_urls,executor:'browser',depends_on,required_capabilities:[],effect:'read_only',completion_evidence:['Readback'],max_steps:10,timeout_ms:60000});
+  const worker=(id,stage,source_urls,depends_on=[])=>({id,role:id,objective:'Read source',stage,source_urls,executor:'browser',...(browserPreference?{browser:browserPreference}:{}),depends_on,required_capabilities:[],effect:'read_only',completion_evidence:['Readback'],max_steps:10,timeout_ms:60000});
   const sources=urls.map((url,i)=>worker(`source-${i}`,'source_read',[url]));
   const visual={assigned:[],released:[],async assign(run,id){this.assigned.push(id);return {surface_id:`surface-${id}`,kind:'browser'};},async perform(){throw Error('BROWSER_AUTH_REQUIRED');},async release(run,id){this.released.push(id);},async close(){}};
   const model={calls:[],async call(purpose){this.calls.push({model:'contract-model',input_sha256:'a'.repeat(64),status:'accepted'});if(purpose==='design')return {summary:'Auth preflight contract fixture.',workers:[...sources,worker('reduce','reduction',[],sources.map(w=>w.id)),worker('synthesize','synthesis',[],['reduce'])]};throw Error('MODEL_NOT_USED');}};
@@ -45,6 +46,11 @@ test('auth requirements persist without credentials and user retry remains unver
   assert.equal(authSites(x.api.store,x.config).length,2);assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/a']).length,1);
   const broker=new BrowserLoginBroker(x.api.store,x.config);assert.equal(broker.retry('x.com').state,'retry_requested');assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/a']).length,0);
   assert.throws(()=>broker.retry('unknown.test'),/AUTH_SITE_NOT_REQUESTED/);
+  for(const state of ['challenge','policy_blocked']){
+    setSiteAuth(x.api.store,x.config,'x.com',state);
+    assert.throws(()=>broker.retry('x.com'),/AUTH_USER_VERIFICATION_REQUIRED/);
+    assert.equal(authSites(x.api.store,x.config).find(s=>s.site==='x.com').state,state);
+  }
   setSiteAuth(x.api.store,x.config,'x.com','login_limited');assert.throws(()=>broker.retry('x.com'),/AUTH_LOGIN_LIMITED/);assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com']).length,1);setSiteAuth(x.api.store,x.config,'x.com','retry_requested');
   const reopened=new PackStore(x.config.dbPath);try{assert.equal(authSites(reopened,x.config).find(s=>s.site==='x.com').state,'retry_requested');}finally{reopened.close();}
   setSiteAuth(x.api.store,x.config,'reddit.com','needs_login',true);assert.equal(blockedAuthSites(x.api.store,x.config,['https://example.test']).length,1);
@@ -73,6 +79,96 @@ test('runtime contract a ready observed sign-in releases the source to the norma
 test('runtime contract auth preflight remains active when no VM or persistent browser is configured',async t=>{
   const x=await setup(t,{allProtected:true,owned:false}),result=await start(x);assert.equal(result.dispatches.length,0);assert.ok(result.run.source_auth.every(item=>item.state==='unchecked'));assert.ok(result.run.workers.every(worker=>worker.attempts===0));
   const server=await startControlCenter(x.config);t.after(()=>server.close());const status=await (await fetch(server.url+'connections/status')).json();assert.equal(status.profile_preserved,false);assert.equal(status.vnc,null);assert.ok(status.sites.every(site=>site.state==='unchecked'));
+});
+
+test('site login choices keep Windows, Ubuntu VM, and unsupported Windows VM profiles distinct',async t=>{
+  const x=await setup(t);requireSiteAuth(x.api.store,x.config,['https://x.com/search']);
+  const windows={id:'windows-neo',engine:'neo',environment:'host_foreground',platform:'win32',profile_ref:'windows-user',endpoint:'http://127.0.0.1:9010/mcp',priority:80};
+  const windowsVm={id:'windows-vm',engine:'playwright',environment:'windows_vm',platform:'win32',profile_ref:'guest',priority:50};
+  x.config.browserExecutors={targets:[windows,windowsVm]};
+  const targets=siteLoginTargets(x.config);assert.deepEqual(targets.map(item=>item.id),['windows-neo','windows-vm','login-owned-ubuntu-vm']);
+  const ubuntu=targets[2];assert.equal(authProfile(x.config,ubuntu),authProfile(x.config),'Existing VM profile key remains stable');
+  assert.notEqual(authProfile(x.config,windows),authProfile(x.config));
+  setSiteAuth(x.api.store,x.config,'x.com','ready',false,windows);
+  assert.equal(authSites(x.api.store,x.config).find(item=>item.site==='x.com').state,'unchecked','Host login does not release a VM-bound worker');
+  assert.deepEqual(readyAuthTargets(x.api.store,x.config,'x.com').map(item=>item.id),['windows-neo']);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search']).length,browserHostCompatible(windows)?0:1,'Only a host-compatible ready target may admit an automatic social attempt');
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search'],{environment:'ubuntu_vm'}).length,1,'An explicit guest does not inherit host readiness');
+  const server=await startControlCenter(x.config);t.after(()=>server.close());
+  const status=await (await fetch(server.url+'connections/status')).json();
+  assert.equal(status.targets.find(item=>item.id==='windows-vm').availability,'unsupported');
+  assert.equal(status.targets.find(item=>item.id==='windows-neo').availability==='ready',false,'Unprobed host connector is not advertised as signed in');
+  assert.equal(status.sites[0].profiles['windows-neo'].state,'ready');
+  assert.equal(status.sites[0].profiles['login-owned-ubuntu-vm'].state,'unchecked');
+  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());
+  const page=await koPage(browser);await page.goto(server.url+'connections');
+  const choices=page.locator('#sites .site').first().locator('.browser-choice option');await choices.first().waitFor({state:'attached'});
+  assert.equal(await choices.count(),status.targets.length);assert.match((await choices.allTextContents()).join(' '),/Windows VM.*미지원/u);
+  assert.equal(await page.locator('#sites .site').first().locator('.browser-choice option[value="windows-vm"]').isDisabled(),true);
+  const response=await fetch(server.url+'connections/open/x.com/windows-vm',{method:'POST',headers:{Origin:new URL(server.url).origin,'X-Agent-Driver':'human-connection'}});
+  assert.equal(response.status,409);assert.equal((await response.json()).error,'AUTH_BROWSER_TRANSPORT_UNAVAILABLE');
+  setSiteAuth(x.api.store,x.config,'x.com','login_limited');
+  const limited=await fetch(server.url+'connections/open/x.com/windows-neo',{method:'POST',headers:{Origin:new URL(server.url).origin,'X-Agent-Driver':'human-connection'}});
+  assert.equal(limited.status,409);assert.equal((await limited.json()).error,'AUTH_LOGIN_LIMITED','Site login limits cannot be bypassed by opening another profile');
+  const english=await browser.newPage();await english.goto(server.url+'connections');
+  await english.getByText('Add sites before starting work',{exact:true}).waitFor();
+});
+
+const asideTarget={id:'auth-aside',engine:'aside',environment:'host_foreground',platform:process.platform,profile_ref:'observed-aside',executable:'/fixture/aside',priority:10};
+test('runtime contract social admission prefers configured Aside readiness without copying it into another profile',async t=>{
+  const x=await setup(t);requireSiteAuth(x.api.store,x.config,['https://x.com/search']);
+  const neo={id:'auth-neo',engine:'neo',environment:'host_foreground',platform:process.platform,profile_ref:'observed-neo',endpoint:'http://127.0.0.1:9010/mcp',priority:100};
+  x.config.browserExecutors={targets:[neo,asideTarget]};
+  setSiteAuth(x.api.store,x.config,'x.com','ready',false,neo);setSiteAuth(x.api.store,x.config,'x.com','ready',false,asideTarget);
+  assert.deepEqual(readyAuthTargets(x.api.store,x.config,'x.com').map(target=>target.id),['auth-aside','auth-neo']);
+  assert.deepEqual(blockedAuthSites(x.api.store,x.config,['https://x.com/search']),[]);
+  assert.deepEqual(blockedAuthSites(x.api.store,x.config,['https://x.com/search'],{environment:'owned_headless'}),[]);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search'],{environment:'ubuntu_vm'}).length,1);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search'],{environment:'windows_vm'}).length,1);
+  assert.equal(authSites(x.api.store,x.config).find(row=>row.site==='x.com').state,'unchecked');
+  x.config.browserExecutors={targets:[{...asideTarget,profile_ref:'another-aside-profile'}]};
+  assert.deepEqual(readyAuthTargets(x.api.store,x.config,'x.com'),[]);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search']).length,1);
+});
+
+for(const state of ['login_limited','challenge'])test(`runtime contract ${state} cannot be bypassed through another historically ready browser profile`,async t=>{
+  const x=await setup(t);requireSiteAuth(x.api.store,x.config,['https://x.com/search']);x.config.browserExecutors={targets:[asideTarget]};
+  setSiteAuth(x.api.store,x.config,'x.com','ready',false,asideTarget);setSiteAuth(x.api.store,x.config,'x.com',state);
+  assert.deepEqual(readyAuthTargets(x.api.store,x.config,'x.com'),[]);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search'])[0].state,state);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search'],{environment:'host_foreground',preferred_engine:'aside'})[0].state,state);
+  setSiteAuth(x.api.store,x.config,'x.com','ready');setSiteAuth(x.api.store,x.config,'x.com',state,false,asideTarget);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://x.com/search'],{environment:'ubuntu_vm'})[0].state,state);
+});
+
+test('runtime contract a human handoff on the connected Aside profile blocks automatic leases',async t=>{
+  const x=await setup(t);requireSiteAuth(x.api.store,x.config,['https://x.com/search']);x.config.browserExecutors={targets:[asideTarget]};
+  setSiteAuth(x.api.store,x.config,'x.com','ready',true,asideTarget);
+  assert.deepEqual(readyAuthTargets(x.api.store,x.config,'x.com'),[]);
+  assert.equal(blockedAuthSites(x.api.store,x.config,['https://example.test/'])[0].handoff,true);
+});
+
+test('runtime contract one social worker needs a single ready profile for all requested sites',async t=>{
+  const x=await setup(t),urls=['https://x.com/search','https://www.reddit.com/r/example'];requireSiteAuth(x.api.store,x.config,urls);
+  const second={...asideTarget,id:'second-aside',profile_ref:'second-profile'};x.config.browserExecutors={targets:[asideTarget,second]};
+  setSiteAuth(x.api.store,x.config,'x.com','ready',false,asideTarget);setSiteAuth(x.api.store,x.config,'reddit.com','ready',false,second);
+  assert.equal(blockedAuthSites(x.api.store,x.config,[urls[0]]).length,0);assert.equal(blockedAuthSites(x.api.store,x.config,[urls[1]]).length,0);
+  assert.ok(blockedAuthSites(x.api.store,x.config,urls).length>0,'Separate ready profiles cannot stand in for one shared worker browser');
+  assert.ok(blockedAuthSites(x.api.store,x.config,urls,{environment:'host_foreground',preferred_engine:'aside'}).length>0,'An explicit engine still needs one common profile');
+  setSiteAuth(x.api.store,x.config,'reddit.com','ready',false,asideTarget);assert.deepEqual(blockedAuthSites(x.api.store,x.config,urls),[]);
+  assert.deepEqual(blockedAuthSites(x.api.store,x.config,urls,{environment:'host_foreground',preferred_engine:'aside'}),[]);
+});
+
+for(const environment of ['owned_headless','ubuntu_vm'])test(`runtime contract Swarm ${environment} social readiness respects the selected profile before leasing`,async t=>{
+  const x=await setup(t,{allProtected:true,browserPreference:{environment}});x.config.browserExecutors={targets:[asideTarget]};
+  for(const site of ['x.com','reddit.com'])setSiteAuth(x.api.store,x.config,site,'ready',false,asideTarget);
+  const result=await start(x);
+  assert.equal(result.dispatches.length,environment==='owned_headless'?6:0);
+  assert.equal(x.api.swarm.status(result.run.run_id).workers.filter(worker=>worker.status==='leased').length,environment==='owned_headless'?6:0);
+  assert.ok(authSites(x.api.store,x.config).every(row=>row.state==='unchecked'),'Aside readiness remains scoped to its actual profile');
+  const actor=readControlCenter(x.api.store,x.config).runs.find(run=>run.id===result.run.run_id).actors.find(value=>value.id==='source-0');
+  assert.equal(actor.status,environment==='owned_headless'?'leased':'waiting_for_auth');
+  assert.equal(actor.lane,environment==='owned_headless'?'running':'attention');
 });
 
 test('runtime contract migrates legacy site-policy blocks back to ordinary sign-in discovery',async t=>{

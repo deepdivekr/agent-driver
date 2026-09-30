@@ -35,12 +35,16 @@ async function run(command,args,{cwd=repo,environment=env,timeout=600000}={}){
 const report={version:pkg.version,tag,published_source:published,evidence_level:'native_integration',status:'NOT_RUN',work_model:'fixture',external_model_calls:0,browser_cache:browserCache,root:base,cases:[],started_at:new Date().toISOString()};
 try{
   let source='https://github.com/deepdivekr/agent-office.git';
+  const baselineSource=join(base,'source');
+  await run('git',['clone','--quiet','--no-hardlinks','--no-tags',repo,baselineSource]);
+  for(const baseline of ['v0.1.0','v0.1.1','v0.2.0','v0.3.0'])await run('git',['-C',baselineSource,'fetch','--quiet','origin',`refs/tags/${baseline}:refs/tags/${baseline}`]);
+  // The immediately previous public version may not have been fetched into
+  // this development checkout. Keep that tag in the disposable clone only.
+  await run('git',['-C',baselineSource,'fetch','--quiet','https://github.com/deepdivekr/agent-office.git','refs/tags/v0.3.1:refs/tags/v0.3.1']);
   if(!published){
-    source=join(base,'source');
+    source=baselineSource;
     // Public release tags may already exist on later CI runs. Do not import
     // the current tag into this disposable candidate mirror or overwrite it.
-    await run('git',['clone','--quiet','--no-hardlinks','--no-tags',repo,source]);
-    for(const baseline of ['v0.1.0','v0.1.1','v0.2.0','v0.3.0'])await run('git',['-C',source,'fetch','--quiet','origin',`refs/tags/${baseline}:refs/tags/${baseline}`]);
     const ref=await run('git',['rev-parse','HEAD']);
     await run('git',['-C',source,'checkout','--quiet','--detach',ref]);
     await run('git',['-C',source,'tag',tag,ref]);
@@ -48,18 +52,19 @@ try{
     env.AGENT_DRIVER_ALLOW_LOCAL_FIXTURE='1';
   }
   env.AGENT_DRIVER_REPOSITORY_URL=source;
-  for(const scenario of ['upgrade-0.1.0','upgrade-0.1.1','upgrade-0.2.0','upgrade-0.3.0','fresh']){
+  for(const scenario of ['upgrade-0.1.0','upgrade-0.1.1','upgrade-0.2.0','upgrade-0.3.0','upgrade-0.3.1','fresh']){
     const baseline=scenario.startsWith('upgrade-')?scenario.slice('upgrade-'.length):null;
+    const sameIdentity=baseline==='0.3.1';
     const home=join(base,scenario);await mkdir(home);
-    const installed=join(home,'.local/share/agent-office'),legacyInstalled=join(home,'.local/share/agent-driver'),state=join(home,baseline?'.agent-driver':'.agent-office');
+    const installed=join(home,'.local/share/agent-office'),legacyInstalled=sameIdentity?installed:join(home,'.local/share/agent-driver'),state=join(home,!baseline||sameIdentity?'.agent-office':'.agent-driver');
     const childEnv={...env,HOME:home,AGENT_DRIVER_CONNECTION_ROOT:state};
     const installer=join(repo,'install.sh');
     if(baseline){
       console.log('Installing v'+baseline+' for upgrade verification');
       const previousInstaller=join(home,'previous-install.sh');
-      const previousSource=await run('git',['show','v'+baseline+':install.sh']);
+      const previousSource=await run('git',['-C',baselineSource,'show','v'+baseline+':install.sh']);
       await writeFile(previousInstaller,previousSource+'\n',{mode:0o700});
-      await run('bash',[previousInstaller],{environment:{...childEnv,AGENT_DRIVER_VERSION:'v'+baseline,...(published?{AGENT_DRIVER_REPOSITORY_URL:'https://github.com/deepdivekr/agent-driver.git'}:{})}});
+      await run('bash',[previousInstaller],{environment:{...childEnv,AGENT_DRIVER_VERSION:'v'+baseline,...(published&&!sameIdentity?{AGENT_DRIVER_REPOSITORY_URL:'https://github.com/deepdivekr/agent-driver.git'}:{})}});
       assert.equal(JSON.parse(await readFile(join(legacyInstalled,'package.json'),'utf8')).version,baseline);
       await run(process.execPath,[join(repo,'scripts/release/install-probe.mjs'),legacyInstalled,state,'seed',baseline],{environment:childEnv});
     }
@@ -75,7 +80,7 @@ try{
     else await run(process.execPath,[join(repo,'scripts/release/install-probe.mjs'),installed,state,'seed',pkg.version],{environment:childEnv});
     if(baseline){
       assert.deepEqual(await readFile(join(home,'.local/bin/agent-driver')),legacyLauncher);
-      assert.equal(JSON.parse(await readFile(join(legacyInstalled,'package.json'),'utf8')).version,baseline);
+      if(!sameIdentity)assert.equal(JSON.parse(await readFile(join(legacyInstalled,'package.json'),'utf8')).version,baseline);
     }
     const autoEnv={...childEnv};delete autoEnv.AGENT_DRIVER_CONNECTION_ROOT;
     const connected=JSON.parse(await run(join(home,'.local/bin/agent-office'),['connection','status'],{cwd:base,environment:autoEnv}));

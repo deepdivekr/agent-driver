@@ -1,4 +1,4 @@
-import {hashJson,type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
+import {hashJson,modelCallBudget,type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {FAST_MODEL_DEFAULTS} from './fast-models.js';
 import {requireCondition} from '../core/contracts.js';
 
@@ -38,17 +38,18 @@ function endpoint(config:ApiProviderConfig){
   return new URL('chat/completions',config.baseUrl!).href;
 }
 function request(config:ApiProviderConfig,instructions:string,input:unknown,schema:Record<string,unknown>,purpose:ModelCall['purpose']){
+  const budget=modelCallBudget(purpose);
   if(config.provider==='openai')return {
     headers:{Authorization:`Bearer ${config.apiKey}`},
-    body:{model:config.model,reasoning:{effort:config.reasoning},store:false,stream:false,tools:[],max_output_tokens:purpose==='correct'?1_500:5_000,instructions,input:JSON.stringify(input),text:{format:{type:'json_schema',name:'agent_driver_result',strict:true,schema}}},
+    body:{model:config.model,reasoning:{effort:config.reasoning},store:false,stream:false,tools:[],max_output_tokens:budget.max_output_tokens,instructions,input:JSON.stringify(input),text:{format:{type:'json_schema',name:'agent_driver_result',strict:true,schema}}},
   };
   if(config.provider==='anthropic')return {
     headers:{'x-api-key':config.apiKey,'anthropic-version':'2023-06-01'},
-    body:{model:config.model,max_tokens:purpose==='correct'?1_500:5_000,system:instructions,messages:[{role:'user',content:JSON.stringify(input)}],output_config:{effort:config.reasoning,format:{type:'json_schema',schema}}},
+    body:{model:config.model,max_tokens:budget.max_output_tokens,system:instructions,messages:[{role:'user',content:JSON.stringify(input)}],output_config:{effort:config.reasoning,format:{type:'json_schema',schema}}},
   };
   return {
     headers:{Authorization:`Bearer ${config.apiKey}`},
-    body:{model:config.model,messages:[{role:'system',content:instructions},{role:'user',content:JSON.stringify(input)}],stream:false,max_tokens:purpose==='correct'?1_500:5_000,response_format:{type:'json_schema',json_schema:{name:'agent_driver_result',strict:true,schema}},...(config.provider==='openrouter'?{provider:{require_parameters:true},reasoning:{effort:config.reasoning,exclude:true}}:{})},
+    body:{model:config.model,messages:[{role:'system',content:instructions},{role:'user',content:JSON.stringify(input)}],stream:false,max_tokens:budget.max_output_tokens,response_format:{type:'json_schema',json_schema:{name:'agent_driver_result',strict:true,schema}},...(config.provider==='openrouter'?{provider:{require_parameters:true},reasoning:{effort:config.reasoning,exclude:true}}:{})},
   };
 }
 function decode(config:ApiProviderConfig,raw:unknown){
@@ -86,15 +87,15 @@ export function structuredModelFromEnvironment(environment:NodeJS.ProcessEnv=pro
   return {calls,async call(purpose,instructions,input,schema){
     const started=performance.now(),input_sha256=hashJson({instructions,input,schema}),prepared=request(config,instructions,input,schema,purpose);let accepted=false,httpStatus:number|undefined,rawUsage:unknown,failureKind:ModelCall['failure_kind']='network';
     try{
-      const response=await fetcher(endpoint(config),{method:'POST',redirect:'error',headers:{'content-type':'application/json',...prepared.headers},body:JSON.stringify(prepared.body),signal:AbortSignal.timeout(60_000)});
+      const response=await fetcher(endpoint(config),{method:'POST',redirect:'error',headers:{'content-type':'application/json',...prepared.headers},body:JSON.stringify(prepared.body),signal:AbortSignal.timeout(modelCallBudget(purpose).timeout_ms)});
       httpStatus=response.status;if(!response.ok)failureKind='http_error';requireCondition(response.ok,'MODEL_PROVIDER_HTTP_FAILURE');
       // A malformed successful response is a correction/validation problem, not
       // a transport outage. Never spend another provider's quota to hide it.
       let decoded:ReturnType<typeof decode>;
       try{decoded=decode(config,await response.json());requireCondition(decoded.value!==null&&typeof decoded.value==='object'&&!Array.isArray(decoded.value),'MODEL_PROVIDER_RESPONSE_INVALID');}
-      catch{throw Error('MODEL_PROVIDER_RESPONSE_INVALID');}
+      catch(error){if(error instanceof Error&&['TimeoutError','AbortError'].includes(error.name))throw error;throw Error('MODEL_PROVIDER_RESPONSE_INVALID');}
       rawUsage=decoded.usage;accepted=true;return decoded.value;
-    }catch(error){if(error instanceof Error&&error.message==='MODEL_PROVIDER_RESPONSE_INVALID'){failureKind='invalid_output';throw error;}throw Error('MODEL_PROVIDER_UNAVAILABLE');}
+    }catch(error){if(error instanceof Error&&error.message==='MODEL_PROVIDER_RESPONSE_INVALID'){failureKind='invalid_output';throw error;}if(error instanceof Error&&['TimeoutError','AbortError'].includes(error.name)){failureKind='timeout';throw Error(purpose==='verify'?'STRUCTURED_MODEL_TIMEOUT':'MODEL_PROVIDER_UNAVAILABLE');}throw Error('MODEL_PROVIDER_UNAVAILABLE');}
     finally{calls.push({purpose,provider:config.provider,auth:'api_key',model:config.model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',...(httpStatus===undefined?{}:{http_status:httpStatus}),...usage(rawUsage),...(accepted?{}:{failure_kind:failureKind})});}
   }};
 }

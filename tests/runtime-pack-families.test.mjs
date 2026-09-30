@@ -20,7 +20,7 @@ async function base(t,options={}){
   const rows=options.rows??[{id:'a',title:'Tokyo hotel',price:120,tags:'five star'},{id:'b',title:'Osaka inn',price:80,tags:'three star'}];
   await writeFile(data,JSON.stringify(rows));
   const config={schema_version:1,project_id:'pack-project',caller_ref:'pack-agent',account_ref:'account-a',worktree:root,data_dir:join(root,'runtime'),environment:options.environment??'production',
-    ...(options.fixture_url?{fixture_url:options.fixture_url}:{}),packs:{models:options.models??'off',confidence:.9,model_data_approved:options.models&&options.models!=='off',
+    ...(options.fixture_url?{fixture_url:options.fixture_url}:{}),...(options.browser_executors?{browser_executors:options.browser_executors}:{}),packs:{models:options.models??'off',confidence:.9,model_data_approved:options.models&&options.models!=='off',
       sources:options.sources??[{id:'records',kind:'file',path:'source.json',format:'json'}],targets:options.targets??[]}};
   await writeFile(configPath,JSON.stringify(config));
   const cleanups=[];
@@ -89,14 +89,23 @@ test('runtime fixture portal sources support bounded HTTP GET and owned-browser 
     if(url.pathname==='/api/list'){assert.equal(url.searchParams.get('month'),'09');res.writeHead(200,{'content-type':'application/json'});res.end(JSON.stringify([{id:'http-1',amount:12}]));return;}
     if(url.pathname==='/table'){res.writeHead(200,{'content-type':'text/html'});res.end('<span id=ready>Ready</span><span id=account>account-a</span><table><tbody><tr><td class=id>browser-1</td><td class=amount>24</td></tr></tbody></table>');return;}
     if(url.pathname==='/auth'){res.writeHead(200,{'content-type':'text/html'});res.end('<span class=auth>Login required</span>');return;}
+    if(url.pathname==='/dialog'){res.writeHead(200,{'content-type':'text/html'});res.end('<div role=dialog>Unexpected confirmation</div>');return;}
+    if(url.pathname==='/account'){res.writeHead(200,{'content-type':'text/html'});res.end('<span id=ready>Ready</span><span id=account>different-account</span>');return;}
+    if(url.pathname==='/ambiguous'){res.writeHead(200,{'content-type':'text/html'});res.end('<span id=ready>Ready</span><span id=account>account-a</span><table><tbody><tr><td class=id>one</td><td class=id>two</td><td class=amount>24</td></tr></tbody></table>');return;}
     res.writeHead(404);res.end();
   });server.listen(0,'127.0.0.1');await once(server,'listening');const origin=`http://127.0.0.1:${server.address().port}`;t.after(()=>{server.closeAllConnections();server.close();});
   const browser=(id,path,ready)=>({id,kind:'browser',url:`${origin}${path}`,parameters:[],rows:'tbody tr',columns:{id:'.id',amount:'.amount'},ready,auth_gate:'.auth',account_selector:'#account',account_text:'account-a'});
-  const sources=[{id:'api',kind:'http',url:`${origin}/api/list`,parameters:['month'],format:'json'},browser('table','/table','#ready'),browser('gate','/auth','#ready')];
-  const x=await base(t,{environment:'fixture',fixture_url:`${origin}/lab/account-a/`,sources}),api=x.api();
+  const sources=[{id:'api',kind:'http',url:`${origin}/api/list`,parameters:['month'],format:'json'},browser('table','/table','#ready'),browser('gate','/auth','#ready'),...['dialog','account','ambiguous'].map(id=>browser(id,`/${id}`,'#ready'))];
+  const ownedBrowser={environment:'owned_headless',preferred_engine:'playwright'};
+  const x=await base(t,{environment:'fixture',fixture_url:`${origin}/lab/account-a/`,sources,browser_executors:{targets:[{id:'fixture-owned',engine:'playwright',environment:'owned_headless',platform:process.platform,profile_ref:'fixture-owned'}]}}),api=x.api();
   const http=await api.call('runtime_pack_run',{request_id:'http-source',recipe:{...recipe('portal.collect'),sources:[{id:'api',parameters:{month:'09'}}],filters:[],deduplicate_by:['id'],format:'json'}});assert.equal(http.status,'succeeded');assert.equal(http.result.evidence[0].executor,'http_get');
-  const browserResult=await api.call('runtime_pack_run',{request_id:'browser-source',recipe:{...recipe('research.search'),sources:[{id:'table',parameters:{}}],filters:[],deduplicate_by:['id'],query:'browser',search_fields:['id'],relevance:null,sort:null,limit:5}});assert.equal(browserResult.status,'succeeded');assert.equal(browserResult.result.rows[0].id,'browser-1');assert.equal(browserResult.result.evidence[0].executor,'playwright');
-  const gated=await api.call('runtime_pack_run',{request_id:'browser-auth',recipe:{...recipe('research.search'),sources:[{id:'gate',parameters:{}}],filters:[],deduplicate_by:[],query:'',search_fields:['id'],relevance:null,sort:null,limit:5}});assert.equal(gated.status,'waiting_auth');assert.equal(gated.result.error,'PACK_WAITING_AUTH');
+  const browserResult=await api.call('runtime_pack_run',{request_id:'browser-source',recipe:{...recipe('research.search'),browser:ownedBrowser,sources:[{id:'table',parameters:{}}],filters:[],deduplicate_by:['id'],query:'browser',search_fields:['id'],relevance:null,sort:null,limit:5}});assert.equal(browserResult.status,'succeeded');assert.equal(browserResult.result.rows[0].id,'browser-1');assert.equal(browserResult.result.evidence[0].executor,'playwright');
+  const gated=await api.call('runtime_pack_run',{request_id:'browser-auth',recipe:{...recipe('research.search'),browser:ownedBrowser,sources:[{id:'gate',parameters:{}}],filters:[],deduplicate_by:[],query:'',search_fields:['id'],relevance:null,sort:null,limit:5}});assert.equal(gated.status,'waiting_auth');assert.equal(gated.result.error,'PACK_WAITING_AUTH');
+  for(const [source,error]of [['dialog','PACK_UNKNOWN_DIALOG'],['account','PACK_ACCOUNT_MISMATCH'],['ambiguous','SOURCE_FIELD_AMBIGUOUS']]){
+    const blocked=await api.call('runtime_pack_run',{request_id:`browser-${source}`,recipe:{...recipe('research.search'),browser:ownedBrowser,sources:[{id:source,parameters:{}}],filters:[],deduplicate_by:[],query:'',search_fields:['id'],relevance:null,sort:null,limit:5}});
+    assert.equal(blocked.status,'failed');assert.equal(blocked.result.error,error);assert.equal(blocked.result.checkpointed_sources,0);assert.equal(blocked.result.recovery.retryable,false);
+  }
+  assert.ok(!api.store.runtimeActivities(x.config.project.id).some(event=>event.kind==='browser.handoff'));
   const unsafe=JSON.parse(await readFile(x.configPath,'utf8'));unsafe.environment='production';delete unsafe.fixture_url;await writeFile(join(x.root,'unsafe.json'),JSON.stringify(unsafe));assert.throws(()=>loadHostConfig(join(x.root,'unsafe.json')),/PACK_URL_NOT_ALLOWED/);
 });
 

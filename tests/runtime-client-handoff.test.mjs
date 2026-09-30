@@ -44,6 +44,45 @@ test('Codex quota failure transfers one no-tools judgment to Claude saved model 
   assert.deepEqual(clientHandoffSchema.parse(durable[0]),durable[0]);
 });
 
+test('unsupported Codex subscription model is typed from stdout despite generic stderr and transfers only to a connected subscription',async()=>{
+  const events=[],calls=[],runner={async run(request){calls.push(request);
+    if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};
+    if(request.executable==='/fixture/codex')return {code:1,stdout:JSON.stringify({type:'error',message:"The 'fixture-model' model is not supported when using Codex with a ChatGPT account. private-output-must-not-leak"}),stderr:'Command failed'};
+    if(request.executable==='/fixture/claude')return {code:0,stdout:JSON.stringify({is_error:false,structured_output:{choice:'B'}}),stderr:''};
+    throw Error('UNEXPECTED_CLIENT');
+  }};
+  const model=new SubscriptionAwareStructuredModel({environment:{AGENT_DRIVER_LLM_CLIENT:'codex,claude',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude',AGENT_DRIVER_CODEX_MODEL:'fixture-model',AGENT_DRIVER_CLAUDE_MODEL:'sonnet'},runner,onHandoff:event=>events.push(event)});
+  assert.deepEqual(await model.call('correct','Choose.',{work_id:'work-model'},schema),{choice:'B'});
+  assert.equal(calls.filter(call=>call.executable==='/fixture/claude'&&call.args.includes('-p')).length,1);
+  assert.deepEqual(events.map(event=>[event.source,event.target,event.reason,event.status]),[['codex','claude','model_unsupported','transferred']]);
+  assert.equal(model.calls[0].failure_kind,'model_unsupported');
+  assert.doesNotMatch(JSON.stringify({events,calls:model.calls}),/private-output-must-not-leak/u);
+});
+
+test('unsupported selected model without a subscription successor remains an explicit safe no-candidate reason',async()=>{
+  const events=[],runner={async run(request){if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};return {code:1,stdout:JSON.stringify({error:{message:"The 'fixture-model' model is not supported when using Codex with a ChatGPT account. private-output-must-not-leak"}}),stderr:'Command failed'};}};
+  const model=new SubscriptionAwareStructuredModel({environment:{AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CODEX_MODEL:'fixture-model'},runner,onHandoff:event=>events.push(event)});
+  await assert.rejects(model.call('correct','Choose.',{work_id:'work-model'},schema),/^Error: STRUCTURED_MODEL_UNSUPPORTED$/u);
+  assert.deepEqual(events.map(event=>[event.source,event.target,event.reason,event.status]),[['codex',null,'model_unsupported','no_candidate']]);
+  assert.equal(model.calls[0].failure_kind,'model_unsupported');
+  assert.doesNotMatch(JSON.stringify({events,calls:model.calls}),/private-output-must-not-leak/u);
+});
+
+test('mixed unsupported-model and quota failures retain a generic aggregate result with an actionable no-candidate receipt',async()=>{
+  const events=[],runner={async run(request){
+    if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+    if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};
+    if(request.executable==='/fixture/codex')return {code:1,stdout:"The 'fixture-model' model is not supported when using Codex with a ChatGPT account.",stderr:'Command failed'};
+    if(request.executable==='/fixture/claude')return {code:1,stdout:'',stderr:'Weekly usage limit reached'};
+    throw Error('UNEXPECTED_CLIENT');
+  }};
+  const model=new SubscriptionAwareStructuredModel({environment:{AGENT_DRIVER_LLM_CLIENT:'codex,claude',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude',AGENT_DRIVER_CODEX_MODEL:'fixture-model',AGENT_DRIVER_CLAUDE_MODEL:'sonnet'},runner,onHandoff:event=>events.push(event)});
+  await assert.rejects(model.call('correct','Choose.',{work_id:'work-mixed'},schema),/^Error: STRUCTURED_MODEL_UNAVAILABLE$/u);
+  assert.deepEqual(events.map(event=>[event.source,event.target,event.reason,event.status]),[['claude',null,'quota_exhausted','no_candidate']]);
+  assert.deepEqual(model.calls.map(call=>call.failure_kind),['model_unsupported','quota_exhausted']);
+});
+
 test('API to subscription handoff requires an explicit saved choice and records target model',async t=>{
   const x=await fixture(t),events=[],seen=[];
   const api=()=>({calls:[],async call(){this.calls.push({provider:'openai',model:'api-model',http_status:429,status:'failed'});throw Error('MODEL_PROVIDER_UNAVAILABLE');}});

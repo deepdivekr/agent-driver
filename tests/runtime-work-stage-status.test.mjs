@@ -1,0 +1,32 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {randomUUID} from 'node:crypto';
+import {PackStore} from '../dist/packs/store.js';
+import {loadHostConfig} from '../dist/interface/config.js';
+import {WorkRuntime} from '../dist/work/runtime.js';
+import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
+import {modelWorkPlan} from '../dist/work/plan.js';
+import {stageBinding} from '../dist/work/stages.js';
+
+test('runtime contract status projection drops dependent stage reports after an upstream outcome changes',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'work-stage-status-')),path=join(root,'host.json');
+  await writeFile(path,JSON.stringify({schema_version:1,project_id:'stage-status',caller_ref:'fixture',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',work:{model_data_approved:true},swarm:{enabled:true,model_data_approved:true}}));
+  const config=loadHostConfig(path),store=new PackStore(config.dbPath);store.registerProject(config.project);
+  const model={calls:[],async call(){return {title:'Source review',desired_outcome:'Review a public source and save a comparison.',completion_checks:[{id:'comparison',result:'Saved comparison',evidence:'Observed source and saved report'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
+  const runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'stage-status-work',prompt:'Review a public source and save a comparison.'}),supervisor=new WorkSupervisor(store,config,model,{auto_start:false});
+  t.after(async()=>{await supervisor.close();store.close();await rm(root,{recursive:true,force:true});});
+  const steps=[{id:'collect',goal:'Collect the source',observable_outcome:'Source text retained',depends_on:[],effect:'read_only',tool_hints:[]},{id:'compare',goal:'Compare the source',observable_outcome:'Comparison retained',depends_on:['collect'],effect:'draft_only',tool_hints:[]}];
+  const plan=modelWorkPlan({steps},'Review a public source and save a comparison.','read_only'),spec={...store.intakeWork(config.project.id,work.work_id).spec,plan};
+  store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify(spec),work.work_id);
+  const runId=randomUUID(),at=new Date().toISOString(),stage_reports=plan.steps.map(step=>({stage_id:step.id,binding:stageBinding(step),evidence_ids:[`${step.id}-receipt`],reported_at:at}));
+  const checkpoint={format:1,work_id:work.work_id,run_id:runId,binding:'a'.repeat(64),turn:2,pending:null,observations:[],summary:'Earlier execution reports',stage_reports};
+  store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(runId,config.project.id,work.work_id,work.revision,'paused',JSON.stringify(checkpoint),config.fingerprint,0,at,at);
+  assert.deepEqual(supervisorStatus(store,config.project.id,work.work_id).stage_reports.map(report=>report.stage_id),['collect','compare']);
+  const changed={...spec,plan:{...plan,revision:2,steps:[{...plan.steps[0],observable_outcome:'A revised source set retained'},plan.steps[1]]}};
+  store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify(changed),work.work_id);
+  assert.deepEqual(supervisorStatus(store,config.project.id,work.work_id).stage_reports,[]);
+  assert.deepEqual(JSON.parse(store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(runId).checkpoint).stage_reports,stage_reports,'The status read does not erase historical checkpoint evidence');
+});

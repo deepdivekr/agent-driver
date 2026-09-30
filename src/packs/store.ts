@@ -13,6 +13,7 @@ import {type CodingPlan} from '../coding/contracts.js';
 import {type LocalGitCheckpoint} from '../coding/local-checkpoint.js';
 import {sanitizeCodingReply} from '../coding/reply-safety.js';
 import {clientHandoffSchema,makeClientHandoff,type ClientHandoff,type ClientRouteEvent} from '../integrations/client-handoff.js';
+import {assertWorkConnected,assertBoundRunConnected} from '../work/lifecycle.js';
 
 export interface PackRun {id:string;project_id:string;request_id:string;binding:string;recipe:Recipe;status:string;result:unknown;task_id:string|null;}
 export interface PackExecution {run_id:string;attempts:number;auth_waits:number;owner:string|null;lease_until_ms:number;retry_at_ms:number;checkpoint:Record<string,unknown>;}
@@ -86,6 +87,7 @@ export class PackStore extends TerminalStore {
     CREATE TABLE IF NOT EXISTS browser_auth(project_id TEXT NOT NULL,profile TEXT NOT NULL,site TEXT NOT NULL,state TEXT NOT NULL,handoff INTEGER NOT NULL DEFAULT 0,updated_at TEXT NOT NULL,PRIMARY KEY(project_id,profile,site));
     CREATE TABLE IF NOT EXISTS office_control(project_id TEXT NOT NULL,run_id TEXT NOT NULL,paused INTEGER NOT NULL DEFAULT 0,revision INTEGER NOT NULL DEFAULT 0,paused_at_ms INTEGER,updated_at TEXT NOT NULL,PRIMARY KEY(project_id,run_id));
     CREATE TABLE IF NOT EXISTS office_work(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,title TEXT NOT NULL,goal TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
+    CREATE TABLE IF NOT EXISTS office_work_lifecycle(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('disconnected','removed')),revision INTEGER NOT NULL,updated_at TEXT NOT NULL);
     CREATE INDEX IF NOT EXISTS office_work_project_updated ON office_work(project_id,updated_at);
     CREATE TABLE IF NOT EXISTS office_intake(work_id TEXT PRIMARY KEY REFERENCES office_work(id),project_id TEXT NOT NULL,request_id TEXT NOT NULL,prompt_hash TEXT NOT NULL,mode TEXT NOT NULL,status TEXT NOT NULL,revision INTEGER NOT NULL,prompt TEXT NOT NULL,spec TEXT NOT NULL,questions TEXT NOT NULL,answers TEXT NOT NULL,define_owner TEXT,define_lease_until_ms INTEGER NOT NULL DEFAULT 0,paused INTEGER NOT NULL DEFAULT 0,jev_enabled INTEGER NOT NULL DEFAULT 0,jev_cost_consent_at TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(project_id,request_id));
     CREATE INDEX IF NOT EXISTS office_intake_project_updated ON office_intake(project_id,updated_at);
@@ -139,6 +141,7 @@ export class PackStore extends TerminalStore {
   }
   browserAuthEntries(project:string,profile:string){return this.connection.prepare('SELECT site,state,handoff,updated_at FROM browser_auth WHERE project_id=? AND profile=? ORDER BY site').all(project,profile);}
   setBrowserAuth(project:string,profile:string,site:string,state:string,handoff:boolean){this.connection.prepare('INSERT INTO browser_auth VALUES (?,?,?,?,?,?) ON CONFLICT(project_id,profile,site) DO UPDATE SET state=excluded.state,handoff=excluded.handoff,updated_at=excluded.updated_at').run(project,profile,site,state,Number(handoff),new Date().toISOString());}
+  releaseBrowserHandoff(project:string,profile:string,site:string,expectedUpdatedAt:string){return this.connection.prepare('UPDATE browser_auth SET handoff=0,updated_at=? WHERE project_id=? AND profile=? AND site=? AND handoff=1 AND updated_at=?').run(new Date().toISOString(),project,profile,site,expectedUpdatedAt).changes===1;}
   claimBrowserHandoff(project:string,profile:string,site:string){this.transaction(()=>{
     const runs=this.connection.prepare('SELECT snapshot FROM swarm_run WHERE project_id=?').all(project).map(row=>JSON.parse(String(row.snapshot)) as SwarmRunSnapshot);
     requireCondition(!runs.some(run=>['running','needs_human'].includes(run.status)&&run.plan.workers.some(def=>def.source_urls.length>0&&run.workers[def.id]?.status==='leased'&&(run.workers[def.id]?.lease_expires_at_ms??0)>Date.now())),'AUTH_WAIT_FOR_ACTIVE_WORKERS');
@@ -153,7 +156,7 @@ export class PackStore extends TerminalStore {
     const binding=snapshotHash({recipe,fingerprint});
     return this.transaction(()=>{
       const old=this.connection.prepare('SELECT id,binding FROM family_run WHERE project_id=? AND request_id=?').get(project,requestId);
-      if(old){requireCondition(old.binding===binding,'PACK_REQUEST_ID_CONFLICT');if(workId)requireCondition((this.officeWork(project,'pack',String(old.id)) as {id:string}|null)?.id===workId,'WORK_RUN_BINDING_CONFLICT');return {run:this.packRun(project,String(old.id)),created:false};}
+      if(old){requireCondition(old.binding===binding,'PACK_REQUEST_ID_CONFLICT');if(workId)requireCondition((this.officeWork(project,'pack',String(old.id)) as {id:string}|null)?.id===workId,'WORK_RUN_BINDING_CONFLICT');assertBoundRunConnected(this,project,'pack',String(old.id));return {run:this.packRun(project,String(old.id)),created:false};}
       const assignedWork=this.assertWorkRunBinding(project,requestId,'pack',recipe.family,workId);
       const id=randomUUID();this.connection.prepare('INSERT INTO family_run VALUES (?,?,?,?,?,?,?,?)').run(id,project,requestId,binding,JSON.stringify(recipe),'running','null',null);
       this.registerOfficeRun(project,'pack',id,recipe.request,undefined,requestId,assignedWork??undefined);
@@ -172,7 +175,7 @@ export class PackStore extends TerminalStore {
   }
   claimPackExecution(project:string,id:string,now=Date.now()){
     return this.transaction(()=>{
-      this.packRun(project,id);this.connection.prepare('INSERT OR IGNORE INTO family_execution(run_id) VALUES (?)').run(id);
+      this.packRun(project,id);assertBoundRunConnected(this,project,'pack',id);this.connection.prepare('INSERT OR IGNORE INTO family_execution(run_id) VALUES (?)').run(id);
       const current=this.packExecution(project,id)!;
       if(current.owner!==null&&current.lease_until_ms>now)return {claimed:false as const,reason:'active_owner' as const,execution:current};
       if(current.attempts-current.auth_waits>=PACK_MAX_ATTEMPTS)return {claimed:false as const,reason:'attempts_exhausted' as const,execution:current};
@@ -186,7 +189,7 @@ export class PackStore extends TerminalStore {
     this.packRun(project,id);return this.connection.prepare('UPDATE family_execution SET lease_until_ms=? WHERE run_id=? AND owner=? AND lease_until_ms>?').run(now+PACK_LEASE_MS,id,owner,now).changes===1;
   }
   assertPackExecution(project:string,id:string,owner:string){
-    const state=this.packExecution(project,id);requireCondition(state?.owner===owner&&state.lease_until_ms>Date.now(),'PACK_EXECUTION_LEASE_LOST');
+    assertBoundRunConnected(this,project,'pack',id);const state=this.packExecution(project,id);requireCondition(state?.owner===owner&&state.lease_until_ms>Date.now(),'PACK_EXECUTION_LEASE_LOST');
   }
   checkpointPack(project:string,id:string,owner:string,checkpoint:Record<string,unknown>){
     this.transaction(()=>{this.assertPackExecution(project,id,owner);this.connection.prepare('UPDATE family_execution SET checkpoint=? WHERE run_id=?').run(JSON.stringify(checkpoint),id);});
@@ -203,7 +206,7 @@ export class PackStore extends TerminalStore {
   }
   recoverablePacks(project:string,now:number){
     return this.connection.prepare(`SELECT r.* FROM family_run r LEFT JOIN family_execution e ON r.id=e.run_id
-      WHERE r.project_id=? AND
+      WHERE r.project_id=? AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_lifecycle l ON l.project_id=o.project_id AND l.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id) AND
       ((r.status='retryable_failure' AND (e.attempts IS NULL OR e.attempts-e.auth_waits<?) AND e.retry_at_ms<=?) OR (r.status='running' AND (e.owner IS NULL OR e.lease_until_ms<=?)))
       ORDER BY r.rowid LIMIT 5`).all(project,PACK_MAX_ATTEMPTS,now,now).map(row=>({...row,recipe:JSON.parse(String(row.recipe)),result:JSON.parse(String(row.result))})) as unknown as PackRun[];
   }
@@ -222,18 +225,21 @@ export class PackStore extends TerminalStore {
     const row=this.connection.prepare('SELECT * FROM family_spec WHERE project_id=? AND prompt_hash=? AND binding=?').get(project,snapshotHash(prompt),fingerprint);return row?JSON.parse(String(row.recipe)) as Recipe:null;
   }
   scheduleWatch(runId:string,interval:number,baseline:unknown,now=Date.now()){
+    const run=this.connection.prepare('SELECT project_id FROM family_run WHERE id=?').get(runId);if(run)assertBoundRunConnected(this,String(run.project_id),'pack',runId);
     this.connection.prepare('INSERT OR IGNORE INTO family_watch(run_id,next_ms,baseline) VALUES (?,?,?)').run(runId,now+interval,JSON.stringify(baseline));
   }
   pauseWatch(project:string,id:string,paused:boolean){
-    this.packRun(project,id);const result=this.connection.prepare('UPDATE family_watch SET paused=? WHERE run_id=?').run(Number(paused),id);requireCondition(result.changes===1,'PACK_WATCH_NOT_FOUND');
+    this.packRun(project,id);assertBoundRunConnected(this,project,'pack',id);const result=this.connection.prepare('UPDATE family_watch SET paused=? WHERE run_id=?').run(Number(paused),id);requireCondition(result.changes===1,'PACK_WATCH_NOT_FOUND');
   }
-  dueWatches(project:string,now:number){return this.connection.prepare('SELECT w.run_id,w.baseline,w.cycle FROM family_watch w JOIN family_run r ON r.id=w.run_id WHERE r.project_id=? AND w.paused=0 AND w.next_ms<=? ORDER BY w.next_ms LIMIT 5').all(project,now);}
+  dueWatches(project:string,now:number){return this.connection.prepare("SELECT w.run_id,w.baseline,w.cycle FROM family_watch w JOIN family_run r ON r.id=w.run_id WHERE r.project_id=? AND w.paused=0 AND w.next_ms<=? AND NOT EXISTS (SELECT 1 FROM office_run o JOIN office_work_lifecycle l ON l.project_id=o.project_id AND l.work_id=o.work_id WHERE o.project_id=r.project_id AND o.source_kind='pack' AND o.source_id=r.id) ORDER BY w.next_ms LIMIT 5").all(project,now);}
   claimWatch(id:string,cycle:number,now:number,interval:number){
     // Claim before I/O. Crash skips one interval, never replays a write or storms missed intervals.
+    const run=this.connection.prepare('SELECT project_id FROM family_run WHERE id=?').get(id);if(run)assertBoundRunConnected(this,String(run.project_id),'pack',id);
     return this.connection.prepare('UPDATE family_watch SET next_ms=?,cycle=cycle+1 WHERE run_id=? AND cycle=? AND paused=0 AND next_ms<=?').run(now+interval,id,cycle,now).changes===1;
   }
   settleWatch(project:string,id:string,cycle:number,baseline:unknown,kind:string|null,body:unknown){
     return this.transaction(()=>{
+      assertBoundRunConnected(this,project,'pack',id);
       const row=this.connection.prepare('SELECT cycle,paused FROM family_watch WHERE run_id=?').get(id);if(row?.cycle!==cycle||row.paused!==0)return false;
       this.connection.prepare('UPDATE family_watch SET baseline=? WHERE run_id=?').run(JSON.stringify(baseline),id);
       if(kind)this.connection.prepare('INSERT INTO family_event(project_id,run_id,kind,body,created_at) VALUES (?,?,?,?,?)').run(project,id,kind,JSON.stringify(body),new Date().toISOString());return true;
@@ -276,6 +282,7 @@ export class PackStore extends TerminalStore {
     return this.connection.prepare('SELECT * FROM control_surface WHERE project_id=? ORDER BY updated_at DESC LIMIT 1000').all(project) as unknown as ManagedControlSurface[];
   }
   bindControlSurface(project:string,runId:string,workerId:string,leaseToken:string,id:string,endpoint:string){
+    assertBoundRunConnected(this,project,'swarm',runId);
     const snapshot=this.swarmRun(project,runId).snapshot as SwarmRunSnapshot,worker=snapshot.workers[workerId];
     requireCondition(['running','needs_human'].includes(snapshot.status)&&worker?.status==='leased'&&worker.lease_token===leaseToken&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
     const url=endpoint?new URL(endpoint):null;
@@ -286,6 +293,7 @@ export class PackStore extends TerminalStore {
     this.connection.prepare('UPDATE control_surface SET state=?,updated_at=? WHERE project_id=? AND run_id=? AND worker_id=?').run(state,new Date().toISOString(),project,runId,workerId);
   }
   recordObservedUrl(project:string,runId:string,workerId:string,leaseToken:string,url:string){
+    assertBoundRunConnected(this,project,'swarm',runId);
     const snapshot=this.swarmRun(project,runId).snapshot as SwarmRunSnapshot,worker=snapshot.workers[workerId];
     requireCondition(['running','needs_human'].includes(snapshot.status)&&worker?.status==='leased'&&worker.lease_token===leaseToken&&(worker.lease_expires_at_ms??0)>Date.now(),'STALE_SWARM_LEASE');
     const parsed=new URL(url);requireCondition(['http:','https:'].includes(parsed.protocol)&&!parsed.username&&!parsed.password&&url.length<=4096,'CONTROL_OBSERVED_URL_INVALID');
@@ -305,7 +313,7 @@ export class PackStore extends TerminalStore {
     const binding=snapshotHash({plan:snapshot.plan,fingerprint});
     return this.transaction(()=>{
       const old=this.connection.prepare('SELECT id,binding,snapshot FROM swarm_run WHERE project_id=? AND request_id=?').get(project,requestId);
-      if(old){requireCondition(old.binding===binding,'SWARM_REQUEST_ID_CONFLICT');if(workId)requireCondition((this.officeWork(project,'swarm',String(old.id)) as {id:string}|null)?.id===workId,'WORK_RUN_BINDING_CONFLICT');return {snapshot:JSON.parse(String(old.snapshot)) as unknown,binding:String(old.binding)};}
+      if(old){requireCondition(old.binding===binding,'SWARM_REQUEST_ID_CONFLICT');if(workId)requireCondition((this.officeWork(project,'swarm',String(old.id)) as {id:string}|null)?.id===workId,'WORK_RUN_BINDING_CONFLICT');assertBoundRunConnected(this,project,'swarm',String(old.id));return {snapshot:JSON.parse(String(old.snapshot)) as unknown,binding:String(old.binding)};}
       const assignedWork=this.assertWorkRunBinding(project,requestId,'swarm',undefined,workId);
       this.connection.prepare('INSERT INTO swarm_run VALUES (?,?,?,?,?,?,?,?,?)').run(snapshot.run_id,project,requestId,binding,planId,snapshot.revision,JSON.stringify(snapshot),snapshot.created_at,snapshot.updated_at);
       this.registerOfficeRun(project,'swarm',snapshot.run_id,snapshot.plan.goal,snapshot.created_at,requestId,assignedWork??undefined);
@@ -331,6 +339,7 @@ export class PackStore extends TerminalStore {
       const previous=this.connection.prepare('SELECT work_id,prompt_hash,mode FROM office_intake WHERE project_id=? AND request_id=?').get(project,requestId);
       if(previous){
         requireCondition(String(previous.prompt_hash)===hash&&String(previous.mode)===mode,'WORK_REQUEST_ID_CONFLICT');
+        assertWorkConnected(this,project,String(previous.work_id));
         return {work:this.intakeWork(project,String(previous.work_id)),created:false};
       }
       const id=randomUUID(),at=new Date().toISOString();
@@ -347,7 +356,7 @@ export class PackStore extends TerminalStore {
   }
   intakeWorks(project:string,limit=100):IntakeWork[]{
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=200,'WORK_LIMIT_INVALID');
-    const ids=this.connection.prepare('SELECT work_id FROM office_intake WHERE project_id=? ORDER BY updated_at DESC LIMIT ?').all(project,limit);
+    const ids=this.connection.prepare("SELECT i.work_id FROM office_intake i WHERE i.project_id=? AND NOT EXISTS (SELECT 1 FROM office_work_lifecycle l WHERE l.project_id=i.project_id AND l.work_id=i.work_id AND l.state='removed') ORDER BY i.updated_at DESC LIMIT ?").all(project,limit);
     return ids.map(row=>this.intakeWork(project,String(row.work_id)));
   }
   createWorkImport(project:string,kind:'pasted'|'project',body:unknown,sourceDigest:string):WorkImportRecord{
@@ -409,7 +418,7 @@ export class PackStore extends TerminalStore {
   acceptWorkImport(project:string,importId:string,prompt:string,spec:unknown,jevEnabled=false,costAcknowledged=false,approvalHash?:string,initialPaused=false):IntakeWork{
     return this.transaction(()=>{
       const record=this.workImport(project,importId);
-      if(record.accepted_work_id){if(approvalHash)requireCondition(this.importAcceptanceHash(project,importId)===approvalHash,'WORK_IMPORT_APPROVAL_CONFLICT');return this.intakeWork(project,record.accepted_work_id);}
+      if(record.accepted_work_id){if(approvalHash)requireCondition(this.importAcceptanceHash(project,importId)===approvalHash,'WORK_IMPORT_APPROVAL_CONFLICT');assertWorkConnected(this,project,record.accepted_work_id);return this.intakeWork(project,record.accepted_work_id);}
       requireCondition(record.status==='draft','WORK_IMPORT_NOT_DRAFT');
       if(jevEnabled)requireCondition(costAcknowledged,'JEV_API_COST_CONSENT_REQUIRED');
       requireCondition(prompt.trim().length>0&&prompt.length<=8000&&!/[\r\n]/u.test(prompt),'WORK_IMPORT_PROMPT_INVALID');
@@ -425,12 +434,14 @@ export class PackStore extends TerminalStore {
     });
   }
   claimWorkDefinition(project:string,id:string,now=Date.now()){
+    assertWorkConnected(this,project,id);
     const owner=randomUUID(),until=now+90_000;
     const result=this.connection.prepare("UPDATE office_intake SET define_owner=?,define_lease_until_ms=? WHERE project_id=? AND work_id=? AND status IN ('defining','needs_model') AND (define_owner IS NULL OR define_lease_until_ms<=?)").run(owner,until,project,id,now);
     return result.changes===1?owner:null;
   }
   finishWorkDefinition(project:string,id:string,owner:string,spec:unknown,questions:unknown[],status:'ready'|'awaiting_details'){
     return this.transaction(()=>{
+      assertWorkConnected(this,project,id);
       const current=this.intakeWork(project,id),at=new Date().toISOString();
       const changed=this.connection.prepare('UPDATE office_intake SET status=?,revision=revision+1,spec=?,questions=?,define_owner=NULL,define_lease_until_ms=0,updated_at=? WHERE project_id=? AND work_id=? AND define_owner=? AND define_lease_until_ms>?').run(status,JSON.stringify(spec),JSON.stringify(questions),at,project,id,owner,Date.now());
       requireCondition(changed.changes===1,'WORK_DEFINITION_LEASE_LOST');
@@ -447,6 +458,7 @@ export class PackStore extends TerminalStore {
   }
   answerWork(project:string,id:string,expected:number,answers:Record<string,string>){
     return this.transaction(()=>{
+      assertWorkConnected(this,project,id);
       const work=this.intakeWork(project,id);requireCondition(work.revision===expected,'WORK_REVISION_CONFLICT');
       requireCondition(work.status==='awaiting_details','WORK_NOT_AWAITING_DETAILS');
       const questions=work.questions as Array<{id:string;required:boolean;options:Array<{id:string}>}>;
@@ -507,10 +519,11 @@ export class PackStore extends TerminalStore {
   }
   setIntakePaused(project:string,id:string,expectedRevision:number,paused:boolean){
     return this.transaction(()=>{
+      assertWorkConnected(this,project,id);
       const work=this.intakeWork(project,id);
       requireCondition(work.revision===expectedRevision,'WORK_REVISION_CONFLICT');
       requireCondition(work.paused!==paused,'WORK_PAUSE_STATE_UNCHANGED');
-      requireCondition(['ready','running','needs_model'].includes(work.status),'WORK_NOT_PAUSABLE');
+      requireCondition(['defining','ready','running','needs_model'].includes(work.status),'WORK_NOT_PAUSABLE');
       const latest=this.officeRuns(project,id)[0];
       if(latest?.source_kind==='swarm')requireCondition(!['running','needs_human'].includes((this.swarmRun(project,latest.source_id).snapshot as SwarmRunSnapshot).status),'WORK_ACTIVE_RUN_USE_STEP_CONTROL');
       if(latest?.source_kind==='pack')requireCondition(!['running','retryable_failure','waiting_auth','waiting_approval','approved','reconciliation_required'].includes(this.packRun(project,latest.source_id).status),'WORK_ACTIVE_PACK_NOT_PAUSABLE');
@@ -524,6 +537,7 @@ export class PackStore extends TerminalStore {
   }
   setWorkJev(project:string,id:string,expectedRevision:number,enabled:boolean,costAcknowledged:boolean){
     return this.transaction(()=>{
+      assertWorkConnected(this,project,id);
       const work=this.intakeWork(project,id);
       requireCondition(work.revision===expectedRevision,'WORK_REVISION_CONFLICT');
       requireCondition(work.jev_enabled!==enabled,'WORK_JEV_STATE_UNCHANGED');
@@ -546,7 +560,7 @@ export class PackStore extends TerminalStore {
       LEFT JOIN swarm_run sr ON r.source_kind='swarm' AND sr.id=r.source_id AND sr.project_id=w.project_id
       LEFT JOIN coding_run cr ON r.source_kind='coding' AND cr.id=r.source_id AND cr.project_id=w.project_id
       LEFT JOIN coding_dialog cd ON r.source_kind='coding_dialog' AND cd.id=r.source_id AND cd.project_id=w.project_id
-      WHERE w.project_id=? ORDER BY COALESCE(r.created_at,w.updated_at) DESC,w.id DESC LIMIT ?`).all(project,limit) as Array<{id:string;title:string;goal:string;created_at:string;updated_at:string;mode:string|null;intake_status:string|null;pack_family:string|null;intake_revision:number|null;paused:number|null;source_kind:string|null;source_id:string|null;pack_status:string|null;swarm_status:string|null;coding_status:string|null;run_revision:number|null;display_updated_at:string}>;
+      WHERE w.project_id=? AND NOT EXISTS (SELECT 1 FROM office_work_lifecycle l WHERE l.project_id=w.project_id AND l.work_id=w.id AND l.state='removed') ORDER BY COALESCE(r.created_at,w.updated_at) DESC,w.id DESC LIMIT ?`).all(project,limit) as Array<{id:string;title:string;goal:string;created_at:string;updated_at:string;mode:string|null;intake_status:string|null;intake_revision:number|null;pack_family:string|null;paused:number|null;source_kind:string|null;source_id:string|null;pack_status:string|null;swarm_status:string|null;coding_status:string|null;run_revision:number|null;display_updated_at:string}>;
   }
   intakeWorkOptional(project:string,id:string):IntakeWork|null{
     const row=this.connection.prepare('SELECT work_id FROM office_intake WHERE project_id=? AND work_id=?').get(project,id);
@@ -558,6 +572,7 @@ export class PackStore extends TerminalStore {
     const row=workId?this.intakeWork(project,workId):byRequest;
     if(!row)return null;
     const work='work_id' in row?this.intakeWork(project,String(row.work_id)):row as IntakeWork;
+    assertWorkConnected(this,project,work.id);
     requireCondition(['ready','running'].includes(work.status),'WORK_NOT_READY');
     requireCondition(!work.paused,'WORK_PAUSED');
     const spec=work.spec as {route?:{kind?:string;pack_family?:string|null}}|null;
@@ -570,6 +585,7 @@ export class PackStore extends TerminalStore {
     const previous=kind==='swarm'?this.connection.prepare(`SELECT o.work_id FROM office_run o JOIN swarm_run current ON current.id=? AND current.project_id=o.project_id JOIN swarm_run prior ON prior.id=o.source_id AND prior.project_id=o.project_id WHERE o.project_id=? AND o.source_kind='swarm' AND prior.plan_id=current.plan_id ORDER BY o.created_at,o.source_id LIMIT 1`).get(runId,project):null;
     const intakeId=workId??(requestId?this.connection.prepare('SELECT work_id FROM office_intake WHERE project_id=? AND request_id=?').get(project,requestId)?.work_id as string|undefined:undefined);
     const assignedId=intakeId??(previous?.work_id?String(previous.work_id):`${kind}:${runId}`);
+    if(intakeId||previous?.work_id)assertWorkConnected(this,project,assignedId);
     this.connection.prepare('INSERT OR IGNORE INTO office_work VALUES (?,?,?,?,?,?)').run(assignedId,project,kind==='swarm'?'Swarm 업무':kind==='coding'||kind==='coding_dialog'?'코딩 업무':'Task Pack 업무',goal,at,at);
     this.connection.prepare('INSERT OR IGNORE INTO office_run VALUES (?,?,?,?,?)').run(project,assignedId,kind,runId,at);
     if(intakeId)this.connection.prepare("UPDATE office_intake SET status='running',updated_at=? WHERE work_id=? AND project_id=?").run(at,assignedId,project);
@@ -630,7 +646,7 @@ export class PackStore extends TerminalStore {
     const binding=snapshotHash({workId,projectRef,root,fingerprint,model,sessionId,goal});
     return this.transaction(()=>{
       const old=this.connection.prepare('SELECT id FROM coding_dialog WHERE project_id=? AND request_id=?').get(project,requestId);
-      if(old){const dialog=this.codingDialog(project,String(old.id));requireCondition(dialog.request_binding===binding,'CODING_DIALOG_REQUEST_ID_CONFLICT');return {dialog,created:false};}
+      if(old){const dialog=this.codingDialog(project,String(old.id));requireCondition(dialog.request_binding===binding,'CODING_DIALOG_REQUEST_ID_CONFLICT');assertWorkConnected(this,project,dialog.work_id);return {dialog,created:false};}
       this.assertWorkRunBinding(project,requestId,'coding','coding.orchestrate',workId);
       requireCondition(!this.officeRuns(project,workId).some(item=>item.source_kind==='coding'||item.source_kind==='coding_dialog'),'CODING_DIALOG_WORK_ALREADY_STARTED');
       if(sessionId)requireCondition(!this.connection.prepare("SELECT 1 FROM coding_dialog WHERE session_id=? AND status<>'stopped'").get(sessionId),'CODING_DIALOG_SESSION_ALREADY_ATTACHED');
@@ -661,6 +677,7 @@ export class PackStore extends TerminalStore {
     const instructionSha256=sha256Text(instruction);
     return this.transaction(()=>{
       const dialog=this.codingDialog(project,id);
+      assertWorkConnected(this,project,dialog.work_id);
       const old=this.connection.prepare('SELECT id,instruction_sha256 FROM coding_dialog_turn WHERE dialog_id=? AND request_id=?').get(id,requestId);
       if(old){requireCondition(String(old.instruction_sha256)===instructionSha256,'CODING_DIALOG_TURN_REQUEST_ID_CONFLICT');return {dialog,turn:this.codingDialogTurn(project,id,String(old.id)),created:false};}
       requireCondition(dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
@@ -681,6 +698,7 @@ export class PackStore extends TerminalStore {
   claimCodingDialogTurn(project:string,id:string,expectedRevision:number):{dialog:CodingDialog;turn:CodingDialogTurn;owner:string}{
     return this.transaction(()=>{
       const dialog=this.codingDialog(project,id);
+      assertWorkConnected(this,project,dialog.work_id);
       requireCondition(dialog.revision===expectedRevision,'CODING_DIALOG_REVISION_CONFLICT');
       requireCondition(dialog.status==='queued'&&dialog.active_turn_id,'CODING_DIALOG_NOT_QUEUED');
       requireCondition(!this.intakeWork(project,dialog.work_id).paused,'WORK_PAUSED');
@@ -855,7 +873,7 @@ export class PackStore extends TerminalStore {
   beginCoding(project:string,requestId:string,workId:string,projectRef:string,root:string,fingerprint:string,plan:CodingPlan,git:LocalGitCheckpoint){
     return this.transaction(()=>{
       const old=this.connection.prepare('SELECT id FROM coding_run WHERE project_id=? AND request_id=?').get(project,requestId);
-      if(old){const run=this.codingRun(project,String(old.id));requireCondition(run.work_id===workId&&run.project_ref===projectRef&&run.project_root===root,'CODING_REQUEST_ID_CONFLICT');return {run,created:false};}
+      if(old){const run=this.codingRun(project,String(old.id));requireCondition(run.work_id===workId&&run.project_ref===projectRef&&run.project_root===root,'CODING_REQUEST_ID_CONFLICT');assertWorkConnected(this,project,run.work_id);return {run,created:false};}
       this.assertWorkRunBinding(project,requestId,'coding','coding.orchestrate',workId);
       const id=randomUUID(),at=new Date().toISOString();
       this.connection.prepare('INSERT INTO coding_run VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,requestId,workId,projectRef,root,fingerprint,JSON.stringify(plan),'ready',0,0,at,at);
@@ -867,7 +885,7 @@ export class PackStore extends TerminalStore {
   }
   claimCodingStage(project:string,id:string,expectedRevision:number){
     return this.transaction(()=>{
-      const run=this.codingRun(project,id);requireCondition(run.revision===expectedRevision,'CODING_REVISION_CONFLICT');
+      const run=this.codingRun(project,id);assertWorkConnected(this,project,run.work_id);requireCondition(run.revision===expectedRevision,'CODING_REVISION_CONFLICT');
       requireCondition(!run.paused,'CODING_RUN_PAUSED');requireCondition(['ready','running'].includes(run.status),'CODING_RUN_NOT_EXECUTABLE');
       const stages=this.codingStages(project,id);requireCondition(!stages.some(stage=>stage.status==='running'),'CODING_STAGE_UNCERTAIN');
       const next=stages.find(stage=>stage.status==='pending');requireCondition(next,'CODING_NO_PENDING_STAGE');
@@ -951,6 +969,7 @@ export class PackStore extends TerminalStore {
   }
   officeInstructionVersion(project:string,runId:string,workerId:string){return Number(this.connection.prepare('SELECT COALESCE(MAX(version),0) AS version FROM office_step_instruction WHERE project_id=? AND run_id=? AND worker_id=?').get(project,runId,workerId)?.version??0);}
   officeAction(project:string,runId:string,action:'pause'|'resume'|'edit',expectedRevision:number,workerId?:string,instruction?:string){
+    assertBoundRunConnected(this,project,'swarm',runId);
     requireCondition(Number.isSafeInteger(expectedRevision)&&expectedRevision>=0,'OFFICE_REVISION_INVALID');
     return this.transaction(()=>{
       const row=this.connection.prepare('SELECT revision,paused,paused_at_ms FROM office_control WHERE project_id=? AND run_id=?').get(project,runId);
@@ -1021,10 +1040,12 @@ export class PackStore extends TerminalStore {
     return rows.map(row=>({...row,id:Number(row.id),revision:Number(row.revision),worker_id:row.worker_id===null?null:String(row.worker_id),body:JSON.parse(String(row.body))})) as unknown as SwarmActivity[];
   }
   recordSwarmActivity(project:string,runId:string,revision:number,workerId:string,kind:string,body:unknown,createdAt=new Date().toISOString()){
+    assertBoundRunConnected(this,project,'swarm',runId);
     const result=this.connection.prepare('INSERT INTO swarm_activity(project_id,run_id,revision,worker_id,kind,body,created_at) SELECT ?,?,?,?,?,?,? WHERE EXISTS(SELECT 1 FROM swarm_run WHERE project_id=? AND id=? AND revision=?)').run(project,runId,revision,workerId,kind,JSON.stringify(body),createdAt,project,runId,revision);
     requireCondition(result.changes===1,'SWARM_REVISION_CONFLICT');return Number(result.lastInsertRowid);
   }
   updateSwarmRun(project:string,id:string,expectedRevision:number,snapshot:SwarmRunSnapshot,authProfile?:string|null){
+    assertBoundRunConnected(this,project,'swarm',id);
     requireCondition(snapshot.revision===expectedRevision+1,'SWARM_REVISION_INVALID');
     this.transaction(()=>{
       const previousRow=this.connection.prepare('SELECT snapshot FROM swarm_run WHERE project_id=? AND id=? AND revision=?').get(project,id,expectedRevision);requireCondition(previousRow,'SWARM_REVISION_CONFLICT');

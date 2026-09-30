@@ -2,7 +2,7 @@
 
 **A local MCP server that helps AI agents run work on your computer and resume after interruptions.**
 
-**English** · [한국어](README.ko.md) · [v0.3.1 release notes](docs/releases/v0.3.1.md)
+**English** · [한국어](README.ko.md) · [v0.4.0 release notes](docs/releases/v0.4.0.md)
 
 Connect it to Codex, Claude Code, Cursor, OpenCode, Hermes, or another MCP client.
 Install and run it as `agent-office`. The old `agent-driver` command remains a compatibility alias.
@@ -26,12 +26,12 @@ Install and run it as `agent-office`. The old `agent-driver` command remains a c
 
 </details>
 
-Current interface in English and dark mode, with isolated sample work.
+v0.3.1 interface in English and dark mode, with isolated sample work.
 These screenshots show setup and queued work, not completed live-agent runs.
 
 ## Supported environments
 
-See [Work operation](docs/work-operation.md) for the development execution loop and [verification](docs/verification/phase-102-work-operation.md) for actual acceptance results. A locally applied development build is separate from the public v0.3.1 installer below.
+See [Work operation](docs/work-operation.md) for the execution loop and [release verification](docs/release-readiness-v0.4.0.md) for tested scope and remaining limits.
 
 | Environment | Status |
 |---|---|
@@ -52,7 +52,7 @@ Ask your agent:
 Or run this from **Ubuntu or WSL Ubuntu**, in any directory:
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-office/v0.3.1/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-office/v0.4.0/install.sh | bash'
 ```
 
 You can [review the installer](install.sh) first.
@@ -61,10 +61,13 @@ Missing system libraries produce setup instructions; the installer does not run 
 
 ### Connect in the Control Center
 
+Connect your tools once, then submit a Work from the board. See [From request to result](#from-request-to-result).
+
 1. **Clients** — check installation and login, then register MCP.
 2. **Execution** — use the default browser or connect an optional executor.
 3. **AI** — choose a subscription CLI or API. Compatible local models are also supported.
-4. **First Work** — enter a request, open its detail, and click **Run**.
+4. **Delivery (optional)** — save Telegram, Slack or Discord destinations. Results always remain available in the app.
+5. **First Work** — enter instructions, a completion condition and result destinations. Leave the condition blank for AI to derive it. The detail opens immediately; guided mode asks for your choices first.
 
 Jev is optional. Without it, the LLM and code handle decisions.
 Website login is requested when a task needs it.
@@ -95,15 +98,16 @@ A **Work** holds your request, completion checks, progress, and run history.
 
 ### From request to result
 
-This flow describes the current source checkout. The installer above remains pinned to the published v0.3.1.
+The detail page groups source visits and tool activity under outcome-based work stages. A finished tool call is not a verified result.
 
-1. **Register** a request. Review the proposed goal and completion checks; registration alone does not run it.
-2. **Run** from the Work detail after confirming model usage.
-3. **Follow** actual execution events in the live log, including any wait or handoff reason.
-4. **Pause, edit, and resume** from the same page. New instructions update the next steps; saved output and evidence remain available.
-5. **Read the result** in the app, with sources and downloads for recorded output files. A saved result is not marked complete until its completion checks pass.
+1. **Start work** with one request. The detail opens immediately while AI defines the work and starts its current run using your configured AI allowance.
+2. **Follow** the readable execution timeline: the chosen Pack, observed sources, actual workers, and any wait or handoff reason.
+3. **Adjust** a stage by clicking it. Its dialog offers pause, new instructions, and resume at the supported execution boundary.
+4. **Read the result** in the app, with sources and downloads. A saved result is not marked complete until its completion checks pass.
 
-New Work returns results in the app by default. A messenger or email connection is not required.
+Missing connections or required choices appear in the detail. Future schedules, external changes, and original-runtime controls keep their own approval boundaries. MCP registration and importing an existing bot do not start a duplicate run.
+
+New Work returns results in the app by default. Select multiple saved messenger destinations to receive verified output there too. Click the final delivery stage to change unsent output and future deliveries. [Delivery setup and limits](docs/work-delivery.md)
 
 The nine built-in **Pack families** provide reusable workflow patterns.
 
@@ -151,7 +155,7 @@ Installations with private workflow code need a [compatibility review](docs/loca
 - Queued Work does not allocate a VM per task. Active browsers and model CLIs consume additional resources.
 - Keep local connection tokens, API keys, and private workflow data out of shared files.
 
-[Release validation](docs/release-readiness-v0.3.1.md) · [AI settings](docs/control-settings.md) · [Browser routing](docs/browser-executor-routing.md) · [Memory and process lifecycle](docs/mcp-resource-lifecycle.md)
+[Release validation](docs/release-readiness-v0.4.0.md) · [AI settings](docs/control-settings.md) · [Browser routing](docs/browser-executor-routing.md) · [Memory and process lifecycle](docs/mcp-resource-lifecycle.md)
 
 ## Development and license
 

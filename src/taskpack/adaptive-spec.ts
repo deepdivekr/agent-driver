@@ -18,11 +18,16 @@ export const adaptiveSpecSchema=z.object({
 }).strict();
 export type AdaptiveSpec=z.infer<typeof adaptiveSpecSchema>;
 export interface AdaptiveTask {request:string;start_url:string;allowed_origins:string[];}
-export interface ModelCall {purpose:'design'|'repair'|'correct';provider?:string;auth?:'client_subscription'|'subscription'|'api_key'|'unknown';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;input_tokens:number|'unobserved';output_tokens:number|'unobserved';total_tokens:number|'unobserved';failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode'|'auth_error'|'quota_exhausted'|'rate_limited'|'provider_unavailable';}
+export interface ModelCall {purpose:'design'|'repair'|'correct'|'verify';provider?:string;auth?:'client_subscription'|'subscription'|'api_key'|'unknown';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;input_tokens:number|'unobserved';output_tokens:number|'unobserved';total_tokens:number|'unobserved';continuity?:'new_session'|'resumed_session'|'checkpoint_only';session_turn?:number;failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode'|'auth_error'|'quota_exhausted'|'rate_limited'|'model_unsupported'|'provider_unavailable';}
+export type ModelRole='planner'|'worker'|'verifier'|'synthesis';
 export interface StructuredModel {
+  forRole?(role:ModelRole):StructuredModel;
   call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>):Promise<unknown>;
   calls:ModelCall[];
 }
+export const modelForRole=(model:StructuredModel,role:ModelRole)=>model.forRole?.(role)??model;
+/** Verification may inspect many bounded receipts; ordinary corrections stay cheap. */
+export const modelCallBudget=(purpose:ModelCall['purpose'])=>({timeout_ms:purpose==='verify'?180_000:60_000,max_output_tokens:purpose==='verify'?12_000:purpose==='correct'?1_500:5_000});
 export function hashJson(value:unknown){return createHash('sha256').update(canonicalJson(value)).digest('hex');}
 export function validateAdaptiveTask(task:AdaptiveTask){
   requireCondition(task.request.length>0&&task.request.length<=8000&&!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(task.request),'INVALID_ADAPTIVE_REQUEST');
@@ -72,8 +77,9 @@ export function adaptiveLlmFromHostEnvironment(environment:NodeJS.ProcessEnv=pro
   return {calls,async call(purpose,instructions,input,schema){
     const started=performance.now(),inputHash=hashJson({instructions,input,schema});let accepted=false,httpStatus:number|undefined,failureKind:ModelCall['failure_kind']='network',usage:{input_tokens?:number;output_tokens?:number;total_tokens?:number}={};
     try {
-      const response=await fetcher('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},signal:AbortSignal.timeout(60000),body:JSON.stringify({
-        model,reasoning:{effort:reasoning},store:false,stream:false,tools:[],max_output_tokens:purpose==='correct'?1500:5000,
+      const budget=modelCallBudget(purpose);
+      const response=await fetcher('https://api.openai.com/v1/responses',{method:'POST',headers:{Authorization:`Bearer ${key}`,'Content-Type':'application/json'},signal:AbortSignal.timeout(budget.timeout_ms),body:JSON.stringify({
+        model,reasoning:{effort:reasoning},store:false,stream:false,tools:[],max_output_tokens:budget.max_output_tokens,
         instructions,input:JSON.stringify(input),text:{format:{type:'json_schema',name:'adaptive_browser_spec',strict:true,schema}},
       })});
       httpStatus=response.status;failureKind='http_error';
@@ -87,7 +93,7 @@ export function adaptiveLlmFromHostEnvironment(environment:NodeJS.ProcessEnv=pro
       if(messages.some(item=>item.type==='refusal'))failureKind='refusal';
       requireCondition(messages.length>0&&messages.every(item=>item.type==='output_text'&&typeof item.text==='string'),'ADAPTIVE_LLM_INVALID_OUTPUT');
       failureKind='json_decode';const decoded=JSON.parse(messages.map(item=>item.text).join(''));accepted=true;return decoded;
-    } catch(error) {if(error instanceof Error&&['TimeoutError','AbortError'].includes(error.name))failureKind='timeout';throw Error('ADAPTIVE_LLM_UNAVAILABLE');}
+    } catch(error) {if(error instanceof Error&&['TimeoutError','AbortError'].includes(error.name)){failureKind='timeout';throw Error(purpose==='verify'?'STRUCTURED_MODEL_TIMEOUT':'ADAPTIVE_LLM_UNAVAILABLE');}throw Error('ADAPTIVE_LLM_UNAVAILABLE');}
     finally {calls.push({purpose,provider:'openai_api',auth:'api_key',model,elapsed_ms:Math.round(performance.now()-started),input_sha256:inputHash,status:accepted?'accepted':'failed',...(httpStatus===undefined?{}:{http_status:httpStatus}),input_tokens:typeof usage.input_tokens==='number'&&Number.isFinite(usage.input_tokens)?usage.input_tokens:'unobserved',output_tokens:typeof usage.output_tokens==='number'&&Number.isFinite(usage.output_tokens)?usage.output_tokens:'unobserved',total_tokens:typeof usage.total_tokens==='number'&&Number.isFinite(usage.total_tokens)?usage.total_tokens:'unobserved',...(accepted?{}:{failure_kind:failureKind})});}
   }};
 }

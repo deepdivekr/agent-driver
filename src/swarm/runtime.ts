@@ -12,6 +12,7 @@ import {ARTIFACT_QUALITY_WEIGHTS,SWARM_DECISION_CATALOG,artifactQualityRequest,d
 import {swarmPlanSchema,swarmWorkerReportSchema,type SwarmResearchMode,type SwarmReviewItem,type SwarmRunSnapshot} from './contracts.js';
 import {type SwarmLlmDecisionFallback,type SwarmPlanner} from './planner.js';
 import {SwarmDecisionLearning,type SwarmLearningMode} from './learning.js';
+import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 
 export interface SwarmRuntimeProviders {planner?:SwarmPlanner;llm_fallback?:SwarmLlmDecisionFallback;decision?:DecisionProvider;learning?:SwarmLearningMode;}
 type StoredRun={snapshot:SwarmRunSnapshot;binding:string};
@@ -22,8 +23,9 @@ const safe=(error:unknown)=>error instanceof Error&&/^[A-Z][A-Z0-9_]+$/u.test(er
 const retryableWorkerErrors=new Set(['CLIENT_TIMEOUT','CLIENT_MODEL_UNAVAILABLE','STRUCTURED_MODEL_UNAVAILABLE','SOURCE_WORKER_DEADLINE','SWARM_BROWSER_TIMEOUT','SWARM_BROWSER_DISCONNECTED','UNOBSERVED_EVIDENCE_SPAN','DERIVED_EVIDENCE_REFERENCE_INVALID']);
 
 export class SwarmRuntime{
-  private readonly runLocks=new Map<string,Promise<void>>();
-  constructor(readonly store:PackStore,readonly config:HostConfig,readonly providers:SwarmRuntimeProviders={}){}
+  constructor(readonly store:PackStore,readonly config:HostConfig,readonly providers:SwarmRuntimeProviders={},private readonly runLocks=new Map<string,Promise<void>>()){}
+  /** Per-Work providers share the original runtime's report/control locks. */
+  withProviders(providers:Pick<SwarmRuntimeProviders,'planner'|'llm_fallback'>){return new SwarmRuntime(this.store,this.config,{...this.providers,...providers},this.runLocks);}
   private async serial<T>(runId:string,operation:()=>Promise<T>):Promise<T>{
     const previous=this.runLocks.get(runId)??Promise.resolve();let unlock!:()=>void;
     const current=new Promise<void>(resolve=>{unlock=resolve;});this.runLocks.set(runId,current);
@@ -134,12 +136,18 @@ export class SwarmRuntime{
     if(Object.values(snapshot.workers).some(worker=>worker.status==='skipped_deadline'))this.deadlineReview(snapshot,'New evidence acquisition stopped to preserve the synthesis reserve.');
     return false;
   }
+  private authBlocked(snapshot:SwarmRunSnapshot,definition:SwarmRunSnapshot['plan']['workers'][number]){
+    const office=this.store.officeWork(this.config.project.id,'swarm',snapshot.run_id) as {id:string}|null;
+    const work=office?this.store.intakeWorkOptional(this.config.project.id,office.id):null;
+    const preference=browserPreferenceSchema.optional().parse((work?.spec as {browser?:unknown}|null)?.browser)??definition.browser;
+    return blockedAuthSites(this.store,this.config,definition.source_urls,preference);
+  }
   private ready(snapshot:SwarmRunSnapshot){
     const definitions=new Map(snapshot.plan.workers.map(worker=>[worker.id,worker]));
-    return Object.values(snapshot.workers).filter(worker=>worker.status==='pending'&&!blockedAuthSites(this.store,this.config,definitions.get(worker.id)!.source_urls).length&&definitions.get(worker.id)!.depends_on.every(id=>['succeeded','skipped_deadline'].includes(snapshot.workers[id]?.status??'')));
+    return Object.values(snapshot.workers).filter(worker=>worker.status==='pending'&&!this.authBlocked(snapshot,definitions.get(worker.id)!).length&&definitions.get(worker.id)!.depends_on.every(id=>['succeeded','skipped_deadline'].includes(snapshot.workers[id]?.status??'')));
   }
   deferForAuth(runId:string,workerId:string,leaseToken:string){
-    return this.serial(runId,async()=>{this.fresh();const snapshot=(this.store.swarmRun(this.config.project.id,runId) as StoredRun).snapshot,worker=snapshot.workers[workerId];requireCondition(snapshot.status==='running'&&worker?.status==='leased'&&worker.lease_token===leaseToken,'STALE_SWARM_LEASE');worker.status='pending';worker.lease_token=null;worker.lease_expires_at_ms=null;this.persist(snapshot,snapshot.revision);return {status:'waiting_for_auth',run_id:runId,worker_id:workerId,source_auth:blockedAuthSites(this.store,this.config,snapshot.plan.workers.find(item=>item.id===workerId)!.source_urls),next_action:'open_control_center_connections_then_runtime_swarm_tick'};});
+    return this.serial(runId,async()=>{this.fresh();const snapshot=(this.store.swarmRun(this.config.project.id,runId) as StoredRun).snapshot,worker=snapshot.workers[workerId];requireCondition(snapshot.status==='running'&&worker?.status==='leased'&&worker.lease_token===leaseToken,'STALE_SWARM_LEASE');worker.status='pending';worker.lease_token=null;worker.lease_expires_at_ms=null;this.persist(snapshot,snapshot.revision);return {status:'waiting_for_auth',run_id:runId,worker_id:workerId,source_auth:this.authBlocked(snapshot,snapshot.plan.workers.find(item=>item.id===workerId)!),next_action:'open_control_center_connections_then_runtime_swarm_tick'};});
   }
   /** An owned read actor stopped cooperatively. Fence its token, retain evidence, and requeue it. */
   releaseReadLease(runId:string,workerId:string,leaseToken:string,reason:string){
@@ -176,7 +184,7 @@ export class SwarmRuntime{
     this.fresh();const stored=this.store.swarmRun(this.config.project.id,runId) as StoredRun,snapshot=stored.snapshot,expected=snapshot.revision;requireCondition(snapshot.status==='running','SWARM_RUN_NOT_ACTIVE');
     if(this.store.officeControl(this.config.project.id,runId).paused)return {...this.public(snapshot),dispatch:null,dispatches:[],reason:'USER_PAUSED',next_action:'resume_in_control_center'};
     if(snapshot.auth_wait_started_at_ms!==undefined){const waited=Math.max(0,now-snapshot.auth_wait_started_at_ms);if(snapshot.target_deadline_at_ms!==null)snapshot.target_deadline_at_ms+=waited;if(snapshot.hard_deadline_at_ms!==null)snapshot.hard_deadline_at_ms+=waited;delete snapshot.auth_wait_started_at_ms;}
-    const waitingOnly=!Object.values(snapshot.workers).some(worker=>worker.status==='leased')&&this.ready(snapshot).length===0&&snapshot.plan.workers.some(worker=>snapshot.workers[worker.id]?.status==='pending'&&blockedAuthSites(this.store,this.config,worker.source_urls).length>0);
+    const waitingOnly=!Object.values(snapshot.workers).some(worker=>worker.status==='leased')&&this.ready(snapshot).length===0&&snapshot.plan.workers.some(worker=>snapshot.workers[worker.id]?.status==='pending'&&this.authBlocked(snapshot,worker).length>0);
     if(waitingOnly){snapshot.auth_wait_started_at_ms=now;this.persist(snapshot,expected);return {...this.public(snapshot),dispatch:null,dispatches:[],reason:'WAITING_FOR_SITE_AUTH',next_action:'open_control_center_connections_then_runtime_swarm_tick'};}
     const skippedBefore=Object.values(snapshot.workers).filter(worker=>worker.status==='skipped_deadline').length;
     if(this.applyDeadline(snapshot,now)){this.persist(snapshot,expected);return {...this.public(snapshot),dispatch:null,dispatches:[],reason:'HARD_DEADLINE_EXCEEDED'};}
@@ -187,7 +195,7 @@ export class SwarmRuntime{
     if(active>=snapshot.plan.max_concurrency){if(deadlineChanged)this.persist(snapshot,expected);return {...this.public(snapshot),dispatch:null,dispatches:[],reason:'CONCURRENCY_LIMIT'};}
     const definitions=new Map(snapshot.plan.workers.map(worker=>[worker.id,worker])),runnable=this.ready(snapshot);
     if(runnable.length===0){
-      const auth=snapshot.plan.workers.filter(worker=>snapshot.workers[worker.id]?.status==='pending').flatMap(worker=>blockedAuthSites(this.store,this.config,worker.source_urls));
+      const auth=snapshot.plan.workers.filter(worker=>snapshot.workers[worker.id]?.status==='pending').flatMap(worker=>this.authBlocked(snapshot,worker));
       if(auth.length){this.persist(snapshot,expected);return {...this.public(snapshot),dispatch:null,dispatches:[],reason:'WAITING_FOR_SITE_AUTH',source_auth:auth,next_action:'open_control_center_connections_then_runtime_swarm_tick'};}
       const reason=this.settleNoRunnable(snapshot);this.persist(snapshot,expected);return {...this.public(snapshot),dispatch:null,dispatches:[],reason};
     }

@@ -77,7 +77,7 @@ test('Control Center renders English by default and the flag button switches to 
   t.after(async()=>{await browser.close();server.close();await rm(root,{recursive:true,force:true});});
   const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(server.url);
-  await page.getByRole('button',{name:'Submit',exact:true}).waitFor();
+  await page.getByRole('button',{name:'Start work',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.lang),'en');
   assert.equal(await page.getByPlaceholder('What should the agent do? One line is enough.').count(),1);
   const hangul=/[가-힣]/u;
@@ -95,7 +95,7 @@ test('Control Center renders English by default and the flag button switches to 
   await page.getByText('Work plan · v1',{exact:true}).waitFor();
   assert.doesNotMatch(await page.locator('#plan-translation-probe').innerText(),hangul);
   await page.locator('#lang-toggle').click();
-  await page.getByRole('button',{name:'업무 접수',exact:true}).waitFor();
+  await page.getByRole('button',{name:'업무 시작',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.lang),'ko');
   assert.equal(await page.locator('#lang-toggle [data-lang-code]').textContent(),'KO');
   await page.goto(server.url+'settings');

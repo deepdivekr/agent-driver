@@ -11,10 +11,17 @@ import {ControlSettings} from '../dist/observability/control-settings.js';
 import {BrowserSetupController} from '../dist/onboarding/browser-setup.js';
 import {startControlCenter} from '../dist/observability/control-center.js';
 import {PackStore} from '../dist/packs/store.js';
+import {modelSettingsPath,publicModelSettings,readModelSettings,saveModelSettings} from '../dist/onboarding/model-settings.js';
+import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
+import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
 
 const evidence='tests/evidence/phase94';
-async function fixture(t){
+async function fixture(t,{savedCodexModel,savedCodexEffort,catalogModels=[{id:'fixture-model',label:'Fixture model'}]}={}){
   const root=await mkdtemp(join(tmpdir(),'office-layout-')),paths=await prepareLocalConnection(root),config=loadHostConfig(paths.runtimeConfig);
+  if(savedCodexModel){
+    const selection=publicModelSettings(null,{}).selection;
+    saveModelSettings(modelSettingsPath(config),{revision:0,onboarding_step:0,selection:{...selection,client_models:{...selection.client_models,codex:savedCodexModel},codex_reasoning_effort:savedCodexEffort}},{});
+  }
   const ids=['codex','claude','opencode','cursor','hermes'],registered=new Set(),calls=[],statusOverrides=new Map();
   const auth={async connections(){return ids.map(id=>({id,status:statusOverrides.get(id)??(['codex','claude'].includes(id)?'ready':'signed_out'),supported_login_flows:['browser'],connection:{client_id:id,state:'idle'}}));},view(id){return {client_id:id,state:'idle'};},async start(){throw Error('No live sign-in in a layout fixture');},close(){}};
   const bootstrap={view(){return {clients:ids.map(id=>({id,label:({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor CLI',hermes:'Hermes'})[id],installed:true,managed_install:true}))};}};
@@ -23,7 +30,7 @@ async function fixture(t){
   const providerFetch=async()=>new Response(JSON.stringify({data:[{id:'fixture-model'}]}),{status:200,headers:{'content-type':'application/json'}});
   const settings=new ControlSettings(config,auth,{},providerFetch,mcp,undefined,bootstrap,browsers);let host;
   const server=createServer(async(req,res)=>{
-    if(req.url==='/settings/models'&&req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify(Object.fromEntries(['codex','claude','opencode'].map(id=>[id,{status:'available',models:[{id:'fixture-model',label:'Fixture model'}]}]))));return;}
+    if(req.url==='/settings/models'&&req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify(Object.fromEntries(['codex','claude','opencode'].map(id=>[id,{status:'available',models:id==='codex'?catalogModels:[{id:'fixture-model',label:'Fixture model'}]}]))));return;}
     if(!await settings.handle(req,res,req.url.slice(1),host)){res.writeHead(404);res.end();}
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));host='127.0.0.1:'+server.address().port;
@@ -121,9 +128,16 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     const aiSpacing=await statusActionSpacing(page,'#clients .client');
     assert.equal(await page.locator('#clients .client-icon svg').count(),5);
     assert.equal(await page.locator('#clients .client>p').count(),0);
+    const selectedCodexModel=await page.locator('#codex-model').inputValue(),selectedCodexEffort=await page.locator('#codex-reasoning').inputValue();
+    assert.equal(selectedCodexModel,'','A first unsaved setting without an account-listed Sol uses the CLI default');
+    assert.equal(selectedCodexEffort,'');
+    const catalogState=await page.locator('#catalog-state').textContent();
+    if(lang==='en')assert.doesNotMatch(catalogState,/[\uac00-\ud7a3]/u,'English AI settings must not retain Korean catalog status fragments');
+    else assert.match(catalogState,/현재 확인/u);
     await page.locator('#client-codex [data-manage-client=codex]').click();
     await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
-    assert.equal(await page.locator('#codex-model').inputValue(),'','Manage must focus the existing model setting without changing it');
+    assert.equal(await page.locator('#codex-model').inputValue(),selectedCodexModel,'Manage must focus the existing model setting without changing it');
+    assert.equal(await page.locator('#codex-reasoning').inputValue(),selectedCodexEffort);
     await rightEdge(page,'#refresh-clients','#subscription-fields');await rightEdge(page,'#step-2>.actions button','#step-2');await noOverflow(page);
     const models=await page.locator('#codex-model,#claude-model,#opencode-model').evaluateAll(items=>items.map(e=>e.getBoundingClientRect().width));
     assert.ok(models.every(w=>Math.abs(w-models[0])<1),JSON.stringify(models));
@@ -140,7 +154,8 @@ test('runtime fixture Control Center alignment and compact right actions hold in
 test('runtime native Work import and detail retain compact right actions, readable prose and pause/resume interaction',async t=>{
   const f=await fixture(t),store=new PackStore(f.config.dbPath);store.registerProject(f.config.project);
   const work=store.beginWork(f.config.project.id,'layout-work','화면 정렬 검증 업무','quick').work.id;
-  // Intake is initially defining and correctly cannot pause yet. Exercise an actual pausable state without calling a model.
+  // Exercise a saved needs-model state through its actual modal controls,
+  // without pretending a missing definition can invoke a model or execute.
   const owner=store.claimWorkDefinition(f.config.project.id,work);assert.ok(owner);
   store.failWorkDefinition(f.config.project.id,work,owner);store.close();
   const server=await startControlCenter(f.config),browser=await chromium.launch({headless:true});
@@ -153,10 +168,12 @@ test('runtime native Work import and detail retain compact right actions, readab
     await page.locator('[data-import-route=workflow]').click();await compactButtons(page.locator('#scan-import'));await rightEdge(page,'#scan-import','#import-project');
     await page.locator('[data-import-route=hermes]').click();await rightEdge(page,'#migration-discover','#import-hermes');
     await page.locator('[data-import-route=remote]').click();await rightEdge(page,'#remote-discover','#import-remote');await noOverflow(page);
-    await page.goto(server.url+'?work='+work);await page.locator('.control-panel').waitFor();await page.locator('#pause').click();
-    await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('재개')||document.querySelector('#pause')?.textContent.includes('Resume'));
-    await page.locator('#pause').click();await page.waitForFunction(()=>document.querySelector('#pause')?.textContent.includes('일시정지')||document.querySelector('#pause')?.textContent.includes('Pause'));
-    await compactButtons(page.locator('.control-panel>.controls button'));await rightEdge(page,'.control-panel>.controls button','.control-panel>.controls');
+    await page.goto(server.url+'?work='+work);await page.locator('.control-panel').waitFor();await page.locator('[data-stage="next"]').click();await page.locator('#stage-dialog[open]').waitFor();await page.locator('[data-stage-action="pause"]').click();
+    await page.waitForFunction(()=>!document.querySelector('[data-stage-action="resume"]')?.disabled);
+    const paused=await(await fetch(server.url+'work/detail?id='+work)).json();assert.equal(paused.paused,true);assert.equal(paused.supervisor,null);
+    await page.locator('[data-stage-action="resume"]').click();await page.waitForFunction(()=>!document.querySelector('[data-stage-action="pause"]')?.disabled);
+    const resumed=await(await fetch(server.url+'work/detail?id='+work)).json();assert.equal(resumed.paused,false);assert.equal(resumed.supervisor,null,'A missing definition must not execute');assert.equal(resumed.work_status,'needs_model');
+    await compactButtons(page.locator('#stage-dialog .actions button'));await rightEdge(page,'#stage-dialog .actions button','#stage-dialog .actions');await page.locator('#stage-close').click();
     // The live Work stream can replace the node after a locator resolves. Inspect the current connected node atomically.
     await page.waitForFunction(()=>{const note=document.querySelector('.control-note');return note?.isConnected&&['start','left'].includes(getComputedStyle(note).textAlign);});await noOverflow(page);
     await page.screenshot({path:join(evidence,`work-${width}-${lang}.png`),fullPage:true});assert.deepEqual(errors,[]);await context.close();
@@ -164,7 +181,7 @@ test('runtime native Work import and detail retain compact right actions, readab
 });
 
 test('runtime fixture client management opens actual settings without changing the selected API mode or saved configuration',async t=>{
-  const f=await fixture(t),before=await readFile(f.paths.runtimeConfig,'utf8');
+  const f=await fixture(t,{savedCodexModel:'gpt-5.6-luna',savedCodexEffort:'medium'}),before=await readFile(f.paths.runtimeConfig,'utf8'),savedBefore=await readFile(modelSettingsPath(f.config),'utf8');
   for(const id of ['codex','claude','opencode','cursor','hermes']){f.statusOverrides.set(id,'ready');f.registered.add(id);}
   const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage({viewport:{width:375,height:900}});
   await page.addInitScript(()=>localStorage.setItem('office-lang','en'));await page.goto(f.url);
@@ -173,14 +190,52 @@ test('runtime fixture client management opens actual settings without changing t
   await page.waitForFunction(()=>document.activeElement?.matches('#mcp-clients [data-client=cursor]'));
   await page.getByRole('button',{name:'Manage Codex',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-5.6-luna','Manage must retain the persisted model instead of restoring the first-run default');
+  assert.equal(await page.locator('#codex-reasoning').inputValue(),'medium');
   await page.locator('#codex-model').selectOption('fixture-model');
   await page.getByRole('button',{name:'Manage Codex',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
   assert.equal(await page.locator('#codex-model').inputValue(),'fixture-model');
+  assert.equal(await page.locator('#codex-reasoning').inputValue(),'medium');
   await page.locator('#mode').selectOption('api');await settled(page,'save-model');
   await page.locator('[data-step="0"]').click();await settled(page,'refresh-mcp');
   await page.getByRole('button',{name:'Manage Codex',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.id==='mode');
   assert.equal(await page.locator('#mode').inputValue(),'api','Manage must never implicitly switch billing or authentication mode');
-  assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),before);assert.deepEqual(f.calls,[]);await noOverflow(page);
+  assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),before);assert.equal(await readFile(modelSettingsPath(f.config),'utf8'),savedBefore);assert.deepEqual(f.calls,[]);await noOverflow(page);
+});
+
+test('runtime fixture fresh catalog refresh recommends listed Sol/high, saves it, and invokes that exact CLI model',async t=>{
+  const f=await fixture(t,{catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'},{id:'gpt-5.6-luna',label:'GPT-5.6-Luna'}]}),browser=await chromium.launch({headless:true});
+  t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-5.6-sol');assert.equal(await page.locator('#codex-reasoning').inputValue(),'high');
+  await page.locator('#refresh-clients').click();await settled(page,'refresh-clients');assert.equal(await page.locator('#codex-model').inputValue(),'gpt-5.6-sol');
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  const saved=readModelSettings(modelSettingsPath(f.config));assert.equal(saved.selection.client_models.codex,'gpt-5.6-sol');assert.equal(saved.selection.codex_reasoning_effort,'high');
+  const requests=[],runner={async run(request){requests.push(request);return request.args.join(' ')==='login status'?{code:0,stdout:'Logged in using ChatGPT',stderr:''}:{code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{"ok":true}'}})+'\n',stderr:''};}};
+  const model=new ConfiguredStructuredModel(modelSettingsPath(f.config),{AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex'}, {subscription:options=>new SubscriptionAwareStructuredModel({...options,runner}),api:()=>{throw Error('PAID_API_NOT_ALLOWED');}});
+  await model.call('correct','Return JSON.',{},{type:'object',properties:{ok:{type:'boolean'}},required:['ok'],additionalProperties:false});
+  const args=requests.find(request=>request.args.includes('exec')).args;assert.deepEqual(args.slice(0,6),['--model','gpt-5.6-sol','exec','-c','model_reasoning_effort=high','--json']);
+});
+
+test('runtime fixture a saved model absent from the account list stays visible and blocks only active Codex saves',async t=>{
+  const f=await fixture(t,{savedCodexModel:'gpt-6-sol',savedCodexEffort:'high',catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'}]}),browser=await chromium.launch({headless:true});
+  t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');assert.match(await page.locator('#catalog-state').textContent(),/현재 계정 지원 목록에 없습니다/u);
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'다시 선택하세요.'}).waitFor();assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
+  await page.locator('#client').selectOption('claude');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client,'claude');assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
+  await page.locator('#client').selectOption('codex');await page.locator('#codex-model').selectOption('gpt-5.6-sol');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-5.6-sol');
+});
+
+test('runtime fixture English catalog warning and unsupported-model save error stay in English',async t=>{
+  const f=await fixture(t,{savedCodexModel:'gpt-6-sol',catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'}]}),browser=await chromium.launch({headless:true});
+  t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','en'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');
+  assert.match(await page.locator('#codex-model option:checked').textContent(),/Not in current account catalog/u);
+  assert.match(await page.locator('#catalog-state').textContent(),/The saved Codex model is not in the current account catalog/u);
+  assert.doesNotMatch(await page.locator('#catalog-state').textContent(),/[\uac00-\ud7a3]/u);
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'Select a listed model.'}).waitFor();
+  assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
 });

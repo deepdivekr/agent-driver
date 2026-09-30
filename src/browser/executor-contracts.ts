@@ -8,6 +8,7 @@ const loopback=z.string().url().refine(value=>{const u=new URL(value);return u.p
 export const browserTargetSchema=z.object({
   id,engine:browserEngine,environment:browserEnvironment,
   profile_ref:id,platform:z.enum(['win32','linux','darwin']),
+  session_mode:z.enum(['isolated','persistent']).optional(),
   endpoint:loopback.optional(),executable:z.string().min(1).max(1000).optional(),
   priority:z.number().int().min(0).max(100).default(50),
 }).strict().superRefine((t,c)=>{
@@ -15,6 +16,7 @@ export const browserTargetSchema=z.object({
   if(t.engine==='aside'&&(!t.executable||t.endpoint))c.addIssue({code:'custom',message:'Aside requires local official CLI only'});
   if(t.engine==='playwright'&&(t.endpoint||t.executable))c.addIssue({code:'custom',message:'Playwright uses runtime-owned profile or verified VM configuration'});
   if(t.engine!=='playwright'&&t.environment==='owned_headless')c.addIssue({code:'custom',message:'Connected desktop browsers are not verified headless executors'});
+  if(t.session_mode&&!(t.engine==='playwright'&&t.environment==='owned_headless'))c.addIssue({code:'custom',message:'Session mode applies only to an owned headless Playwright profile'});
 });
 export type BrowserTarget=z.infer<typeof browserTargetSchema>;
 export const browserExecutorsSchema=z.object({targets:z.array(browserTargetSchema).min(1).max(16)}).strict().refine(v=>new Set(v.targets.map(t=>t.id)).size===v.targets.length,'Duplicate browser target');
@@ -29,7 +31,7 @@ export function browserHostCompatible(target:BrowserTarget){
   let wsl=false;try{wsl=/microsoft/iu.test(readFileSync('/proc/sys/kernel/osrelease','utf8'));}catch{}
   return wsl&&(target.engine==='neo'||target.engine==='aside'&&/^\/mnt\/[a-z]\/.+\/aside\.exe$/iu.test(target.executable??''));
 }
-export interface BrowserCheckpoint {version:1;entry_url:string;url:string;target_id:string|null;environment:string;completed_steps:string[];effect_state:'none'|'uncertain';binding:string;observation_sha256:string|null;}
+export interface BrowserCheckpoint {version:1;entry_url:string;url:string;target_id:string|null;environment:string;completed_steps:string[];effect_state:'none'|'uncertain';binding:string;observation_sha256:string|null;environment_recovery?:{reason:'unusual_traffic';target_id:string};}
 export interface BrowserObservation {url:string;title:string;text:string;links:Array<{text:string;url:string}>;observed_at:string;}
 export interface BrowserExtraction {ready:string;auth_gate:string;auth_required:boolean;account_selector:string;account_text:string;rows:string;columns:Record<string,string>;max_rows:number;}
 export interface BrowserPort {
@@ -44,7 +46,16 @@ export interface BrowserPort {
 }
 export const browserObservationSchema=z.object({url:z.string().url().max(4096),title:z.string().max(500),text:z.string().max(24000),links:z.array(z.object({text:z.string().max(160),url:z.string().max(4096)}).strict()).max(120),observed_at:z.string().datetime()}).strict();
 /** Shared DOM reads only. No evaluation string supplied by a model reaches an adapter. */
-export function observationScript(){return `() => ({url:location.href,title:document.title.slice(0,500),text:(document.body?.innerText??'').slice(0,24000),links:Array.from(document.querySelectorAll('a[href]')).map(a=>({text:(a.textContent??'').trim().slice(0,160),url:a.href})).filter(a=>a.text&&/^https?:/.test(a.url)&&a.url.length<=4096).slice(0,120),observed_at:new Date().toISOString()})`;}
+export function observationScript(){return `() => {
+  const rendered=a=>{
+    if(a.closest('[hidden],[aria-hidden="true"],[inert]'))return false;
+    if(typeof a.checkVisibility==='function'&&!a.checkVisibility({checkOpacity:true,checkVisibilityCSS:true}))return false;
+    const style=getComputedStyle(a);if(style.visibility==='hidden'||style.visibility==='collapse'||!Array.from(a.getClientRects()).some(r=>r.width>0&&r.height>0))return false;
+    for(let e=a;e;e=e.parentElement){const s=getComputedStyle(e);if(s.display==='none'||s.contentVisibility==='hidden'||Number(s.opacity)===0)return false;}
+    return true;
+  };
+  return {url:location.href,title:document.title.slice(0,500),text:(document.body?.innerText??'').slice(0,24000),links:Array.from(document.querySelectorAll('a[href]')).filter(rendered).map(a=>({text:(a.innerText??'').trim().slice(0,160),url:a.href})).filter(a=>a.text&&/^https?:/.test(a.url)&&a.url.length<=4096).slice(0,120),observed_at:new Date().toISOString()};
+}`;}
 export function extractionScript(spec:BrowserExtraction){return `() => {
   const s=${JSON.stringify(spec)};
   const visible=e=>!!e&&!!(e.getClientRects().length)&&getComputedStyle(e).visibility!=='hidden';

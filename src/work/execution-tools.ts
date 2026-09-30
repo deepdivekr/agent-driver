@@ -2,8 +2,8 @@ import {z} from 'zod';
 import {type RuntimeApi} from '../interface/api.js';
 import {tools} from '../interface/catalog.js';
 import {type HostConfig} from '../interface/config.js';
-import {RoutedBrowser,browserCatalog,assertBrowserUrl,type BrowserRouteOptions} from '../browser/executor-routing.js';
-import {browserObservationSchema} from '../browser/executor-contracts.js';
+import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
+import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
 import {workActivity} from './activity.js';
 import {type WorkProposal} from './contracts.js';
@@ -15,6 +15,8 @@ import {dirname,join,resolve} from 'node:path';
 import {mkdir,open,realpath,stat} from 'node:fs/promises';
 import {nativeProcessRunner} from '../integrations/subscription-auth.js';
 import {readLocalGitCheckpoint} from '../coding/local-checkpoint.js';
+import {safeControlText} from '../observability/safe-text.js';
+import {knownLoginSites,readyAuthTargets,detectAuthGate} from '../swarm/browser-auth.js';
 
 /** Potential effect, not a claim that a particular call performed a write.
  * Drafts also have durable state and must not be replayed after a lost reply.
@@ -24,12 +26,66 @@ const effects={
   runtime_pack_catalog:'read_only',runtime_pack_plan:'read_only',runtime_pack_run:'local_write',runtime_pack_status:'read_only',runtime_pack_execute_approved:'external_write',
   runtime_files_roots:'read_only',runtime_files_request:'draft_only',runtime_files_scan:'draft_only',runtime_files_inspect:'read_only',runtime_files_classify:'draft_only',runtime_files_propose:'draft_only',runtime_files_report:'read_only',
   runtime_windows_catalog:'read_only',runtime_windows_design:'draft_only',runtime_windows_start:'draft_only',runtime_windows_step:'external_write',runtime_windows_status:'read_only',
-  runtime_work_context:'read_only',runtime_coding_projects:'read_only',runtime_coding_start:'local_write',runtime_coding_step:'local_write',runtime_coding_status:'read_only',runtime_coding_pause:'draft_only',runtime_coding_reconcile:'read_only',office_browser_read:'read_only',office_browser_links:'read_only',office_result_draft:'local_write',office_result_read:'read_only',
+  runtime_work_context:'read_only',runtime_coding_projects:'read_only',runtime_coding_start:'local_write',runtime_coding_step:'local_write',runtime_coding_status:'read_only',runtime_coding_pause:'draft_only',runtime_coding_reconcile:'read_only',office_web_search:'read_only',office_social_search:'read_only',office_browser_read:'read_only',office_browser_links:'read_only',office_result_draft:'local_write',office_result_read:'read_only',
 } as const satisfies Record<string,WorkClientTool['effect']>;
 type ExecutionToolName=keyof typeof effects;
 const injectWork=new Set(['runtime_pack_plan','runtime_pack_run','runtime_files_request','runtime_files_scan','runtime_files_propose','runtime_files_report','runtime_windows_design','runtime_windows_start','runtime_work_context','runtime_coding_start']);
 const object=(value:unknown):Record<string,unknown>|null=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
 const browserInput=z.object({url:z.string().url().max(4096)}).strict();
+const browserLinksInput=z.object({offset:z.number().int().min(0).max(100000).default(0),limit:z.number().int().min(1).max(40).default(20),snapshot_id:z.string().regex(/^[a-f0-9]{64}$/u).optional()}).strict();
+const privateHostname=(value:string)=>/^(?:localhost$|.*\.localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.|\[)|\.(?:local|lan|internal)$/iu.test(value);
+function safeSearchQuery(value:string){
+  if(/(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\bapikey_[A-Za-z0-9_-]{16,}|\bBearer\s+[A-Za-z0-9._-]{16,}|\b[A-Za-z0-9_]*(?:token|password|secret|api.?key|auth|session|cookie)[A-Za-z0-9_]*\s*[=:]\s*\S+)/iu.test(value))return false;
+  for(const raw of value.match(/https?:\/\/[^\s<>"'`]+/gu)??[]){try{const url=new URL(raw.replace(/[),.;]+$/u,''));if(url.username||url.password||privateHostname(url.hostname)||Array.from(url.searchParams.keys()).some(key=>/password|token|secret|api.?key|auth|session|cookie/iu.test(key))||/(?:password|token|secret|api.?key|auth|session|cookie)[^=]*=/iu.test(url.hash))return false;}catch{return false;}}
+  return true;
+}
+const searchProvider=z.enum(['google','bing','duckduckgo']);
+const searchArguments={query:z.string().trim().min(1).max(512),provider:searchProvider.default('google')};
+const searchInput=z.object({...searchArguments,query:searchArguments.query.refine(safeSearchQuery,'WORK_SEARCH_CREDENTIAL_OR_PRIVATE_INPUT')}).strict();
+const socialSearchInput=z.object({site:z.enum(['x.com','reddit.com','stocktwits.com']),query:z.string().trim().min(1).max(512).refine(safeSearchQuery,'WORK_SEARCH_CREDENTIAL_OR_PRIVATE_INPUT')}).strict();
+type SocialSearchRequest=z.infer<typeof socialSearchInput>;
+const socialSearchEntries:Record<SocialSearchRequest['site'],string>={'x.com':'https://x.com/search','reddit.com':'https://www.reddit.com/search/','stocktwits.com':'https://stocktwits.com/search'};
+function socialSearchEntry(input:SocialSearchRequest){const url=new URL(socialSearchEntries[input.site]);url.searchParams.set('q',input.query);return url.href;}
+/** A ticker plus a news/research request is a source cue, not a site grant.
+ * Work definition must also remain a research task; generic acronym articles
+ * do not silently acquire signed-in social sources. */
+function socialIntent(prompt:string,spec:WorkProposal){
+  const direct=/\b(?:ticker|stocks?|shares?|equity|market|sentiment|stocktwits|reddit)\b|주식|종목|티커|증시|투자|소셜/iu;
+  if(direct.test(prompt))return true;
+  const research=/\b(?:news|research|articles?|reports?|updates?)\b|기사|리서치|조사|뉴스|소식|최근/iu;
+  const ticker=/\$[A-Z][A-Z0-9.]{0,5}\b|\b(?!AI\b|API\b|LLM\b|CEO\b|URL\b)[A-Z]{2,5}\b/u;
+  const defined=[spec.title,spec.desired_outcome,...spec.completion_checks.map(check=>check.result)].join(' ');
+  return research.test(prompt)&&ticker.test(prompt)&&research.test(defined)&&(spec.route.kind==='swarm'||spec.route.kind==='pack'&&spec.route.pack_family==='research.search');
+}
+type SearchRequest=z.infer<typeof searchInput>;
+function searchEntry(input:SearchRequest){
+  const entry=new URL(({google:'https://www.google.com/search',bing:'https://www.bing.com/search',duckduckgo:'https://duckduckgo.com/'} as const)[input.provider]);
+  entry.searchParams.set('q',input.query);
+  if(input.provider==='google')entry.searchParams.set('num','10');else if(input.provider==='bing')entry.searchParams.set('count','10');else entry.searchParams.set('ia','web');
+  return entry.href;
+}
+const searchKey=(input:SearchRequest)=>hashJson({provider:input.provider,query:input.query});
+/** Classify an already delegated URL; this grants no navigation authority and
+ * never rewrites the user's href. Aliases share the same challenge fence. */
+function searchFromUrl(raw:string):SearchRequest|null{
+  try{
+    const url=new URL(raw),host=url.hostname.replace(/^www\./u,''),provider=({ 'google.com':'google','bing.com':'bing','duckduckgo.com':'duckduckgo' } as const)[host as 'google.com'|'bing.com'|'duckduckgo.com'];
+    if(!provider||url.protocol!=='https:'||url.port||url.username||url.password)return null;
+    if(provider==='duckduckgo'?!/^\/(?:html\/?|lite\/?)?$/u.test(url.pathname):url.pathname!=='/search')return null;
+    const input=searchInput.safeParse({provider,query:url.searchParams.get('q')});return input.success?input.data:null;
+  }catch{return null;}
+}
+/** Strong page observations only. No match means unclassified DOM, not proof
+ * that results or authentication succeeded. Never solve or route a challenge.
+ */
+function observedSearchChallenge(input:SearchRequest,page:z.infer<typeof browserObservationSchema>){
+  const url=new URL(page.url),entry=new URL(searchEntry(input));if(url.protocol!=='https:'||url.port||url.hostname.replace(/^www\./u,'')!==entry.hostname.replace(/^www\./u,''))return false;
+  if(input.provider==='google'&&/^\/sorry(?:\/|$)/u.test(url.pathname))return true;
+  if(input.provider==='bing'&&/^\/turing\/(?:captcha|challenge)(?:\/|$)/u.test(url.pathname))return true;
+  return /^(?:captcha|human verification|verify (?:you are|that you are) human|access denied)\b/iu.test(page.title.trim())||
+    input.provider==='google'&&/our systems have detected unusual traffic from your computer network/iu.test(page.text)||
+    input.provider==='duckduckgo'&&/unfortunately, bots use duckduckgo too/iu.test(page.text);
+}
 const resultInput=z.object({text:z.string().trim().min(1).max(16000),label:z.string().trim().min(1).max(120).optional()}).strict();
 const resultReadInput=z.object({request_id:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u)}).strict();
 const sourceIntegritySchema=z.array(z.object({
@@ -43,19 +99,58 @@ type FileSnapshot={source_id:string;sha256:string|null;observed_at:string|null};
 export class WorkExecutionTools {
   private browsers=new Map<string,RoutedBrowser>();
   private allowedUrls=new Set<string>();
+  private blockedSearches=new Set<string>();
+  private recoverableSearches=new Map<string,string>();
+  private recoverableSearchOrigins=new Map<string,BrowserPreference>();
+  private environmentBlockedQueries=new Set<string>();
+  private blockedSocial=new Set<string>();
   private resultReceipts=new Map<string,{tool_name:'office_result_draft'|'runtime_pack_run';value:Record<string,unknown>}>();
   private packIntegrity=new Map<string,{run_id:string;result_sha256:string;sources:SourceIntegrity}>();
   private dispatched=new Map<string,{name:string;input:Record<string,unknown>;coding_stage?:{id:string;attempts:number};reused_coding_run?:string}>();
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly api:RuntimeApi,readonly workId:string,readonly runId:string,readonly spec:WorkProposal,readonly prompt:string,readonly guard:()=>void,readonly model:StructuredModel,readonly options:{browserFactory?:BrowserRouteOptions['factory']}={}){
     for(const raw of prompt.match(/https?:\/\/[^\s<>"'`]+/gu)??[]){try{this.allowedUrls.add(new URL(raw.replace(/[),.;]+$/u,'')).href);}catch{}}
+    this.restoreObservedUrls();
+  }
+  /** Same-run host receipts are evidence, never model-proposed URLs or a grant.
+   * Restore only completed, dispatched DOM reads; pending/uncertain receipts,
+   * foreign checkpoint identities and credential/private links stay excluded.
+   */
+  private restoreObservedUrls(){
+    if(!this.table('office_supervisor'))return;
+    const row=this.store.desktopState.prepare('SELECT checkpoint FROM office_supervisor WHERE project_id=? AND work_id=? AND run_id=?').get(this.config.project.id,this.workId,this.runId);
+    let checkpoint:Record<string,unknown>|null;try{checkpoint=typeof row?.checkpoint==='string'?object(JSON.parse(row.checkpoint)):null;}catch{return;}
+    if(checkpoint?.work_id!==this.workId||checkpoint.run_id!==this.runId||!Array.isArray(checkpoint.observations))return;
+    const add=(raw:string)=>{try{const parsed=new URL(raw);assertBrowserUrl(raw,[parsed.origin],this.config.environment==='fixture');if(Array.from(parsed.searchParams.keys()).some(key=>/auth|session|cookie/iu.test(key)))return;if(!privateHostname(parsed.hostname)||this.config.environment==='fixture'&&parsed.protocol==='http:'&&parsed.hostname==='127.0.0.1')this.allowedUrls.add(parsed.href);}catch{/* Invalid observation is not new navigation authority. */}};
+    for(const raw of checkpoint.observations){const observed=object(raw),invocation=object(observed?.invocation),receipt=object(observed?.receipt),value=object(receipt?.value);
+      if(!['office_browser_read','office_web_search','office_social_search'].includes(String(invocation?.tool_name))||invocation?.dispatched!==true||invocation.effect!=='read_only'||!['succeeded','retryable_failure'].includes(String(receipt?.status))||receipt?.effect_state!=='none'||value?.provenance!=='live_browser_dom'||value.effect!=='read_only')continue;
+      if(receipt.status==='retryable_failure'&&value.social_access==='not_verified'&&typeof value.social_site==='string'&&Object.hasOwn(knownLoginSites,value.social_site)){this.blockedSocial.add(value.social_site);continue;}
+      const parsed=browserObservationSchema.safeParse({url:value.url,title:value.title,text:value.text,links:value.links,observed_at:value.observed_at});if(!parsed.success)continue;
+      const input=invocation?.tool_name==='office_web_search'?searchInput.safeParse(invocation.arguments):null;
+      const requested=invocation?.tool_name==='office_browser_read'&&typeof object(invocation.arguments)?.url==='string'?String(object(invocation.arguments)!.url):null;
+      const search=input?.success?input.data:requested?searchFromUrl(requested):null,entry=input?.success?searchEntry(input.data):requested;
+      if(search&&entry&&value.requested_url===entry&&observedSearchChallenge(search,parsed.data)){
+        const key=searchKey(search),previous=browserTargets(this.config).find(t=>t.id===value.executor),aside=eligibleBrowserTargets(this.config,{environment:'host_foreground',preferred_engine:'aside'})[0];
+        if(unusualSearchTraffic(entry,parsed.data))this.environmentBlockedQueries.add(search.query);
+        const explicitAside=this.spec.browser?.environment==='host_foreground'&&this.spec.browser.preferred_engine==='aside';
+        if(!this.blockedSearches.has(key)&&aside&&previous&&previous.engine==='playwright'&&['owned_headless','ubuntu_vm'].includes(previous.environment)&&(publicBrowserRecovery(this.spec.browser).length||explicitAside)&&unusualSearchTraffic(entry,parsed.data)){
+          this.recoverableSearches.set(key,aside.id);this.recoverableSearchOrigins.set(key,{environment:previous.environment});
+        }else {this.blockedSearches.add(key);this.recoverableSearches.delete(key);this.recoverableSearchOrigins.delete(key);}
+        this.allowedUrls.delete(new URL(entry).href);this.allowedUrls.delete(new URL(parsed.data.url).href);continue;
+      }
+      if(receipt.status!=='succeeded')continue;
+      add(parsed.data.url);for(const link of parsed.data.links)add(link.url);
+    }
   }
   catalog():WorkClientTool[]{
     const coding=this.spec.route.kind==='pack'&&this.spec.route.pack_family==='coding.orchestrate';
     const names=Object.keys(effects).filter(name=>!name.startsWith('office_')&&(!name.startsWith('runtime_coding_')||name==='runtime_coding_projects'||coding)) as ExecutionToolName[];
     const descriptors=names.flatMap(name=>{const tool=(tools as Record<string,{schema:z.ZodType;implemented:boolean;readOnly:boolean}>)[name];if(!tool?.implemented)return [];
-      return [{name,description:`Agent Office ${name}. Scope: this Work only. ${name==='runtime_files_roots'?'Only folders explicitly granted to this Work are returned. ':''}${name==='runtime_files_request'?'Creates a permission request, never grants access. ':''}${name==='runtime_files_propose'?'Creates a move preview, never moves files. ':''}${name==='runtime_pack_execute_approved'?'Requires an existing human-approved, unconsumed proposal; cannot approve it. ':''}${name==='runtime_windows_step'?'May change an application or send externally; native host approval and postcondition receipts are mandatory. ':''}${name==='runtime_coding_start'?'Choose one registered project_ref. Creates a bounded Codex/Claude CLI stage plan and local Git handoff for this Work. The host supplies Work/request identity. Reuses this Work existing coding run; never resumes an unrelated session. Model-data consent and registered project policy remain mandatory. ':''}${name==='runtime_coding_step'?'Send only the next prepared stage instruction to the configured Codex/Claude CLI, read its actual response, and verify its Git/check receipts. Only same-run saved CLI session IDs may resume; no --last. Repository writes require this Work write delegation and registered policy. Imported plans/stages retain human approval. ':''}${name==='runtime_coding_status'?'Read actual stage progress, exact CLI replies and verification receipts of this Work coding run; completed stages are not proof of whole Work completion. ':''}${name==='runtime_coding_reconcile'?'Inspect uncertain coding effects without replay or automatic acceptance; report required user review. ':''}Only configured executors and approved connections can run. Unknown effects are fenced, not replayed.`,input_schema:z.toJSONSchema(tool.schema),effect:effects[name]}];});
+      return [{name,description:`Agent Office ${name}. Scope: this Work only. ${name==='runtime_pack_catalog'?'Its models field is the optional Pack semantic/Jev policy. models=off does not disable the configured Work LLM or office_web_search; use the capabilities supplied in this Work instead of inferring missing configuration. ':''}${name==='runtime_files_roots'?'Only folders explicitly granted to this Work are returned. ':''}${name==='runtime_files_request'?'Creates a permission request, never grants access. ':''}${name==='runtime_files_propose'?'Creates a move preview, never moves files. ':''}${name==='runtime_pack_execute_approved'?'Requires an existing human-approved, unconsumed proposal; cannot approve it. ':''}${name==='runtime_windows_step'?'May change an application or send externally; native host approval and postcondition receipts are mandatory. ':''}${name==='runtime_coding_start'?'Choose one registered project_ref. Creates a bounded Codex/Claude CLI stage plan and local Git handoff for this Work. The host supplies Work/request identity. Reuses this Work existing coding run; never resumes an unrelated session. Model-data consent and registered project policy remain mandatory. ':''}${name==='runtime_coding_step'?'Send only the next prepared stage instruction to the configured Codex/Claude CLI, read its actual response, and verify its Git/check receipts. Only same-run saved CLI session IDs may resume; no --last. Repository writes require this Work write delegation and registered policy. Imported plans/stages retain human approval. ':''}${name==='runtime_coding_status'?'Read actual stage progress, exact CLI replies and verification receipts of this Work coding run; completed stages are not proof of whole Work completion. ':''}${name==='runtime_coding_reconcile'?'Inspect uncertain coding effects without replay or automatic acceptance; report required user review. ':''}Only configured executors and approved connections can run. Unknown effects are fenced, not replayed.`,input_schema:z.toJSONSchema(tool.schema),effect:effects[name]}];});
     descriptors.push({name:'office_browser_read',description:'Open and read a URL explicitly supplied by the user, or a link in an already observed page. Returns live text, links, timestamp and executor. Read-only; never submits or signs in. Independent same-environment executor fallback is automatic.',input_schema:z.toJSONSchema(z.object({url:z.string().url().max(4096)}).strict()),effect:'read_only'});
-    descriptors.push({name:'office_browser_links',description:'List available user-supplied and observed URLs plus configured browser environments.',input_schema:z.toJSONSchema(z.object({}).strict()),effect:'read_only'});
+    descriptors.push({name:'office_web_search',description:'Search the public web when the user supplied a topic but no source URL. Choose google (default), bing or duckduckgo; the host constructs its fixed public search URL from query text (maximum 512 characters). Returns actual DOM text and observed links only, with timestamps and executor; no generated search results. For observed Google unusual traffic in headless or the managed Playwright guest, the host hands the identical Google query directly to registered Aside once, skipping the guest retry. Never replace that query with Bing or DuckDuckGo. If environment_block=true is returned, follow next_action for Aside connection or user confirmation; no repeat or profile cycling. For another public-provider challenge, an independent source within scope may be used. Never solve CAPTCHA, sign in or bypass access controls. Credentials and private-host query URLs are rejected. Follow only actually observed links. Pack models=off does not disable this tool or the configured Work LLM.',input_schema:z.toJSONSchema(z.object(searchArguments).strict(),{io:'input'}),effect:'read_only'});
+    const socialSites=this.socialSites();
+    if(socialSites.length)descriptors.push({name:'office_social_search',description:`Read current ticker/social discussion from one historically ready, registered browser profile only. Offered sites: ${socialSites.join(', ')}. The host constructs a bounded search entry URL, reobserves the live page and checks the signed-in marker. A prior ready observation is not proof of current access or of source quality. No cross-profile fallback, login, challenge bypass, post or message. Use actual DOM URLs/timestamps as unverified source observations, not as verified news claims.`,input_schema:z.toJSONSchema(socialSearchInput,{io:'input'}),effect:'read_only'});
+    descriptors.push({name:'office_browser_links',description:'List a bounded page of exact user-supplied and observed URLs plus configured browser environments. Defaults: offset=0, limit=20 (maximum 40); byte limits may return fewer complete URLs. If has_more, request next_offset with the returned snapshot_id. A changed snapshot requires restarting at offset=0. Never infer an omitted or unobserved URL; this tool does not open pages or grant access.',input_schema:z.toJSONSchema(browserLinksInput,{io:'input'}),effect:'read_only'});
     descriptors.push({name:'office_result_draft',description:'Save the Work result/report for the user in this Office. Write the requested final text using observed source evidence and requested language/format, without invented facts. The host independently rereads the file and verifies exact bytes and SHA-256 before issuing a verified receipt. Returns text, artifact metadata and request_id. Use office_result_read with that request_id if additional readback is required; runtime_files_report is for user folders, not Office results. Creates only an Office-owned file, never sends a message or changes an external service.',input_schema:z.toJSONSchema(resultInput),effect:'local_write'});
     descriptors.push({name:'office_result_read',description:'Read the actual text of an Office-created output using the exact host invocation request_id from a successful verified office_result_draft or runtime_pack_run receipt, not an ID proposed in tool arguments. Supports local TXT/JSON/CSV artifacts up to 16KB. Rechecks bytes and SHA-256; Pack outputs also require a task-free successful run bound to this Work. Only current Work/run receipts may be read, including persisted receipts after resume. A known failed source-quality output is not readable: correct its grounded recipe and obtain a successful verified receipt first. Arbitrary paths, binary files and other Work files are unavailable. Use this tool to inspect saved Pack rows before computing or summarizing them.',input_schema:z.toJSONSchema(resultReadInput),effect:'read_only'});
     return descriptors;
@@ -130,7 +225,7 @@ export class WorkExecutionTools {
     if(!this.table('office_supervisor'))return [];
     const row=this.store.desktopState.prepare('SELECT checkpoint FROM office_supervisor WHERE project_id=? AND work_id=? AND run_id=?').get(this.config.project.id,this.workId,this.runId);
     const checkpoint=row?.checkpoint?object(JSON.parse(String(row.checkpoint))):null;
-    return Array.isArray(checkpoint?.observations)?checkpoint.observations:[];
+    return Array.isArray(checkpoint?.observations)?checkpoint.observations:checkpoint?.kind==='swarm'&&Array.isArray(checkpoint.final_observations)?checkpoint.final_observations:[];
   }
   private async fileSnapshots(recipe:Record<string,unknown>):Promise<FileSnapshot[]>{
     const requested=Array.isArray(recipe.sources)?recipe.sources:[],ids=[...new Set(requested.flatMap(item=>typeof object(item)?.id==='string'?[String(object(item)!.id)]:[]))];
@@ -197,17 +292,57 @@ export class WorkExecutionTools {
     return input;
   }
   /** Pre-dispatch schema checking: no API, grants, model calls or filesystem effects. */
+  private searchRequest(raw:unknown){const input=searchInput.parse(raw);if(this.environmentBlockedQueries.has(input.query)&&input.provider!=='google')throw new WorkClientToolInputError('WORK_SEARCH_ENVIRONMENT_BLOCKED','Unusual traffic is an environment block. Keep the same provider and use the registered Aside recovery, or request Aside connection/user confirmation. Do not substitute Bing or DuckDuckGo.');if(this.blockedSearches.has(searchKey(input)))throw new WorkClientToolInputError('WORK_SEARCH_PROVIDER_BLOCKED','This provider returned an observed access challenge for the same query. If environment_block is true, request the indicated Aside connection or user confirmation; do not substitute the provider. Otherwise another independent source within the user scope may be used. Never repeat or bypass a challenge.');return input;}
+  private socialSites(){return socialIntent(this.prompt,this.spec)?(Object.keys(knownLoginSites) as SocialSearchRequest['site'][]).filter(site=>this.socialTarget(site)!==null):[];}
+  private socialTarget(site:SocialSearchRequest['site']):BrowserTarget|null{
+    if(this.blockedSocial.has(site))return null;
+    const preference=this.spec.browser;
+    // A public-search placement does not force its optional social sources into
+    // that headless profile. Prefer the user's connected Aside profile; a
+    // named engine/foreground/guest preference still constrains selection.
+    const publicDefault=preference?.environment==='owned_headless'&&!preference.preferred_engine;
+    return readyAuthTargets(this.store,this.config,site).filter(target=>browserHostCompatible(target)&&(!preference||publicDefault||target.environment===preference.environment)&&(!preference?.preferred_engine||target.engine===preference.preferred_engine)).sort((a,b)=>Number(b.engine==='aside'&&b.environment==='host_foreground')-Number(a.engine==='aside'&&a.environment==='host_foreground')||b.priority-a.priority||a.id.localeCompare(b.id))[0]??null;
+  }
+  private socialRequest(raw:unknown){const input=socialSearchInput.parse(raw);requireCondition(socialIntent(this.prompt,this.spec)&&this.socialTarget(input.site),'WORK_SOCIAL_PROFILE_NOT_READY');return input;}
+  private browserRequest(raw:unknown){const input=browserInput.parse(raw),search=searchFromUrl(input.url);if(search)this.searchRequest(search);return input;}
+  private browserLinksPage(raw:unknown){
+    const input=browserLinksInput.parse(raw),urls=[...this.allowedUrls].filter(url=>{const search=searchFromUrl(url);return !search||!this.blockedSearches.has(searchKey(search));}),executors=browserCatalog(this.config),snapshot_id=hashJson({urls,executors});
+    if(input.snapshot_id&&input.snapshot_id!==snapshot_id)throw new WorkClientToolInputError('WORK_BROWSER_LINKS_SNAPSHOT_CHANGED','The observed URL list changed. Restart at offset=0, then use the returned snapshot_id with next_offset. No page was opened.');
+    const page={urls:[] as string[],executors,total_urls:urls.length,offset:input.offset,next_offset:null as number|null,has_more:false,snapshot_id};
+    // Preserve each href verbatim. Pagination happens BEFORE generic tool-value
+    // compaction so it can never truncate URLs into different navigation targets.
+    for(const url of urls.slice(input.offset,input.offset+input.limit)){
+      const next=[...page.urls,url],nextOffset=input.offset+next.length,hasMore=nextOffset<urls.length;
+      if(Buffer.byteLength(JSON.stringify(next))>10000||Buffer.byteLength(JSON.stringify({...page,urls:next,next_offset:hasMore?nextOffset:null,has_more:hasMore}))>15000){
+        if(!page.urls.length)throw new WorkClientToolInputError('WORK_BROWSER_LINKS_VALUE_TOO_LARGE','One observed URL exceeds this tool response budget. It was not truncated or opened. Choose another exact observed source.');
+        break;
+      }
+      page.urls=next;
+    }
+    const nextOffset=input.offset+page.urls.length;page.has_more=nextOffset<urls.length;page.next_offset=page.has_more?nextOffset:null;
+    return page;
+  }
   validate(name:string,args:Record<string,unknown>,requestId:string){
     requireCondition(this.catalog().some(t=>t.name===name),'WORK_TOOL_NOT_AVAILABLE');
-    if(name==='office_browser_read')return browserInput.parse(args);
-    if(name==='office_browser_links')return z.object({}).strict().parse(args);
+    if(name==='office_browser_read')return this.browserRequest(args);
+    if(name==='office_web_search')return this.searchRequest(args);
+    if(name==='office_social_search')return this.socialRequest(args);
+    if(name==='office_browser_links'){this.browserLinksPage(args);return browserLinksInput.parse(args);}
     if(name==='office_result_draft')return resultInput.parse(args);
     if(name==='office_result_read')return this.validateResultRead(args);
-    return (tools as Record<string,{schema:z.ZodType}>)[name]!.schema.parse(this.normalizedInput(name,args,requestId));
+    const input=(tools as Record<string,{schema:z.ZodType}>)[name]!.schema.parse(this.normalizedInput(name,args,requestId)) as Record<string,unknown>;
+    if(name==='runtime_pack_run'){
+      const policy=this.config.packs,recipe=object(input.recipe)!;
+      if(!policy)throw new WorkClientToolInputError('WORK_PACK_CONNECTION_REQUIRED','No Pack source/target policy is connected. Nothing was executed. For public research use office_web_search, office_browser_read and office_result_draft; do not invent registered sources.');
+      if(this.spec.route.kind!=='pack'||recipe.family!==this.spec.route.pack_family)throw new WorkClientToolInputError('WORK_TOOL_PACK_FAMILY_MISMATCH','The recipe must use the family already selected for this Work. Nothing was executed.');
+      if(Array.isArray(recipe.sources)&&recipe.sources.some(source=>!policy.sources.some(registered=>registered.id===object(source)?.id)))throw new WorkClientToolInputError('WORK_PACK_SOURCE_NOT_CONNECTED','Choose only a source ID returned by runtime_pack_plan. For unregistered public URLs use the office browser tools. Nothing was executed.');
+      if(typeof recipe.target==='string'&&!policy.targets.some(target=>target.id===recipe.target&&target.family===recipe.family))throw new WorkClientToolInputError('WORK_PACK_TARGET_NOT_CONNECTED','The target must already be registered for this recipe family. Nothing was executed.');
+    }
+    return input;
   }
   async execute(name:string,args:Record<string,unknown>,requestId:string){
     this.guard();this.store.intakeWork(this.config.project.id,this.workId);
-    if(name==='office_browser_links'){z.object({}).strict().parse(args);return {urls:[...this.allowedUrls].slice(0,160),executors:browserCatalog(this.config)};}
+    if(name==='office_browser_links')return this.browserLinksPage(args);
     if(name==='office_result_read'){
       const {request_id}=resultReadInput.parse(args);let source=this.resultReceipts.get(request_id);
       if(!source){
@@ -242,20 +377,91 @@ export class WorkExecutionTools {
       workActivity(this.store,this.config.project.id,this.workId,'result.saved',`Result saved: ${input.label??this.spec.title} · ${saved.length} bytes`);
       return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id:requestId,title:input.label??this.spec.title,text:input.text,artifact:{path,sha256:sha(saved),bytes:saved.length,format:'txt'},deduplicated,external_delivery:false};
     }
-    if(name==='office_browser_read'){
-      const {url}=browserInput.parse(args),parsed=new URL(url);
-      requireCondition(this.allowedUrls.has(parsed.href),'BROWSER_URL_NOT_OBSERVED');
+    if(name==='office_browser_read'||name==='office_web_search'||name==='office_social_search'){
+      const explicit=name==='office_browser_read'?this.browserRequest(args):null,social=name==='office_social_search'?this.socialRequest(args):null,search=name==='office_web_search'?this.searchRequest(args):explicit?searchFromUrl(explicit.url):null,url=explicit?explicit.url:social?socialSearchEntry(social):searchEntry(search!);
+      if(search)workActivity(this.store,this.config.project.id,this.workId,'search.started','Searching the public web through the configured browser executor.',{tool_name:name,status:'running'});
+      const parsed=new URL(url);
+      requireCondition(name==='office_web_search'||name==='office_social_search'||this.allowedUrls.has(parsed.href),'BROWSER_URL_NOT_OBSERVED');
       assertBrowserUrl(url,[parsed.origin],this.config.environment==='fixture');
-      const key=parsed.origin,journal=this.store.browserExecutors(),checkpointKey=`work:${this.runId}:${key}`;
+      workActivity(this.store,this.config.project.id,this.workId,'source.started','Opening a source through the configured browser executor.',{tool_name:name,status:'running',target_url:url});
+      const origin=parsed.origin,journal=this.store.browserExecutors();
+      const socialSite=(social?.site??(Object.hasOwn(knownLoginSites,parsed.hostname.toLowerCase().replace(/^www\./u,''))?parsed.hostname.toLowerCase().replace(/^www\./u,'') as SocialSearchRequest['site']:null));
+      const authTarget=socialSite?this.socialTarget(socialSite):null;
+      if(socialSite)requireCondition(authTarget,'WORK_SOCIAL_PROFILE_NOT_READY');
+      const preference=authTarget?{environment:authTarget.environment,preferred_engine:authTarget.engine}:this.spec.browser??{environment:'owned_headless' as const};
+      const recoveryKey=search?searchKey(search):null,explicitAside=!authTarget&&preference.environment==='host_foreground'&&preference.preferred_engine==='aside',explicitAsideRecovery=explicitAside&&Boolean(recoveryKey&&this.recoverableSearches.has(recoveryKey));
+      const key=authTarget?`${origin}:${authTarget.id}`:origin,legacyKey=`work:${this.runId}:${origin}`,originalCheckpointKey=`${legacyKey}:${hashJson({entry_url:url})}`,checkpointKey=`${legacyKey}:${hashJson(authTarget?{entry_url:url,profile:authTarget.id}:explicitAside?{entry_url:url,recovery:preference}:{entry_url:url})}`;
+      // A broken read-only browser transport may move to another registered
+      // environment. Login/challenge pages never take this route: each profile
+      // has independent authentication and a site's access decision is final.
+      const socialLogin=Boolean(socialSite);
+      // These three capabilities only read. A Work that also saves its report
+      // locally still gets the same safe read recovery; its write capabilities
+      // retain their independent delegation, approval and uncertainty fences.
+      const fallback_preferences=!socialLogin?publicBrowserRecovery(preference):[];
       let browser=this.browsers.get(key);
-      if(!browser){browser=new RoutedBrowser(this.config,{profile_key:`work-${this.workId}`,context_id:this.runId,request:this.prompt,preference:this.spec.browser??{environment:'owned_headless'},ephemeral:true,guard:this.guard,providers:{llm:this.model},...(this.options.browserFactory?{factory:this.options.browserFactory}:{}),checkpoint:{load:()=>journal.checkpoint(this.config.project.id,checkpointKey),save:cp=>journal.saveCheckpoint(this.config.project.id,checkpointKey,cp)},event:event=>{journal.append(this.config.project.id,this.runId,event);workActivity(this.store,this.config.project.id,this.workId,`browser.${event.kind}`,`${event.engine} / ${event.environment}${event.from?' ← '+event.from:''}${event.reason?' · '+event.reason:''}`);}},[key]);this.browsers.set(key,browser);await browser.open(url);}else await browser.navigate(url);
-      const observed=browserObservationSchema.parse(await browser.observe());this.guard();assertBrowserUrl(observed.url,[key],this.config.environment==='fixture');
+      if(!browser){
+        const routeConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:this.config;
+        browser=new RoutedBrowser(routeConfig,{profile_key:`work-${this.workId}`,context_id:this.runId,request:this.prompt,preference,fallback_preferences,...(!explicitAsideRecovery&&search&&this.recoverableSearches.has(searchKey(search))?{recover_from_unusual_traffic:this.recoverableSearches.get(searchKey(search))}:{}),ephemeral:true,restore_navigation:'entry_url',guard:this.guard,providers:{llm:this.model},...(this.options.browserFactory?{factory:this.options.browserFactory}:{}),checkpoint:{load:()=>{
+          // A user revision may explicitly select the one permitted recovery
+          // destination. Keep the old read-only checkpoint intact and validate
+          // its original authority/effect fence before starting that new scope.
+          const exact=journal.checkpoint(this.config.project.id,checkpointKey);
+          if(explicitAside){
+            const prior=journal.checkpoint(this.config.project.id,originalCheckpointKey)??journal.checkpoint(this.config.project.id,legacyKey);
+            if(prior){
+              if(explicitAsideRecovery||!exact){
+                let originalPreference=explicitAsideRecovery?this.recoverableSearchOrigins.get(recoveryKey!):preference;
+                // Historical plans sometimes pinned Playwright explicitly. Match
+                // its exact binding, without relaxing request/config/effect fences.
+                if(explicitAsideRecovery&&originalPreference){
+                  const pinned={...originalPreference,preferred_engine:'playwright' as const};
+                  if(prior.binding===browserCheckpointBinding(this.config,{preference:pinned,request:this.prompt}))originalPreference=pinned;
+                }
+                validateBrowserCheckpoint(this.config,{preference:originalPreference,request:this.prompt},[origin],prior);
+              }
+              else{
+                // The current bound checkpoint outlives the bounded Work trace.
+                // Never restore the obsolete cursor or ignore its effect fence.
+                requireCondition(prior.version===1,'BROWSER_CHECKPOINT_BINDING_CHANGED');requireCondition(prior.effect_state==='none','BROWSER_RECONCILIATION_REQUIRED');
+                assertBrowserUrl(prior.entry_url,[origin],this.config.environment==='fixture');assertBrowserUrl(prior.url,[origin],this.config.environment==='fixture');
+              }
+            }
+          }
+          if(exact)return exact;
+          if(authTarget||explicitAside)return null;
+          const legacy=journal.checkpoint(this.config.project.id,legacyKey);if(!legacy)return null;
+          validateBrowserCheckpoint(this.config,{preference,request:this.prompt},[origin],legacy);
+          // Keep the legacy bytes intact. Different entry URLs start a fresh
+          // read; matching entries restore bindings without opening saved.url.
+          return legacy.entry_url===url?legacy:null;
+        },save:cp=>journal.saveCheckpoint(this.config.project.id,checkpointKey,cp)},event:event=>{journal.append(this.config.project.id,this.runId,event);workActivity(this.store,this.config.project.id,this.workId,`browser.${event.kind}`,`${event.engine} / ${event.environment}${event.from?' ← '+event.from:''}${event.reason?' · '+event.reason:''}`,{status:event.kind,executor:event.target_id,engine:event.engine,environment:event.environment,...(event.reason?{reason:event.reason}:{})});}},[origin]);
+        try{await browser.open(url);this.browsers.set(key,browser);}catch(error){await browser.close();throw error;}
+      }else await browser.navigate(url);
+      const observed=browserObservationSchema.parse(await browser.observe());this.guard();assertBrowserUrl(observed.url,[origin],this.config.environment==='fixture');
+      if(socialSite){
+        const known=knownLoginSites[socialSite],gate=detectAuthGate(observed.url,observed.title,observed.text);
+        const signedIn=!gate&&await browser.extract({ready:known.signed_in,auth_gate:'input[type="password"]',auth_required:false,account_selector:'',account_text:'',rows:known.signed_in,columns:{},max_rows:1}).then(rows=>rows.length>0).catch(()=>false);
+        this.guard();
+        if(!signedIn){
+          this.blockedSocial.add(socialSite);
+          workActivity(this.store,this.config.project.id,this.workId,'search.blocked','The registered social browser did not show a current signed-in page. No other profile was tried.',{tool_name:name,status:'retryable_failure',reason:gate==='challenge'?'WORK_SOCIAL_CHALLENGE':'WORK_SOCIAL_AUTH_NOT_VERIFIED',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{})});
+          return {status:'retryable_failure',reason:gate==='challenge'?'WORK_SOCIAL_CHALLENGE':gate==='login_limited'?'WORK_SOCIAL_LOGIN_LIMITED':'WORK_SOCIAL_AUTH_NOT_VERIFIED',requested_url:url,observed_at:observed.observed_at,social_site:socialSite,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',social_access:'not_verified',text:'',links:[]};
+        }
+      }
+      const links=observed.links.filter(link=>{try{const next=new URL(link.url);return !next.username&&!next.password&&!Array.from(next.searchParams.keys()).some(k=>/token|password|secret|api.?key|auth|session|cookie/iu.test(k));}catch{return false;}});
+      if(search&&observedSearchChallenge(search,observed)){
+        this.blockedSearches.add(searchKey(search));
+        if(unusualSearchTraffic(url,observed))this.environmentBlockedQueries.add(search.query);
+        this.allowedUrls.delete(url);this.allowedUrls.delete(new URL(observed.url).href);
+        workActivity(this.store,this.config.project.id,this.workId,'search.blocked','The public search provider returned an observed access challenge. No login, challenge bypass or browser replay was attempted.',{tool_name:name,status:'retryable_failure',reason:'WORK_SEARCH_PROVIDER_CHALLENGE',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{}),source:{url:safeControlText(observed.url,2048),title:safeControlText(observed.title,200),observed_at:observed.observed_at}});
+        return {...observed,links,omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',search_provider:search.provider,search_access:'challenge_observed',status:'retryable_failure',reason:'WORK_SEARCH_PROVIDER_CHALLENGE',...(unusualSearchTraffic(url,observed)?{next_action:browser.target?.engine==='aside'?'user_browser_confirmation':'connect_aside',environment_block:true,provider_change_allowed:false}:{})};
+      }
       this.allowedUrls.add(new URL(observed.url).href);
-      const links=observed.links.filter(link=>{try{const next=new URL(link.url);return !next.username&&!next.password&&!Array.from(next.searchParams.keys()).some(k=>/token|password|secret|api.?key/iu.test(k));}catch{return false;}});
-      for(const link of links){try{const next=assertBrowserUrl(link.url,[new URL(link.url).origin],this.config.environment==='fixture');if(this.allowedUrls.has(next.href)||next.origin===key||next.protocol==='https:'&&!/^(?:localhost$|.*\.localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.|\[)/iu.test(next.hostname))this.allowedUrls.add(next.href);}catch{}}
-      workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${observed.title} · ${observed.url}`);
+      for(const link of links){try{const next=assertBrowserUrl(link.url,[new URL(link.url).origin],this.config.environment==='fixture');if(this.allowedUrls.has(next.href)||next.origin===origin||next.protocol==='https:'&&!privateHostname(next.hostname))this.allowedUrls.add(next.href);}catch{}}
+      workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${observed.title} · ${observed.url}`,{tool_name:name,status:'succeeded',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{}),source:{url:safeControlText(observed.url,2048),title:safeControlText(observed.title,200),observed_at:observed.observed_at}});
       // Never rewrite observed hrefs or fill absent links with model guesses.
-      return {...observed,links,omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only'};
+      return {...observed,links,omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',...(socialSite?{social_site:socialSite,social_access:'signed_in_marker_observed'}:{}),...(search?{search_provider:search.provider,search_access:'unclassified_dom'}:{})};
     }
     requireCondition(this.catalog().some(t=>t.name===name),'WORK_TOOL_NOT_AVAILABLE');
     const input=this.normalizedInput(name,args,requestId);
@@ -296,6 +502,7 @@ export class WorkExecutionTools {
     }
     const before=name==='runtime_pack_run'?await this.fileSnapshots(object(input.recipe)!):[];
     if(name==='runtime_pack_run')this.guard();
+    if(name==='runtime_pack_run'){const recipe=object(input.recipe)!,sources=Array.isArray(recipe.sources)?recipe.sources.flatMap(source=>typeof object(source)?.id==='string'?[String(object(source)!.id)]:[]):[];workActivity(this.store,this.config.project.id,this.workId,'pack.sources_selected',`Selected configured Pack sources: ${sources.slice(0,24).join(', ')}`,{tool_name:name,pack_family:String(recipe.family),status:'planned'});}
     this.dispatched.set(requestId,{name,input,...(codingStage?{coding_stage:codingStage}:{})});
     // Once dispatched, return the authoritative receipt even if pause/revision
     // changes during the effect. The bounded executor checkpoints it first and
@@ -320,6 +527,9 @@ export class WorkExecutionTools {
     const effect=effects[name as ExecutionToolName];requireCondition(effect,'WORK_TOOL_NOT_AVAILABLE');
     const data=object(value),readOnly=effect==='read_only';
     let state=String(data?.status??data?.run_status??'succeeded'),status:WorkClientToolReceipt['status']='succeeded';
+    const challengedSearch=['office_web_search','office_browser_read'].includes(name)&&data?.provenance==='live_browser_dom'&&data.effect==='read_only'&&data.search_access==='challenge_observed'&&state==='retryable_failure';
+    const socialBlocked=['office_social_search','office_browser_read'].includes(name)&&data?.provenance==='live_browser_dom'&&data.effect==='read_only'&&data.social_access==='not_verified'&&state==='retryable_failure';
+    if(challengedSearch||socialBlocked)status='retryable_failure';
     if(!readOnly){
       if(name==='runtime_files_request'&&!data?.root_id)state='waiting_approval';
       if(name==='runtime_files_propose'&&data?.state==='preview')state='waiting_approval';
@@ -374,7 +584,7 @@ export class WorkExecutionTools {
     const id=requestId&&/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(requestId)?requestId:null;
     const scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null}:value;
     const receiptValue=correctableQuality&&status==='retryable_failure'?{...object(scopedValue),correction:{kind:'data_quality',reason:'PACK_SOURCE_EVIDENCE_VERIFICATION_FAILED',automatic_correction_allowed:true,user_confirmation_required:false,quality_checks_passed:false,next_action:'Inspect preserved source records and verification receipts; correct only grounded recipe fields or collect missing evidence, then retry a validated recipe. Do not invent evidence, weaken requested checks or mark unverified data complete.'}}:scopedValue;
-    return {status,value:receiptValue,evidence_ids:status==='succeeded'&&id?[id]:[],effect_state:effectState,retry_safe:effectState==='none'&&(readOnly||status!=='succeeded')};
+    return {status,value:receiptValue,evidence_ids:status==='succeeded'&&id?[id]:[],effect_state:effectState,retry_safe:!challengedSearch&&!socialBlocked&&effectState==='none'&&(readOnly||status!=='succeeded')};
   }
   async close(){await Promise.allSettled([...this.browsers.values()].map(b=>b.close()));this.browsers.clear();}
 }

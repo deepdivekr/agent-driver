@@ -1,6 +1,8 @@
 # 일관된 백업과 격리 복원
 
-Linux 운영자 전용 기능이다. 실행 중 SQLite의 WAL까지 한 read transaction에 고정하고 Node의 online backup으로 복사한다. DB 파일만 복사하거나 WAL을 삭제하지 않는다. runtime schema6/7만 받으며 실제 schema·integrity·foreign key·event/outbox 일관성을 검사한다. 원본 schema6은 그대로 두고 백업 사본만 schema7로 올린다.
+Linux 운영자 전용 기능이다. 실행 중 SQLite의 WAL까지 한 read transaction에 고정하고 Node의 online backup으로 복사한다. DB 파일만 복사하거나 WAL을 삭제하지 않는다. runtime schema6/7/8을 받으며 실제 schema·integrity·foreign key·event/outbox 일관성을 검사한다. 원본 schema는 그대로 두고 백업 사본만 schema8로 올린다.
+
+현재 공개 bundle 검증기는 위 기본 runtime 스키마에 한정됩니다. Work·Pack 등 확장 테이블이 포함된 실제 Office DB는 `BACKUP_SCHEMA_MISMATCH`로 거절될 수 있습니다. 이를 해결하려고 스키마 검사를 끄면 안 됩니다. 로컬 수정 전 별도로 보존한 SQLite online snapshot은 공개 bundle이나 검증된 업무 재개 수단과 구분해야 합니다.
 
 ## 계약
 
@@ -16,14 +18,14 @@ Linux 운영자 전용 기능이다. 실행 중 SQLite의 WAL까지 한 read tra
 
 ## 운영자 명령
 
-Linux/Ubuntu/WSL Bash에서 설치한 저장소의 상위 디렉터리에서 시작한다. 아래 DB 경로는 demo 기본값이며 host 설정의 data directory가 다르면 실제 `dbPath`로 바꾼다. 목적지는 매번 존재하지 않는 새 폴더를 지정한다.
+Linux/Ubuntu/WSL Bash에서 빌드된 저장소의 상위 디렉터리에서 시작한다. 아래는 기본 clone 폴더명이 `agent-office`인 예시다. 다른 경로에 설치했다면 `cd`를 실제 경로로 바꾼다. DB 경로는 demo 기본값이며 host 설정의 data directory가 다르면 실제 `dbPath`로 바꾼다. 목적지는 매번 존재하지 않는 새 폴더를 지정한다.
 
 ```bash
-cd agent-driver
-node dist/cli.js maintenance backup --db .runtime/runtime.sqlite --destination ../agent-driver-backup-01
-node dist/cli.js maintenance inspect --backup ../agent-driver-backup-01
-node dist/cli.js maintenance restore --backup ../agent-driver-backup-01 --destination ../agent-driver-restored-01
-node dist/cli.js maintenance inspect --backup ../agent-driver-restored-01
+cd agent-office
+node dist/cli.js maintenance backup --db .runtime/runtime.sqlite --destination ../agent-office-backup-01
+node dist/cli.js maintenance inspect --backup ../agent-office-backup-01
+node dist/cli.js maintenance restore --backup ../agent-office-backup-01 --destination ../agent-office-restored-01
+node dist/cli.js maintenance inspect --backup ../agent-office-restored-01
 node dist/cli.js maintenance checkpoint --db .runtime/runtime.sqlite
 ```
 

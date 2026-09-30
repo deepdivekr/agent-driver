@@ -35,12 +35,14 @@ import {SwarmVisualExecutor} from '../swarm/visual-executor.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {WorkRuntime} from '../work/runtime.js';
-import {workControlSchema,workExecuteSchema} from '../work/contracts.js';
+import {workControlSchema,workExecuteSchema,workStartSchema} from '../work/contracts.js';
 import {type WorkSupervisor} from '../work/supervisor.js';
 import {WorkResults,workResultGetSchema,workResultsListSchema} from '../work/results.js';
+import {WorkDeliverySettings} from '../work/delivery-settings.js';
 import {SEMANTIC_DECISION_CATALOG} from '../decision-plane/semantic.js';
 import {WorkImportRuntime} from '../work/import-runtime.js';
 import {workImportExecutionOwner} from '../work/import-authority.js';
+import {assertWorkConnected} from '../work/lifecycle.js';
 import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
 import {CodingDialogRuntime} from '../coding/conversation.js';
 import {codingTools} from '../coding/contracts.js';
@@ -88,16 +90,18 @@ export class RuntimeApi{
   private workSupervisorLoading:Promise<WorkSupervisor>|null=null;
   private workSupervisorStopping:Promise<void>|null=null;
   private workAdmissionClosed=false;
+  private readonly deliveryJobs=new Map<string,Promise<void>>();
+  private readonly deliveryRecoveryTimer:NodeJS.Timeout;
   constructor(readonly config:HostConfig,readonly options:RuntimeApiOptions={}){
     this.workflowCompatibility=new WorkflowCompatibility(config);
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
-    this.workResults=new WorkResults(this.store);
+    this.workResults=new WorkResults(this.store,[],WorkDeliverySettings.fromConfig(config));
     this.files=this.store.localFileExplorer(config.project.id,dirname(config.dbPath));
     this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
     const windowsDriver=options.windows?.driver??(config.windowsExecutor?(config.windowsExecutor.kind==='cua-desktop'?new CuaDesktopDriver(config.windowsExecutor,this.store.desktopState):new CuaFieldDriver(config.windowsExecutor,this.store.desktopState)):undefined);
     this.windows=new WindowsWorkflowRuntime(this.store,config,{...options.windows,
       ...(windowsDriver?{driver:windowsDriver}:{}),llm:options.windows?.llm??this.model});
-    this.work=new WorkRuntime(this.store,config,this.model,()=>{const native=this.windows.catalog();return {browser_executors:browserCatalog(this.config),windows:{connection:native.native_executor,dynamic_planning:native.dynamic_planning,profiles_required:false}};});
+    this.work=new WorkRuntime(this.store,config,this.model,()=>{const native=this.windows.catalog();return {browser_executors:browserCatalog(this.config),windows:{connection:native.native_executor,dynamic_planning:native.dynamic_planning,profiles_required:false}};},(id,input,created)=>{if(created)this.workResults.setSelection(config.project.id,id,{revision:0,target_ids:input.delivery_target_ids??this.workResults.settings!.publicState().default_target_ids});});
     this.imports=new WorkImportRuntime(this.store,config,this.model);
     this.migrations=new HermesMigrationRuntime(this.store,config);
     this.remote=new RemoteOffice(this.store,config);
@@ -111,6 +115,9 @@ export class RuntimeApi{
       const saved=readModelSettings(modelSettingsPath(config)),approved=config.swarm?.model_data_approved===true,allowed=approved&&saved?.selection.jev!=='off';
       return {jev:allowed?(options.swarmJev??optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport??undefined):undefined,llm:approved?this.model:undefined};
     }):new SwarmVisualExecutor(this.store,config))):null;
+    this.deliveryRecoveryTimer=setInterval(()=>this.recoverPendingDeliveries(),3_000);
+    this.deliveryRecoveryTimer.unref();
+    queueMicrotask(()=>this.recoverPendingDeliveries());
   }
   attachClientSampling(sampling:McpSamplingStructuredModel){
     if(this.explicitProviders)return;
@@ -119,6 +126,18 @@ export class RuntimeApi{
     this.packs.providers.llm=this.model;this.swarm.providers.planner=new LlmSwarmPlanner(this.model);this.swarm.providers.llm_fallback=new LlmSwarmDecisionFallback(this.model);
   }
   private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
+  private recoverPendingDeliveries(){
+    if(this.closed||this.workAdmissionClosed||this.deliveryJobs.size>=4)return;
+    try{for(const workId of this.workResults.pendingWorkIds(this.config.project.id,4-this.deliveryJobs.size))this.dispatchWorkPending(workId);}catch{/* Malformed stored settings cannot grant delivery authority. */}
+  }
+  private dispatchWorkPending(workId:string){
+    if(this.closed||this.workAdmissionClosed||this.deliveryJobs.has(workId))return;
+    const job=this.workResults.dispatchPending(this.config.project.id,workId,()=>!this.closed&&!this.workAdmissionClosed).then(()=>undefined).catch(()=>undefined).finally(()=>this.deliveryJobs.delete(workId));this.deliveryJobs.set(workId,job);
+  }
+  private deliverWorkOutput(workId:string){
+    this.workResults.capture(this.config.project.id,workId);
+    this.dispatchWorkPending(workId);
+  }
   /** Execution/control imports the operating loop lazily; status and ordinary tools never start its timer. */
   private async supervisedWork(){
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');requireCondition(!this.workAdmissionClosed,'WORK_SUPERVISOR_CLOSED');
@@ -126,7 +145,7 @@ export class RuntimeApi{
     if(!this.workSupervisorLoading){
       const loading=import('../work/supervisor.js').then(({WorkSupervisor})=>{
         requireCondition(!this.closed,'RUNTIME_API_CLOSED');requireCondition(!this.workAdmissionClosed,'WORK_SUPERVISOR_CLOSED');
-        const supervisor=new WorkSupervisor(this.store,this.config,this.model,{api:this,auto_start:false,onResult:workId=>this.workResults.capture(this.config.project.id,workId)});this.workSupervisor=supervisor;return supervisor;
+        const supervisor=new WorkSupervisor(this.store,this.config,this.model,{api:this,auto_start:false,onResult:workId=>this.deliverWorkOutput(workId)});this.workSupervisor=supervisor;return supervisor;
       });
       this.workSupervisorLoading=loading;
     }
@@ -141,12 +160,13 @@ export class RuntimeApi{
     return this.workSupervisorStopping;
   }
   close(){
-    if(this.closed)return;this.closed=true;const workClosing=this.stopSupervisedWork();this.packs.close();this.coding.close();this.codingDialog.close();this.windows.close();
-    this.closing=(async()=>{await workClosing;await this.workflowCompatibility.drain();await this.windows.drain();await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
+    if(this.closed)return;this.closed=true;clearInterval(this.deliveryRecoveryTimer);const workClosing=this.stopSupervisedWork();this.packs.close();this.coding.close();this.codingDialog.close();this.windows.close();
+    this.closing=(async()=>{await workClosing;await Promise.allSettled([...this.deliveryJobs.values()]);await this.workflowCompatibility.drain();await this.windows.drain();await this.packs.drain();await this.coding.drain();await this.codingDialog.drain();await this.remote.drain();if(this.visual)await this.visual.close();this.store.close();})().catch(()=>{process.exitCode=1;this.store.close();});
   }
   async drain(){
     // Start admission fences together, before yielding to any one runtime.
     await Promise.all([this.stopSupervisedWork(),this.workflowCompatibility.drain(),this.windows.drain(),this.packs.drain(),this.coding.drain(),this.codingDialog.drain(),this.remote.drain()]);
+    await Promise.allSettled([...this.deliveryJobs.values()]);
     if(this.closing)await this.closing;
   }
   private async releaseFinishedVisuals(runId:string){
@@ -182,8 +202,23 @@ export class RuntimeApi{
     return {...result,dispatches,dispatch:dispatches[0]??null};
   }
   private scoped(taskId:string){const task=this.store.task(taskId);requireCondition(task.project_id===this.config.project.id,'TASK_SCOPE_MISMATCH');return task;}
+  /** Detachment is an Office admission fence, not a command to its original bot. */
+  private assertWorkToolConnection(name:string,args:unknown){
+    const tool=tools[name as keyof typeof tools];
+    if(!tool||tool.readOnly&&name!=='runtime_pack_plan'&&name!=='runtime_work_remote_refresh'&&!name.startsWith('runtime_files_'))return;
+    const input=tool.schema.parse(args) as Record<string,unknown>,workIds=new Set<string>();
+    if(typeof input.work_id==='string')workIds.add(input.work_id);
+    if(typeof input.run_id==='string'){
+      const kind=name.startsWith('runtime_swarm_')?'swarm':name.startsWith('runtime_pack_')?'pack':name.startsWith('runtime_coding_')?'coding':null;
+      if(kind){const bound=this.store.officeWork(this.config.project.id,kind,input.run_id) as {id:string}|null;if(bound)workIds.add(bound.id);}
+      if(name.startsWith('runtime_windows_')){const bound=this.store.desktopState.prepare('SELECT work_id FROM windows_workflow_run WHERE project_id=? AND id=?').get(this.config.project.id,input.run_id);if(bound)workIds.add(String(bound.work_id));}
+    }
+    if(name.startsWith('runtime_coding_')&&typeof input.dialog_id==='string'){const bound=this.store.officeWork(this.config.project.id,'coding_dialog',input.dialog_id) as {id:string}|null;if(bound)workIds.add(bound.id);}
+    for(const id of workIds)assertWorkConnected(this.store,this.config.project.id,id);
+  }
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');
+    this.assertWorkToolConnection(name,args);
     if(name.startsWith('runtime_workflow_'))return this.workflowCompatibility.call(name,args);
     if(name.startsWith('runtime_windows_'))return this.windows.call(name,args);
     if(name.startsWith('runtime_files_'))return this.files.call(name,args);
@@ -206,7 +241,11 @@ export class RuntimeApi{
           requireCondition(item,'WORK_IMPORT_PROJECT_NOT_REGISTERED');
           return this.imports.scan({path:item.root,...(input.scope!==undefined?{scope:input.scope}:{})});
         }
-        case 'runtime_work_start':return this.work.start(args);
+        case 'runtime_work_start':{
+          const input=workStartSchema.parse(args),targetIds=input.delivery_target_ids??this.workResults.settings!.publicState().default_target_ids;
+          requireCondition(targetIds.every(id=>id==='app'||this.workResults.settings?.target(id)),'RESULT_DELIVERY_TARGET_UNAVAILABLE');
+          return this.work.start(input);
+        }
         case 'runtime_work_define':return this.work.define(args);
         case 'runtime_work_answer':return this.work.answer(args);
         case 'runtime_work_execute':{
@@ -218,7 +257,7 @@ export class RuntimeApi{
           requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
           requireCondition(!work.paused&&work.spec&&['ready','running'].includes(work.status),'WORK_NOT_READY');
           requireCondition(workImportExecutionOwner(this.store,this.config.project.id,input.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
-          const supervisor=await this.supervisedWork();return supervisor.start(input.work_id,input.revision,input.cost_acknowledged,input.timezone);
+          const supervisor=await this.supervisedWork();return supervisor.start(input.work_id,input.revision,input.cost_acknowledged,input.timezone,input.current_run_only);
         }
         case 'runtime_work_control':{
           const input=workControlSchema.parse(args);requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');

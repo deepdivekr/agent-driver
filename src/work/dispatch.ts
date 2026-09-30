@@ -12,6 +12,7 @@ import {type HermesWorkRuntime,bindIntakeHermes} from './hermes.js';
 import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {WorkSupervisor,supervisorStatus} from './supervisor.js';
 import {workImportExecutionOwner} from './import-authority.js';
+import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
 
 export {workExecuteSchema} from './contracts.js';
 const readFamilies=new Set(['research.search','portal.collect','file.pipeline','inbox.triage','monitor.watch']);
@@ -21,12 +22,14 @@ export function workDispatchOptions(store:PackStore,config:HostConfig,id:string)
   const observation=workObservation(store,config.project.id,id,latest?.source_kind==='pack'?store.packRun(config.project.id,latest.source_id).status:work?.status??'unobserved');
   const unavailable=(reason:string)=>({can_execute:false,executor:null,reason,model_usage:false});
   if(!work)return unavailable('LEGACY_RUN_REQUIRES_ORCHESTRATOR');
+  const lifecycle=readWorkLifecycle(store,config.project.id,id);if(lifecycle.state!=='connected')return unavailable(lifecycle.state==='removed'?'WORK_REMOVED':'WORK_DISCONNECTED');
   if(importedConnectionReadiness(store,config,id))return unavailable('ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
   if(workImportExecutionOwner(store,config.project.id,id)==='original_runtime')return unavailable('USE_EXISTING_RUNTIME_CONTROL');
   if(work.paused)return unavailable('WORK_PAUSED');
+  try{if(loadHostConfig(config.path).fingerprint!==config.fingerprint)return unavailable('CONFIG_CHANGED');}catch{return unavailable('CONFIG_UNAVAILABLE');}
   if(!['ready','running'].includes(work.status)||!spec)return unavailable('WORK_DEFINITION_REQUIRED');
   if(observation.live)return unavailable('WORK_ALREADY_EXECUTING');
-  const supervisor=supervisorStatus(store,config.project.id,id);
+  const supervisor=supervisorStatus(store,config.project.id,id,config);
   if(supervisor)return unavailable('WORK_USE_EXISTING_EXECUTION_CONTROL');
   if(latest&&latest.source_kind!=='pack')return unavailable('USE_EXISTING_RUNTIME_CONTROL');
   if(latest){const run=store.packRun(config.project.id,latest.source_id);if(!['running','retryable_failure','waiting_auth','paused_work','paused_config'].includes(run.status))return unavailable('RUN_RESULT_REQUIRES_REVIEW');if('target' in run.recipe)return unavailable('USE_EXISTING_RUNTIME_CONTROL');}
@@ -39,19 +42,22 @@ export function workDispatchOptions(store:PackStore,config:HostConfig,id:string)
 export class WorkDispatcher{
   private active=new Set<Promise<void>>();private stopped=false;readonly family:FamilyRuntime;
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,readonly hermes:HermesWorkRuntime,readonly supervisor?:WorkSupervisor){initWorkExecution(store);this.family=new FamilyRuntime(store,config,{llm:model});}
+  get idle(){return this.active.size===0;}
   start(raw:unknown){
     const input=workExecuteSchema.parse(raw),project=this.config.project.id,work=this.store.intakeWork(project,input.work_id);
+    try{
     requireCondition(!this.stopped,'WORK_DISPATCH_CLOSED');
+    assertWorkConnected(this.store,project,work.id);
     const previous=executionRecord(this.store,project,work.id);
     if(previous?.owner&&previous.lease_until_ms>Date.now())return {accepted:false,deduplicated:true,state:previous.state};
     requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
-    const supervised=supervisorStatus(this.store,project,work.id);
+    const supervised=supervisorStatus(this.store,project,work.id,this.config);
     if(input.executor==='client'&&supervised&&['queued','running','retry_wait'].includes(supervised.state))return {accepted:false,deduplicated:true,...supervised};
     const route=workDispatchOptions(this.store,this.config,work.id);
     requireCondition(route.can_execute,route.reason??'WORK_NOT_READY');requireCondition(route.executor===input.executor||!this.supervisor&&input.executor==='hermes'&&route.executor==='client','WORK_EXECUTOR_CHANGED');
     requireCondition(input.cost_acknowledged,'WORK_MODEL_USAGE_CONSENT_REQUIRED');
     requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
-    if(input.executor==='client'){requireCondition(this.supervisor,'WORK_SUPERVISOR_NOT_CONNECTED');return this.supervisor.start(work.id,input.revision,input.cost_acknowledged,input.timezone);}
+    if(input.executor==='client'){requireCondition(this.supervisor,'WORK_SUPERVISOR_NOT_CONNECTED');workActivity(this.store,project,work.id,'dispatch.selected','The configured client and host tool capabilities were selected for this Work run.',{stage_id:'admission',status:'preparing',executor:'client'});return this.supervisor.start(work.id,input.revision,input.cost_acknowledged,input.timezone,input.current_run_only);}
     if(input.executor==='hermes'){
       const id=bindIntakeHermes(this.store,this.config,work.id,input.revision),bound=this.hermes.status(id)!;
       return this.hermes.action({work_id:id,revision:bound.revision,action:'send',request_id:randomUUID(),cost_acknowledged:true,instruction:'이 업무의 지침과 완료조건에 따라 이번 회차를 실행해 주세요. 이미 실행한 작업은 재실행하지 말고 기록을 먼저 확인하세요. 예약 생성·변경, 메시지 전송, 외부 제출은 별도 승인을 요청하세요. 연결이나 권한이 없으면 필요한 항목을 구체적으로 보고하세요.'});
@@ -63,6 +69,7 @@ export class WorkDispatcher{
     workActivity(this.store,project,work.id,'dispatch.started','실행 요청을 접수했습니다. 연결된 실행 경로를 준비합니다.');
     const operation=this.execute(work.id,work.revision,owner);this.active.add(operation);void operation.finally(()=>this.active.delete(operation));
     return {accepted:true,state:'preparing'};
+    }catch(error){const reason=error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'WORK_EXECUTION_REQUEST_FAILED';workActivity(this.store,project,work.id,'dispatch.rejected',`Work start rejected: ${reason}`,{stage_id:'admission',status:'blocked',reason});throw error;}
   }
   private async execute(id:string,revision:number,owner:string){
     const project=this.config.project.id,db=this.store.hermesState,settingsRevision=readModelSettings(modelSettingsPath(this.config))?.revision??0;
@@ -81,12 +88,14 @@ export class WorkDispatcher{
         }
       }
       const lease=executionRecord(this.store,project,id);requireCondition(lease?.owner===owner&&lease.lease_until_ms>Date.now(),'WORK_EXECUTION_LEASE_LOST');
+      assertWorkConnected(this.store,project,id);
       requireCondition(workImportExecutionOwner(this.store,project,id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
       requireCondition(this.store.intakeWork(project,id).revision===revision,'WORK_REVISION_CONFLICT');
       requireCondition((readModelSettings(modelSettingsPath(this.config))?.revision??0)===settingsRevision,'MODEL_SETTINGS_CHANGED');
       requireCondition(readFamilies.has(recipe.family)&&!('target' in recipe),'WORK_USE_REVIEWED_WRITE_CONTROL');
       requireCondition(recipe.family===spec.route.pack_family,'WORK_PACK_FAMILY_MISMATCH');
       workActivity(this.store,project,id,'dispatch.executing','Pack 실행을 시작합니다. 수집·검증 결과를 이 업무에 기록합니다.');
+      assertWorkConnected(this.store,project,id);
       const result=await this.family.call('runtime_pack_run',{...workExecutionBinding(work),...(prior?{request_id:prior.request_id}:{}),recipe}) as {status:string};
       workActivity(this.store,project,id,'dispatch.result',`Pack result: ${result.status}`);
       db.prepare('UPDATE office_execution SET state=?,reason=NULL,owner=NULL,lease_until_ms=0,updated_at=? WHERE project_id=? AND work_id=? AND owner=?').run(result.status,new Date().toISOString(),project,id,owner);

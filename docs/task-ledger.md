@@ -1,5 +1,84 @@
 # Public release ledger
 
+## Phase 111
+
+| ID | Requirement |
+|---|---|
+| RQ-887 | Audit current app results and original-runtime delivery; provide private local Telegram, Slack and Discord connection settings and truthful configured versus observed status. |
+| RQ-888 | Persist user instructions, explicit completion conditions and result destination selection independently of model plans; retain one-line intake with derived conditions and only material clarification questions. |
+| RQ-889 | Deliver independently verified new Work output to the chosen multiple destinations with durable receipts, recipient/configuration binding, bounded calls and no replay of uncertain sends; preserve imported runtime delivery ownership. |
+| RQ-890 | Add localized aligned onboarding/settings delivery controls, new Work destination selection and a clickable final delivery step for future destination changes; expose actual per-channel status. |
+| RQ-891 | Verify destination changes, stale revisions, restart/concurrency/uncertain outcomes, secret isolation, saved completion requirements and Korean/English desktop/mobile UI using isolated tests, preserving all failures. |
+| RQ-892 | Complete the affected and frozen full quick regression without soak, real public Work completion and versioned publication gates from Phase 110; update concise delivery guidance, evidence and handoff. |
+
+## Phase 110
+
+| ID | Requirement |
+|---|---|
+| RQ-881 | Define bounded user-meaningful Work stages with stable IDs and observable outcomes in new LLM plans; preserve legacy and imported plans, saved authority and replanning continuity. |
+| RQ-882 | Bind runtime operations, workers, source attempts/readbacks, waits and handoffs to those stages; retain honest evidence-backed state across pause, direction changes and resume without treating tool calls or visits as overall completion. |
+| RQ-883 | Render consistent business-stage progress with nested current activities, actual sites, workers, executor and blocking/handoff reasons; retain stage-dialog controls, localized responsive UI and bounded live updates. |
+| RQ-884 | Use GPT-6 Sol high sub-agents for independent final regression and review, run a frozen full quick suite without long soak, fix failures and pass installation, public-boundary and ledger gates on the release candidate. |
+| RQ-885 | Use a GPT-6 Sol high sub-agent to verify a real public-research Work through the Office runtime from UI intake to independently checked result, including visible stages and safe intervention/resume, in an isolated environment without restoring private Works or sending external messages. |
+| RQ-886 | Publish the verified common candidate through protected GitHub review/CI and a versioned release, update concise documentation and verify the released installer; preserve credentials, personal state, existing immutable releases and honest remaining limits. |
+
+## Phase 109
+
+| ID | Requirement |
+|---|---|
+| RQ-878 | Audit local commit history for September 29 in KST, distinguish merged history from branch duplicates and later uncommitted work, and summarize verified changes without treating UTC evidence names as local dates. |
+| RQ-879 | Preserve and commit the outstanding common implementation with its tests and documentation, verify current inputs against final recorded evidence, and run build, ledger, whitespace and public-boundary checks without restoring private services, calling models or publishing. |
+| RQ-880 | Save a concise dated change summary and commit receipts, update status and handoff, and verify the final local worktree while distinguishing implementation, test, installation and release status. |
+
+## Phase 108
+
+| ID | Requirement |
+|---|---|
+| RQ-874 | Separate default client/model selection from role policy with inherit, manual and task-auto modes; preserve legacy manual settings, coding priority and subscription-only billing boundaries. |
+| RQ-875 | Let the LLM allocate task roles once from verified subscription client/model candidates, validate every assignment, persist a task/settings-bound receipt and reuse it; unavailable or invalid allocation must fall back visibly without authorizing paid API or arbitrary models. |
+| RQ-876 | Apply allocations to Work execution, Swarm planning/workers and verification without cross-Work leakage; show allocation progress, chosen models, rationale and fallback in localized Work details. |
+| RQ-877 | Verify settings, candidate validation, reuse/invalidation, runtime propagation and Korean/English desktop/mobile flows with isolated tests; document exact evidence and remaining live-model limits. |
+
+## Phase 107
+
+| ID | Requirement |
+|---|---|
+| RQ-870 | Remove arbitrary minimum Swarm/source-worker counts and mandatory reduction, allowing the smallest useful evidence-backed DAG while preserving scope, dependencies, budgets, verification and read-only gates. |
+| RQ-871 | Reuse existing Work/worker decision sessions when supported; bind continuity to Work, run, role, provider, model and instruction contract, fence concurrent use and invalid sessions, and preserve checkpoint fallback without mixing user conversations or replaying effects. |
+| RQ-872 | Apply configurable role-specific model choices only when the effective default connection is subscription authentication; inherit saved choices when unspecified, preserve coding overrides and all API-mode choices including API-to-auth fallback, and never route auth to paid API. |
+| RQ-873 | Verify adaptive planning, session reuse/isolation/recovery, subscription/API model boundaries and localized settings with isolated regressions; record evidence and limits without paid calls, personal installation restore or release claims. |
+
+## Phase 106
+
+| ID | Requirement |
+|---|---|
+| RQ-863 | Inventory the actual personal Office Works, retain a recoverable backup and the preceding preservation evidence, then remove their Office registrations from normal views without deleting or replaying original bots, schedules, profiles or retained receipts. |
+| RQ-864 | Implement a common explicit Work disconnect/remove contract and visible detail control; fence future Office dispatch, resume, scheduling and original-runtime commands while preserving results and handling active or uncertain execution honestly. |
+| RQ-865 | Confirm the eight non-coding basic Pack families and create one clearly titled real-use Work per family using actual public sites or local file tasks, with precise outcome checks and no invented execution, automatic schedules, external submissions or messages. |
+| RQ-866 | Verify lifecycle guards, board/detail/SSE controls, real installed cleanup and example registration; run required quick/boundary/ledger checks without soak, update usage/verification records and use protected publication. |
+| RQ-867 | Diagnose the preserved ASTS research failure without attributing it to an unobserved model; default first-run Codex subscription model selection to Sol/high, preserve saved and explicit user choices and subscription-to-paid-API safety, and verify invocation evidence. |
+| RQ-868 | Expose actual Windows host, Ubuntu guest and Windows guest login readiness without pretending a missing guest transport is connected; bind auth per profile, use verified logged-in social browser candidates, and enable registered cross-environment read-only technical failover without login/challenge/effect bypass. |
+| RQ-869 | Provide explicit environment-specific site pre-login and persistent owned profiles shared across Work/Swarm/Pack restarts; release idle memory, preserve profile isolation and credential boundaries, and verify restart plus localized settings without promising permanent authentication or traffic-block removal. |
+
+## Phase 105
+
+| ID | Requirement |
+|---|---|
+| RQ-858 | Diagnose the actual submitted ASTS Work against installed runtime, saved definition, admission, process and activity state without duplicating private tasks. |
+| RQ-859 | Make the human Start work action durably register, immediately open the Work detail and admit its current run without a second Run action; preserve cost consent, revisions, original-runtime authority and uncertain-effect boundaries. |
+| RQ-860 | Surface actual bounded Work analysis, Pack/executor/source selection, current operation and readable execution summaries in live localized progress; move pause/instruction/resume to stage-click modals, without simulated progress or hidden failures. |
+| RQ-861 | Verify desktop/mobile UI and affected contracts, exercise the user's read-only ASTS Work through the installed runtime, preserve state and record actual versus fixture evidence. |
+| RQ-862 | Run proportionate quick/public-boundary/ledger checks without soak; apply the verified local candidate and record failures, issue disposition and remaining publication limits. |
+
+## Phase 104
+
+| ID | Requirement |
+|---|---|
+| RQ-854 | Re-audit all remaining issues against current implementation, original acceptance and preserved failures. |
+| RQ-855 | Repair reproducible in-scope defects with bounded verification; preserve failures and authority, exclude long soak. |
+| RQ-856 | Resolve issues using evidence and truthful state reasons; retain or explicitly decide unfinished acceptance scope. |
+| RQ-857 | Record issue dispositions and exact verification in status/handoff and publish reviewed changes under protected main. |
+
 ## Phase 103
 
 | ID | Requirement |

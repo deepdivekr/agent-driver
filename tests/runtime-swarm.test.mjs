@@ -147,9 +147,9 @@ test('standard batch leases exactly sixteen of eighteen dependency-ready workers
   const status=await x.api.call('runtime_swarm_status',{run_id:started.run.run_id});assert.equal(status.workers.filter(item=>item.status==='leased').length,16);assert.equal(status.workers.filter(item=>item.status==='pending').length,2);
 });
 
-test('standard start rejects a three-worker plan while the compatible generic plan API still accepts it',async t=>{
+test('standard start rejects a graph without source evidence while the generic plan API still accepts it',async t=>{
   const draft={summary:'Legacy generic graph.',workers:[worker('one'),worker('two'),worker('three')]},x=await setup(t,{draft,maxWorkers:24,maxConcurrency:16});
-  await assert.rejects(x.api.call('runtime_swarm_start',{request_id:'too-small-standard',goal:'Research broadly.',context:{}}),/SWARM_STANDARD_MIN_WORKERS/);
+  await assert.rejects(x.api.call('runtime_swarm_start',{request_id:'no-sources-standard',goal:'Research broadly.',context:{}}),/SWARM_STANDARD_MIN_SOURCE_WORKERS/);
   const generic=await x.api.call('runtime_swarm_plan',{goal:'Run a generic bounded graph.',context:{}});assert.equal(generic.plan.workers.length,3);assert.equal(generic.plan.research_mode,null);
 });
 
@@ -186,8 +186,8 @@ test('swarm mode requires an LLM-created multi-worker DAG, dispatches separate s
   const persisted=await x.api.call('runtime_swarm_status',{run_id:run.run_id});assert.equal(persisted.status,'completed');assert.ok(persisted.decision_events.length>=4);
 });
 
-test('swarm mode refuses silent single-agent downgrade and invalid or over-broad task graphs',async t=>{
-  assert.throws(()=>validateSwarmPlanDraft({summary:'single',workers:[worker('one')]},{max_workers:8,capabilities:[]}));
+test('swarm mode permits a single planned worker but still rejects invalid or over-broad task graphs',async t=>{
+  assert.equal(validateSwarmPlanDraft({summary:'single',workers:[worker('one')]},{max_workers:8,capabilities:[]}).workers.length,1);
   assert.throws(()=>validateSwarmPlanDraft({summary:'cycle',workers:[worker('one',['two']),worker('two',['one'])]},{max_workers:8,capabilities:[]}),/SWARM_PLAN_CYCLE/);
   assert.throws(()=>validateSwarmPlanDraft({summary:'capability',workers:[{...worker('one'),required_capabilities:['undelegated']},worker('two')]},{max_workers:8,capabilities:[]}),/SWARM_PLAN_CAPABILITY_NOT_DELEGATED/);
   const x=await setup(t,{draft:{summary:'valid',workers:[worker('one'),worker('two')]}});x.api.swarm.providers.planner=undefined;x.api.swarm.providers.llm_fallback=undefined;

@@ -5,10 +5,10 @@ import {type HostConfig,loadHostConfig} from '../interface/config.js';
 import {type PackStore} from '../packs/store.js';
 import {type SwarmRunSnapshot} from './contracts.js';
 import {requireCondition} from '../core/contracts.js';
-import {RoutedBrowser,type BrowserRouteProviders} from '../browser/executor-routing.js';
-import {browserPreferenceSchema} from '../browser/executor-contracts.js';
+import {RoutedBrowser,publicBrowserRecovery,type BrowserRouteProviders} from '../browser/executor-routing.js';
+import {browserPreferenceSchema,browserHostCompatible,type BrowserPreference,type BrowserTarget} from '../browser/executor-contracts.js';
 import {type VisualCommand} from './visual-executor.js';
-import {detectAuthGate} from './browser-auth.js';
+import {authSites,detectAuthGate,knownLoginSites,readyAuthTargets,setSiteAuth} from './browser-auth.js';
 import {sanitizeSwarmEndpoint} from './dashboard.js';
 
 interface Slot {id:string;browser:RoutedBrowser;lease:string;links:Set<string>;origins:string[];steps:number;busy:boolean;}
@@ -42,11 +42,26 @@ export class RoutedSwarmBrowser {
       const office=this.store.officeWork(this.config.project.id,'swarm',run) as {id:string}|null,work=office?this.store.intakeWorkOptional(this.config.project.id,office.id):null;
       const workBrowser=browserPreferenceSchema.optional().parse((work?.spec as {browser?:unknown}|null)?.browser);
       requireCondition(!workBrowser||!definition.browser||workBrowser.environment===definition.browser.environment,'BROWSER_WORK_ENVIRONMENT_CONFLICT');
-      const preference=workBrowser??definition.browser??{environment:this.config.swarm?.visual.owned_vm?'ubuntu_vm':'owned_headless'};
+      let preference:BrowserPreference=workBrowser??definition.browser??{environment:'owned_headless'};
+      const socialSites=[...new Set(definition.source_urls.map(value=>new URL(value).hostname.toLowerCase().replace(/^www\./u,'')).filter(site=>Object.hasOwn(knownLoginSites,site)))];
+      let authTarget:BrowserTarget|undefined;
+      if(socialSites.length){
+        // The generic public/headless default does not select an account. A
+        // real social read binds one previously verified profile for all sites.
+        const explicit=preference.environment!=='owned_headless'||preference.preferred_engine?preference:undefined;
+        const ready=socialSites.map(site=>readyAuthTargets(this.store,this.config,site));
+        authTarget=ready[0]!.filter(target=>browserHostCompatible(target)&&ready.every(targets=>targets.some(candidate=>candidate.id===target.id))&&(!explicit||target.environment===explicit.environment&&(!explicit.preferred_engine||target.engine===explicit.preferred_engine)))
+          .sort((a,b)=>Number(b.environment==='host_foreground'&&b.engine==='aside')-Number(a.environment==='host_foreground'&&a.engine==='aside')||b.priority-a.priority||a.id.localeCompare(b.id))[0];
+        requireCondition(authTarget,'BROWSER_AUTH_REQUIRED');
+        preference={environment:authTarget.environment,preferred_engine:authTarget.engine};
+      }
+      const fallback_preferences=socialSites.length?[]:publicBrowserRecovery(preference);
+      const routingConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:this.config;
+      const guard=()=>{this.lease(run,worker,token);if(authTarget){const states=authSites(this.store,this.config,authTarget);requireCondition(!states.some(site=>site.handoff)&&socialSites.every(site=>states.some(row=>row.site===site&&row.state==='ready')),'BROWSER_AUTH_REQUIRED');}};
       const configured=this.providers(),providers=work?.jev_enabled===false?{...configured,jev:undefined}:configured;
       const journal=this.store.browserExecutors(),saved=journal.checkpoint(this.config.project.id,id);
       if(saved){await this.url(saved.url);if(!origins.includes(new URL(saved.url).origin))origins.push(new URL(saved.url).origin);}
-      const browser=new RoutedBrowser(this.config,{profile_key:`${run}-${worker}`,ephemeral:true,context_id:id,request:definition.objective,preference,providers,guard:()=>{this.lease(run,worker,token);},checkpoint:{load:()=>journal.checkpoint(this.config.project.id,id),save:value=>journal.saveCheckpoint(this.config.project.id,id,value)},event:event=>{journal.append(this.config.project.id,id,event);}},origins);
+      const browser=new RoutedBrowser(routingConfig,{profile_key:`${run}-${worker}`,ephemeral:true,context_id:id,request:definition.objective,preference,fallback_preferences,providers,guard,checkpoint:{load:()=>journal.checkpoint(this.config.project.id,id),save:value=>journal.saveCheckpoint(this.config.project.id,id,value)},event:event=>{journal.append(this.config.project.id,id,event);}},origins);
       const slot:Slot={id:`browser-${randomUUID()}`,browser,lease:token,links:new Set(definition.source_urls.map(key)),origins,steps:0,busy:false};
       try{await browser.open(definition.source_urls[0]!);this.lease(run,worker,token);this.store.bindControlSurface(this.config.project.id,run,worker,token,slot.id,'');this.store.recordSwarmActivity(this.config.project.id,run,snapshot.revision,worker,'worker.activity',{activity_kind:'started',summary:`${browser.target!.engine} / ${browser.target!.environment}`,surface_id:slot.id,decision_layer:'code'});return slot;}catch(error){await browser.close().catch(()=>{});throw error;}
     })();this.slots.set(id,pending);
@@ -59,7 +74,12 @@ export class RoutedSwarmBrowser {
       if(command.action==='navigate'){const u=await this.url(command.url);requireCondition(slot.links.has(key(command.url)),'CONTROL_BROWSER_URL_NOT_OBSERVED');if(!slot.origins.includes(u.origin))slot.origins.push(u.origin);await slot.browser.navigate(key(command.url));}
       else if(command.action==='scroll')await slot.browser.scroll(command.direction);
       const observed=await slot.browser.observe();await this.url(observed.url);this.lease(run,worker,token);
-      if(detectAuthGate(observed.url,observed.title,observed.text,false))throw Error('BROWSER_AUTH_REQUIRED');
+      const authGate=detectAuthGate(observed.url,observed.title,observed.text,false);
+      if(authGate){
+        const site=new URL(observed.url).hostname.toLowerCase().replace(/^www\./u,'');
+        if(Object.hasOwn(knownLoginSites,site))setSiteAuth(this.store,this.config,site,authGate,false,slot.browser.target!);
+        throw Error('BROWSER_AUTH_REQUIRED');
+      }
       const links=observed.links.filter(link=>{try{const u=new URL(link.url);return ['http:','https:'].includes(u.protocol)&&!u.username&&!u.password;}catch{return false;}});
       for(const link of links)slot.links.add(key(link.url));slot.links.add(key(observed.url));requireCondition(slot.links.size<=2000,'CONTROL_BROWSER_LINK_LIMIT');
       this.store.recordObservedUrl(this.config.project.id,run,worker,token,observed.url);

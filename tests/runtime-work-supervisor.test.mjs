@@ -16,6 +16,7 @@ import {WorkExecutionTools} from '../dist/work/execution-tools.js';
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 import {sha} from '../dist/packs/data.js';
 import {startControlCenter} from '../dist/observability/control-center.js';
+import {readWorkDetail} from '../dist/observability/work-view.js';
 const proposal={title:'테스트 자료 수집',desired_outcome:'실제 로컬 원본의 값을 결과에 남긴다',completion_checks:[{id:'records',result:'원본 제목과 값 23 확인',evidence:'실제 파일 조회 결과'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};
 const recipe={version:1,family:'research.search',request:'자료를 확인해줘',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],query:'',search_fields:['title'],sort:null,limit:10};
 function fixture(options={}){const calls=[];return {calls,async call(purpose,instructions,input){
@@ -36,6 +37,44 @@ async function setup(t,options={}){
  const cleanup=[];t.after(async()=>{for(const operation of cleanup.reverse())await operation();store.close();await rm(root,{recursive:true,force:true});});return {root,config,store,model,work,cleanup};
 }
 async function finished(x,states=['succeeded','failed','awaiting_review','reconciliation_required']){for(let i=0;i<120;i++){const s=supervisorStatus(x.store,x.config.project.id,x.work.work_id);if(states.includes(s?.state))return s;await delay(25);}assert.fail(JSON.stringify(supervisorStatus(x.store,x.config.project.id,x.work.work_id)));}
+test('runtime contract semantic stage controls reject stale targets and attribute direction changes to the current run',async t=>{
+ const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false});x.cleanup.push(()=>supervisor.close());
+ const work=x.store.intakeWork(x.config.project.id,x.work.work_id),spec={...work.spec,plan:{...work.spec.plan,steps:[{id:'collect',goal:'Collect records',observable_outcome:'Source records retained',depends_on:[],effect:'read_only',tool_hints:[],evidence_ids:[]}]}};
+ x.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify(spec),work.id);
+ const runId=randomUUID(),at=new Date().toISOString();
+ x.store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(runId,x.config.project.id,work.id,work.revision,'paused','null',x.config.fingerprint,0,at,at);
+ assert.throws(()=>supervisor.action({work_id:work.id,revision:work.revision,action:'edit',stage_id:'removed_stage',instruction:'Keep two records'}),/WORK_CLIENT_STAGE_UNKNOWN/u);
+ assert.equal(x.store.intakeWork(x.config.project.id,work.id).revision,work.revision);
+ supervisor.action({work_id:work.id,revision:work.revision,action:'edit',stage_id:'collect',instruction:'Keep two records'});
+ const activity=x.store.hermesState.prepare("SELECT metadata FROM office_activity WHERE work_id=? AND kind='supervisor.edit' ORDER BY id DESC LIMIT 1").get(work.id);
+ const metadata=JSON.parse(activity.metadata);assert.equal(metadata.run_id,runId);assert.equal(metadata.stage_id,'collect');assert.match(metadata.stage_binding,/^[a-f0-9]{64}$/u);
+ assert.equal(supervisorStatus(x.store,x.config.project.id,work.id).state,'paused');
+});
+test('runtime contract dispatched calls without receipts expose the actual interruption and never count as completed progress',async t=>{
+ const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false});x.cleanup.push(()=>supervisor.close());
+ const runId=randomUUID(),at=new Date().toISOString(),pending={request_id:'pending-read',turn:1,stage_id:'blocked-source',tool_name:'office_browser_read',arguments:{url:'https://example.org/next'},effect:'read_only',dispatched:true};
+ const checkpoint={format:1,work_id:x.work.work_id,run_id:runId,binding:'a'.repeat(64),turn:1,pending,observations:[{invocation:{...pending,request_id:'confirmed-read',turn:0,stage_id:'confirmed-source'},receipt:{status:'succeeded',effect_state:'none',value:{},evidence_ids:[],retry_safe:true},observed_at:at}],summary:'Actual pending tool without a host receipt.'};
+ x.store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(runId,x.config.project.id,x.work.work_id,x.work.revision,'failed',JSON.stringify(checkpoint),x.config.fingerprint,0,at,at);
+ const modelCalls=x.model.calls.length;
+ for(const [state,expires,expected] of [['running',Date.now()+60000,'running'],['running',0,'execution_unobserved'],['failed',0,'failed'],['reconciliation_required',0,'reconciliation_required']]){
+  x.store.hermesState.prepare('UPDATE office_supervisor SET state=?,owner=?,lease_until_ms=? WHERE run_id=?').run(state,'owned-test-lease',expires,runId);
+  const status=supervisorStatus(x.store,x.config.project.id,x.work.work_id);assert.equal(status.steps.length,2);assert.equal(status.current_stage,'blocked-source');assert.equal(status.steps[1].status,expected);assert.equal(status.steps[1].effect_state,'unobserved');assert.equal(status.steps[1].observed_at,null);
+  const detail=readWorkDetail(x.store,x.config,x.work.work_id);assert.equal(detail.total_steps,2);assert.equal(detail.verified_steps,1);assert.equal(detail.stages[1].verified,false);assert.equal(detail.stages[1].status,expected);assert.equal(detail.completion_verified,false);assert.equal(detail.progress_percent,null);
+ }
+ assert.equal(x.model.calls.length,modelCalls);assert.deepEqual(JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(runId).checkpoint),checkpoint);
+});
+test('runtime fixture explicit resume preserves a legacy dispatched read interruption without replay or lost trace turns',async t=>{
+ const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false,tick_ms:25});x.cleanup.push(()=>supervisor.close());
+ const runId=randomUUID(),at=new Date().toISOString(),pending={request_id:'interrupted-link-list',turn:1,stage_id:'links',tool_name:'office_browser_links',arguments:{},effect:'read_only',dispatched:true};
+ const original={invocation:{...pending,request_id:'saved-source',turn:0,stage_id:'source',tool_name:'office_browser_read',arguments:{url:'https://example.org/source'}},receipt:{status:'succeeded',effect_state:'none',value:{title:'Actual preserved source'},evidence_ids:['saved-source'],retry_safe:true},observed_at:at};
+ const checkpoint={format:1,work_id:x.work.work_id,run_id:runId,binding:'a'.repeat(64),turn:1,pending,observations:[original],summary:'A legacy interrupted link listing.'};
+ x.store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,reason,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(runId,x.config.project.id,x.work.work_id,x.work.revision,'failed',JSON.stringify(checkpoint),'WORK_CLIENT_TOOL_METADATA_BUDGET_EXCEEDED',x.config.fingerprint,0,at,at);
+ const inputs=[];x.model.call=async(purpose,instructions,input)=>{assert.ok(instructions.startsWith('Execute the registered Work'));inputs.push(structuredClone(input));return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'The prior interruption is retained for review.',completed_checks:[],wait_reason:'configuration'};};
+ supervisor.action({work_id:x.work.work_id,revision:x.work.revision,action:'resume'});supervisor.activate();const end=await finished(x,['paused']);
+ assert.equal(end.run_id,runId);assert.equal(inputs.length,1);assert.equal(inputs[0].checkpoint.turn,2);assert.equal(inputs[0].checkpoint.pending,null);assert.deepEqual(inputs[0].checkpoint.observations[0],original);
+ const interrupted=inputs[0].checkpoint.observations[1];assert.deepEqual(interrupted.invocation,pending);assert.equal(interrupted.receipt.status,'retryable_failure');assert.equal(interrupted.receipt.value.status,'read_interrupted');assert.equal(interrupted.receipt.value.result_observation,'unobserved');assert.equal(interrupted.receipt.value.retry_not_attempted,true);assert.equal(interrupted.receipt.effect_state,'none');assert.equal(interrupted.receipt.retry_safe,false);assert.deepEqual(interrupted.receipt.evidence_ids,[]);assert.equal(end.result.completion_verified,false);
+ const saved=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(runId).checkpoint);assert.equal(saved.observations.length,2);assert.deepEqual(saved.observations[0],original);assert.equal(saved.turn,2);assert.equal(x.store.hermesState.prepare('SELECT COUNT(*) AS n FROM office_supervisor WHERE work_id=?').get(x.work.work_id).n,1);
+});
 test('runtime fixture supervised Work performs native Pack file I/O, independent verification and result capture',async t=>{
  const x=await setup(t),results=new WorkResults(x.store),supervisor=new WorkSupervisor(x.store,x.config,x.model,{tick_ms:25,onResult:id=>results.capture(x.config.project.id,id)});x.cleanup.push(()=>supervisor.close());
  assert.throws(()=>supervisor.start(x.work.work_id,999,true),/REVISION/);assert.throws(()=>supervisor.start(x.work.work_id,x.work.revision,false),/CONSENT/);
@@ -45,10 +84,25 @@ test('runtime fixture supervised Work performs native Pack file I/O, independent
  assert.equal(JSON.parse(await readFile(join(x.root,'source.json'),'utf8'))[0].value,23);
 });
 test('runtime fixture pause/edit/resume races retain receipts and do not let old result overwrite new direction',async t=>{
- let release;const gate=new Promise(resolve=>release=resolve),x=await setup(t,{gate});const s=new WorkSupervisor(x.store,x.config,x.model,{tick_ms:25});x.cleanup.push(async()=>{release();await s.close();});s.start(x.work.work_id,x.work.revision,true);await delay(40);
+ let release;const gate=new Promise(resolve=>release=resolve),x=await setup(t,{gate}),replanRoles=[],base=x.model.call.bind(x.model);
+ x.model.forRole=role=>({calls:x.model.calls,async call(...args){if(args[1].startsWith('Revise this existing'))replanRoles.push(role);return base(...args);}});
+ const s=new WorkSupervisor(x.store,x.config,x.model,{tick_ms:25});x.cleanup.push(async()=>{release();await s.close();});s.start(x.work.work_id,x.work.revision,true);await delay(40);
  const edited=s.action({work_id:x.work.work_id,revision:x.work.revision,action:'edit',instruction:'카드가 아닌 요약문으로 반환해줘.'});assert.equal(edited.state,'paused');
  const resumed=s.action({work_id:x.work.work_id,revision:edited.revision,action:'resume'});assert.equal(resumed.state,'queued');release();const end=await finished(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
- const work=x.store.intakeWork(x.config.project.id,x.work.work_id);assert.equal(work.spec.title,'자료 요약');assert.equal(work.revision,3);assert.equal(x.store.officeRuns(x.config.project.id,work.id).length,1);assert.equal(x.store.workDirections(x.config.project.id,work.id).length,1);
+ const work=x.store.intakeWork(x.config.project.id,x.work.work_id);assert.equal(work.spec.title,'자료 요약');assert.equal(work.revision,3);assert.equal(x.store.officeRuns(x.config.project.id,work.id).length,1);assert.equal(x.store.workDirections(x.config.project.id,work.id).length,1);assert.ok(replanRoles.length>0&&replanRoles.every(role=>role==='planner'));
+});
+test('runtime fixture unsupported model during replanning waits and resumes the same run after model correction',async t=>{
+ const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false,tick_ms:25});x.cleanup.push(()=>supervisor.close());
+ const runId=randomUUID(),at=new Date().toISOString(),workId=x.work.work_id,base=x.model.call.bind(x.model);let unsupported=true,replans=0;
+ x.model.call=async(...args)=>{if(args[1].startsWith('Revise this existing')){replans++;if(unsupported)throw Error('STRUCTURED_MODEL_UNSUPPORTED');}return base(...args);};
+ x.store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(runId,x.config.project.id,workId,x.work.revision,'paused','null',x.config.fingerprint,0,at,at);
+ const edited=supervisor.action({work_id:workId,revision:x.work.revision,action:'edit',instruction:'카드 대신 근거 있는 짧은 요약문으로 반환해줘.'});
+ supervisor.action({work_id:workId,revision:edited.revision,action:'resume'});supervisor.activate();
+ const waiting=await finished(x,['waiting_model']);assert.equal(waiting.reason,'STRUCTURED_MODEL_UNSUPPORTED');assert.equal(waiting.run_id,runId);assert.equal(waiting.can_resume,true);
+ assert.equal(x.store.hermesState.prepare('SELECT replan_required FROM office_supervisor WHERE run_id=?').get(runId).replan_required,1);assert.equal(x.store.officeRuns(x.config.project.id,workId).length,0);
+ unsupported=false;const current=x.store.intakeWork(x.config.project.id,workId),resumed=supervisor.action({work_id:workId,revision:current.revision,action:'resume'});assert.equal(resumed.run_id,runId);
+ const complete=await finished(x);assert.equal(complete.state,'succeeded',JSON.stringify(complete));assert.equal(complete.run_id,runId);assert.equal(replans,2);
+ assert.equal(x.store.hermesState.prepare('SELECT replan_required FROM office_supervisor WHERE run_id=?').get(runId).replan_required,0);assert.equal(x.store.hermesState.prepare('SELECT COUNT(*) AS n FROM office_supervisor WHERE work_id=?').get(workId).n,1);
 });
 test('runtime fixture service restart continues the same paused run without repeated successful source work',async t=>{
  const x=await setup(t);let release,entered;const waiting=new Promise(r=>entered=r),gate=new Promise(r=>release=r),base=x.model.call.bind(x.model);x.model.call=async(...args)=>{if(args[2]?.checkpoint?.observations?.length){entered();await gate;}return base(...args);};
@@ -126,20 +180,22 @@ test('runtime fixture actual desktop/mobile UI has execute, true live tail, cont
  for(const [index,[lang,width,theme]] of [['ko',1280,'dark'],['en',390,'dark'],['en',1280,'light'],['ko',390,'light']].entries()){
   const page=await browser.newPage({viewport:{width,height:900},timezoneId:'Asia/Seoul'});await page.addInitScript(({lang,theme})=>{localStorage.setItem('office-lang',lang);localStorage.setItem('office-theme',theme);},{lang,theme});const errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.goto(server.url+'?work='+x.work.work_id);if(index===0){
-   await page.locator('#execution-consent').check();await page.locator('#execute-work').click();
+   assert.equal(await page.locator('#execution-consent').count(),0);assert.equal(await page.locator('#execute-work').isEnabled(),true);await page.locator('#execute-work').click();
    await page.waitForFunction(()=>document.getElementById('work-tail-output')?.textContent.includes('model.started'));
    await page.locator('.supervisor-control .live-stage[data-busy=true]').waitFor();
-   await page.locator('#supervisor-instruction').fill('Return the collected data as a summary.');release();
+   await page.locator('[data-stage="next"]').click();await page.locator('#stage-instruction').fill('Return the collected data as a summary.');release();
   }
   await page.waitForFunction(()=>document.querySelector('#work-tail-output')?.textContent.includes('supervisor.result'));
-  await page.locator('.work-results').waitFor();assert.ok(await page.locator('.work-results').innerText().then(v=>v.includes('23')));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
+  if(index===0){assert.equal(await page.locator('#stage-instruction').inputValue(),'Return the collected data as a summary.');assert.equal(await page.evaluate(()=>document.activeElement.id),'stage-instruction');await page.locator('#stage-close').click();}
+  await page.locator('.work-results').waitFor();await page.waitForFunction(()=>document.querySelector('.work-results')?.textContent.includes('23'),{},{timeout:5000});assert.ok(await page.locator('.work-results').innerText().then(v=>v.includes('23')));const saved=await(await fetch(server.url+'work/detail?id='+x.work.work_id)).json();assert.ok(saved.results.some(result=>result.text.includes('23')));assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   assert.equal(await page.getByRole('button',{name:lang==='ko'?'일시정지 미지원':'Pause not supported',exact:true}).count(),0);
   if(index===0){
-   assert.equal(await page.locator('#supervisor-instruction').inputValue(),'Return the collected data as a summary.');assert.equal(await page.evaluate(()=>document.activeElement.id),'supervisor-instruction');
+   await page.locator('[data-stage="next"]').click();await page.locator('#stage-instruction').focus();
+   assert.equal(await page.locator('#stage-instruction').inputValue(),'Return the collected data as a summary.');assert.equal(await page.evaluate(()=>document.activeElement.id),'stage-instruction');
    assert.equal(x.store.hermesState.prepare('SELECT timezone FROM office_supervisor WHERE work_id=?').get(x.work.work_id).timezone,'Asia/Seoul');
-   await page.locator('[data-supervisor-action="edit"]').click();await page.locator('[data-supervisor-action="resume"]').waitFor();
+   await page.locator('[data-stage-action="edit"]').click();await page.waitForFunction(()=>!document.querySelector('[data-stage-action="resume"]')?.disabled);
    assert.equal(supervisorStatus(x.store,x.config.project.id,x.work.work_id).state,'paused');
-   await page.locator('[data-supervisor-action="resume"]').click();await page.waitForFunction(()=>document.querySelector('.supervisor-control .badge')?.textContent.includes('실행 완료'));
+   await page.locator('[data-stage-action="resume"]').click();await page.locator('#stage-close').click();await page.waitForFunction(()=>document.querySelector('.supervisor-control .badge')?.textContent.includes('실행 완료'));
    assert.equal(x.store.intakeWork(x.config.project.id,x.work.work_id).spec.title,'자료 요약');assert.equal(x.store.officeRuns(x.config.project.id,x.work.work_id).length,1);
   }else if(lang==='en')assert.doesNotMatch(await page.locator('.work-tail').innerText(),/[가-힣]/u);
   assert.deepEqual(errors,[]);await page.close();

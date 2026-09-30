@@ -49,7 +49,11 @@ const hasSupervisor=x=>Boolean(x.api.store.hermesState.prepare("SELECT 1 FROM sq
 test('MCP contract execution and control share canonical dashboard schemas without granting authority',()=>{
   assert.equal(dispatcherExecuteSchema,workExecuteSchema);assert.equal(supervisorActionSchema,workControlSchema);
   assert.equal(workTools.runtime_work_execute.readOnly,false);assert.equal(workTools.runtime_work_control.readOnly,false);
-  assert.deepEqual(workExecuteSchema.parse({work_id:'11111111-1111-4111-8111-111111111111',revision:1}),{work_id:'11111111-1111-4111-8111-111111111111',revision:1,executor:'client',cost_acknowledged:false});
+  const request={work_id:'11111111-1111-4111-8111-111111111111',revision:1};
+  assert.deepEqual(workExecuteSchema.parse(request),{...request,executor:'client',cost_acknowledged:false,current_run_only:true});
+  assert.equal(workExecuteSchema.parse({...request,current_run_only:false}).current_run_only,false);
+  assert.equal(workExecuteSchema.parse({...request,current_run_only:true}).current_run_only,true);
+  assert.equal(workExecuteSchema.parse({...request,current_run_only:true}).cost_acknowledged,false);
   assert.throws(()=>workControlSchema.parse({work_id:'11111111-1111-4111-8111-111111111111',revision:1,action:'resume',approved:true}));
 });
 
@@ -82,6 +86,13 @@ test('MCP contract independent runtimes share the exact UI supervisor lease inst
   const repeated=await other.call('runtime_work_execute',{work_id:x.work.work_id,revision:x.work.revision,cost_acknowledged:true});
   assert.equal(repeated.accepted,false);assert.equal(repeated.deduplicated,true);assert.equal(repeated.run_id,begun.run_id);
   assert.equal(x.api.store.hermesState.prepare('SELECT count(*) AS n FROM office_supervisor').get().n,1);hold.release();assert.equal((await settle(x)).state,'succeeded');
+});
+
+test('MCP contract omitted schedule opt-in starts only the current recurring cycle without normalizing or enabling a schedule',async t=>{
+  const ai=model(),original=ai.call.bind(ai);ai.call=async(purpose,instructions,input,schema)=>{assert.ok(!instructions.startsWith('Normalize the user'),'omitted schedule consent must not call schedule planning');const value=await original(purpose,instructions,input,schema);return schema.properties?.title?{...value,recurrence:{kind:'recurring',rule:'Daily at 20:00 UTC'}}:value;};
+  const x=await setup(t,ai);x.work=await x.start();const admitted=await x.api.call('runtime_work_execute',{work_id:x.work.work_id,revision:x.work.revision,cost_acknowledged:true,timezone:'UTC'});
+  assert.equal(admitted.current_run_only,true);const finished=await settle(x);assert.equal(finished.current_run_only,true);assert.equal(finished.result.completion_verified,true);
+  assert.equal(x.api.store.hermesState.prepare('SELECT COUNT(*) AS n FROM office_work_schedule WHERE work_id=?').get(x.work.work_id).n,0);
 });
 
 test('MCP contract pause/resume changes the same Work revision and preserves the operation identity',async t=>{
