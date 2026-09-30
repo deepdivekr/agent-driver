@@ -11,10 +11,12 @@ import {ControlSettings} from '../dist/observability/control-settings.js';
 import {BrowserSetupController} from '../dist/onboarding/browser-setup.js';
 import {startControlCenter} from '../dist/observability/control-center.js';
 import {PackStore} from '../dist/packs/store.js';
-import {modelSettingsPath,publicModelSettings,saveModelSettings} from '../dist/onboarding/model-settings.js';
+import {modelSettingsPath,publicModelSettings,readModelSettings,saveModelSettings} from '../dist/onboarding/model-settings.js';
+import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
+import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
 
 const evidence='tests/evidence/phase94';
-async function fixture(t,{savedCodexModel,savedCodexEffort}={}){
+async function fixture(t,{savedCodexModel,savedCodexEffort,catalogModels=[{id:'fixture-model',label:'Fixture model'}]}={}){
   const root=await mkdtemp(join(tmpdir(),'office-layout-')),paths=await prepareLocalConnection(root),config=loadHostConfig(paths.runtimeConfig);
   if(savedCodexModel){
     const selection=publicModelSettings(null,{}).selection;
@@ -28,7 +30,7 @@ async function fixture(t,{savedCodexModel,savedCodexEffort}={}){
   const providerFetch=async()=>new Response(JSON.stringify({data:[{id:'fixture-model'}]}),{status:200,headers:{'content-type':'application/json'}});
   const settings=new ControlSettings(config,auth,{},providerFetch,mcp,undefined,bootstrap,browsers);let host;
   const server=createServer(async(req,res)=>{
-    if(req.url==='/settings/models'&&req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify(Object.fromEntries(['codex','claude','opencode'].map(id=>[id,{status:'available',models:[{id:'fixture-model',label:'Fixture model'}]}]))));return;}
+    if(req.url==='/settings/models'&&req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify(Object.fromEntries(['codex','claude','opencode'].map(id=>[id,{status:'available',models:id==='codex'?catalogModels:[{id:'fixture-model',label:'Fixture model'}]}]))));return;}
     if(!await settings.handle(req,res,req.url.slice(1),host)){res.writeHead(404);res.end();}
   });
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));host='127.0.0.1:'+server.address().port;
@@ -127,8 +129,8 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     assert.equal(await page.locator('#clients .client-icon svg').count(),5);
     assert.equal(await page.locator('#clients .client>p').count(),0);
     const selectedCodexModel=await page.locator('#codex-model').inputValue(),selectedCodexEffort=await page.locator('#codex-reasoning').inputValue();
-    assert.equal(selectedCodexModel,'gpt-6-sol','A first unsaved subscription setting must propose Sol');
-    assert.equal(selectedCodexEffort,'high');
+    assert.equal(selectedCodexModel,'','A first unsaved setting without an account-listed Sol uses the CLI default');
+    assert.equal(selectedCodexEffort,'');
     await page.locator('#client-codex [data-manage-client=codex]').click();
     await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
     assert.equal(await page.locator('#codex-model').inputValue(),selectedCodexModel,'Manage must focus the existing model setting without changing it');
@@ -198,4 +200,28 @@ test('runtime fixture client management opens actual settings without changing t
   await page.waitForFunction(()=>document.activeElement?.id==='mode');
   assert.equal(await page.locator('#mode').inputValue(),'api','Manage must never implicitly switch billing or authentication mode');
   assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),before);assert.equal(await readFile(modelSettingsPath(f.config),'utf8'),savedBefore);assert.deepEqual(f.calls,[]);await noOverflow(page);
+});
+
+test('runtime fixture fresh catalog refresh recommends listed Sol/high, saves it, and invokes that exact CLI model',async t=>{
+  const f=await fixture(t,{catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'},{id:'gpt-5.6-luna',label:'GPT-5.6-Luna'}]}),browser=await chromium.launch({headless:true});
+  t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-5.6-sol');assert.equal(await page.locator('#codex-reasoning').inputValue(),'high');
+  await page.locator('#refresh-clients').click();await settled(page,'refresh-clients');assert.equal(await page.locator('#codex-model').inputValue(),'gpt-5.6-sol');
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  const saved=readModelSettings(modelSettingsPath(f.config));assert.equal(saved.selection.client_models.codex,'gpt-5.6-sol');assert.equal(saved.selection.codex_reasoning_effort,'high');
+  const requests=[],runner={async run(request){requests.push(request);return request.args.join(' ')==='login status'?{code:0,stdout:'Logged in using ChatGPT',stderr:''}:{code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{"ok":true}'}})+'\n',stderr:''};}};
+  const model=new ConfiguredStructuredModel(modelSettingsPath(f.config),{AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex'}, {subscription:options=>new SubscriptionAwareStructuredModel({...options,runner}),api:()=>{throw Error('PAID_API_NOT_ALLOWED');}});
+  await model.call('correct','Return JSON.',{},{type:'object',properties:{ok:{type:'boolean'}},required:['ok'],additionalProperties:false});
+  const args=requests.find(request=>request.args.includes('exec')).args;assert.deepEqual(args.slice(0,6),['--model','gpt-5.6-sol','exec','-c','model_reasoning_effort=high','--json']);
+});
+
+test('runtime fixture a saved model absent from the account list stays visible and blocks only active Codex saves',async t=>{
+  const f=await fixture(t,{savedCodexModel:'gpt-6-sol',savedCodexEffort:'high',catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'}]}),browser=await chromium.launch({headless:true});
+  t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');assert.match(await page.locator('#catalog-state').textContent(),/현재 계정 지원 목록에 없습니다/u);
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'다시 선택하세요.'}).waitFor();assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
+  await page.locator('#client').selectOption('claude');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client,'claude');assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
+  await page.locator('#client').selectOption('codex');await page.locator('#codex-model').selectOption('gpt-5.6-sol');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-5.6-sol');
 });

@@ -61,8 +61,8 @@ test('a second invalid decision output fails without dispatch and a later invali
 });
 
 test('auth quota and provider failures never invoke output correction, including failure during the only correction',async()=>{
-  for(const reason of ['STRUCTURED_MODEL_UNAVAILABLE','CLIENT_SUBSCRIPTION_EXHAUSTED']){
-    const provider=model([Error(reason),choose()]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);assert.equal(result.status,'waiting_model');assert.equal(provider.inputs.length,1);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.observations.length,0);
+  for(const reason of ['STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_UNSUPPORTED','CLIENT_SUBSCRIPTION_EXHAUSTED']){
+    const provider=model([Error(reason),choose()]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);assert.equal(result.status,'waiting_model');if(reason==='STRUCTURED_MODEL_UNSUPPORTED')assert.equal(result.reason,reason);assert.equal(provider.inputs.length,1);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.observations.length,0);
   }
   const provider=model([{...choose(),wait_reason:'approval'},Error('STRUCTURED_MODEL_UNAVAILABLE'),choose()]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);assert.equal(result.status,'waiting_model');assert.equal(result.reason,'STRUCTURED_MODEL_UNAVAILABLE');assert.equal(provider.inputs.length,2);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.pending,null);
 });

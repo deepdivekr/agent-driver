@@ -120,7 +120,7 @@ export class WorkRuntime {
       return this.public(defined);
     }catch(error){
       if(readWorkLifecycle(this.store,project,work_id).state!=='connected')throw error;
-      const reason=error instanceof Error&&['WORK_DEFINITION_INVALID_AFTER_CORRECTION','CONFIG_CHANGED','MODEL_SETTINGS_CHANGED'].includes(error.message)?error.message:'MODEL_OR_DEFINITION_UNAVAILABLE';
+      const reason=error instanceof Error&&['WORK_DEFINITION_INVALID_AFTER_CORRECTION','CONFIG_CHANGED','MODEL_SETTINGS_CHANGED','STRUCTURED_MODEL_UNSUPPORTED'].includes(error.message)?error.message:'MODEL_OR_DEFINITION_UNAVAILABLE';
       if(this.store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_activity'").get())workActivity(this.store,project,work_id,'definition.failed',`Work definition failed: ${reason}`,{stage_id:'definition',status:'needs_model',reason});
       return this.public(this.store.failWorkDefinition(project,work_id,owner),reason);
     }

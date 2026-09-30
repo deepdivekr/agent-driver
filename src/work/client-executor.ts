@@ -343,6 +343,7 @@ export class BoundedWorkClientExecutor {
       if(/SCOPE_MISMATCH$|CAPABILITY_NOT_DELEGATED$/u.test(code))return result('failed',code);
       if(/(?:GRANT|APPROVAL|PERMISSION)_REQUIRED$|ACCESS_DENIED$/u.test(code))return result('waiting_approval',code);
       if(isNonRetryableClientFailure(error)||error instanceof z.ZodError||error instanceof SyntaxError||/^(?:WORK_CLIENT_(?:COMPLETION|DECISION|TOOL_NOT|TOOL_ARGUMENTS))/u.test(code))return result('failed',code);
+      if(code==='STRUCTURED_MODEL_UNSUPPORTED')return result('waiting_model',code);
       if(code==='STRUCTURED_MODEL_UNAVAILABLE'||/^(?:CLIENT_|MODEL_PROVIDER_|ADAPTIVE_LLM_)/u.test(code))return result('waiting_model',code==='STRUCTURED_MODEL_UNAVAILABLE'?code:classifyClientFailure(error));
       return result('retryable_failure',code);
     }

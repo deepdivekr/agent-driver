@@ -382,7 +382,9 @@ function nativeSessionId(id:'codex'|'claude',stdout:string):string|null{
   return found[0] as string|undefined??null;
 }
 function cliFailure(result:ProcessResult,session?:DecisionSessionTurn){
-  const detail=result.stderr||result.stdout;
+  // The CLI can put a generic line on stderr and its typed provider error on
+  // stdout. Inspect both, but persist and expose only our bounded reason code.
+  const detail=result.stderr+'\n'+result.stdout;
   if(session?.session_id&&/(?:no (?:conversation|session|thread) found|(?:session|conversation|thread)[^\r\n]{0,100}(?:not found|does not exist))/iu.test(detail))throw Error('CLIENT_NATIVE_SESSION_MISSING');
   throw Error(`CLIENT_${classifyClientFailure(detail).toUpperCase()}`);
 }
@@ -463,8 +465,11 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
     const environment={...this.options.environment??process.env},runner=this.options.runner??nativeProcessRunner,preferred=[...new Set(environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor'])];
     // Legacy callers can select API explicitly, but no client chain may fall into it.
     const apiOnly=preferred.length===1&&preferred[0]==='api';
-    let failed:{client:HandoffClient;model:string;reason:HandoffReason}|null=null;
-    const transferred=(target:HandoffClient,targetModel:string)=>{if(failed)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:failed.client,target,source_model:failed.model,target_model:targetModel,reason:failed.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
+    type FailedClient={client:HandoffClient;model:string;reason:HandoffReason};
+    let failed:FailedClient|null=null;
+    let invokedFailure:FailedClient|null=null,otherInvokedFailure:FailedClient|null=null;
+    const representative=()=>invokedFailure??failed;
+    const transferred=(target:HandoffClient,targetModel:string)=>{const source=representative();if(source)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:source.client,target,source_model:source.model,target_model:targetModel,reason:source.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
     for(const id of preferred){
         if(id==='mcp'&&this.options.sampling){
           // Keep per-turn evidence separate while concurrent sampling is in flight.
@@ -490,14 +495,16 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
             }else result=await invokeCli(client,environment,runner,instructions,input,schema);
             model=result.model;value=result.value;accepted=true;
           }
-          catch(error){this.statuses.delete(client);invalidateClient(client,runner);const reason=classifyClientFailure(error);failureKind=reason==='invalid_output'?'invalid_output':reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='provider_unavailable'?'provider_unavailable':'incomplete';if(isNonRetryableClientFailure(error))throw error;failed??={client,model,reason};continue;}
+          catch(error){this.statuses.delete(client);invalidateClient(client,runner);const reason=classifyClientFailure(error);failureKind=reason==='invalid_output'?'invalid_output':reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='model_unsupported'?'model_unsupported':reason==='provider_unavailable'?'provider_unavailable':'incomplete';if(isNonRetryableClientFailure(error))throw error;failed??={client,model,reason};invokedFailure??={client,model,reason};if(reason!=='model_unsupported')otherInvokedFailure??={client,model,reason};continue;}
           finally{this.calls.push({purpose,provider:client,auth:state.auth==='subscription'?'subscription':'unknown',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?continuity:{failure_kind:failureKind})});}
           transferred(client,model);return value;
         }
         if(id==='api'&&apiOnly&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);return value;}
     }
-    if(failed)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:failed.client,target:null,source_model:failed.model,target_model:null,reason:failed.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
-    throw Error('STRUCTURED_MODEL_UNAVAILABLE');
+    // A mixed failure cannot be presented as solely an unsupported model.
+    const source=otherInvokedFailure??representative();
+    if(source)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:source.client,target:null,source_model:source.model,target_model:null,reason:source.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
+    throw Error(invokedFailure?.reason==='model_unsupported'&&!otherInvokedFailure?'STRUCTURED_MODEL_UNSUPPORTED':'STRUCTURED_MODEL_UNAVAILABLE');
   }
 }
 

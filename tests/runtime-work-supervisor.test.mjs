@@ -91,6 +91,19 @@ test('runtime fixture pause/edit/resume races retain receipts and do not let old
  const resumed=s.action({work_id:x.work.work_id,revision:edited.revision,action:'resume'});assert.equal(resumed.state,'queued');release();const end=await finished(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
  const work=x.store.intakeWork(x.config.project.id,x.work.work_id);assert.equal(work.spec.title,'자료 요약');assert.equal(work.revision,3);assert.equal(x.store.officeRuns(x.config.project.id,work.id).length,1);assert.equal(x.store.workDirections(x.config.project.id,work.id).length,1);assert.ok(replanRoles.length>0&&replanRoles.every(role=>role==='planner'));
 });
+test('runtime fixture unsupported model during replanning waits and resumes the same run after model correction',async t=>{
+ const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false,tick_ms:25});x.cleanup.push(()=>supervisor.close());
+ const runId=randomUUID(),at=new Date().toISOString(),workId=x.work.work_id,base=x.model.call.bind(x.model);let unsupported=true,replans=0;
+ x.model.call=async(...args)=>{if(args[1].startsWith('Revise this existing')){replans++;if(unsupported)throw Error('STRUCTURED_MODEL_UNSUPPORTED');}return base(...args);};
+ x.store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(runId,x.config.project.id,workId,x.work.revision,'paused','null',x.config.fingerprint,0,at,at);
+ const edited=supervisor.action({work_id:workId,revision:x.work.revision,action:'edit',instruction:'카드 대신 근거 있는 짧은 요약문으로 반환해줘.'});
+ supervisor.action({work_id:workId,revision:edited.revision,action:'resume'});supervisor.activate();
+ const waiting=await finished(x,['waiting_model']);assert.equal(waiting.reason,'STRUCTURED_MODEL_UNSUPPORTED');assert.equal(waiting.run_id,runId);assert.equal(waiting.can_resume,true);
+ assert.equal(x.store.hermesState.prepare('SELECT replan_required FROM office_supervisor WHERE run_id=?').get(runId).replan_required,1);assert.equal(x.store.officeRuns(x.config.project.id,workId).length,0);
+ unsupported=false;const current=x.store.intakeWork(x.config.project.id,workId),resumed=supervisor.action({work_id:workId,revision:current.revision,action:'resume'});assert.equal(resumed.run_id,runId);
+ const complete=await finished(x);assert.equal(complete.state,'succeeded',JSON.stringify(complete));assert.equal(complete.run_id,runId);assert.equal(replans,2);
+ assert.equal(x.store.hermesState.prepare('SELECT replan_required FROM office_supervisor WHERE run_id=?').get(runId).replan_required,0);assert.equal(x.store.hermesState.prepare('SELECT COUNT(*) AS n FROM office_supervisor WHERE work_id=?').get(workId).n,1);
+});
 test('runtime fixture service restart continues the same paused run without repeated successful source work',async t=>{
  const x=await setup(t);let release,entered;const waiting=new Promise(r=>entered=r),gate=new Promise(r=>release=r),base=x.model.call.bind(x.model);x.model.call=async(...args)=>{if(args[2]?.checkpoint?.observations?.length){entered();await gate;}return base(...args);};
  let s=new WorkSupervisor(x.store,x.config,x.model,{tick_ms:25});s.start(x.work.work_id,x.work.revision,true);await waiting;const paused=s.action({work_id:x.work.work_id,revision:x.work.revision,action:'pause'});release();await s.close();
