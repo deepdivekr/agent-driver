@@ -62,3 +62,20 @@ test('a completed stage cannot be dispatched again after its execution claim',as
   assert.deepEqual(result.checkpoint.stage_reports.map(report=>report.stage_id),['collect']);
   assert.match(JSON.stringify(x.model.calls[2].input.validation_error.issues),/WORK_CLIENT_STAGE_ALREADY_COMPLETED/u);
 });
+
+test('awaiting review resumes the same semantic receipts for verification without replaying source reads or file writes',async()=>{
+  const tools=[{name:'read_source',description:'Read the selected source',input_schema:{type:'object'},effect:'read_only'},{name:'write_report',description:'Write the verified local report',input_schema:{type:'object'},effect:'local_write'}];
+  const first=fixture([decision('tool','collect'),{...decision('tool','compare',[{stage_id:'collect',evidence_ids:['collect-receipt']}]),tool_name:'write_report'},decision('complete',null,[{stage_id:'compare',evidence_ids:['compare-receipt']}],[{id:'comparison',evidence_ids:['compare-receipt']}])]);
+  const dispatched=[];first.hooks.tools=tools;first.hooks.executeTool=async(name,_args,context)=>{dispatched.push({name,stage:context.stage_id});return {status:'succeeded',value:{stage_id:context.stage_id},evidence_ids:[`${context.stage_id}-receipt`],effect_state:name==='write_report'?'verified':'none',retry_safe:true};};
+  const awaiting=await first.executor.execute(request(),first.hooks);
+  assert.equal(awaiting.status,'awaiting_review');assert.deepEqual(dispatched,[{name:'read_source',stage:'collect'},{name:'write_report',stage:'compare'}]);assert.equal(awaiting.checkpoint.pending,null);
+  assert.deepEqual(currentStageReports(plan,awaiting.checkpoint.stage_reports).map(report=>report.stage_id),['collect','compare']);
+  for(const [stage_id,tool_name] of [['collect','read_source'],['compare','write_report']]){
+    const resumed=fixture([{...decision('tool',stage_id),tool_name},decision('complete',null,[],[{id:'comparison',evidence_ids:['compare-receipt']}])]);
+    resumed.hooks.tools=tools;let verifiedObservations=null;resumed.hooks.verifyCompletion=async(_checks,observations)=>{verifiedObservations=observations;return true;};
+    const result=await resumed.executor.execute(request({checkpoint:awaiting.checkpoint,resume_wait:true}),resumed.hooks);
+    assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);assert.equal(resumed.executions.length,0,'no source read or local write is dispatched');
+    assert.equal(resumed.model.calls[0].input.stage_id,'completion.verify');assert.match(JSON.stringify(resumed.model.calls[1].input.validation_error.issues),/WORK_CLIENT_STAGE_ALREADY_COMPLETED/u);
+    assert.deepEqual(verifiedObservations,awaiting.checkpoint.observations);assert.deepEqual(result.checkpoint.observations,awaiting.checkpoint.observations);
+  }
+});

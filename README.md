@@ -66,7 +66,7 @@ Connect your tools once, then submit a Work from the board. See [From request to
 1. **Clients** — check installation and login, then register MCP.
 2. **Execution** — use the default browser or connect an optional executor.
 3. **AI** — choose a subscription CLI or API. Compatible local models are also supported.
-4. **First Work** — enter a request, open its detail, and click **Run**.
+4. **First Work** — submit a request. Its detail page opens and execution begins when the required connections are ready. Guided mode asks for your choices first.
 
 Jev is optional. Without it, the LLM and code handle decisions.
 Website login is requested when a task needs it.
