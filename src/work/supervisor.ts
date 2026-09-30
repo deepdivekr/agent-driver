@@ -120,7 +120,7 @@ export class WorkSupervisor {
   private stopped=false;private active=new Map<string,Promise<void>>();private controllers=new Map<string,AbortController>();
   private timer:NodeJS.Timeout|null=null;private activated=false;private api:RuntimeApi|null=null;
   readonly schedules:WorkSchedules;
-  constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,readonly options:{api?:RuntimeApi;tick_ms?:number;max_parallel?:number;auto_start?:boolean;onResult?:(workId:string)=>void;verifyCompletion?:Parameters<BoundedWorkClientExecutor['execute']>[1]['verifyCompletion']}={}){
+  constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,readonly options:{api?:RuntimeApi;tick_ms?:number;max_parallel?:number;auto_start?:boolean;can_start?:()=>boolean;onResult?:(workId:string)=>void;verifyCompletion?:Parameters<BoundedWorkClientExecutor['execute']>[1]['verifyCompletion']}={}){
     initWorkSupervisor(store);this.api=options.api??null;this.schedules=new WorkSchedules(store,config.project.id);
     if(options.auto_start!==false)this.activate();
   }
@@ -172,7 +172,7 @@ export class WorkSupervisor {
     if(input.action==='pause'||input.action==='edit')this.controllers.get(status.run_id)?.abort();this.tick();return supervisorStatus(this.store,project,work.id,this.config);
   }
   tick(){
-    if(this.stopped||!this.activated)return;const project=this.config.project.id,db=this.store.hermesState,at=Date.now();
+    if(this.stopped||!this.activated||this.options.can_start?.()===false)return;const project=this.config.project.id,db=this.store.hermesState,at=Date.now();
     // Slot claim, new execution record and run binding share one transaction.
     for(const due of this.schedules.due(at)){
       const latest=supervisorStatus(this.store,project,due.work_id,this.config);if(!latest||!['succeeded','failed','awaiting_review'].includes(latest.state))continue;

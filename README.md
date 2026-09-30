@@ -144,6 +144,9 @@ Importing alone does not start a duplicate bot or activate a new schedule. Monit
 
 ## Updates and limits
 
+AI settings include **Auto-update CLIs** and **Update now**. Supported user-owned Linux/WSL CLIs are checked every 24 hours while Office is running and idle; active clients are left alone.
+Save the preference to enable automatic checks. Windows automatic updates are not supported yet.
+
 Finish active work, disconnect MCP clients, and close the Control Center before rerunning the installer.
 If the shared server is still running, follow the [stop and reconnect guide](docs/mcp-resource-lifecycle.md).
 New installs use `~/.local/share/agent-office` and keep settings and Work data in `~/.agent-office`.

@@ -62,7 +62,7 @@ async function serverFor(t,x){let providerCalls=0;const auth={async connections(
  const mcp={async view(){return {registered_count:1,agent_driver:{installed:true},clients:[],windows_bridge:null}}},bootstrap={view(){return {clients:[]}},async install(){throw Error('not used')}};
  const fetcher=async()=>{providerCalls++;return new Response(JSON.stringify({status:'completed',model:'coding-api',output:[{type:'message',content:[{type:'output_text',text:'{"status":"ok","nonce":"agent-driver-provider-probe"}'}]}]}),{status:200})};
  const settings=new ControlSettings(x.config,auth,{},fetcher,mcp,undefined,bootstrap);let host;const server=createServer(async(req,res)=>{if(!await settings.handle(req,res,req.url.slice(1),host)){res.writeHead(404);res.end();}});await new Promise(r=>server.listen(0,'127.0.0.1',r));host='127.0.0.1:'+server.address().port;
- t.after(async()=>{settings.close();server.closeAllConnections();await new Promise(r=>server.close(r))});return {url:'http://'+host,headers:{origin:'http://'+host,'content-type':'application/json','x-agent-driver':'human-settings'},calls:()=>providerCalls};
+ t.after(async()=>{await settings.close();server.closeAllConnections();await new Promise(r=>server.close(r))});return {url:'http://'+host,headers:{origin:'http://'+host,'content-type':'application/json','x-agent-driver':'human-settings'},calls:()=>providerCalls};
 }
 test('runtime fixture coding settings HTTP preserves global revisions, requires human origin and API probe',async t=>{
  const x=await setup(t);saveModelSettings(x.path,body(0,{...choice,mode:'api'},{api_action:'replace',api_key:secret}),{});const server=await serverFor(t,x);

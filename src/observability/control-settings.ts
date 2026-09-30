@@ -1,11 +1,13 @@
 import {randomBytes} from 'node:crypto';
 import {type IncomingMessage,type ServerResponse} from 'node:http';
-import {dirname,resolve} from 'node:path';
+import {dirname,join,resolve} from 'node:path';
+import {existsSync} from 'node:fs';
 import {type HostConfig,workModelDataApproved} from '../interface/config.js';
 import {SubscriptionAuthFlowController,type SubscriptionClientConnection} from '../integrations/subscription-auth.js';
 import {probeStructuredModel} from '../integrations/model-provider.js';
 import {approveNonInterferingConnection,localConnectionPaths,readLocalConnection,setWorkModelDataApproval} from '../onboarding/connection.js';
 import {ClientBootstrapController} from '../onboarding/client-bootstrap.js';
+import {ClientMaintenanceController} from '../onboarding/client-maintenance.js';
 import {McpRegistrationController,type McpRegistrationClient} from '../onboarding/mcp-registration.js';
 import {effectiveModelEnvironment,modelSettingsFingerprint,modelSettingsPath,previewModelSettings,publicModelSettings,readModelSettings,saveModelSettings,modelScopeBase,scopedModelSettingsPath,type ModelScope,type ModelSettings,type ApiVerification} from '../onboarding/model-settings.js';
 import {apiModelCatalog,claudeModelCatalog,codexModelCatalog,opencodeModelCatalog} from '../onboarding/model-catalog.js';
@@ -16,8 +18,39 @@ import {BrowserSetupController} from '../onboarding/browser-setup.js';
 async function readBody(request:IncomingMessage){let size=0;const chunks:Buffer[]=[];for await(const chunk of request){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>20_000)throw Error('SETTINGS_INPUT_TOO_LARGE');chunks.push(bytes);}return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;}
 export class ControlSettings{
   readonly path:string;private busy=false;private providerProbe:{token:string;fingerprint:string;verification:ApiVerification;expires_at:number}|null=null;
-  constructor(readonly config:HostConfig,readonly auth:Pick<SubscriptionAuthFlowController,'connections'|'view'|'start'|'close'>=new SubscriptionAuthFlowController(),readonly environment:NodeJS.ProcessEnv=process.env,readonly fetcher:typeof fetch=fetch,readonly mcp=new McpRegistrationController(dirname(config.path),environment),readonly activity=new SetupActivityStream(dirname(config.path)),readonly bootstrap=new ClientBootstrapController(environment,undefined,fetcher),readonly browsers=new BrowserSetupController(config,{environment})){this.path=modelSettingsPath(config);}
-  get reloadBlockedReason(){if(this.busy)return 'SETTINGS_ACTION_IN_PROGRESS';return (['codex','claude','opencode','cursor','hermes'] as const).some(id=>['starting','waiting'].includes(this.auth.view(id).state))?'AUTHENTICATION_IN_PROGRESS':null;}
+  readonly maintenance:Pick<ClientMaintenanceController,'view'|'save'|'runDue'|'runNow'|'close'>;
+  maintenanceBusy:()=>boolean=()=>false;
+  private maintenanceOperation=false;private maintenanceOwnRequest=false;
+  constructor(readonly config:HostConfig,readonly auth:Pick<SubscriptionAuthFlowController,'connections'|'view'|'start'|'close'>=new SubscriptionAuthFlowController(),readonly environment:NodeJS.ProcessEnv=process.env,readonly fetcher:typeof fetch=fetch,readonly mcp=new McpRegistrationController(dirname(config.path),environment),readonly activity=new SetupActivityStream(dirname(config.path)),readonly bootstrap=new ClientBootstrapController(environment,undefined,fetcher),readonly browsers=new BrowserSetupController(config,{environment}),maintenance?:Pick<ClientMaintenanceController,'view'|'save'|'runDue'|'runNow'|'close'>){
+    this.path=modelSettingsPath(config);
+    this.maintenance=maintenance??new ClientMaintenanceController({statePath:join(dirname(this.path),'cli-maintenance.json'),environment,fixture:config.environment==='fixture',isBusy:()=>this.maintenanceBusy()||this.busy&&!this.maintenanceOwnRequest||this.authenticationBusy()});
+  }
+  private authenticationBusy(){return (['codex','claude','opencode','cursor','hermes'] as const).some(id=>['starting','waiting'].includes(this.auth.view(id).state));}
+  get maintenanceRunning(){return this.maintenanceOperation;}
+  get maintenanceHumanAction(){return this.maintenanceOwnRequest;}
+  get reloadBlockedReason(){if(this.maintenanceRunning)return 'CLI_UPDATE_IN_PROGRESS';if(this.busy)return 'SETTINGS_ACTION_IN_PROGRESS';return this.authenticationBusy()?'AUTHENTICATION_IN_PROGRESS':null;}
+  async tickMaintenance(trigger:'startup'|'tick'='tick'){
+    // Merely starting a host or viewing settings cannot authorize package writes.
+    // The UI persists this preference when the user saves their connection settings.
+    if(this.config.environment==='fixture'||!existsSync(join(dirname(this.path),'cli-maintenance.json'))||this.connection().kind==='local'&&!this.connection().connected||this.maintenanceRunning)return;
+    let view:ReturnType<ClientMaintenanceController['view']>;
+    try{view=this.maintenance.view();}catch{await this.activity.record('setup','warning','CLI 업데이트 상태를 확인하지 못했습니다. 설정을 확인해 주세요.').catch(()=>{});throw Error('CLIENT_MAINTENANCE_STATE_INVALID');}
+    if(!view.enabled||view.next_due_at&&Date.parse(view.next_due_at)>Date.now())return;
+    await this.performMaintenance(false,trigger);
+  }
+  private async performMaintenance(forced:boolean,trigger:'startup'|'tick'='tick'){
+    if(this.maintenanceOperation)throw Error('CLIENT_MAINTENANCE_BUSY');
+    this.maintenanceOperation=true;
+    try{
+      await this.activity.record('setup','running','CLI 업데이트를 확인하는 중입니다.');
+      const result=await (forced?this.maintenance.runNow():this.maintenance.runDue(trigger));
+      for(const id of result.updated_ids){const name={codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor',hermes:'Hermes'}[id];await this.activity.record('setup','success',`${name}: CLI 업데이트 확인 완료`);}
+      const failed=result.skipped.some(item=>item.reason==='update_failed');
+      await this.activity.record('setup',result.state==='deferred_busy'||failed?'warning':'success',result.state==='deferred_busy'?'진행 중인 업무나 CLI가 있어 업데이트를 미뤘습니다.':failed?'일부 CLI 업데이트를 완료하지 못했습니다. 나중에 다시 확인합니다.':result.attempted_ids.length?'CLI 업데이트 확인을 마쳤습니다. 모델 목록을 새로고침하세요.':'자동으로 업데이트할 수 있는 설치된 CLI가 없습니다.');
+      return result;
+    }catch{await this.activity.record('setup','warning','CLI 업데이트 확인에 실패했습니다. 다시 시도해 주세요.').catch(()=>{});throw Error('CLIENT_MAINTENANCE_CHECK_FAILED');}
+    finally{this.maintenanceOperation=false;}
+  }
   private connection(){const root=dirname(this.config.path);return resolve(this.config.path)===localConnectionPaths(root).runtimeConfig?{kind:'local' as const,connected:readLocalConnection(root)!==null}: {kind:'host_configured' as const,connected:true};}
   private async recordClientChecks(clients:SubscriptionClientConnection[],registrations?:Awaited<ReturnType<McpRegistrationController['view']>>['clients']){
     const names={codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor',hermes:'Hermes'};
@@ -46,6 +79,7 @@ export class ControlSettings{
         else if(suffix==='settings/mcp')send(200,await this.mcp.view());
         else if(suffix==='settings/bootstrap')send(200,{...this.bootstrap.view(),connections:await this.auth.connections()});
         else if(suffix==='settings/browsers')send(200,this.browsers.view());
+        else if(suffix==='settings/maintenance/status')send(200,this.maintenance.view());
         else if(suffix==='settings/models'){const [codex,opencode]=await Promise.all([codexModelCatalog(),opencodeModelCatalog(this.environment)]);send(200,{codex,claude:claudeModelCatalog(),opencode});}
         else if(suffix==='settings/activity'){this.activity.attach(response);return true;}
         else if(suffix==='settings/flows')send(200,{flows:['codex','claude','opencode','cursor','hermes'].map(id=>this.auth.view(id as 'codex'|'claude'|'opencode'|'cursor'|'hermes'))});
@@ -57,6 +91,18 @@ export class ControlSettings{
       this.busy=true;
       try{
         const body=await readBody(request);
+        if(suffix==='settings/maintenance/settings'){
+          const value=body&&typeof body==='object'&&!Array.isArray(body)?body as Record<string,unknown>:{};
+          if(Object.keys(value).some(key=>!['revision','enabled'].includes(key))||!Number.isSafeInteger(value.revision)||typeof value.enabled!=='boolean')throw Error('CLIENT_MAINTENANCE_SETTINGS_INVALID');
+          const result=await this.maintenance.save({revision:value.revision as number,enabled:value.enabled});
+          await this.activity.record('setup','success',result.enabled?'CLI 자동 업데이트를 켰습니다.':'CLI 자동 업데이트를 껐습니다.');send(200,result);return true;
+        }
+        if(suffix==='settings/maintenance/update-now'){
+          if(!body||typeof body!=='object'||Array.isArray(body)||Object.keys(body).length)throw Error('CLIENT_MAINTENANCE_SETTINGS_INVALID');
+          this.maintenanceOwnRequest=true;
+          try{send(200,await this.performMaintenance(true));}finally{this.maintenanceOwnRequest=false;}
+          return true;
+        }
         if(suffix.startsWith('settings/browsers/')){
           const value=body as {engine?:unknown;revision?:unknown;consent?:unknown};
           if(!value||!['playwright','aside','neo'].includes(String(value.engine))){send(400,{error:'BROWSER_SETUP_ENGINE_INVALID'});return true;}
@@ -157,8 +203,8 @@ export class ControlSettings{
           await this.activity.record('runtime','running','전용 작업 폴더와 로컬 실행 권한을 준비하는 중입니다.');await approveNonInterferingConnection(dirname(this.config.path));await this.activity.record('runtime','success','로컬 실행 연결을 승인했습니다.');send(200,this.status());
         }else send(404,{error:'NOT_FOUND'});
       }finally{this.busy=false;}
-    }catch(error){if(suffix==='settings/mcp/check'||suffix==='settings/refresh'||suffix==='settings/provider-probe')await this.activity.record(suffix==='settings/mcp/check'?'mcp':'ai','error','연결 상태를 확인하지 못했습니다. 다시 확인해 주세요.');const message=error instanceof Error&&/^(?:BROWSER_SETUP|MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|OPENCODE_MCP_CONFIG|CLIENT_INSTALL)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error',message.startsWith('CLIENT_INSTALL_DOWNLOAD')?'설치 파일 다운로드 실패 · 네트워크를 확인한 뒤 설치를 다시 누르세요.':'설치 완료를 확인하지 못했습니다. 연결 작업 기록과 설치 상태를 다시 확인하세요.');send(message.includes('CONFLICT')||message.includes('BUSY')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
+    }catch(error){if(suffix==='settings/mcp/check'||suffix==='settings/refresh'||suffix==='settings/provider-probe')await this.activity.record(suffix==='settings/mcp/check'?'mcp':'ai','error','연결 상태를 확인하지 못했습니다. 다시 확인해 주세요.');const message=error instanceof Error&&/^(?:BROWSER_SETUP|MODEL_SETTINGS|MODEL_KEY|MODEL_PROVIDER|JEV_CREDENTIAL|SETTINGS_INPUT|MCP_CLIENT|MCP_REGISTRATION|CURSOR_MCP_CONFIG|OPENCODE_MCP_CONFIG|CLIENT_INSTALL|CLIENT_MAINTENANCE)_[A-Z_]+$/u.test(error.message)?error.message:'SETTINGS_REQUEST_INVALID';if(suffix==='settings/mcp/register')await this.activity.record('mcp','error','MCP 등록을 마치지 못했습니다. 클라이언트 상태를 확인해 주세요.');if(suffix==='settings/client/install')await this.activity.record('setup','error',message.startsWith('CLIENT_INSTALL_DOWNLOAD')?'설치 파일 다운로드 실패 · 네트워크를 확인한 뒤 설치를 다시 누르세요.':'설치 완료를 확인하지 못했습니다. 연결 작업 기록과 설치 상태를 다시 확인하세요.');send(message.includes('CONFLICT')||message.includes('BUSY')||message.includes('LOCKED')?409:message.includes('TOO_LARGE')?413:400,{error:message});}
     return true;
   }
-  close(){this.auth.close();this.activity.close();}
+  async close(){this.auth.close();try{await this.maintenance.close();}catch{await this.activity.record('setup','warning','CLI 업데이트를 마무리하지 못했습니다. 실행 로그에서 실패 내용을 확인해 주세요.').catch(()=>{});}finally{this.activity.close();}}
 }

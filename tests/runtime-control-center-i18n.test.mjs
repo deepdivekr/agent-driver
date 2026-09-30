@@ -65,7 +65,7 @@ test('runtime fixture setup checks stream localized historical/live outcomes and
    assert.equal(await readFile(paths.runtimeConfig,'utf8'),before);
    assert.ok(readSetupActivity(root).some(e=>e.message===seeds[1]),'Do not rewrite stored history');
    assert.deepEqual(errors,[]);assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth));
-  }finally{hold=false;releaseCheck?.();await page.close();settings.close();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});}
+  }finally{hold=false;releaseCheck?.();await page.close();await settings.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});}
  }
 });
 

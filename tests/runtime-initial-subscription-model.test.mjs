@@ -32,10 +32,11 @@ async function invokeSaved(path,runner){
   return runner.requests.find(request=>request.args.includes('exec'))?.args;
 }
 
-test('runtime unit first subscription setup leaves Codex CLI default until the account catalog is observed',async t=>{
+test('runtime unit fresh subscription setup prefers exact requested models without claiming account availability',async t=>{
   const path=await fixture(t),initial=publicModelSettings(null,{});
   assert.equal(initial.configured,false);assert.equal(initial.selection.mode,'subscription');assert.equal(initial.selection.client,'codex');
-  assert.equal(initial.selection.client_models.codex,null);assert.equal(initial.selection.codex_reasoning_effort,null);
+  assert.equal(initial.selection.client_models.codex,'gpt-6.1-sol');assert.equal(initial.selection.codex_reasoning_effort,'low');
+  assert.equal(initial.selection.client_models.claude,'claude-sonnet-5-5');
   assert.equal(initial.selection.api_model,'gpt-6-luna');assert.equal(initial.selection.reasoning,'low');
   assert.equal(readModelSettings(path),null);
   const html=settingsHtml('fixture-nonce');assert.match(html,/id="codex-reasoning"/u);assert.match(html,/Codex 추론 강도/u);
@@ -51,11 +52,24 @@ test('runtime contract saved account-listed Sol/high choice reaches Codex CLI wi
   assert.doesNotMatch(await readFile(path,'utf8'),new RegExp(secret));
 });
 
-test('runtime contract a fresh CLI-default selection never invents a versioned model or reasoning override',async t=>{
+test('runtime contract a fresh requested subscription default reaches Codex CLI without paid API fallback',async t=>{
   const path=await fixture(t),selection=publicModelSettings(null,{}).selection;
   saveModelSettings(path,update(selection),{});
   const args=await invokeSaved(path,fakeCodexRunner());
-  assert.equal(args.includes('--model'),false);assert.equal(args.includes('-c'),false);
+  assert.deepEqual(args.slice(0,6),['--model','gpt-6.1-sol','exec','-c','model_reasoning_effort=low','--json']);
+  assert.equal(effectiveModelEnvironment(null,{}).AGENT_DRIVER_CLAUDE_MODEL,'claude-sonnet-5-5');
+  assert.equal(effectiveModelEnvironment(null,{AGENT_DRIVER_CODEX_MODEL:'pinned',AGENT_DRIVER_CODEX_REASONING_EFFORT:'high',AGENT_DRIVER_CLAUDE_MODEL:'personal'}).AGENT_DRIVER_CODEX_MODEL,'pinned');
+});
+
+test('runtime contract unsaved subscription routes both exact defaults through client-owned CLIs only',async t=>{
+  const path=await fixture(t),codexArgs=await invokeSaved(path,fakeCodexRunner());
+  assert.deepEqual(codexArgs.slice(0,6),['--model','gpt-6.1-sol','exec','-c','model_reasoning_effort=low','--json']);
+  let paid=0;const requests=[];
+  const runner={async run(request){requests.push(request);if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};assert.equal(request.executable,'/fixture/claude');return {code:0,stdout:JSON.stringify({structured_output:{ok:true}}),stderr:''};}};
+  const claude=new ConfiguredStructuredModel(path,{AGENT_DRIVER_LLM_CLIENT:'claude',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude',OPENAI_API_KEY:secret},{subscription:options=>{assert.equal(options.fallbackModel,undefined);return new SubscriptionAwareStructuredModel({...options,runner});},api:()=>{paid++;throw Error('UNAUTHORIZED_PAID_API');}});
+  assert.deepEqual(await claude.call('correct','Return the requested JSON.',{},schema),{ok:true});
+  const args=requests.find(request=>request.args[0]==='-p')?.args;
+  assert.equal(args[args.indexOf('--model')+1],'claude-sonnet-5-5');assert.equal(paid,0);
 });
 
 test('runtime contract an existing or custom Codex choice stays selected and absent effort leaves CLI config alone',async t=>{
@@ -76,7 +90,7 @@ test('runtime unit API and other subscription client choices retain their own pr
   const apiDefault=publicModelSettings(null,{AGENT_DRIVER_LLM_CLIENT:'api'}).selection;
   assert.equal(apiDefault.mode,'api');assert.equal(apiDefault.client_models.codex,null);assert.equal(apiDefault.codex_reasoning_effort,null);
   assert.equal(publicModelSettings(null,{AGENT_DRIVER_LLM_CLIENT:'claude'}).selection.client,'claude');
-  assert.equal(publicModelSettings(null,{AGENT_DRIVER_LLM_CLIENT:'claude'}).selection.client_models.codex,null);
+  assert.equal(publicModelSettings(null,{AGENT_DRIVER_LLM_CLIENT:'claude'}).selection.client_models.codex,'gpt-6.1-sol');
   const choice={...defaults,mode:'api',client:'claude',client_models:{codex:null,claude:'opus',opencode:null},codex_reasoning_effort:null,api_provider:'anthropic',api_model:'claude-sonnet-4-5',reasoning:'low'};
   saveModelSettings(path,{...update(choice),api_action:'replace',api_key:secret},{});
   const env=effectiveModelEnvironment(readModelSettings(path),{});
