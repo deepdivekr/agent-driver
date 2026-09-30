@@ -32,6 +32,7 @@ The isolated actual-use server was safely stopped after confirming zero active W
 
 ## Remaining publication gates
 
+- Initial remote push/PR checks at `4a22633` failed before runtime tests: older status entries RQ-863/873/877 referenced ignored local evidence as required public files. Those references are retained under `private_evidence`, with tracked verification/handoff records as public evidence. This is a publication-record fix; no tests or product behavior are removed. Retain failed runs `36671331153` and `36671386143`.
 - Publish through protected PR/CI and inspect the release assets plus published installer.
 
 No real messenger send is authorized for this validation. Generated original files remain app downloads; messenger delivery sends result text. Uncertain delivery requires reconciliation rather than automated retry.
