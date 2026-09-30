@@ -20,6 +20,7 @@ import {WorkSchedules} from '../work/schedule.js';
 import {workImportExecutionOwner} from '../work/import-authority.js';
 import {readWorkLifecycle} from '../work/lifecycle.js';
 import {taskModelReceiptView} from '../work/task-models.js';
+import {businessSteps,currentStageReports,stageBinding} from '../work/stages.js';
 
 const clean=(value:string,max=800)=>{const text=redact(value).replace(/https?:\/\/[^\s<>"']+/giu,raw=>{try{const url=new URL(raw);return url.origin+url.pathname;}catch{return '[URL]';}});return text.length<=max?text:text.slice(0,max-1)+'…';};
 const verified=(worker:SwarmRunSnapshot['workers'][string])=>worker.status==='succeeded'&&worker.result?.readback?.verified===true&&worker.quality?.accepted===true;
@@ -54,11 +55,42 @@ export function readWorkDetail(store:PackStore,config:HostConfig,id:string){
   const observation=special?null:workObservation(store,config.project.id,id,status);
   const supervisor=supervisorStatus(store,config.project.id,id,config),adoption=importedWorkAdoption(store,config,id);
   const activity=[...workTail(store,config.project.id,id),...(adoption?.activity??[])].sort((a,b)=>a.created_at.localeCompare(b.created_at)).slice(-100);
-  const stages=supervisor&&supervisor.kind!=='swarm'?supervisor.steps.map((s,index)=>({id:s.id,label:`단계 ${index+1}`,objective:s.tool,status:s.status,verified:s.status==='succeeded',executor:'client',can_edit:false,attempts:1,owner:null})):null;
+  const toolStages=supervisor&&supervisor.kind!=='swarm'?supervisor.steps.map((s,index)=>({id:s.id,label:`단계 ${index+1}`,objective:s.tool,status:s.status,verified:s.status==='succeeded',executor:'client',can_edit:false,attempts:1,owner:null})):null;
   const completionVerified=supervisor?.state==='succeeded'&&supervisor.result?.completion_verified===true;
   const schedule=store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_work_schedule'").get()?new WorkSchedules(store,config.project.id).status(id):null;
   const imported_execution_owner=workImportExecutionOwner(store,config.project.id,id),adoption_eligible=imported_execution_owner==='original_runtime'&&(!('route' in detail)||detail.route?.pack_family!=='coding.orchestrate')&&'run_id' in detail&&!detail.run_id&&!special;
   const spec='spec' in detail?detail.spec as WorkProposal|null:null;
+  const business=spec?businessSteps(spec.plan):[];
+  const reports=spec&&supervisor?currentStageReports(spec.plan,supervisor.stage_reports):[];
+  const swarmSnapshot=supervisor?.kind==='swarm'&&'run_id' in detail&&typeof detail.run_id==='string'?store.swarmRun(config.project.id,detail.run_id).snapshot as SwarmRunSnapshot:null;
+  const bindings=new Map(business.map(step=>[step.id,stageBinding(step)]));
+  const boundActivity=supervisor?activity.filter(row=>row.metadata?.run_id===supervisor.run_id&&row.metadata?.stage_id&&row.metadata.stage_binding===bindings.get(row.metadata.stage_id)):[];
+  const latestBound=boundActivity.at(-1);
+  // A tool receipt is an activity within a planned business stage. A claim
+  // backed by that receipt is execution-complete; independent Work verification
+  // remains a separate decision.
+  const semanticStages=business.length?business.map(step=>{
+    const binding=bindings.get(step.id)!,report=reports.find(item=>item.stage_id===step.id);
+    const events=boundActivity.filter(row=>row.metadata?.stage_id===step.id).slice(-12);
+    const workerDefs=swarmSnapshot?.plan.workers.filter(worker=>worker.work_stage_id===step.id)??[];
+    const activeWorkerIds=supervisor?.live?workerDefs.filter(worker=>{const state=swarmSnapshot?.workers[worker.id];return state?.status==='leased'&&Boolean(state.lease_token)&&typeof state.lease_expires_at_ms==='number'&&state.lease_expires_at_ms>Date.now();}).map(worker=>worker.id):[];
+    const observedWorkerIds=workerDefs.filter(worker=>{const state=swarmSnapshot?.workers[worker.id];return state?.status==='succeeded'&&state.result?.readback?.verified===true&&state.quality?.accepted===true;}).map(worker=>worker.id);
+    const failedWorkerIds=workerDefs.filter(worker=>swarmSnapshot?.workers[worker.id]?.status==='failed').map(worker=>worker.id);
+    const pending=supervisor?.pending?.stage_id===step.id&&supervisor.pending.stage_binding===binding;
+    const latest=events.at(-1),current=Boolean(latest&&latest.id===latestBound?.id),outcome=events.findLast(row=>row.kind==='tool.result'||row.kind==='source.observed'||Boolean(row.metadata?.source)),receiptStatus=outcome?.kind==='tool.result'?outcome.metadata?.status:null;
+    const observedResult=Boolean(observedWorkerIds.length||outcome?.metadata?.source||outcome?.kind==='source.observed'||outcome?.kind==='tool.result'&&receiptStatus==='succeeded');
+    const waiting=receiptStatus&&['failed','retryable_failure','waiting_auth','waiting_approval','waiting_connection','waiting_model'].includes(receiptStatus)?receiptStatus:null;
+    const interrupted=current&&!supervisor?.live&&supervisor?.state!=='succeeded'&&['paused','awaiting_review','waiting_auth','waiting_approval','waiting_connection','waiting_model','retry_wait','failed','reconciliation_required'].includes(supervisor?.state??'')?supervisor!.state:null;
+    const active=Boolean(activeWorkerIds.length||supervisor?.live&&current&&latest&&(supervisor.kind==='swarm'?latest.kind==='tool.started'&&!latest.metadata?.worker_id:['model.started','tool.started','source.started','search.started'].includes(latest.kind)));
+    const verified=Boolean(report&&completionVerified),status=verified?'succeeded':report?'execution_completed':pending?supervisor?.live?'running':interrupted??'execution_unobserved':active?'running':failedWorkerIds.length?'failed':waiting??(observedResult?'result_observed':interrupted??(events.length?'execution_unobserved':'pending'));
+    const sources=events.flatMap(row=>row.metadata?.source?[row.metadata.source]:[]).slice(-5);
+    const workers=[...new Set([...events.map(row=>row.metadata?.worker_id).filter((id):id is string=>Boolean(id)),...workerDefs.filter(worker=>swarmSnapshot?.workers[worker.id]?.status!=='pending').map(worker=>worker.id)])];
+    const executor=events.findLast(row=>row.metadata?.engine||row.metadata?.executor)?.metadata;
+    const workerReason=swarmSnapshot?.reviews.find(review=>review.worker_id&&workerDefs.some(worker=>worker.id===review.worker_id))?.reason;
+    const reason=latest?.metadata?.reason??workerReason??((pending||current&&!supervisor?.live)?supervisor?.reason:null);
+    return {id:step.id,label:clean(step.goal,120),objective:clean(step.observable_outcome!,500),observable_outcome:clean(step.observable_outcome!,500),status,verified,execution_reported:Boolean(report),executor:executor?.engine??executor?.executor??(activeWorkerIds.length?workerDefs.find(worker=>worker.id===activeWorkerIds[0])?.executor??null:null),can_edit:false,attempts:events.filter(row=>row.kind==='tool.started').length,owner:activeWorkerIds.length?activeWorkerIds.join(', '):supervisor?.kind!=='swarm'&&supervisor?.live&&current?workers.at(-1)??null:null,workers,sources,activities:events.slice(-6),block_reason:reason??null,semantic:true};
+  }):null;
+  const stages=semanticStages??toolStages;
   const metadata=activity.map(row=>({row,metadata:(row as {metadata?:Record<string,unknown>}).metadata}));
   const observed_sources:Array<{url:string;title:string|null;observed_at:string;tool:string|null;engine:string|null}>=[];
   for(const {metadata:meta} of metadata){
@@ -74,11 +106,11 @@ export function readWorkDetail(store:PackStore,config:HostConfig,id:string){
   // Legacy saved Work definitions can contain only the route and checks. Missing
   // analysis fields are unobserved, not a new inferred execution contract.
   const knownText=(value:unknown,max:number)=>typeof value==='string'?clean(value,max):null;
-  const analysis=spec?{status:'work_status' in detail?detail.work_status:null,outcome:knownText(spec.desired_outcome,2000),route_kind:spec.route?.kind??null,pack_family:spec.route?.pack_family??null,requested_effect:spec.requested_effect??null,steps:Array.isArray(spec.plan?.steps)?spec.plan.steps.map(step=>({id:step.id,goal:knownText(step.goal,500),effect:step.effect,depends_on:step.depends_on})):null,assumptions:Array.isArray(spec.assumptions)?spec.assumptions.map(value=>({field:knownText(value.field,100),value:knownText(value.value,500),basis:knownText(value.basis,500)})):null}:null;
+  const analysis=spec?{status:'work_status' in detail?detail.work_status:null,outcome:knownText(spec.desired_outcome,2000),route_kind:spec.route?.kind??null,pack_family:spec.route?.pack_family??null,requested_effect:spec.requested_effect??null,steps:Array.isArray(spec.plan?.steps)?spec.plan.steps.map(step=>({id:step.id,goal:knownText(step.goal,500),observable_outcome:knownText(step.observable_outcome,500),effect:step.effect,depends_on:step.depends_on})):null,assumptions:Array.isArray(spec.assumptions)?spec.assumptions.map(value=>({field:knownText(value.field,100),value:knownText(value.value,500),basis:knownText(value.basis,500)})):null}:null;
   const current_operation=operation?{kind:operation.row.kind,summary:operation.row.summary,observed_at:operation.row.created_at,metadata:operation.metadata,...(typeof operation.metadata?.tool_name==='string'?{tool_name:clean(operation.metadata.tool_name,100)}:{}),...(typeof operation.metadata?.executor==='string'?{executor:clean(operation.metadata.executor,80)}:{}),...(typeof operation.metadata?.engine==='string'?{engine:clean(operation.metadata.engine,40)}:{})}:null;
   return {...detail,lifecycle,display_status:adoption?.state??observation?.status??status,execution:adoption?{live:adoption.live,active_workers:adoption.live?1:0,basis:'original_runtime'}:observation,supervisor,schedule,adoption,imported_execution_owner,adoption_eligible:connected&&adoption_eligible,execution_action:!connected||special||adoption||supervisor?null:workDispatchOptions(store,config,id),...((adoption||supervisor)&&'work_control' in detail&&detail.work_control?{work_control:{...detail.work_control,can_pause:false}}:{}),activity,
     analysis,observed_sources,current_operation,task_models:taskModelReceiptView(store,config.project.id,id),
-    ...(supervisor?{run_status:supervisor.state,completion_verified:completionVerified}:{}),...(supervisor?.kind==='swarm'?{agent_count:supervisor.live?supervisor.active_workers:0}:{}),...(stages?{stages,agent_count:supervisor!.live?1:0,verified_steps:stages.filter(s=>s.verified).length,total_steps:stages.length,progress_percent:completionVerified?100:null,progress_basis:'실제로 수행한 도구 단계 기준 · 완료조건 확인은 결과에 별도 표시'}:!special&&observation?.live&&observation.status==='defining'&&activity.some(row=>row.kind==='definition.started')?{stages:[{id:'definition',label:'업무 분석',objective:'지침·완료조건·실행 계획 구성',status:'defining',verified:false,executor:'AI',can_edit:false,attempts:1,owner:null}],verified_steps:0,total_steps:1,progress_percent:null}:!special&&observation&&!observation.live&&'stages' in detail?{agent_count:0,stages:detail.stages.map(s=>['running','leased'].includes(s.status)?{...s,status:'execution_unobserved',owner:null}:s)}:{}),
+    ...(supervisor?{run_status:supervisor.state,completion_verified:completionVerified}:{}),...(supervisor?.kind==='swarm'?{agent_count:supervisor.live?supervisor.active_workers:0}:{}),...(semanticStages?{stages:semanticStages,agent_count:supervisor?.live?1:0,verified_steps:semanticStages.filter(s=>s.verified).length,executed_steps:semanticStages.filter(s=>s.execution_reported).length,total_steps:semanticStages.length,progress_percent:Math.floor(semanticStages.filter(s=>s.execution_reported).length*100/semanticStages.length),progress_basis:'근거가 연결된 업무 단계의 실행 보고 기준 · 독립 검증은 결과에서 별도 확인'}:stages?{stages,agent_count:supervisor!.live?1:0,verified_steps:stages.filter(s=>s.verified).length,total_steps:stages.length,progress_percent:completionVerified?100:null,progress_basis:'실제로 수행한 도구 단계 기준 · 완료조건 확인은 결과에 별도 표시'}:!special&&observation?.live&&observation.status==='defining'&&activity.some(row=>row.kind==='definition.started')?{stages:[{id:'definition',label:'업무 분석',objective:'지침·완료조건·실행 계획 구성',status:'defining',verified:false,executor:'AI',can_edit:false,attempts:1,owner:null}],verified_steps:0,total_steps:1,progress_percent:null}:!special&&observation&&!observation.live&&'stages' in detail?{agent_count:0,stages:detail.stages.map(s=>['running','leased'].includes(s.status)?{...s,status:'execution_unobserved',owner:null}:s)}:{}),
     ...(!connected?{display_status:lifecycle.state,run_status:lifecycle.state,last_observed_status:status,execution:{live:false,active_workers:0,basis:'office_control_disconnected'},agent_count:0,
       supervisor:supervisor?{...supervisor,live:false,active_workers:0,can_pause:false,can_resume:false,can_edit:false}:null,
       adoption:adoption?{...adoption,live:false,capabilities:{observe:false,send:false,pause:false,resume:false,review:false,permission:false}}:null,

@@ -11,15 +11,16 @@ import {hashJson} from '../taskpack/adaptive-spec.js';
 export class ConfiguredStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];
   sampling?:McpSamplingStructuredModel;
-  constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel;taskCandidates?:(env:NodeJS.ProcessEnv)=>Promise<TaskModelCandidate[]>}={},readonly onHandoff?:(event:ClientRouteEvent)=>void,readonly scope:ModelScope='global',readonly provenance?:ReturnType<typeof handoffContext>,readonly role?:ModelRole,private readonly taskModels?:TaskModelBinding){}
-  forScope(scope:ModelScope){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,scope,this.provenance,this.role,this.taskModels);if(this.sampling)model.sampling=this.sampling;return model;}
-  forRole(role:ModelRole){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,this.scope,this.provenance,role,this.taskModels);if(this.sampling)model.sampling=this.sampling;return model;}
+  constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel;taskCandidates?:(env:NodeJS.ProcessEnv)=>Promise<TaskModelCandidate[]>}={},readonly onHandoff?:(event:ClientRouteEvent)=>void,readonly scope:ModelScope='global',readonly provenance?:ReturnType<typeof handoffContext>,readonly role?:ModelRole,private readonly taskModels?:TaskModelBinding,private readonly actorId?:string){}
+  forScope(scope:ModelScope){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,scope,this.provenance,this.role,this.taskModels,this.actorId);if(this.sampling)model.sampling=this.sampling;return model;}
+  forRole(role:ModelRole){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,this.scope,this.provenance,role,this.taskModels,this.actorId);if(this.sampling)model.sampling=this.sampling;return model;}
   /** Bind all successor calls to the same Work/run even if a capability input omits IDs. */
-  forWork(context:{work_id:string;run_id:string;stage_id?:string},scope:ModelScope=this.scope){
+  forWork(context:{work_id:string;run_id:string;stage_id?:string;actor_id?:string},scope:ModelScope=this.scope){
     const binding=handoffContext(context);
     if(binding.work_id!==context.work_id||binding.run_id!==context.run_id||context.stage_id!==undefined&&binding.stage_id!==context.stage_id)throw Error('CLIENT_HANDOFF_CONTEXT_INVALID');
+    if(context.actor_id!==undefined&&!/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(context.actor_id))throw Error('CLIENT_SESSION_ACTOR_INVALID');
     const sink=this.onHandoff?(event:ClientRouteEvent)=>this.onHandoff!({...event,...binding,stage_id:binding.stage_id??event.stage_id}):undefined;
-    const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,sink,scope,binding,this.role,this.taskModels);if(this.sampling)model.sampling=this.sampling;return model;
+    const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,sink,scope,binding,this.role,this.taskModels,context.actor_id??binding.stage_id??undefined);if(this.sampling)model.sampling=this.sampling;return model;
   }
   taskModelContext(){
     const context=scopedModelConfiguration(this.path,this.scope,this.base);
@@ -30,7 +31,7 @@ export class ConfiguredStructuredModel implements StructuredModel{
   async taskModelCandidates(){const context=this.taskModelContext();return context?(this.factories.taskCandidates??subscriptionTaskModelCandidates)(context.environment):[];}
   withTaskModels(binding:TaskModelBinding){
     if(binding.work_id!==this.provenance?.work_id)throw Error('TASK_MODEL_WORK_MISMATCH');
-    const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,this.scope,this.provenance,this.role,structuredClone(binding));if(this.sampling)model.sampling=this.sampling;return model;
+    const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,this.scope,this.provenance,this.role,structuredClone(binding),this.actorId);if(this.sampling)model.sampling=this.sampling;return model;
   }
   environment(){return scopedModelConfiguration(this.path,this.scope,this.base).environment;}
   private resolve(context:ReturnType<typeof scopedModelConfiguration>,role:ModelRole){
@@ -43,7 +44,7 @@ export class ConfiguredStructuredModel implements StructuredModel{
   }
   private sessionOptions(role:ModelRole){
     const p=this.provenance;
-    return p?.work_id&&p.run_id?{session:{root:join(dirname(this.path),'decision-sessions'),work_id:p.work_id,run_id:p.run_id,actor_id:p.stage_id??'supervisor',role}}:{};
+    return p?.work_id&&p.run_id?{session:{root:join(dirname(this.path),'decision-sessions'),work_id:p.work_id,run_id:p.run_id,actor_id:this.actorId??p.stage_id??'supervisor',role}}:{};
   }
   async status(){const context=scopedModelConfiguration(this.path,this.scope,this.base);return {...publicModelSettings(context.saved,context.base),model_scope:this.scope,model_source:context.source,...await subscriptionAwareModelFromHostEnvironment({...(this.sampling?{sampling:this.sampling}:{})},context.environment).status()};}
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){

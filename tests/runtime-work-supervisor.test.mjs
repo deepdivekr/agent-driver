@@ -37,6 +37,19 @@ async function setup(t,options={}){
  const cleanup=[];t.after(async()=>{for(const operation of cleanup.reverse())await operation();store.close();await rm(root,{recursive:true,force:true});});return {root,config,store,model,work,cleanup};
 }
 async function finished(x,states=['succeeded','failed','awaiting_review','reconciliation_required']){for(let i=0;i<120;i++){const s=supervisorStatus(x.store,x.config.project.id,x.work.work_id);if(states.includes(s?.state))return s;await delay(25);}assert.fail(JSON.stringify(supervisorStatus(x.store,x.config.project.id,x.work.work_id)));}
+test('runtime contract semantic stage controls reject stale targets and attribute direction changes to the current run',async t=>{
+ const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false});x.cleanup.push(()=>supervisor.close());
+ const work=x.store.intakeWork(x.config.project.id,x.work.work_id),spec={...work.spec,plan:{...work.spec.plan,steps:[{id:'collect',goal:'Collect records',observable_outcome:'Source records retained',depends_on:[],effect:'read_only',tool_hints:[],evidence_ids:[]}]}};
+ x.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify(spec),work.id);
+ const runId=randomUUID(),at=new Date().toISOString();
+ x.store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(runId,x.config.project.id,work.id,work.revision,'paused','null',x.config.fingerprint,0,at,at);
+ assert.throws(()=>supervisor.action({work_id:work.id,revision:work.revision,action:'edit',stage_id:'removed_stage',instruction:'Keep two records'}),/WORK_CLIENT_STAGE_UNKNOWN/u);
+ assert.equal(x.store.intakeWork(x.config.project.id,work.id).revision,work.revision);
+ supervisor.action({work_id:work.id,revision:work.revision,action:'edit',stage_id:'collect',instruction:'Keep two records'});
+ const activity=x.store.hermesState.prepare("SELECT metadata FROM office_activity WHERE work_id=? AND kind='supervisor.edit' ORDER BY id DESC LIMIT 1").get(work.id);
+ const metadata=JSON.parse(activity.metadata);assert.equal(metadata.run_id,runId);assert.equal(metadata.stage_id,'collect');assert.match(metadata.stage_binding,/^[a-f0-9]{64}$/u);
+ assert.equal(supervisorStatus(x.store,x.config.project.id,work.id).state,'paused');
+});
 test('runtime contract dispatched calls without receipts expose the actual interruption and never count as completed progress',async t=>{
  const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false});x.cleanup.push(()=>supervisor.close());
  const runId=randomUUID(),at=new Date().toISOString(),pending={request_id:'pending-read',turn:1,stage_id:'blocked-source',tool_name:'office_browser_read',arguments:{url:'https://example.org/next'},effect:'read_only',dispatched:true};

@@ -15,9 +15,10 @@ import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRU
 import {BoundedWorkClientExecutor,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint} from './client-executor.js';
 import {packTools} from '../packs/contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
-import {activeSwarmWorkerCount,initWorkExecution,workActivity} from './activity.js';
+import {activeSwarmWorkerCount,initWorkExecution,workActivity,withWorkActivityContext} from './activity.js';
+import {businessSteps,currentStageReports,stageBinding} from './stages.js';
 import {WorkExecutionTools} from './execution-tools.js';
-import {executeSupervisedSwarm,type SupervisedSwarmCheckpoint} from './swarm-executor.js';
+import {executeSupervisedSwarm,assessSupervisedStages,type SupervisedSwarmCheckpoint,type SupervisedSwarmHooks} from './swarm-executor.js';
 import {WorkSchedules} from './schedule.js';
 import {captureWorkRunAdmissionCheckpoint,createWorkCompletionVerifier,createWorkRunTraceEvidence} from './completion.js';
 import {workImportExecutionOwner} from './import-authority.js';
@@ -108,7 +109,9 @@ export function supervisorStatus(store:PackStore,project:string,workId:string,co
   // A dispatched call without a receipt is not a completed step. Expose the
   // real interruption, preserving its unknown effect rather than inventing one.
   if(pending)steps.push({id:pending.stage_id,tool:pending.tool_name,status:live?'running':row.state==='running'?'execution_unobserved':row.state,effect_state:'unobserved',observed_at:null});
-  return {run_id:row.run_id,work_id:row.work_id,revision:row.work_revision,state:row.state,current_run_only:row.current_run_only===1,live,attempts:row.attempts,reason:row.reason,updated_at:row.updated_at,result:row.result?JSON.parse(row.result):null,kind:swarm?'swarm':'client',active_workers:activeWorkers,steps,current_stage:pending?.stage_id??null,can_pause:activeStates.includes(row.state),can_resume:['paused','awaiting_review','waiting_auth','waiting_approval','waiting_model','waiting_connection','retry_wait','failed'].includes(row.state)||rejectedPackBeforeExecution(store,row,config)!==null,can_edit:row.state!=='reconciliation_required'};
+  const plan=(store.intakeWork(project,workId).spec as WorkProposal|null)?.plan;
+  const reports=plan&&cp&&'stage_reports' in cp?currentStageReports(plan,cp.stage_reports??[]):[];
+  return {run_id:row.run_id,work_id:row.work_id,revision:row.work_revision,state:row.state,current_run_only:row.current_run_only===1,live,attempts:row.attempts,reason:row.reason,updated_at:row.updated_at,result:row.result?JSON.parse(row.result):null,kind:swarm?'swarm':'client',active_workers:activeWorkers,steps,stage_reports:reports,pending,current_stage:pending?.stage_id??null,can_pause:activeStates.includes(row.state),can_resume:['paused','awaiting_review','waiting_auth','waiting_approval','waiting_model','waiting_connection','retry_wait','failed'].includes(row.state)||rejectedPackBeforeExecution(store,row,config)!==null,can_edit:row.state!=='reconciliation_required'};
 }
 
 /** Durable admission and bounded retries share the same Work ID and receipts. */
@@ -140,6 +143,8 @@ export class WorkSupervisor {
     const input=supervisorActionSchema.parse(raw),project=this.config.project.id,work=this.store.intakeWork(project,input.work_id),status=supervisorStatus(this.store,project,work.id,this.config);
     assertWorkConnected(this.store,project,work.id);
     requireCondition(status,'WORK_EXECUTION_NOT_FOUND');requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
+    const semantic=businessSteps((work.spec as WorkProposal|null)?.plan);
+    if(input.stage_id&&semantic.length)requireCondition(semantic.some(step=>step.id===input.stage_id),'WORK_CLIENT_STAGE_UNKNOWN');
     const reconcilePackRefusal=status.state==='reconciliation_required'&&['resume','retry'].includes(input.action)&&status.can_resume;
     requireCondition(status.state!=='reconciliation_required'||reconcilePackRefusal,'WORK_RECONCILIATION_REQUIRED');
     if(['resume','retry'].includes(input.action))requireCondition(workImportExecutionOwner(this.store,project,work.id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
@@ -159,7 +164,8 @@ export class WorkSupervisor {
       this.store.hermesState.prepare('INSERT INTO office_work_revision VALUES(?,?,?,?,?,?)').run(work.id,revision,input.action==='edit'?'direction_changed':paused?'paused':'resumed',JSON.stringify(input.action==='edit'?direction:work.spec),JSON.stringify(work.answers),at);
       this.store.hermesState.prepare('UPDATE office_supervisor SET work_revision=?,state=?,reason=NULL,retry_at_ms=0,resume_wait=?,replan_required=CASE WHEN ? THEN 1 ELSE replan_required END,model_revision=?,updated_at=? WHERE project_id=? AND run_id=?').run(revision,paused?'paused':'queued',Number(!paused),Number(input.action==='edit'),readModelSettings(modelSettingsPath(this.config))?.revision??0,at,project,status.run_id);
       this.store.hermesState.prepare('UPDATE office_work SET updated_at=? WHERE project_id=? AND id=?').run(at,project,work.id);
-      workActivity(this.store,project,work.id,`supervisor.${input.action}`,input.action==='edit'?`지침 변경 · ${input.instruction}`:paused?'실행 중단을 요청했습니다. 완료한 단계는 보존됩니다.':'저장한 진행 지점에서 실행을 재개합니다.');
+      const selected=semantic.find(step=>step.id===input.stage_id);
+      workActivity(this.store,project,work.id,`supervisor.${input.action}`,input.action==='edit'?`지침 변경 · ${input.instruction}`:paused?'실행 중단을 요청했습니다. 완료한 단계는 보존됩니다.':'저장한 진행 지점에서 실행을 재개합니다.',{run_id:status.run_id,...(selected?{stage_id:selected.id,stage_binding:stageBinding(selected)}:{})});
       this.store.hermesState.exec('COMMIT');
     }catch(error){this.store.hermesState.exec('ROLLBACK');throw error;}
     if(input.action==='pause'||input.action==='edit')this.controllers.get(status.run_id)?.abort();this.tick();return supervisorStatus(this.store,project,work.id,this.config);
@@ -236,10 +242,15 @@ export class WorkSupervisor {
         }finally{verificationCutpoint=false;}
       });
       if(spec.route.kind==='swarm'){
-        const swarm=await executeSupervisedSwarm(this.api,model,{work_id:row.work_id,request_id:`office-${row.run_id}`,goal:work.prompt,revision:row.work_revision,directions,completion_checks:spec.completion_checks,...(checkpoint?{checkpoint}:{}),max_parallel:3},{guard,checkpoint:saveCheckpoint,progress:event=>workActivity(this.store,project,row.work_id,event.kind,`${event.worker_id??'swarm'} · ${event.summary}`,{stage_id:event.stage_id,...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.worker_id?{worker_id:event.worker_id}:{}),...(event.tool_name?{tool_name:event.tool_name}:{})})});
+        const swarmHooks:SupervisedSwarmHooks={guard,checkpoint:saveCheckpoint,progress:event=>workActivity(this.store,project,row.work_id,event.source?'source.observed':event.kind,`${event.worker_id??'swarm'} · ${event.summary}`,{run_id:row.run_id,stage_id:event.stage_id,...(spec.plan.steps.find(step=>step.id===event.stage_id)?{stage_binding:stageBinding(spec.plan.steps.find(step=>step.id===event.stage_id)!)}:{}),...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.worker_id?{worker_id:event.worker_id}:{}),...(event.tool_name?{tool_name:event.tool_name}:{}),...(event.source?{source:event.source,status:'succeeded'}:{})})};
+        const swarmRequest={work_id:row.work_id,request_id:`office-${row.run_id}`,goal:work.prompt,plan:spec.plan,revision:row.work_revision,directions,completion_checks:spec.completion_checks,...(checkpoint?{checkpoint}:{}),max_parallel:3};
+        const swarm=await executeSupervisedSwarm(this.api,model,swarmRequest,swarmHooks);
         let verified=false;
         if(swarm.status==='succeeded'){
           guard();const snapshot=this.store.swarmRun(project,swarm.run_id).snapshot as SwarmRunSnapshot;
+          const outputStep=businessSteps(spec.plan).find(step=>step.id===snapshot.plan.work_output_stage_id);
+          if(businessSteps(spec.plan).length)requireCondition(outputStep&&['draft_only','local_write'].includes(outputStep.effect),'SWARM_OUTPUT_STAGE_UNBOUND');
+          const outputStage={stage_id:outputStep?.id??'completion.verify',...(outputStep?{stage_binding:stageBinding(outputStep)}:{})};
           requireCondition(snapshot.status==='completed'&&Object.values(snapshot.workers).every(worker=>worker.status==='succeeded'&&worker.result?.readback?.verified&&worker.quality?.accepted),'SWARM_FINAL_READBACK_UNVERIFIED');
           const finalWorkers=snapshot.plan.workers.length===1?snapshot.plan.workers:snapshot.plan.workers.filter(worker=>worker.stage==='synthesis'),cards=finalWorkers.flatMap(worker=>snapshot.workers[worker.id]!.result!.fact_cards);
           const sourceCoverage=snapshot.plan.workers.filter(worker=>worker.source_urls.length>0).map(worker=>({worker_id:worker.id,source_urls:[...new Set(snapshot.workers[worker.id]!.result!.fact_cards.map(card=>card.source_url))],readback:snapshot.workers[worker.id]!.result!.readback}));
@@ -248,12 +259,26 @@ export class WorkSupervisor {
           // A result file is Office-owned output, never another message or bot run.
           const reportText=[swarm.summary,...cards.map(card=>`${card.source_url}\n${card.claim}\n${card.evidence_excerpt}`),'Sources',...[...new Set(sourceCoverage.flatMap(source=>source.source_urls))]].join('\n\n');
           requireCondition(reportText.length<=16000,'SWARM_FINAL_OUTPUT_BUDGET_EXCEEDED');
-          const draftId=`swarm-output-${hashJson({run:swarm.run_id,revision:row.work_revision,text:reportText}).slice(0,32)}`;
-          workActivity(this.store,project,row.work_id,'tool.started','office_result_draft · Swarm output');
+          // Same owned report after a pause/crash uses the same exclusive-write
+          // path. A new Work revision alone must not create a duplicate file.
+          const draftId=`swarm-output-${hashJson({run:swarm.run_id,text:reportText}).slice(0,32)}`;
+          const outputClaim={request_id:draftId,content_sha256:hashJson(reportText),work_revision:row.work_revision,...outputStage};
+          const priorOutput=swarm.checkpoint.final_output_claim;
+          requireCondition(!priorOutput||priorOutput.work_revision!==row.work_revision||priorOutput.content_sha256===outputClaim.content_sha256&&priorOutput.request_id===draftId,'SWARM_OUTPUT_CLAIM_CHANGED');
+          swarm.checkpoint.final_output_claim=outputClaim;saveCheckpoint(swarm.checkpoint);guard();
+          workActivity(this.store,project,row.work_id,'tool.started','office_result_draft · Swarm output',{run_id:row.run_id,...outputStage,tool_name:'office_result_draft',status:'running'});
           const value=await toolkit.execute('office_result_draft',{text:reportText,label:spec.title},draftId),receipt=await toolkit.receipt('office_result_draft',value,draftId);
-          const output={invocation:{request_id:draftId,turn:1,stage_id:'completion.verify',tool_name:'office_result_draft',arguments:{},effect:'local_write' as const,dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:now()};
+          const output={invocation:{request_id:draftId,turn:1,...outputStage,tool_name:'office_result_draft',arguments:{},effect:'local_write' as const,dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:now()};
           swarm.checkpoint.final_observations=[readback,output];saveCheckpoint(swarm.checkpoint);guard();
-          workActivity(this.store,project,row.work_id,'tool.result',`office_result_draft: ${receipt.status}`,{stage_id:'completion.verify',tool_name:'office_result_draft',status:receipt.status});
+          workActivity(this.store,project,row.work_id,'tool.result',`office_result_draft: ${receipt.status}`,{run_id:row.run_id,...outputStage,tool_name:'office_result_draft',status:receipt.status});
+          if(outputStep){
+            const artifactReadId=`${draftId}-read`,artifactValue=await toolkit.execute('office_result_read',{request_id:draftId},artifactReadId),artifactReceipt=await toolkit.receipt('office_result_read',artifactValue,artifactReadId);
+            swarm.checkpoint.final_observations.push({invocation:{request_id:artifactReadId,turn:2,...outputStage,tool_name:'office_result_read',arguments:{request_id:draftId},effect:'read_only',dispatched:true},receipt:{...artifactReceipt,value:boundWorkToolValue(artifactReceipt.value)},observed_at:now()});saveCheckpoint(swarm.checkpoint);guard();
+            await assessSupervisedStages(this.api,model,swarmRequest,swarm.checkpoint,swarmHooks);
+            if(!businessSteps(spec.plan).every(step=>swarm.checkpoint.stage_reports.some(report=>report.stage_id===step.id&&report.binding===stageBinding(step)))){
+              this.finish(row,'awaiting_review','SWARM_WORK_STAGES_INCOMPLETE',{summary:swarm.summary,text:swarm.summary,completion_verified:false,checks:spec.completion_checks,swarm_run_id:swarm.run_id});return;
+            }
+          }
           verified=await verifyCompletion(spec.completion_checks,swarm.checkpoint.final_observations,{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:swarm.summary,wait_reason:null,completed_checks:spec.completion_checks.map(check=>({id:check.id,evidence_ids:[readId,draftId]}))});guard();
         }
         this.finish(row,swarm.status==='succeeded'&&!verified?'awaiting_review':swarm.status,swarm.status==='succeeded'&&!verified?'WORK_CLIENT_COMPLETION_REQUIRES_VERIFICATION':swarm.reason,{summary:swarm.summary,text:swarm.summary,completion_verified:verified,checks:spec.completion_checks,swarm_run_id:swarm.run_id});return;
@@ -288,13 +313,13 @@ export class WorkSupervisor {
       }
       // The executor binds immutable initial task/checks. New direction is live context.
       guard();admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
-      const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,completion_checks:spec.completion_checks,context:{spec,user_directions:directions,execution_policy:'Follow the latest user direction. Keep existing verified receipts. Use this Work ID for all tools. Missing connections need a concrete wait reason.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
+      const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_directions:directions,execution_policy:'Follow the latest user direction. Keep existing verified receipts. Use this Work ID for all tools. Missing connections need a concrete wait reason.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
         {tools:toolkit.catalog(),guard,signal:controller.signal,
           checkpoint:saveCheckpoint,
-          progress:event=>workActivity(this.store,project,row.work_id,event.kind,event.summary,{stage_id:event.stage_id,...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.tool_name?{tool_name:event.tool_name}:{}),...(event.reason?{reason:event.reason}:{}),...(event.kind==='tool.started'?{status:'running'}:event.kind==='tool.result'?{status:event.status??'unknown'}:{})}),
+          progress:event=>workActivity(this.store,project,row.work_id,event.kind,event.summary,{run_id:row.run_id,stage_id:event.stage_id,...(spec.plan.steps.find(step=>step.id===event.stage_id)?{stage_binding:stageBinding(spec.plan.steps.find(step=>step.id===event.stage_id)!)}:{}),...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.tool_name?{tool_name:event.tool_name}:{}),...(event.reason?{reason:event.reason}:{}),...(event.kind==='tool.started'?{status:'running'}:event.kind==='tool.result'?{status:event.status??'unknown'}:{})}),
           validateTool:async(name,args,context)=>{await toolkit!.validate(name,args,context.request_id);},
           executeTool:async(name,args,context)=>{
-            requireCondition(!verificationCutpoint,'WORK_VERIFICATION_ADMISSION_CLOSED');const value=await toolkit!.execute(name,args,context.request_id);return toolkit!.receipt(name,value,context.request_id);
+            requireCondition(!verificationCutpoint,'WORK_VERIFICATION_ADMISSION_CLOSED');const step=spec.plan.steps.find(value=>value.id===context.stage_id);return withWorkActivityContext({project_id:project,work_id:row.work_id,run_id:row.run_id,stage_id:context.stage_id,operation_id:context.request_id,...(step?{stage_binding:stageBinding(step)}:{})},async()=>{const value=await toolkit!.execute(name,args,context.request_id);return toolkit!.receipt(name,value,context.request_id);});
           },verifyCompletion});
       let state:string=result.status==='retryable_failure'&&row.attempts<3?'retry_wait':result.status;
       if(result.status==='retryable_failure'&&row.attempts>=3)state='failed';

@@ -2,7 +2,7 @@
 
 **AI 에이전트가 내 컴퓨터에서 업무를 실행하고, 중단된 지점부터 이어가게 하는 로컬 MCP 서버입니다.**
 
-[English](README.md) · **한국어** · [v0.3.1 변경 내역](docs/releases/v0.3.1.md)
+[English](README.md) · **한국어** · [v0.4.0 변경 내역](docs/releases/v0.4.0.md)
 
 Codex, Claude Code, Cursor, OpenCode, Hermes 등 MCP 클라이언트에 연결합니다.
 저장소와 기본 명령은 `agent-office`입니다. 이전 `agent-driver` 명령은 호환용 별칭으로 남깁니다.
@@ -31,7 +31,7 @@ v0.3.1 한국어·다크모드 화면에 공개용 예시 업무를 넣어 촬�
 
 ## 지원 환경
 
-개발판의 업무 실행 루프는 [실행 안내](docs/work-operation.md), 최근 실사용 결과는 [검증 기록](docs/verification/phase-105-work-live-action.md)에 정리했습니다. 개발판 로컬 반영과 아래 v0.3.1 공개 설치본은 별개입니다.
+실행 흐름은 [실행 안내](docs/work-operation.md), 확인한 범위와 남은 제약은 [출시 검증 기록](docs/release-readiness-v0.4.0.md)에 정리합니다.
 
 | 환경 | 상태 |
 |---|---|
@@ -52,7 +52,7 @@ v0.3.1 한국어·다크모드 화면에 공개용 예시 업무를 넣어 촬�
 직접 설치하려면 **Ubuntu 또는 WSL Ubuntu 터미널**에서 실행합니다. 작업 폴더와 무관합니다.
 
 ```bash
-bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-office/v0.3.1/install.sh | bash'
+bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/agent-office/v0.4.0/install.sh | bash'
 ```
 
 설치 전에 [스크립트](install.sh)를 확인할 수 있습니다.
@@ -61,7 +61,7 @@ bash -o pipefail -c 'curl -fsSL https://raw.githubusercontent.com/deepdivekr/age
 
 ### 관제센터에서 연결
 
-아래는 공개 v0.3.1 설치본의 흐름입니다. 최신 소스의 자동 착수 흐름은 [요청부터 결과까지](#요청부터-결과까지)를 참고하세요.
+도구를 한 번 연결하면 보드에서 업무를 접수할 수 있습니다. [요청부터 결과까지](#요청부터-결과까지)를 참고하세요.
 
 1. **클라이언트 연결** — 설치·로그인을 확인하고 MCP를 등록합니다.
 2. **실행 환경** — 기본 브라우저를 사용하거나 선택 실행기를 연결합니다.
@@ -97,7 +97,7 @@ Windows 앱에는 관제센터가 표시하는 WSL 연결 명령을 사용합니
 
 ### 요청부터 결과까지
 
-아래 흐름은 현재 소스 기준입니다. 위 설치 명령은 아직 공개 v0.3.1을 설치합니다.
+상세 화면은 결과 중심의 업무 단계 아래에 사이트 조회와 도구 활동을 묶어 보여줍니다. 도구 실행 성공과 결과 검증은 구분합니다.
 
 1. **업무 시작** — 한 줄로 요청하면 바로 상세 화면이 열립니다. 선택한 AI의 사용량으로 업무를 분석하고 이번 회차를 실행합니다.
 2. **진행 확인** — 실행 요약에서 선택된 Pack·실제로 방문한 출처·작업자 수·대기와 인계 사유를 확인합니다.
@@ -154,7 +154,7 @@ API에서 구독으로의 인계도 등록된 연결과 정책을 따릅니다.
 - 큐의 업무마다 VM을 만들지 않습니다. 실제 브라우저·CLI 실행은 별도 자원을 사용합니다.
 - 로컬 연결 주소의 토큰, API 키, 개인 업무 데이터는 공유하지 마세요.
 
-[출시 검증 범위](docs/release-readiness-v0.3.1.md) · [AI 설정](docs/control-settings.md) · [브라우저 라우팅](docs/browser-executor-routing.md) · [메모리와 서버 수명](docs/mcp-resource-lifecycle.md)
+[출시 검증 범위](docs/release-readiness-v0.4.0.md) · [AI 설정](docs/control-settings.md) · [브라우저 라우팅](docs/browser-executor-routing.md) · [메모리와 서버 수명](docs/mcp-resource-lifecycle.md)
 
 ## 개발과 라이선스
 

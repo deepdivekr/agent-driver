@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {referenceSelectionSchema} from './reference-selection.js';
 import {basePackFamilyId} from '../taskpacks/base-pack-catalog.js';
 import {browserPreferenceSchema} from '../browser/executor-contracts.js';
-import {initialWorkPlan,validateWorkPlan,workPlanSchema} from './plan.js';
+import {hasBusinessStages,initialWorkPlan,modelWorkPlan,modelWorkPlanSchema,validateWorkPlan,workPlanSchema} from './plan.js';
 import {workResultGetSchema,workResultsListSchema} from './results.js';
 
 const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u);
@@ -16,7 +16,7 @@ export const workQuestionSchema=z.object({
   recommended_id:z.string().nullable(),
   required:z.boolean(),
 }).strict();
-export const workProposalSchema=z.object({
+const workProposalFields=z.object({
   title:sentence.max(160),
   desired_outcome:sentence,
   completion_checks:z.array(z.object({id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),result:sentence.max(500),evidence:sentence.max(500)}).strict()).min(1).max(8),
@@ -27,8 +27,11 @@ export const workProposalSchema=z.object({
   recurrence:z.object({kind:z.enum(['once','recurring']),rule:sentence.max(300).nullable()}).strict(),
   questions:z.array(workQuestionSchema).max(4),
 }).strict();
-export type WorkProposal=z.infer<typeof workProposalSchema>&{plan:z.infer<typeof workPlanSchema>};
-const storedWorkProposalSchema=workProposalSchema.extend({plan:workPlanSchema.optional()}).strict();
+// A new model definition must describe observable business stages. Old saved
+// Works and imported plans remain readable through the separate storage form.
+export const workProposalSchema=workProposalFields.extend({plan:modelWorkPlanSchema}).strict();
+export type WorkProposal=z.infer<typeof workProposalFields>&{plan:z.infer<typeof workPlanSchema>};
+const storedWorkProposalSchema=workProposalFields.extend({plan:workPlanSchema.optional()}).strict();
 
 export const workStartSchema=z.object({request_id:id,prompt:z.string().trim().min(1).max(8000).refine(value=>!/[\r\n]/u.test(value),'ONE_LINE_REQUIRED'),intake_mode:workModeSchema.default('quick')}).strict();
 export const workDefineSchema=z.object({work_id:id}).strict();
@@ -83,4 +86,19 @@ export function validateWorkProposal(raw:unknown,mode:WorkMode,answered=false){
   }
   if(new Set(questions.map(question=>question.id)).size!==questions.length)throw Error('WORK_QUESTION_ID_DUPLICATE');
   return {...proposal,questions};
+}
+
+/** Interpret an LLM proposal without granting its metadata or evidence claims
+ * authority. Missing plan remains a compatibility path for older model
+ * fixtures/providers; the model-facing JSON schema requires one.
+ */
+export function validateModelWorkProposal(raw:unknown,mode:WorkMode,answered=false,previous:WorkProposal|null=null):WorkProposal{
+  const candidate=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw as Record<string,unknown>:null;
+  const fields={...candidate};delete fields.plan;
+  const proposed=validateWorkProposal(fields,mode,answered);
+  if(previous&&hasBusinessStages(previous.plan)&&(!candidate||!Object.hasOwn(candidate,'plan')))throw Error('WORK_PLAN_REQUIRED_FOR_REPLAN');
+  const plan=candidate&&Object.hasOwn(candidate,'plan')?
+    modelWorkPlan(candidate.plan,proposed.desired_outcome,proposed.requested_effect,previous?.plan??null):
+    previous?.plan?validateWorkPlan({...previous.plan,revision:previous.plan.revision+1}):proposed.plan;
+  return {...proposed,plan};
 }

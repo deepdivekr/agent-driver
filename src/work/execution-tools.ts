@@ -225,7 +225,7 @@ export class WorkExecutionTools {
     if(!this.table('office_supervisor'))return [];
     const row=this.store.desktopState.prepare('SELECT checkpoint FROM office_supervisor WHERE project_id=? AND work_id=? AND run_id=?').get(this.config.project.id,this.workId,this.runId);
     const checkpoint=row?.checkpoint?object(JSON.parse(String(row.checkpoint))):null;
-    return Array.isArray(checkpoint?.observations)?checkpoint.observations:[];
+    return Array.isArray(checkpoint?.observations)?checkpoint.observations:checkpoint?.kind==='swarm'&&Array.isArray(checkpoint.final_observations)?checkpoint.final_observations:[];
   }
   private async fileSnapshots(recipe:Record<string,unknown>):Promise<FileSnapshot[]>{
     const requested=Array.isArray(recipe.sources)?recipe.sources:[],ids=[...new Set(requested.flatMap(item=>typeof object(item)?.id==='string'?[String(object(item)!.id)]:[]))];
@@ -383,6 +383,7 @@ export class WorkExecutionTools {
       const parsed=new URL(url);
       requireCondition(name==='office_web_search'||name==='office_social_search'||this.allowedUrls.has(parsed.href),'BROWSER_URL_NOT_OBSERVED');
       assertBrowserUrl(url,[parsed.origin],this.config.environment==='fixture');
+      workActivity(this.store,this.config.project.id,this.workId,'source.started','Opening a source through the configured browser executor.',{tool_name:name,status:'running',target_url:url});
       const origin=parsed.origin,journal=this.store.browserExecutors();
       const socialSite=(social?.site??(Object.hasOwn(knownLoginSites,parsed.hostname.toLowerCase().replace(/^www\./u,''))?parsed.hostname.toLowerCase().replace(/^www\./u,'') as SocialSearchRequest['site']:null));
       const authTarget=socialSite?this.socialTarget(socialSite):null;

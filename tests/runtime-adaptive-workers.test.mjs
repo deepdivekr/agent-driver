@@ -48,6 +48,19 @@ test('runtime contract planner requests the smallest graph, binds planning role 
   assert.match(STANDARD_RESEARCH_INSTRUCTIONS,/smallest useful graph/u);assert.doesNotMatch(STANDARD_RESEARCH_INSTRUCTIONS,/8 to 24|at least six/u);
 });
 
+test('runtime contract semantic Work stages bind every Swarm worker and correction cannot invent a stage',async()=>{
+  const stages=JSON.stringify([{id:'collect',outcome:'Two public sources were read.',effect:'read_only'},{id:'report',outcome:'A brief was saved and read back.',effect:'local_write'}]);
+  let turns=0;const model={calls:[],async call(purpose,_instructions,input){
+    turns++;this.calls.push({purpose,model:'fixture',input_sha256:'b'.repeat(64),status:'accepted'});
+    assert.equal(input.context?.work_stages??input.original_input?.context?.work_stages,stages);
+    return {summary:'One reader',...(turns>1?{work_output_stage_id:'report'}:{}),workers:[worker('one',{...(turns>1?{work_stage_id:'collect'}:{})})]};
+  }};
+  const plan=await new LlmSwarmPlanner(model).plan('Read a public source.',{work_stages:stages},limits);
+  assert.equal(turns,2);assert.equal(plan.workers[0].work_stage_id,'collect');assert.equal(plan.work_output_stage_id,'report');
+  assert.throws(()=>validateSwarmPlanDraft({summary:'Wrong stage',work_output_stage_id:'report',workers:[worker('one',{work_stage_id:'missing'})]},{...limits,work_stage_ids:['collect','report'],work_output_stage_ids:['report']}),/SWARM_WORK_STAGE_UNKNOWN|SWARM_WORK_STAGE_UNCOVERED/u);
+  assert.throws(()=>validateSwarmPlanDraft({summary:'Unbound stage',work_output_stage_id:'report',workers:[worker('one')]},{...limits,work_stage_ids:['collect','report'],work_output_stage_ids:['report']}),/SWARM_WORK_STAGE_REQUIRED|SWARM_WORK_STAGE_UNCOVERED/u);
+});
+
 test('runtime contract subscription roles use exact saved models while inherited choices and coding overrides remain intact',async t=>{
   const {path}=await setup(t),seen=[];
   const model=new ConfiguredStructuredModel(path,{}, {subscription:options=>({calls:[],async call(){seen.push(options.environment.AGENT_DRIVER_CODEX_MODEL);return {};}})});
@@ -81,6 +94,21 @@ test('runtime contract native Codex assignee resumes after a wrapper restart and
   saveModelSettings(path,{revision:1,onboarding_step:3,selection:{...selection,role_models:{...selection.role_models,worker:{codex:'new-worker-model',claude:null,opencode:null}}}},{});
   assert.equal((await call()).continuity,'new_session');
   const records=await readdir(join(root,'decision-sessions'));for(const dir of records){const text=await readFile(join(root,'decision-sessions',dir,'session.json'),'utf8');assert.doesNotMatch(text,/Already read|Read only|token|password/u);}
+});
+
+test('runtime contract two workers in one business stage keep separate native sessions and shared stage provenance',async t=>{
+  const {path}=await setup(t),runner=runnerFor(),base=factory(path,runner);
+  const call=async actor=>{const model=base.forWork({work_id:'work-a',run_id:'run-a',stage_id:'collect',actor_id:actor});
+    await model.call('correct','Report source-backed evidence.',input,schema);return model.calls.at(-1);};
+  assert.equal((await call('reader-one')).continuity,'new_session');
+  assert.equal((await call('reader-two')).continuity,'new_session');
+  assert.equal((await call('reader-one')).continuity,'resumed_session');
+  assert.equal((await call('reader-two')).continuity,'resumed_session');
+  const requests=invocations(runner);assert.equal(requests.length,4);
+  assert.notEqual(requests[0].cwd,requests[1].cwd);
+  assert.equal(requests[0].cwd,requests[2].cwd);assert.equal(requests[1].cwd,requests[3].cwd);
+  for(const request of requests)assert.equal(JSON.parse(request.stdin.split('INPUT:\n')[1]).stage_id,'collect');
+  assert.throws(()=>base.forWork({work_id:'work-a',run_id:'run-a',stage_id:'collect',actor_id:'bad actor'}),/CLIENT_SESSION_ACTOR_INVALID/u);
 });
 
 test('runtime contract Claude uses its own persistent ID and exact resume, with tools and hooks still disabled',async t=>{

@@ -54,8 +54,8 @@ test('runtime unit analysis preserves confirmed browser engine after a model eve
   x.data.activity=[{kind:'tool.result',metadata:{status:'waiting_approval',engine:'aside'}}];assert.equal(vm.runInNewContext('observedExecutor(data)',x),null);
   x.data.activity=[{kind:'source.observed',metadata:{status:'failed',engine:'aside'}}];assert.equal(vm.runInNewContext('observedExecutor(data)',x),null);
   x.data.current_operation={kind:'dispatch.selected',engine:'planned_neo',metadata:{status:'preparing'}};x.data.activity=[];assert.equal(vm.runInNewContext('observedExecutor(data)',x),null);
-  assert.match(script,/s\.executor==='client'\?'실행 경로: 연결된 AI'/u,'client dispatch is labelled as a route, not a browser engine');
-  assert.match(script,/<span>도구 기록 확인<\/span>/u,'confirmed tool records remain distinct from Work completion');
+  assert.match(script,/s\.executor==='client'\?t\('실행 경로: 연결된 AI','Execution route: connected AI'\)/u,'client dispatch is labelled as a route, not a browser engine');
+  assert.match(script,/<span>'\+esc\(t\('도구 기록 확인','Tool records observed'\)\)\+'<\/span>/u,'confirmed tool records remain distinct from Work completion');
 });
 
 test('runtime unit ordinary live worker counts use host observations and distinguish Swarm sub-agents without planned or unknown counts',()=>{

@@ -1,8 +1,10 @@
 import {type PackStore} from '../packs/store.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {z} from 'zod';
+import {AsyncLocalStorage} from 'node:async_hooks';
 
 const activityMetadataSchema=z.object({
+  run_id:z.string().max(100).optional(),operation_id:z.string().max(100).optional(),stage_binding:z.string().max(64).optional(),target_url:z.string().url().max(2048).optional(),
   stage_id:z.string().max(100).optional(),worker_id:z.string().max(100).optional(),tool_name:z.string().max(100).optional(),status:z.string().max(80).optional(),
   pack_family:z.string().max(100).optional(),route_kind:z.string().max(40).optional(),executor:z.string().max(160).optional(),
   engine:z.string().max(40).optional(),environment:z.string().max(80).optional(),reason:z.string().max(160).optional(),
@@ -11,10 +13,14 @@ const activityMetadataSchema=z.object({
   source:z.object({url:z.string().url().max(2048),title:z.string().max(200),observed_at:z.string().datetime()}).strict().optional(),
 }).strict();
 export type WorkActivityMetadata=z.infer<typeof activityMetadataSchema>;
+type ActivityContext={project_id:string;work_id:string;run_id:string;stage_id:string;operation_id?:string;stage_binding?:string;worker_id?:string};
+const activityContext=new AsyncLocalStorage<ActivityContext>();
+/** Async-local attribution prevents parallel workers from borrowing each other's stage. */
+export function withWorkActivityContext<T>(context:ActivityContext,action:()=>T):T{return activityContext.run(context,action);}
 /** Only explicit host fields, never arguments, page bodies or provider reasoning. */
 function safeMetadata(raw:unknown):WorkActivityMetadata|undefined{
   const parsed=activityMetadataSchema.safeParse(raw);if(!parsed.success)return undefined;
-  const metadata=Object.fromEntries(Object.entries(parsed.data).filter(([key])=>key!=='source').map(([key,value])=>[key,safeControlText(String(value),160)])) as WorkActivityMetadata;
+  const metadata=Object.fromEntries(Object.entries(parsed.data).filter(([key])=>key!=='source').map(([key,value])=>[key,safeControlText(String(value),key==='target_url'?2048:160)])) as WorkActivityMetadata;
   if(parsed.data.source){const source=parsed.data.source,url=safeControlText(source.url,2048);try{new URL(url);metadata.source={url,title:safeControlText(source.title,200),observed_at:source.observed_at};}catch{/* Sensitive or invalid URLs are not public source evidence. */}}
   return metadata;
 }
@@ -31,7 +37,9 @@ export function executionRecord(store:PackStore,project:string,id:string){
   return hasExecutionTable(store)?store.hermesState.prepare('SELECT owner,lease_until_ms,state,reason,updated_at FROM office_execution WHERE project_id=? AND work_id=?').get(project,id) as {owner:string|null;lease_until_ms:number;state:string;reason:string|null;updated_at:string}|undefined:undefined;
 }
 export function workActivity(store:PackStore,project:string,id:string,kind:string,summary:string,metadata?:WorkActivityMetadata){
-  const safe=metadata?safeMetadata(metadata):undefined;
+  const context=activityContext.getStore();
+  const scoped=context?.project_id===project&&context.work_id===id?Object.fromEntries(Object.entries(context).filter(([key])=>key!=='project_id'&&key!=='work_id')):undefined;
+  const safe=metadata||scoped?safeMetadata({...metadata,...scoped}):undefined;
   store.hermesState.prepare('INSERT INTO office_activity(project_id,work_id,kind,summary,created_at,metadata) VALUES(?,?,?,?,?,?)').run(project,id,kind,safeControlText(summary,800),new Date().toISOString(),safe?JSON.stringify(safe):null);
 }
 export interface WorkLog {id:string;kind:string;summary:string;created_at:string;source:string;metadata?:WorkActivityMetadata;}

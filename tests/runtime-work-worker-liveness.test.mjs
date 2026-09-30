@@ -12,6 +12,7 @@ function readOnlyStore(savedSnapshot,overrides={},hasSupervisor=true){
   const row={run_id:'fixture-supervisor',work_id:workId,work_revision:2,state:'running',owner:'owned-parent',lease_until_ms:atMs+1000,attempts:1,checkpoint:JSON.stringify(checkpoint),result:null,reason:null,current_run_only:1,updated_at:'2030-03-17T17:46:40.000Z',...overrides};
   const before={row:structuredClone(row),snapshot:structuredClone(savedSnapshot)},reads=[];
   const store={
+    intakeWork(p,id){assert.equal(p,project);assert.equal(id,workId);return {spec:null};},
     hermesState:{exec(){assert.fail('observation must not execute or mutate SQL');},prepare(sql){
       assert.match(sql,/^SELECT /u);reads.push(sql);
       return {run(){assert.fail('observation must not write');},get(...parameters){

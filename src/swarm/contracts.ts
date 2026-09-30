@@ -25,6 +25,8 @@ export const swarmWorkerStageSchema=z.enum(['discovery','source_read','verificat
 export const swarmEffectSchema=z.enum(['read_only','local_write','external_effect','irreversible']);
 export const swarmWorkerSchema=z.object({
   id,
+  /** Host Work business stage. Optional for saved standalone and legacy Swarm plans. */
+  work_stage_id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u).optional(),
   role:sentence.max(160),
   objective:sentence,
   stage:swarmWorkerStageSchema.default('discovery'),
@@ -41,6 +43,8 @@ export const swarmWorkerSchema=z.object({
 
 export const swarmPlanDraftSchema=z.object({
   summary:sentence,
+  /** Work host file/result stage; absent in standalone and legacy Swarm plans. */
+  work_output_stage_id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u).optional(),
   workers:z.array(swarmWorkerSchema).min(1).max(MAX_SWARM_WORKERS),
 }).strict();
 export type SwarmPlanDraft=z.infer<typeof swarmPlanDraftSchema>;
@@ -165,13 +169,20 @@ export interface SwarmRunSnapshot {
   execution_authority:false;approval_granted:false;
 }
 
-export function validateSwarmPlanDraft(raw:unknown,limits:{max_workers:number;capabilities:string[];mode?:SwarmResearchMode;worker_timeout_ms?:number;max_sources_per_worker?:number}){
+export function validateSwarmPlanDraft(raw:unknown,limits:{max_workers:number;capabilities:string[];mode?:SwarmResearchMode;worker_timeout_ms?:number;max_sources_per_worker?:number;work_stage_ids?:readonly string[];work_output_stage_ids?:readonly string[]}){
   const draft=swarmPlanDraftSchema.parse(raw);
+  if(limits.work_stage_ids){
+    if(!draft.work_output_stage_id)throw Error('SWARM_WORK_OUTPUT_STAGE_REQUIRED');
+    if(!limits.work_output_stage_ids?.includes(draft.work_output_stage_id))throw Error('SWARM_WORK_OUTPUT_STAGE_INVALID');
+    const covered=new Set([draft.work_output_stage_id,...draft.workers.map(worker=>worker.work_stage_id)]);
+    if(limits.work_stage_ids.some(stageId=>!covered.has(stageId)))throw Error('SWARM_WORK_STAGE_UNCOVERED');
+  }
   if(draft.workers.length>limits.max_workers)throw Error('SWARM_PLAN_WORKER_LIMIT');
   const ids=new Set(draft.workers.map(worker=>worker.id));
   if(ids.size!==draft.workers.length)throw Error('SWARM_PLAN_DUPLICATE_WORKER');
   const allowed=new Set(limits.capabilities);
   for(const worker of draft.workers){
+    if(limits.work_stage_ids&&(!worker.work_stage_id||!limits.work_stage_ids.includes(worker.work_stage_id)))throw Error(worker.work_stage_id?'SWARM_WORK_STAGE_UNKNOWN':'SWARM_WORK_STAGE_REQUIRED');
     if(worker.depends_on.includes(worker.id)||worker.depends_on.some(dependency=>!ids.has(dependency)))throw Error('SWARM_PLAN_INVALID_DEPENDENCY');
     if(worker.required_capabilities.some(capability=>!allowed.has(capability)))throw Error('SWARM_PLAN_CAPABILITY_NOT_DELEGATED');
     if(limits.mode==='standard'&&worker.stage==='source_read'&&(worker.source_urls.length<1||worker.source_urls.length>(limits.max_sources_per_worker??STANDARD_SWARM_DEFAULTS.max_sources_per_worker)))throw Error('SWARM_STANDARD_SOURCE_URL_LIMIT');

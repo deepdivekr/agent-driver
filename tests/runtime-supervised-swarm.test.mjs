@@ -6,13 +6,15 @@ import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
 import {RuntimeApi} from '../dist/interface/api.js';
 import {loadHostConfig} from '../dist/interface/config.js';
-import {executeSupervisedSwarm,supervisedSwarmCheckpointSchema} from '../dist/work/swarm-executor.js';
+import {executeSupervisedSwarm,assessSupervisedStages,supervisedSwarmCheckpointSchema} from '../dist/work/swarm-executor.js';
 import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {WorkResults} from '../dist/work/results.js';
 import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
 import {modelSettingsPath,saveModelSettings} from '../dist/onboarding/model-settings.js';
 import {allocateWorkModels} from '../dist/work/task-models.js';
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
+import {initialWorkPlan,validateWorkPlan} from '../dist/work/plan.js';
+import {stageBinding} from '../dist/work/stages.js';
 
 const goal='Research six physical AI sources, preserve citations and summarize their common findings.';
 const draft=()=>{const sources=Array.from({length:6},(_,i)=>({id:`source-${i+1}`,role:'Read one source',objective:`Read https://example.test/source-${i+1} and report the observed evidence.`,stage:'source_read',source_urls:[`https://example.test/source-${i+1}`],executor:'sub_agent',depends_on:[],required_capabilities:[],effect:'read_only',completion_evidence:['Source-backed fact cards.'],max_steps:12,timeout_ms:75000}));return {summary:'Read six sources in parallel, reduce and synthesize.',workers:[...sources,{...sources[0],id:'reduce',role:'Reduce evidence',objective:'Combine all source facts without losing their evidence.',stage:'reduction',source_urls:[],depends_on:sources.map(worker=>worker.id)},{...sources[0],id:'final',role:'Synthesize results',objective:'Produce the final source-backed digest.',stage:'synthesis',source_urls:[],depends_on:['reduce']}]};};
@@ -24,6 +26,7 @@ async function setup(t,options={}){
     inputs.push({purpose,instructions,input:structuredClone(input)});
     calls.push({purpose,provider:'fixture',model:'fixture-llm',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});
     if(instructions.startsWith('Define one durable'))return proposal;
+    if(instructions.startsWith('Assess only the listed business stages'))return {completed_stages:input.stages.map(stage=>({stage_id:stage.id,evidence_ids:[stage.verified_workers?.[0]?.evidence_ids?.[0]??stage.host_readbacks?.find(item=>item.tool_name==='office_result_read')?.evidence_ids?.[0]]}))};
     if(instructions.startsWith('Independently verify'))return {checks:input.checks.map(check=>({id:check.id,verdict:options.finalUnsupported?'unknown':'supported',evidence_ids:[check.allowed_evidence_ids[0]],evidence_quotes:[{evidence_id:check.allowed_evidence_ids[0],quote:'Physical AI evidence-backed result.'}],reason:options.finalUnsupported?'The requested extra field was not observed.':'The independently read-back final result contains a source-backed summary.'}))};
     if(purpose==='design')return options.plan??draft();
     if(instructions.startsWith('Revise only the allowed existing worker')){
@@ -57,6 +60,73 @@ async function setup(t,options={}){
   const saved=[],events=[],hooks={guard:()=>{},checkpoint:value=>saved.push(structuredClone(value)),progress:event=>events.push(event)};
   return {api,model,work,saved,events,hooks,reads,released,inputs,peak:()=>peak};
 }
+
+function semanticPlan(steps){
+  const base=initialWorkPlan(goal,'local_file_write');
+  return validateWorkPlan({...base,steps:steps.map(step=>({tool_hints:[],evidence_ids:[],...step}))});
+}
+const semanticSteps=()=>[
+  {id:'collect',goal:'Read public source evidence.',observable_outcome:'Source claims and excerpts are independently observed.',depends_on:[],effect:'read_only'},
+  {id:'report',goal:'Save a concise report.',observable_outcome:'The report file is saved and read back.',depends_on:['collect'],effect:'local_write'},
+];
+const semanticDraft=()=>({summary:'Read and report.',work_output_stage_id:'report',workers:[{...draft().workers[0],work_stage_id:'collect'}]});
+
+test('runtime fixture semantic Swarm does not equate a finished worker with saved business output',async t=>{
+  const plan=semanticPlan(semanticSteps()),x=await setup(t,{plan:semanticDraft()});
+  const request={work_id:x.work.work_id,request_id:'semantic-swarm',goal,plan},result=await executeSupervisedSwarm(x.api,x.model,request,x.hooks);
+  assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,false);
+  assert.deepEqual(result.checkpoint.stage_reports.map(report=>report.stage_id),['collect']);
+  assert.equal(result.checkpoint.final_observations.length,0);
+  const state=x.api.store.swarmRun(x.api.config.project.id,result.run_id).snapshot;
+  assert.equal(state.plan.work_output_stage_id,'report');assert.equal(state.plan.workers[0].work_stage_id,'collect');
+  assert.ok(x.events.some(event=>event.worker_id==='source-1'&&event.stage_id==='collect'&&event.stage_binding===stageBinding(plan.steps[0])));
+  const at=new Date().toISOString(),binding=stageBinding(plan.steps[1]);
+  for(const [tool_name,effect,evidence_id] of [['office_result_draft','local_write','saved-report'],['office_result_read','read_only','read-report']]){
+    result.checkpoint.final_observations.push({invocation:{request_id:evidence_id,turn:1,stage_id:'report',stage_binding:binding,tool_name,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{artifact:{path:'/isolated/report.txt',sha256:'a'.repeat(64)}},evidence_ids:[evidence_id],effect_state:effect==='read_only'?'none':'verified',retry_safe:true},observed_at:at});
+  }
+  await assessSupervisedStages(x.api,x.model,request,result.checkpoint,x.hooks);
+  assert.deepEqual(result.checkpoint.stage_reports.map(report=>report.stage_id),['collect','report']);
+  assert.deepEqual(result.checkpoint.stage_reports[1].evidence_ids,['read-report']);
+  const count=x.model.calls.length;
+  await assessSupervisedStages(x.api,x.model,request,result.checkpoint,x.hooks);
+  assert.equal(x.model.calls.length,count,'unchanged evidence does not rerun stage verification');
+});
+
+test('runtime fixture two workers sharing one business stage retain separate worker identities and receipts',async t=>{
+  const plan=semanticPlan(semanticSteps()),sources=draft().workers.slice(0,2).map(worker=>({...worker,work_stage_id:'collect'}));
+  const workers=[...sources,{...draft().workers.at(-1),depends_on:sources.map(worker=>worker.id),work_stage_id:'collect'}];
+  const x=await setup(t,{plan:{summary:'Two independent reads.',work_output_stage_id:'report',workers}});
+  const result=await executeSupervisedSwarm(x.api,x.model,{work_id:x.work.work_id,request_id:'shared-business-stage',goal,plan},x.hooks);
+  assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,false);
+  assert.deepEqual(result.checkpoint.completed_workers.sort(),['final','source-1','source-2']);
+  for(const id of ['source-1','source-2'])assert.equal(result.checkpoint.workers[id].observations[0].invocation.stage_id,'collect');
+  assert.deepEqual(new Set(x.events.filter(event=>event.worker_id&&event.stage_id==='collect').map(event=>event.worker_id)),new Set(['source-1','source-2','final']));
+  assert.deepEqual(result.checkpoint.stage_reports.map(report=>report.stage_id),['collect']);
+});
+
+test('runtime fixture business-stage direction resets all bound workers and dependents but preserves unrelated evidence',async t=>{
+  const steps=[
+    {id:'collect',goal:'Read two sources.',observable_outcome:'Two source claims are observed.',depends_on:[],effect:'read_only'},
+    {id:'other',goal:'Read another source.',observable_outcome:'An independent source claim is observed.',depends_on:[],effect:'read_only'},
+    {id:'compose',goal:'Synthesize claims.',observable_outcome:'Source-backed synthesis is read back.',depends_on:['collect','other'],effect:'read_only'},
+    {id:'report',goal:'Save report.',observable_outcome:'Report file is saved and read back.',depends_on:['compose'],effect:'local_write'},
+  ];
+  const plan=semanticPlan(steps),all=draft().workers;
+  const workers=[{...all[0],work_stage_id:'collect'},{...all[1],work_stage_id:'collect'},{...all[2],work_stage_id:'other'},{...all.at(-1),depends_on:['source-1','source-2','source-3'],work_stage_id:'compose'}];
+  const x=await setup(t,{plan:{summary:'Bound source and synthesis workers.',work_output_stage_id:'report',workers}});
+  const request={work_id:x.work.work_id,request_id:'business-direction',goal,plan};
+  const first=await executeSupervisedSwarm(x.api,x.model,request,x.hooks),before=structuredClone(x.api.store.swarmRun(x.api.config.project.id,first.run_id).snapshot);
+  assert.equal(first.status,'succeeded');assert.deepEqual(first.checkpoint.stage_reports.map(report=>report.stage_id),['collect','other','compose']);
+  const direction=saveDirection(x,first.run_id,'collect','Recheck the two collected sources and shorten the synthesis.');
+  const next=await executeSupervisedSwarm(x.api,x.model,{...request,checkpoint:first.checkpoint,...direction},x.hooks),after=x.api.store.swarmRun(x.api.config.project.id,first.run_id).snapshot;
+  assert.equal(next.status,'succeeded');assert.deepEqual(after.workers['source-3'],before.workers['source-3']);
+  const rebase=x.api.store.swarmActivities(x.api.config.project.id,0,500,first.run_id).find(event=>event.kind==='work.direction_rebased');
+  assert.deepEqual(new Set(rebase.body.reset_workers),new Set(['source-1','source-2','final']));
+  assert.equal(x.reads.filter(read=>read.worker==='source-3').length,2,'unaffected source is not replayed');
+  assert.deepEqual(next.checkpoint.stage_reports.map(report=>report.stage_id),['other','collect','compose']);
+  const unknown=saveDirection(x,first.run_id,'unlisted_business_stage','Do not silently map unknown business steps.');
+  await assert.rejects(executeSupervisedSwarm(x.api,x.model,{...request,checkpoint:next.checkpoint,...unknown},x.hooks),/SWARM_DIRECTION_STAGE_NOT_FOUND/u);
+});
 
 // Fixture equivalent of a persisted, explicitly approved UI edit; no private bot or outbound effect.
 function saveDirection(x,runId,stepId,instruction){
