@@ -13,15 +13,16 @@ import {WorkSchedules} from '../dist/work/schedule.js';
 import {workStartSchema,workAnswerSchema,workPauseSchema,workStartActionSchema,workAnswerActionSchema,workPauseActionSchema,workExecuteSchema} from '../dist/work/contracts.js';
 import {initWorkExecution,workActivity,workTail} from '../dist/work/activity.js';
 import {WorkExecutionTools} from '../dist/work/execution-tools.js';
+import {changeWorkLifecycle,readWorkLifecycle} from '../dist/work/lifecycle.js';
 import {startControlCenter,controlCenterReloadBlockedReason} from '../dist/observability/control-center.js';
 
 const question={id:'format',prompt:'Choose the output',options:[{id:'summary',label:'Summary',meaning:'Text summary'},{id:'cards',label:'Cards',meaning:'Card draft'}],recommended_id:'summary',required:false};
 const proposal=(extra={})=>({title:'ASTS article research',desired_outcome:'Read public sources about ASTS and provide a sourced summary',completion_checks:[{id:'evidence',result:'A sourced summary is available',evidence:'Observed source and saved result receipts'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],...extra});
 const wait={action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'The fixture intentionally waits for configuration; no result is claimed.',completed_checks:[],wait_reason:'configuration'};
 function model({definition=proposal(),gate=null,offline=false,guided=false}={}){
-  return {calls:[],inputs:[],async call(purpose,instructions,input){
+  return {offline,calls:[],inputs:[],async call(purpose,instructions,input){
     this.calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture',duration_ms:0});this.inputs.push({instructions,input:structuredClone(input)});
-    if(instructions.startsWith('Define one durable')){if(gate)await gate;if(offline)throw Error('OFFLINE');return structuredClone({...definition,...(guided&&!Object.keys(input.answers??{}).length?{questions:[question]}:{})});}
+    if(instructions.startsWith('Define one durable')){if(gate)await gate;if(this.offline)throw Error('OFFLINE');return structuredClone({...definition,...(guided&&!Object.keys(input.answers??{}).length?{questions:[question]}:{})});}
     if(instructions.startsWith('Normalize the user'))return {kind:'daily',timezone:'UTC',hour:20,minute:0};
     assert.ok(instructions.startsWith('Execute the registered Work'),instructions.slice(0,120));return structuredClone(wait);
   }};
@@ -99,6 +100,42 @@ test('runtime fixture unavailable analysis persists Work and typed waiting activ
   assert.equal(result.response.status,200);assert.equal(result.data.definition_status,'needs_model');assert.equal(result.data.admission.accepted,false);
   const tail=workTail(x.store,x.config.project.id,result.data.work_id);assert.ok(tail.some(row=>row.kind==='definition.failed'&&row.metadata.reason==='MODEL_OR_DEFINITION_UNAVAILABLE'));assert.ok(tail.some(row=>row.kind==='dispatch.waiting'));
   assert.equal(supervisorStatus(x.store,x.config.project.id,result.data.work_id),null);
+});
+
+test('runtime fixture approved Start survives unavailable definition and retry admits its original run exactly once',async t=>{
+  const ai=model({offline:true}),x=await fixture(t,{model:ai}),first=await x.post('work/start',{request_id:'retry-approved',prompt:'Research ASTS',execute:true,cost_acknowledged:true});
+  assert.equal(first.data.definition_status,'needs_model');assert.equal(first.data.admission.accepted,false);
+  assert.equal(workTail(x.store,x.config.project.id,first.data.work_id).filter(row=>row.kind==='dispatch.requested').length,1);
+  ai.offline=false;const retry=await x.post('work/define',{work_id:first.data.work_id});
+  assert.equal(retry.response.status,200);assert.equal(retry.data.definition_status,'ready');assert.equal(retry.data.admission.accepted,true);
+  const run=await settle(x,first.data.work_id);assert.equal(run.run_id,retry.data.admission.run_id);
+  const duplicate=await x.post('work/define',{work_id:first.data.work_id});assert.equal(duplicate.data.admission.deduplicated,true);assert.equal(duplicate.data.admission.run_id,run.run_id);
+  assert.equal(x.store.hermesState.prepare('SELECT COUNT(*) AS n FROM office_supervisor WHERE work_id=?').get(first.data.work_id).n,1);
+});
+
+test('runtime fixture definition-only retry stays passive for HTTP and MCP intake',async t=>{
+  const ai=model({offline:true}),x=await fixture(t,{model:ai}),http=await x.post('work/start',{request_id:'retry-passive-http',prompt:'Research ASTS'}),mcp=await x.runtime.start({request_id:'retry-passive-mcp',prompt:'Research ASTS'});
+  assert.equal(http.data.definition_status,'needs_model');assert.equal(mcp.definition_status,'needs_model');ai.offline=false;
+  for(const id of [http.data.work_id,mcp.work_id]){const retry=await x.post('work/define',{work_id:id});assert.equal(retry.response.status,200);assert.equal(retry.data.definition_status,'ready');assert.equal(retry.data.admission.requested,false);assert.equal(supervisorStatus(x.store,x.config.project.id,id),null);}
+});
+
+test('runtime fixture retry preserves pause and disconnect boundaries despite an earlier approved Start',async t=>{
+  const ai=model({offline:true}),x=await fixture(t,{model:ai}),paused=await x.post('work/start',{request_id:'retry-paused',prompt:'Research ASTS',execute:true,cost_acknowledged:true}),disconnected=await x.post('work/start',{request_id:'retry-disconnected',prompt:'Research ASTS',execute:true,cost_acknowledged:true});
+  const pause=await x.post('work/pause',{work_id:paused.data.work_id,revision:paused.data.revision,paused:true});assert.equal(pause.response.status,200);
+  const life=readWorkLifecycle(x.store,x.config.project.id,disconnected.data.work_id);changeWorkLifecycle(x.store,x.config.project.id,{work_id:disconnected.data.work_id,revision:life.revision,work_revision:life.work_revision,action:'disconnect',confirmed:true});
+  ai.offline=false;const retry=await x.post('work/define',{work_id:paused.data.work_id});assert.equal(retry.response.status,200);assert.equal(retry.data.admission.accepted,false);assert.equal(retry.data.admission.reason,'WORK_PAUSED');
+  const blocked=await x.post('work/define',{work_id:disconnected.data.work_id});assert.equal(blocked.response.status,409);assert.equal(blocked.data.error,'WORK_DISCONNECTED');
+  for(const id of [paused.data.work_id,disconnected.data.work_id])assert.equal(supervisorStatus(x.store,x.config.project.id,id),null);
+});
+
+test('runtime fixture answer consent survives unavailable redefinition while passive answers do not authorize execution',async t=>{
+  const ai=model({guided:true}),x=await fixture(t,{model:ai});
+  for(const execute of [true,false]){
+    const first=await x.post('work/start',{request_id:execute?'retry-answer-approved':'retry-answer-passive',prompt:'Research ASTS',intake_mode:'guided',execute:false});assert.equal(first.data.definition_status,'awaiting_details');
+    ai.offline=true;const answer=await x.post('work/answer',{work_id:first.data.work_id,revision:first.data.revision,answers:{format:'summary'},execute,cost_acknowledged:execute});assert.equal(answer.response.status,200);assert.equal(answer.data.definition_status,'needs_model');assert.equal(answer.data.admission.requested,execute);
+    ai.offline=false;const retry=await x.post('work/define',{work_id:first.data.work_id});assert.equal(retry.response.status,200);assert.equal(retry.data.definition_status,'ready');assert.equal(retry.data.admission.requested,execute);
+    if(execute){assert.equal(retry.data.admission.accepted,true);await settle(x,first.data.work_id);}else assert.equal(supervisorStatus(x.store,x.config.project.id,first.data.work_id),null);
+  }
 });
 
 test('runtime fixture pause during real analysis preserves its lease and unique revisions but blocks the next execution',async t=>{

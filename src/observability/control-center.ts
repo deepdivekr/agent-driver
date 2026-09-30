@@ -131,6 +131,10 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const runtimeReady=()=>{const state=options.reloadStatus?.().state;return !stopped&&!reloading&&(state===undefined||state==='idle'||state==='restored');};
   const activateReadySupervisor=()=>{if(runtimeReady())supervisor.activate();};
   const runtimeConfiguration=()=>({runtime_reload_available:Boolean(options.onReload),runtime_configuration:options.reloadStatus?.()??{state:reloading?'reloading':'idle',reason:null}});
+  // A failed definition does not erase a human's already-approved current-run
+  // request. Only this host records the consent-gated admission event; MCP
+  // definition-only Works have no such event and remain definition-only.
+  const requestedIntakeRun=(workId:string)=>Boolean(store.hermesState.prepare("SELECT 1 FROM office_activity WHERE project_id=? AND work_id=? AND kind='dispatch.requested' AND json_valid(metadata) AND json_extract(metadata,'$.stage_id')='admission' AND json_extract(metadata,'$.status')='requested' LIMIT 1").get(config.project.id,workId));
   const finishIntake=(work:ReturnType<WorkRuntime['status']>,intent:{execute:boolean;cost_acknowledged:boolean;timezone?:string})=>{
     if(!intent.execute)return {...work,admission:{requested:false,accepted:false,deduplicated:false,state:'registered',reason:null}};
     const previous=supervisorStatus(store,config.project.id,work.work_id,config);
@@ -309,7 +313,8 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>1024)throw Error('WORK_REQUEST_TOO_LARGE');}
         if(rejectStopped())return;const input=workDefineSchema.parse(JSON.parse(body));
-        const result=await workRuntime.define(input);
+        const work=await workRuntime.define(input);if(rejectStopped())return;
+        const execute=requestedIntakeRun(work.work_id),result=finishIntake(work,{execute,cost_acknowledged:execute});
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_DEFINE_FAILED'}),'application/json; charset=utf-8');}return;
     }
@@ -320,7 +325,9 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         if(rejectStopped())return;const {execute,cost_acknowledged,timezone,...input}=workAnswerActionSchema.parse(JSON.parse(body));
         if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
         if(Object.values(input.answers).some(value=>/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(value)))throw Error('CREDENTIAL_LIKE_INPUT');
-        const work=await workRuntime.answer(input);if(rejectStopped())return;const result=finishIntake(work,{execute,cost_acknowledged,...(timezone?{timezone}:{})});
+        const work=await workRuntime.answer(input);if(rejectStopped())return;
+        if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The user requested this Work run using the configured AI allowance. Future recurring runs and external changes remain separately gated.',{stage_id:'admission',status:'requested'});
+        const result=finishIntake(work,{execute,cost_acknowledged,...(timezone?{timezone}:{})});
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_ANSWER_FAILED'}),'application/json; charset=utf-8');}return;
     }

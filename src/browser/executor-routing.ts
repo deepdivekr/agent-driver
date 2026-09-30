@@ -69,9 +69,11 @@ export function validateBrowserCheckpoint(config:HostConfig,options:Pick<Browser
   requireCondition(saved.effect_state==='none','BROWSER_RECONCILIATION_REQUIRED');
   assertBrowserUrl(saved.entry_url,origins,config.environment==='fixture');assertBrowserUrl(saved.url,origins,config.environment==='fixture');
 }
+const http2TransportError=(error:unknown)=>error instanceof Error&&/\bnet::ERR_HTTP2_PROTOCOL_ERROR\b/u.test(error.message);
 const routeFailure=(error:unknown)=>{
   const message=error instanceof Error?error.message:'';
   const code=(error as NodeJS.ErrnoException|null)?.code;
+  if(http2TransportError(error))return true;
   if(code&&['ENOENT','ECONNREFUSED','ECONNRESET','ENOTFOUND','ETIMEDOUT'].includes(code))return true;
   // Windows activation failures surface as spawn UNKNOWN before any page exists.
   if(/^browserType\.(?:launch|launchPersistentContext): (?:spawn (?:UNKNOWN|EACCES|EPERM|ENOENT)|Executable doesn't exist)/u.test(message))return true;
@@ -161,7 +163,7 @@ export class RoutedBrowser {
   }
   private makePort(target:BrowserTarget){return this.options.factory?.(target)??(target.engine==='playwright'?new PlaywrightBrowserExecutor(target,this.config,this.options.profile_key,this.options.ephemeral??false):new McpBrowserExecutor(target));}
   private async connectNext(from:string|null){
-    requireCondition(!this.pendingEffect,'BROWSER_RECONCILIATION_REQUIRED');let last:unknown;
+    requireCondition(!this.pendingEffect,'BROWSER_RECONCILIATION_REQUIRED');let last:unknown,previous=from;
     while(this.remaining.length){
       this.options.guard?.();const target=this.remaining.shift()!,started=performance.now();
       const wasProbed=this.probed.has(target.id),port=this.probed.get(target.id)??this.makePort(target);this.probed.delete(target.id);
@@ -177,8 +179,8 @@ export class RoutedBrowser {
         }
         if(!wasProbed)await port.probe();this.options.guard?.();await port.open(this.currentUrl!);this.options.guard?.();
         const observation=await port.observe();assertBrowserUrl(observation.url,this.origins,this.config.environment==='fixture');
-        this.port=port;this.currentUrl=observation.url;this.observationHash=decisionHash(observation);this.persist();this.record(from?'handoff':'selected',target,started,null,from);return;
-      }catch(error){await port.close().catch(()=>{});this.record('failed',target,started,routeFailure(error)?'executor_unavailable':'operation_refused',from);last=error;if(!routeFailure(error))throw error;this.selectionSource='host_priority';this.confidence=null;}
+        this.port=port;this.currentUrl=observation.url;this.observationHash=decisionHash(observation);this.persist();this.record(previous?'handoff':'selected',target,started,null,previous);return;
+      }catch(error){await port.close().catch(()=>{});this.record('failed',target,started,http2TransportError(error)?'BROWSER_TRANSPORT_HTTP2_PROTOCOL_ERROR':routeFailure(error)?'executor_unavailable':'operation_refused',previous);last=error;if(!routeFailure(error))throw error;previous=target.id;this.selectionSource='host_priority';this.confidence=null;}
     }
     throw last??Error('BROWSER_NO_AVAILABLE_EXECUTOR');
   }

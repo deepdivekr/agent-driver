@@ -131,6 +131,9 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     const selectedCodexModel=await page.locator('#codex-model').inputValue(),selectedCodexEffort=await page.locator('#codex-reasoning').inputValue();
     assert.equal(selectedCodexModel,'','A first unsaved setting without an account-listed Sol uses the CLI default');
     assert.equal(selectedCodexEffort,'');
+    const catalogState=await page.locator('#catalog-state').textContent();
+    if(lang==='en')assert.doesNotMatch(catalogState,/[\uac00-\ud7a3]/u,'English AI settings must not retain Korean catalog status fragments');
+    else assert.match(catalogState,/현재 확인/u);
     await page.locator('#client-codex [data-manage-client=codex]').click();
     await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
     assert.equal(await page.locator('#codex-model').inputValue(),selectedCodexModel,'Manage must focus the existing model setting without changing it');
@@ -224,4 +227,15 @@ test('runtime fixture a saved model absent from the account list stays visible a
   assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client,'claude');assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
   await page.locator('#client').selectOption('codex');await page.locator('#codex-model').selectOption('gpt-5.6-sol');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
   assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-5.6-sol');
+});
+
+test('runtime fixture English catalog warning and unsupported-model save error stay in English',async t=>{
+  const f=await fixture(t,{savedCodexModel:'gpt-6-sol',catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'}]}),browser=await chromium.launch({headless:true});
+  t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','en'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');
+  assert.match(await page.locator('#codex-model option:checked').textContent(),/Not in current account catalog/u);
+  assert.match(await page.locator('#catalog-state').textContent(),/The saved Codex model is not in the current account catalog/u);
+  assert.doesNotMatch(await page.locator('#catalog-state').textContent(),/[\uac00-\ud7a3]/u);
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'Select a listed model.'}).waitFor();
+  assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
 });

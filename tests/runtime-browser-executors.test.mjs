@@ -66,7 +66,7 @@ test('runtime contract read-only technical fallback crosses only explicitly offe
   assert.equal(browser.target.id,'windows');
   assert.deepEqual(log.filter(item=>item.endsWith(':probe')),['guest:probe','ubuntu:probe','windows:probe']);
   assert.ok(events.some(event=>event.kind==='failed'&&event.environment==='windows_vm'));
-  assert.ok(events.some(event=>event.kind==='selected'&&event.environment==='host_foreground'));
+  assert.ok(events.some(event=>event.kind==='handoff'&&event.environment==='host_foreground'&&event.from==='ubuntu'));
   await browser.close();
   const without=new RoutedBrowser(config(targets),{...options(t=>fake(t,[],t.id==='guest'?{probeError:'ECONNREFUSED'}:{})),preference:{environment:'windows_vm'}},['https://example.test']);
   await assert.rejects(without.open('https://example.test/'),/ECONNREFUSED/);await without.close();
@@ -92,6 +92,32 @@ test('runtime contract browser pre-navigation launch and absent binary errors se
   for(const error of [Error('browserType.launchPersistentContext: spawn UNKNOWN'),Object.assign(Error('missing executable'),{code:'ENOENT'}),Error('page.goto: net::ERR_CONNECTION_RESET at https://example.test/')]){
     const log=[],events=[],browser=new RoutedBrowser(config([target('first'),target('second')]),{...options(t=>t.id==='first'?{...fake(t,log),async open(){throw error;}}:fake(t,log)),event:e=>events.push(e)},['https://example.test']);
     await browser.open('https://example.test/');assert.equal(browser.target.id,'second');assert.ok(events.some(e=>e.kind==='failed'&&e.reason==='executor_unavailable'));await browser.close();
+  }
+});
+test('runtime contract observed HTTP/2 protocol transport failure uses only registered public Aside fallback',async()=>{
+  const targets=[target('headless'),target('aside',{engine:'aside',environment:'host_foreground',executable:'/fixture/aside',priority:1})],log=[],events=[];
+  const browser=new RoutedBrowser(config(targets),{
+    ...options(t=>t.id==='headless'?{...fake(t,log),async open(){log.push('headless:open');throw Error('page.goto: net::ERR_HTTP2_PROTOCOL_ERROR at https://example.test/article');}}:fake(t,log)),
+    fallback_preferences:publicBrowserRecovery(),event:event=>events.push(event),
+  },['https://example.test']);
+  await browser.open('https://example.test/article');
+  assert.equal(browser.target.id,'aside');assert.deepEqual(log.filter(item=>item.endsWith(':open')),['headless:open','aside:open']);
+  assert.ok(events.some(event=>event.kind==='failed'&&event.target_id==='headless'&&event.reason==='BROWSER_TRANSPORT_HTTP2_PROTOCOL_ERROR'));
+  assert.ok(events.some(event=>event.kind==='handoff'&&event.target_id==='aside'&&event.from==='headless'));
+  await browser.close();
+});
+test('runtime contract HTTP 403 and authentication refusals never use transport fallback',async()=>{
+  const targets=[target('headless'),target('aside',{engine:'aside',environment:'host_foreground',executable:'/fixture/aside',priority:1})];
+  for(const message of ['page.goto: HTTP 403 Forbidden at https://example.test/article','PACK_WAITING_AUTH','BROWSER_ACCESS_DENIED']){
+    const log=[],events=[],browser=new RoutedBrowser(config(targets),{
+      ...options(t=>t.id==='headless'?{...fake(t,log),async open(){log.push('headless:open');throw Error(message);}}:fake(t,log)),
+      fallback_preferences:publicBrowserRecovery(),event:event=>events.push(event),
+    },['https://example.test']);
+    await assert.rejects(browser.open('https://example.test/article'),new RegExp(message.split(' ')[0]));
+    assert.deepEqual(log.filter(item=>item.endsWith(':open')),['headless:open']);
+    assert.equal(events.some(event=>event.kind==='handoff'),false);
+    assert.ok(events.some(event=>event.kind==='failed'&&event.reason==='operation_refused'));
+    await browser.close();
   }
 });
 test('runtime contract browser authentication and unknown dialogs never trigger alternate-account fallback',async()=>{
