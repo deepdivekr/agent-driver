@@ -33,7 +33,7 @@ export const workProposalSchema=workProposalFields.extend({plan:modelWorkPlanSch
 export type WorkProposal=z.infer<typeof workProposalFields>&{plan:z.infer<typeof workPlanSchema>};
 const storedWorkProposalSchema=workProposalFields.extend({plan:workPlanSchema.optional()}).strict();
 
-export const workStartSchema=z.object({request_id:id,prompt:z.string().trim().min(1).max(8000).refine(value=>!/[\r\n]/u.test(value),'ONE_LINE_REQUIRED'),intake_mode:workModeSchema.default('quick')}).strict();
+export const workStartSchema=z.object({request_id:id,prompt:z.string().trim().min(1).max(8000).refine(value=>!/[\r\n]/u.test(value),'ONE_LINE_REQUIRED'),intake_mode:workModeSchema.default('quick'),completion_condition:z.string().trim().max(2000).optional(),delivery_target_ids:z.array(id).max(10).refine(value=>new Set(value).size===value.length,'DUPLICATE_DELIVERY_TARGET').optional()}).strict();
 export const workDefineSchema=z.object({work_id:id}).strict();
 export const workAnswerSchema=z.object({work_id:id,revision:z.number().int().nonnegative(),answers:z.record(z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),z.string().trim().min(1).max(800)).refine(value=>Object.keys(value).length<=4)}).strict();
 // Human Control Center actions may combine registration with ONE explicit run.

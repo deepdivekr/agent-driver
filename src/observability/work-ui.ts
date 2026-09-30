@@ -5,10 +5,11 @@ import {hermesWorkScript} from './hermes-work-ui.js';
 import {hermesMigrationScript} from './hermes-migration-ui.js';
 import {remoteOfficeScript} from './remote-office-ui.js';
 import {workResultsScript,workResultsCss} from './work-results-ui.js';
+import {deliveryCss,deliveryWorkScript} from './delivery-ui.js';
 import {workAdoptionScript} from './work-adoption-ui.js';
 import {taskModelUiScript} from './task-model-ui.js';
 export function workHtml(nonce:string){return `<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Agent Office · 업무 현황</title>
-<style>${uiCss}${workResultsCss}
+<style>${uiCss}${workResultsCss}${deliveryCss}
 .top .tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.top input[type=search]{width:220px;font:12.5px var(--mono)}
 .seg{display:inline-flex;gap:2px}.seg button{border:0;border-bottom:2px solid transparent;border-radius:0;background:none;color:var(--dim);padding:5px 9px;font:500 11px var(--mono);letter-spacing:.14em;text-transform:uppercase}.seg button[aria-pressed=true]{color:var(--text);border-bottom-color:var(--accent)}
 .intake{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px;margin-bottom:20px}.intake>label:first-child{position:absolute;left:-9999px}
@@ -374,9 +375,9 @@ try{while(true){const part=await reader.read();buffer+=decoder.decode(part.value
 if(!result)throw Error('업무 처리 결과를 받지 못했습니다. 저장된 업무를 확인하세요.');return result;
 }
 async function submitWork(event){
-event.preventDefault();if(submissionBusy)return;const field=document.getElementById('prompt'),prompt=field.value.trim();if(!prompt){setMessage('업무를 한 줄로 입력해 주세요.');return}
-const button=document.getElementById('submit-work'),mode=document.getElementById('guided').checked?'guided':'quick',key=JSON.stringify([prompt,mode]);if(pendingRequestKey!==key){pendingRequestId=null;pendingRequestKey=key;}pendingRequestId??=crypto.randomUUID();submissionBusy=true;button.disabled=true;button.textContent=window.officeText('업무 요청 중…');const feedback=document.getElementById('intake-feedback');feedback.hidden=false;feedback.dataset.busy='true';feedback.textContent=window.officeText('업무 요청을 전송하는 중입니다.');setMessage('업무 요청을 전송하는 중입니다.');let registeredId=null,timezone;try{timezone=Intl.DateTimeFormat().resolvedOptions().timeZone}catch{}
-try{const res=await fetch('work/start',{method:'POST',headers:{'content-type':'application/json',accept:'application/x-ndjson','x-agent-driver':'human-office'},body:JSON.stringify({request_id:pendingRequestId,prompt,intake_mode:mode,execute:true,cost_acknowledged:true,...(timezone?{timezone}:{})})});const data=await readWorkStartResponse(res,work=>{registeredId=work.work_id;if(!selected&&!importOpen)openWork(work.work_id);setMessage('요청을 저장했습니다. 실제 분석과 실행 기록을 확인하는 중…');});if(!res.ok)throw Error(data.error||'업무 접수 실패');pendingRequestId=null;pendingRequestKey=null;if(field.value.trim()===prompt)field.value='';if(!registeredId&&!selected&&!importOpen)openWork(data.work_id);const statusMessage=admissionMessage(data);if(selected===data.work_id)await loadDetail();setMessage(statusMessage);}
+event.preventDefault();if(submissionBusy)return;const field=document.getElementById('prompt'),prompt=field.value.trim(),completionCondition=document.getElementById('completion-condition').value.trim(),deliveryTargetIds=checkedDeliveryIds('intake-delivery');if(!prompt){setMessage('업무 지침을 입력해 주세요.');return}if(!deliveryTargetIds.length){setMessage('작업물 확인 방법을 하나 이상 선택해 주세요.');return}
+const button=document.getElementById('submit-work'),mode=document.getElementById('guided').checked?'guided':'quick',key=JSON.stringify([prompt,completionCondition,deliveryTargetIds,mode]);if(pendingRequestKey!==key){pendingRequestId=null;pendingRequestKey=key;}pendingRequestId??=crypto.randomUUID();submissionBusy=true;button.disabled=true;button.textContent=window.officeText('업무 요청 중…');const feedback=document.getElementById('intake-feedback');feedback.hidden=false;feedback.dataset.busy='true';feedback.textContent=window.officeText('업무 요청을 전송하는 중입니다.');setMessage('업무 요청을 전송하는 중입니다.');let registeredId=null,timezone;try{timezone=Intl.DateTimeFormat().resolvedOptions().timeZone}catch{}
+try{const res=await fetch('work/start',{method:'POST',headers:{'content-type':'application/json',accept:'application/x-ndjson','x-agent-driver':'human-office'},body:JSON.stringify({request_id:pendingRequestId,prompt,completion_condition:completionCondition||undefined,delivery_target_ids:deliveryTargetIds,intake_mode:mode,execute:true,cost_acknowledged:true,...(timezone?{timezone}:{})})});const data=await readWorkStartResponse(res,work=>{registeredId=work.work_id;if(!selected&&!importOpen)openWork(work.work_id);setMessage('요청을 저장했습니다. 실제 분석과 실행 기록을 확인하는 중…');});if(!res.ok)throw Error(data.error||'업무 접수 실패');pendingRequestId=null;pendingRequestKey=null;if(field.value.trim()===prompt)field.value='';if(document.getElementById('completion-condition').value.trim()===completionCondition)document.getElementById('completion-condition').value='';if(!registeredId&&!selected&&!importOpen)openWork(data.work_id);const statusMessage=admissionMessage(data);if(selected===data.work_id)await loadDetail();setMessage(statusMessage);}
 catch(error){setMessage(String(error.message||error));if(registeredId&&selected===registeredId)await loadDetail();}
 finally{submissionBusy=false;button.disabled=false;button.textContent=window.officeText('업무 시작');feedback.dataset.busy='false';feedback.hidden=true;}
 }
@@ -407,6 +408,7 @@ app.addEventListener('change',event=>{if(event.target.id==='jev-cost'){jevCostAc
 app.addEventListener('input',event=>{if(event.target.id==='coding-followup')codingDraft=event.target.value;if(event.target.id==='coding-project-ref'&&event.target.value.trim()!==codingCatalogProject){attachSessionId='';document.getElementById('coding-attach').disabled=true}});
 ${hermesMigrationScript()}
 ${workResultsScript}
+${deliveryWorkScript}
 ${workAdoptionScript()}
 ${remoteOfficeScript()}
 document.getElementById('open-import').onclick=()=>{importOpen=true;render();setImportRoute('external');loadMigrationPrompt()};

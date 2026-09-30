@@ -30,6 +30,9 @@ import {RemoteOffice} from '../work/remote.js';
 import {type RemoteTransport} from '../integrations/remote-openclaw.js';
 import {WorkSupervisor,supervisorActionSchema,supervisorStatus} from '../work/supervisor.js';
 import {WorkResults} from '../work/results.js';
+import {WorkDeliverySettings,deliverySettingsUpdateSchema} from '../work/delivery-settings.js';
+import {readWorkIntakeOptions} from '../work/intake-options.js';
+import {z} from 'zod';
 import {WorkAdoptionRuntime} from '../work/adoption.js';
 import {workActivity} from '../work/activity.js';
 import {changeWorkLifecycle,lifecycleActionSchema} from '../work/lifecycle.js';
@@ -123,9 +126,11 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const migrations=new HermesMigrationRuntime(store,config);
   const remoteOffice=new RemoteOffice(store,config,options.remote);
   const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>store.recordClientHandoff(config.project.id,event));
-  const workRuntime=new WorkRuntime(store,config,workModel),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);
-  const results=new WorkResults(store);
-  const supervisor=new WorkSupervisor(store,config,workModel,{auto_start:false,onResult:id=>results.capture(config.project.id,id)});
+  const deliverySettings=WorkDeliverySettings.fromConfig(config),results=new WorkResults(store,[],deliverySettings);
+  const deliveryJobs=new Map<string,Promise<void>>();
+  const deliverOutput=(id:string)=>{if(stopped||reloading||deliveryJobs.has(id))return;const job=results.dispatchPending(config.project.id,id,()=>runtimeReady()).then(()=>undefined).catch(()=>{if(!stopped)workActivity(store,config.project.id,id,'delivery.blocked','Result delivery requires checking its stored connection or receipt.',{stage_id:'delivery',status:'blocked',reason:'RESULT_DELIVERY_UNAVAILABLE'});}).finally(()=>deliveryJobs.delete(id));deliveryJobs.set(id,job);};
+  const workRuntime=new WorkRuntime(store,config,workModel,undefined,(id,input,created)=>{if(created)results.setSelection(config.project.id,id,{revision:0,target_ids:input.delivery_target_ids??deliverySettings.publicState().default_target_ids});}),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);
+  const supervisor=new WorkSupervisor(store,config,workModel,{auto_start:false,onResult:id=>{results.capture(config.project.id,id);deliverOutput(id);}});
   const adoption=new WorkAdoptionRuntime(store,config,hermesWork,remoteOffice);
   const dispatcher=new WorkDispatcher(store,config,workModel,hermesWork,supervisor);
   const runtimeReady=()=>{const state=options.reloadStatus?.().state;return !stopped&&!reloading&&(state===undefined||state==='idle'||state==='restored');};
@@ -153,11 +158,26 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     try{
     if(await serveUiAsset(request,response,suffix))return;
     if(rejectStopped())return;
+    if(suffix==='delivery/status'||suffix==='work/delivery'&&request.method==='GET'){
+      if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
+      try{const value=suffix==='delivery/status'?deliverySettings.publicState():results.selection(config.project.id,z.string().uuid().parse(url.searchParams.get('work_id')));reply(response,200,JSON.stringify(value),'application/json; charset=utf-8');}
+      catch{reply(response,409,JSON.stringify({error:'DELIVERY_STATUS_UNAVAILABLE'}),'application/json; charset=utf-8');}return;
+    }
+    if(suffix==='delivery/settings'||suffix==='work/delivery'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>32_000)throw Error('DELIVERY_REQUEST_TOO_LARGE');}if(rejectStopped())return;
+        const raw:unknown=JSON.parse(body);let value:unknown;
+        if(suffix==='delivery/settings')value=deliverySettings.save(deliverySettingsUpdateSchema.parse(raw));
+        else{const input=z.object({work_id:z.string().uuid(),revision:z.number().int().nonnegative(),target_ids:z.array(z.string().min(1).max(120)).max(21)}).strict().parse(raw);value=results.setSelection(config.project.id,input.work_id,input);workActivity(store,config.project.id,input.work_id,'delivery.selection_changed','Updated the destinations for unsent and future Work results.',{stage_id:'delivery',status:'configured'});deliverOutput(input.work_id);}
+        reply(response,200,JSON.stringify(value),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'DELIVERY_REQUEST_INVALID'}),'application/json; charset=utf-8');}return;
+    }
     if(suffix==='work/reconnect'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
       try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>2048)throw Error('WORK_REQUEST_TOO_LARGE');}if(rejectStopped())return;const input=workReconnectSchema.parse(JSON.parse(body));if(input.work_id)store.officeWorkById(config.project.id,input.work_id);
-        if(!options.onReload)throw Error('CONTROL_CENTER_RELOAD_UNAVAILABLE');if(inflightMutations>1)throw Error('MANAGEMENT_ACTION_IN_PROGRESS');const busy=settings.reloadBlockedReason??connections.reloadBlockedReason;if(busy)throw Error(busy);if(!remoteOffice.idle)throw Error('REMOTE_ACTION_IN_PROGRESS');if(!dispatcher.idle)throw Error('WORK_EXECUTION_ACTIVE');const reason=controlCenterReloadBlockedReason(store,config.project.id);if(reason)throw Error(reason);
+        if(!options.onReload)throw Error('CONTROL_CENTER_RELOAD_UNAVAILABLE');if(inflightMutations>1)throw Error('MANAGEMENT_ACTION_IN_PROGRESS');const busy=settings.reloadBlockedReason??connections.reloadBlockedReason;if(busy)throw Error(busy);if(deliveryJobs.size)throw Error('RESULT_DELIVERY_IN_PROGRESS');if(!remoteOffice.idle)throw Error('REMOTE_ACTION_IN_PROGRESS');if(!dispatcher.idle)throw Error('WORK_EXECUTION_ACTIVE');const reason=controlCenterReloadBlockedReason(store,config.project.id);if(reason)throw Error(reason);
         supervisor.suspendForReload();reloading=true;if(input.work_id)workActivity(store,config.project.id,input.work_id,'runtime.reconnect_requested','Applying the saved runtime settings; existing Work records and checkpoints are preserved.',{stage_id:'connection',status:'reconnecting'});
         response.once('finish',()=>setImmediate(()=>{void options.onReload!().catch(()=>{if(stopped)return;reloading=false;activateReadySupervisor();if(input.work_id)workActivity(store,config.project.id,input.work_id,'runtime.reconnect_failed','Applying runtime settings failed. No Work was replayed.',{stage_id:'connection',status:'blocked',reason:'CONTROL_CENTER_RELOAD_FAILED'});});}));reply(response,202,JSON.stringify({state:'reconnecting',execution_started:false,work_id:input.work_id??null}),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'CONTROL_CENTER_RELOAD_FAILED'}),'application/json; charset=utf-8');}return;
@@ -293,8 +313,9 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(suffix==='work/start'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
       if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
-      try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>12_288)throw Error('WORK_REQUEST_TOO_LARGE');}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>32_000)throw Error('WORK_REQUEST_TOO_LARGE');}
         if(rejectStopped())return;const {execute,cost_acknowledged,timezone,...input}=workStartActionSchema.parse(JSON.parse(body));
+        if(input.delivery_target_ids?.some(id=>id!=='app'&&!deliverySettings.target(id)))throw Error('DELIVERY_TARGET_NOT_CONFIGURED');
         if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
         const intent={execute,cost_acknowledged,...(timezone?{timezone}:{})};
         const recordStart=(work:ReturnType<WorkRuntime['status']>)=>{if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The user requested this Work run using the configured AI allowance. Future recurring runs and external changes remain separately gated.',{stage_id:'admission',status:'requested'});};
@@ -375,7 +396,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     if(suffix==='work/board'){reply(response,200,JSON.stringify(readWorkBoard(store,config)),'application/json; charset=utf-8');return;}
     if(suffix==='work/detail'){
       const id=url.searchParams.get('id');if(!id||id.length>128){reply(response,400,'work id required');return;}
-      try{const detail=readWorkDetail(store,config,id);reply(response,200,JSON.stringify({...detail,...runtimeConfiguration(),results:results.capture(config.project.id,id)}),'application/json; charset=utf-8');}catch{reply(response,404,'work not found');}return;
+      try{const detail=readWorkDetail(store,config,id);reply(response,200,JSON.stringify({...detail,...runtimeConfiguration(),intake_options:readWorkIntakeOptions(store,config.project.id,id),results:results.capture(config.project.id,id),delivery:results.selection(config.project.id,id),delivery_targets:deliverySettings.publicState().targets}),'application/json; charset=utf-8');}catch{reply(response,404,'work not found');}return;
     }
     if(suffix==='work/events'){
       if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
@@ -399,5 +420,6 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   await new Promise<void>((resolve,reject)=>{server.once('error',reject);server.listen(options.port??0,'127.0.0.1',resolve)});const address=server.address();if(address===null||typeof address==='string'){store.stopPresence(config.project.id,presence);store.close();throw Error('CONTROL_CENTER_BIND_FAILED');}host=`127.0.0.1:${address.port}`;activateReadySupervisor();const heartbeat=setInterval(()=>{try{store.heartbeatPresence(config.project.id,presence);activateReadySupervisor();}catch{}},2_000);heartbeat.unref();
   let lastBoard='',lastKeep=Date.now();const lightTick=setInterval(()=>{if(!lightClients.size)return;try{const board=readWorkBoard(store,config),payload=JSON.stringify({works:board.works,auth_attention_count:board.auth_attention_count});if(payload!==lastBoard){lastBoard=payload;for(const client of lightClients)if(!client.destroyed)client.write(`event: board\ndata: ${JSON.stringify(board)}\n\n`);}if(Date.now()-lastKeep>=15_000){lastKeep=Date.now();for(const client of lightClients)if(!client.destroyed)client.write(': keep-alive\n\n');}}catch{for(const client of lightClients)client.end();lightClients.clear();}},Math.max(1000,poll));lightTick.unref();
   const hermesTick=setInterval(()=>{if(runtimeReady())hermesWork.tick();},1000);hermesTick.unref();
-  const close=async()=>{if(stopped)return closed;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);clearInterval(hermesTick);settings.close();codingRuntime.close();codingDialog.close();await supervisor.close();await dispatcher.close();await hermesWork.close();await remoteOffice.drain();store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
+  const deliveryTick=setInterval(()=>{if(!runtimeReady()||deliveryJobs.size>=4)return;try{for(const id of results.pendingWorkIds(config.project.id,4-deliveryJobs.size))deliverOutput(id);}catch{/* A failed stored configuration is surfaced by the settings/status route. */}},3000);deliveryTick.unref();
+  const close=async()=>{if(stopped)return closed;stopped=true;clearInterval(heartbeat);clearInterval(lightTick);clearInterval(hermesTick);clearInterval(deliveryTick);settings.close();codingRuntime.close();codingDialog.close();await supervisor.close();await dispatcher.close();await hermesWork.close();await remoteOffice.drain();await Promise.allSettled([...deliveryJobs.values()]);store.stopPresence(config.project.id,presence);for(const client of clients)client.end();await new Promise<void>((resolve,reject)=>server.close(error=>error?reject(error):resolve()));await codingRuntime.drain();await codingDialog.drain();await connections.close();store.close();done()};return {url:`http://${host}/${token}/`,closed,close};
 }

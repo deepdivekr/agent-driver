@@ -4,6 +4,21 @@ import {flagSvgs} from './ui-shell.js';
  * rendered text, placeholders, labels and titles are translated in place and new nodes are translated as they appear.
  * User content (work titles, prompts, model output) is only touched when it exactly equals a UI phrase. */
 const EN:Record<string,string>={
+'결과 전달':'Result delivery',
+'업무 지침':'Work instructions',
+'작업물 확인 방법':'How to receive the result',
+'결과 전달 대상':'Result destinations',
+'선택 · 비워 두면 AI가 작업 지침에서 정리합니다':'Optional · AI will derive this from your instructions',
+'업무 결과를 확인할 곳을 연결하세요. 앱은 항상 사용할 수 있습니다.':'Connect a place to receive results. This app is always available.',
+'메신저에는 결과 본문을 보냅니다. Telegram·Discord는 긴 본문을 텍스트 파일로 첨부하고, Slack은 길이 제한을 넘으면 실패를 표시합니다. 생성한 원본 파일은 이 앱에서 다운로드하세요.':'Messengers receive the result text. Telegram and Discord attach long text as a file. Slack reports a failure if its length limit is exceeded. Download original generated files in this app.',
+'전달 대상 추가':'Add result destination',
+'Telegram 추가':'Add Telegram',
+'Slack 추가':'Add Slack',
+'Discord 추가':'Add Discord',
+'새 업무의 기본 전달 대상':'Default destinations for new Work',
+'연결 정보는 저장 후 실제 전송 때 확인됩니다.':'Connection details are checked when a result is sent.',
+'업무 현황에서 업무별 전달 대상을 바꿀 수 있습니다.':'You can change destinations per Work in the Work view.',
+'에서 업무별 전달 대상을 바꿀 수 있습니다.':' to change destinations per Work.',
 '역할별 모델':'Role models',
 '기본 모델 사용':'Use default models',
 '역할별 직접 지정':'Assign roles manually',

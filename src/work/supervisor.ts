@@ -11,7 +11,8 @@ import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.
 import {requireCondition} from '../core/contracts.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {workProposalSchema,workControlSchema as supervisorActionSchema,type WorkProposal} from './contracts.js';
-import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS} from './runtime.js';
+import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS,WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS} from './runtime.js';
+import {readWorkIntakeOptions} from './intake-options.js';
 import {BoundedWorkClientExecutor,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint} from './client-executor.js';
 import {packTools} from '../packs/contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
@@ -200,7 +201,7 @@ export class WorkSupervisor {
       if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
       if(row.replan_required){
         guard();workActivity(this.store,project,row.work_id,'supervisor.replanning','새 지침에 맞춰 완료조건과 다음 단계를 갱신합니다. 이전 실행 증거는 보존합니다.');
-        const instructions=WORK_REPLANNING_INSTRUCTIONS,input={work_id:row.work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:spec,user_directions:this.store.workDirections(project,row.work_id),...(this.api.work?.planningContext()??workPlanningContext(this.store,this.config))};
+        const instructions=WORK_REPLANNING_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS,input={work_id:row.work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:spec,user_directions:this.store.workDirections(project,row.work_id),user_intake:readWorkIntakeOptions(this.store,project,row.work_id),...(this.api.work?.planningContext()??workPlanningContext(this.store,this.config))};
         const priorImport=workImportExecutionOwner(this.store,project,row.work_id)==='office'?spec.plan:null;
         const planningModel=modelForRole(model,'planner');
         spec=await validateOrCorrectWorkProposal(await planningModel.call('correct',instructions,input,z.toJSONSchema(workProposalSchema)),work.mode as 'quick'|'guided',true,{model:planningModel,instructions,input,onDiagnostic:event=>workActivity(this.store,project,row.work_id,'supervisor.replanning',`Work definition ${event.kind}: ${event.code}`)});guard();
