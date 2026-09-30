@@ -27,8 +27,10 @@ import {effectiveModelEnvironment,modelSettingsPath,readModelSettings} from '../
 import {workExecutionBinding,type WorkProposal} from '../work/contracts.js';
 import {assertBoundRunConnected} from '../work/lifecycle.js';
 import {assertWorkConnected} from '../work/lifecycle.js';
-import {assertLocalRecordUnchanged,inspectLocalRecord,localRecordDraft} from './local-records.js';
-import {connectedSourceCatalog} from './source-catalog.js';
+import {assertLocalRecordUnchanged,inspectLocalRecord,localRecordDraft,readableLocalRecordFields} from './local-records.js';
+import {connectedSourceCatalog,declaredSourceContractIssues,DeclaredSourceContractError} from './source-catalog.js';
+import {assertCustomPackInvocation,customPackWorkBinding} from '../work/custom-pack-repeat.js';
+import {assertCustomPackScheduledRun} from '../work/custom-pack-schedule.js';
 
 const isMutation=(r:Recipe):r is MutationRecipe=>'target' in r;
 function safeError(error:unknown){
@@ -65,6 +67,24 @@ export class FamilyRuntime {
   }
   private fresh(){requireCondition(!this.stopped,'PACK_RUNTIME_CLOSED');requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');requireCondition(this.config.packs,'PACKS_NOT_CONNECTED');}
   private engineBinding(){return snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION});}
+  /** Timer/recovery dispatch has no caller Work argument. Resolve its saved
+   * owner and apply the same immutable contract as explicit tool dispatch. */
+  private assertCustomRun(run:PackRun,name:'runtime_pack_run'|'runtime_pack_watch_tick'){
+    const project=this.config.project.id,owner=this.store.officeWork(project,'pack',run.id) as {id:string}|null;
+    const db=this.store.hermesState,hasCycles=db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name='office_custom_pack_cycle'").get();
+    const cycle=hasCycles?db.prepare('SELECT request_id FROM office_custom_pack_cycle WHERE project_id=? AND request_id=?').get(project,run.request_id):null;
+    const binding=owner?customPackWorkBinding(this.store,project,owner.id):null;
+    if(!binding&&!cycle)return;
+    requireCondition(owner&&binding,'CUSTOM_PACK_WORK_BINDING_MISSING');
+    requireCondition(run.request_id===binding.request_id,'CUSTOM_PACK_REQUEST_ID_CHANGED');
+    requireCondition(snapshotHash(run.recipe)===snapshotHash(binding.recipe),'CUSTOM_PACK_RECIPE_CHANGED');
+    const host={config_fingerprint:this.config.fingerprint,engine_binding:this.engineBinding()};
+    assertCustomPackInvocation(this.store,project,owner.id,name,name==='runtime_pack_run'?{request_id:run.request_id,recipe:run.recipe}:{run_id:run.id},host);
+    assertCustomPackScheduledRun(this.store,project,owner.id,host);
+  }
+  private customRunHold(run:PackRun,name:'runtime_pack_run'|'runtime_pack_watch_tick'){
+    try{this.assertCustomRun(run,name);return null;}catch(error){return safeError(error);}
+  }
   private effectiveStatus(run:PackRun){
     if(!run.task_id)return run.status;const task=this.store.task(run.task_id);
     if(task.status==='cancelled')return 'cancelled';if(run.status==='waiting_approval'&&this.store.proposal(run.task_id).state==='approved')return 'approved';return run.status;
@@ -197,7 +217,7 @@ export class FamilyRuntime {
       return {status:cached?'ready_to_run':'needs_agent_design',dispatch_allowed:false,cache_hit:cached!==null,recipe:cached,instructions:PACK_DESIGN_INSTRUCTIONS+' Browser collection may select browser.environment and preferred_engine from browser_executors. These preferences never authorize another environment or transfer credentials. Browser write targets still use their approved write adapter; do not promise submission on a read-only executor.',browser_executors:browserCatalog(this.config),
         ...(work?{execution_binding:workExecutionBinding(work),requested_family:spec!.route.pack_family,bound_runs}:{}),
         families:BASE_PACK_CATALOG,windows_profiles:WINDOWS_WORKFLOWS.map(({id,title,family,example})=>({id,title,family,example})),windows_route:'For desktop work use runtime_windows_design from a ready Work, then start/step. Profiles are optional examples, never an app allowlist. Use current executor capabilities and preserve the requested target; native readiness is separate from browser connections.',recipe_schema:z.toJSONSchema(recipeSchema),connections:{sources:connectedSourceCatalog(this.config).map(source=>({...source,...(source.parameter_names?{parameters:source.parameter_names}:{})})),
-          targets:[...(this.config.packs?.targets.map(t=>({id:t.id,family:t.family,fields:Object.keys(t.fields),identity_field:t.identity_field,draft_only:t.draft_only,submission_enabled:!t.draft_only,auth_required:t.auth_required}))??[]),...(this.config.packs?.local_records.map(record=>({id:record.id,kind:'local_record',family:'record.update',fields:record.fields,identity_field:record.identity_field,draft_only:true,submission_enabled:false,auth_required:false,inspect_tool:'runtime_pack_local_record_inspect'}))??[])]},next_action:bound_runs.length?'inspect_bound_run_before_new_execution':cached?work?'runtime_pack_run_with_execution_binding':'runtime_pack_run_with_new_request_id':'caller_design_from_observed_data_or_request_connection'};
+          targets:[...(this.config.packs?.targets.map(t=>({id:t.id,family:t.family,fields:Object.keys(t.fields),identity_field:t.identity_field,draft_only:t.draft_only,submission_enabled:!t.draft_only,auth_required:t.auth_required}))??[]),...(this.config.packs?.local_records.map(record=>({id:record.id,kind:'local_record',family:'record.update',fields:record.fields,editable_fields:record.fields,readable_fields:readableLocalRecordFields(record),identity_field:record.identity_field,draft_only:true,submission_enabled:false,auth_required:false,inspect_tool:'runtime_pack_local_record_inspect'}))??[])]},next_action:bound_runs.length?'inspect_bound_run_before_new_execution':cached?work?'runtime_pack_run_with_execution_binding':'runtime_pack_run_with_new_request_id':'caller_design_from_observed_data_or_request_connection'};
     }
     this.fresh();
     if(name==='runtime_pack_local_record_inspect'){
@@ -221,6 +241,10 @@ export class FamilyRuntime {
       return {...this.store.watchState(this.config.project.id,runId),delivery:'local_only'};
     }
     if(name==='runtime_pack_watch_tick')return this.tick(Date.now(),input.run_id?String(input.run_id):undefined);
+    if(name==='runtime_pack_run'){
+      const issues=declaredSourceContractIssues(recipeSchema.parse(input.recipe),this.config.packs!.sources);
+      if(issues.length)throw new DeclaredSourceContractError(issues);
+    }
     const promise=name==='runtime_pack_run'?this.run(String(input.request_id),recipeSchema.parse(input.recipe),input.work_id as string|undefined):this.executeApproved(String(input.run_id));
     this.operations.add(promise);try{return await promise;}finally{this.operations.delete(promise);}
   }
@@ -368,6 +392,18 @@ export class FamilyRuntime {
     const processed=[],recovered=[];
     for(const run of runId?[]:this.store.recoverablePacks(this.config.project.id,now)){
       this.fresh();
+      const held=this.customRunHold(run,'runtime_pack_run');
+      if(held){
+        // Retire only an unowned recovery candidate so it cannot occupy every
+        // recovery batch ahead of healthy legacy work. Preserve its old result.
+        const paused=this.store.transaction(()=>{
+          const current=this.store.packRun(this.config.project.id,run.id),execution=this.store.packExecution(this.config.project.id,run.id);
+          if(!['running','retryable_failure'].includes(current.status)||execution?.owner&&execution.lease_until_ms>now)return false;
+          const uncertain=current.task_id&&(this.store.proposal(current.task_id).state==='consumed'||this.store.task(current.task_id).effect_state==='unknown'||this.store.task(current.task_id).status==='reconciliation_required');
+          this.store.finishPack(this.config.project.id,run.id,uncertain?'reconciliation_required':'needs_replan',{error:held,custom_pack_held:true,previous_status:current.status,previous_result:current.result,dispatch_allowed:false,write_replayed:false});return true;
+        });
+        recovered.push({run_id:run.id,status:paused?'custom_contract_held':'active_owner',reason:held,observed:false,write_replayed:false});continue;
+      }
       const currentBinding=snapshotHash({recipe:run.recipe,fingerprint:this.engineBinding()});
       if(run.binding!==currentBinding){
         const paused=this.store.pausePackForConfig(this.config.project.id,run.id,currentBinding,now);
@@ -377,19 +413,21 @@ export class FamilyRuntime {
     }
     for(const due of this.store.dueWatches(this.config.project.id,now,runId)){
       this.fresh();const run=this.store.packRun(this.config.project.id,String(due.run_id)),recipe=run.recipe;requireCondition(recipe.family==='monitor.watch','INVALID_WATCH_RECIPE');
+      const held=this.customRunHold(run,'runtime_pack_watch_tick');
+      if(held){this.store.pauseWatch(this.config.project.id,run.id,true);processed.push({run_id:run.id,status:'custom_contract_held',reason:held,observed:false,evidence:[]});continue;}
       if(run.binding!==snapshotHash({recipe,fingerprint:this.engineBinding()})){this.store.pauseWatch(this.config.project.id,run.id,true);processed.push({run_id:run.id,status:'config_changed_paused'});continue;}
       const cycle=Number(due.cycle);if(!this.store.claimWatch(run.id,cycle,now,recipe.interval_seconds*1000))continue;
       const before=JSON.parse(String(due.baseline)) as WatchBaseline;
       try{
         const source:{rows:Row[];evidence:SourceEvidence[]}={rows:[],evidence:[]};
         for(const requested of recipe.sources){
-          this.fresh();assertBoundRunConnected(this.store,this.config.project.id,'pack',run.id);
+          this.fresh();assertBoundRunConnected(this.store,this.config.project.id,'pack',run.id);this.assertCustomRun(run,'runtime_pack_watch_tick');
           const configured=this.config.packs!.sources.find(item=>item.id===requested.id);requireCondition(configured,'SOURCE_NOT_DELEGATED');
-          const routeOptions=configured.kind==='browser'?{...this.sourceBrowserRoute(run,configured),request:recipe.request,guard:()=>{this.fresh();assertBoundRunConnected(this.store,this.config.project.id,'pack',run.id);}}:undefined;
+          const routeOptions=configured.kind==='browser'?{...this.sourceBrowserRoute(run,configured),request:recipe.request,guard:()=>{this.fresh();assertBoundRunConnected(this.store,this.config.project.id,'pack',run.id);this.assertCustomRun(run,'runtime_pack_watch_tick');}}:undefined;
           const collected=await collectSource(configured,requested.parameters,this.config,routeOptions);
           source.rows.push(...collected.rows);source.evidence.push(collected.evidence);requireCondition(source.rows.length<=MAX_ROWS,'SOURCE_TOO_MANY_ROWS');
         }
-        this.fresh();const rows=deduplicate(applyFilters(source.rows,recipe.filters),recipe.deduplicate_by),after=watchBaseline(recipe,rows);
+        this.fresh();this.assertCustomRun(run,'runtime_pack_watch_tick');const rows=deduplicate(applyFilters(source.rows,recipe.filters),recipe.deduplicate_by),after=watchBaseline(recipe,rows);
         const changed=recipe.mode==='any_change'?before.digest!==after.digest:Object.entries(after.minima).some(([group,value])=>before.minima[group]!==undefined&&value<before.minima[group]!);
         const observedAt=source.evidence.at(-1)?.observed_at;
         requireCondition(observedAt,'WATCH_OBSERVATION_MISSING');

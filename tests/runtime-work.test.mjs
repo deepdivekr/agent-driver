@@ -130,3 +130,18 @@ test('dashboard accepts one-line Work through the same durable intake and compil
   const reopened=new PackStore(x.config.dbPath);x.onClose(()=>reopened.close());
   assert.equal(reopened.intakeWork(x.config.project.id,work.work_id).answers.format,'cards');
 });
+
+
+test('native technical Work definition uses supplied host template while preserving original goal and no completion assertion',async t=>{
+ let calls=0;const request='Save every original observed row as JSON; row count may vary.';
+ const fake={calls:[],async call(_purpose,instructions,input){
+  calls++;assert.match(instructions,/copy its matching result\/evidence text exactly/u);
+  const template=input.native_completion_templates.find(item=>item.kind==='native_pack_output'&&item.output_rows_rule==='observed_source_rows');
+  assert.ok(template);assert.equal(input.prompt,request);
+  return {title:'All current rows',desired_outcome:request,completion_checks:[{id:'output',result:template.result,evidence:template.evidence,native_check:{version:1,kind:'native_pack_output',family:'file.pipeline',format:'json',columns:['id','value'],output_rows:'observed_source_rows',numeric_columns:[],sort:null}}],assumptions:[],route:{kind:'pack',pack_family:'file.pipeline'},requested_effect:'local_file_write',recurrence:{kind:'once',rule:null},questions:[],plan:{steps:[{id:'export',goal:request,observable_outcome:'Actual JSON bytes contain every observed row.',depends_on:[],effect:'local_write',tool_hints:['runtime_pack_run']}]}};
+ }};
+ const x=await setup(t,fake),work=await x.api.call('runtime_work_start',{request_id:'native-definition',prompt:request});
+ assert.equal(work.status,'ready',JSON.stringify(work));assert.equal(calls,1);
+ assert.equal(work.prompt,request);assert.equal(work.spec.completion_checks[0].native_check.output_rows,'observed_source_rows');
+ assert.equal(work.completion_verified,false);assert.deepEqual(work.runs,[]);
+});

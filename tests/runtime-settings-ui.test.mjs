@@ -8,7 +8,8 @@ import {chromium} from 'playwright';
 import {ControlSettings} from '../dist/observability/control-settings.js';
 import {prepareLocalConnection} from '../dist/onboarding/connection.js';
 import {loadHostConfig} from '../dist/interface/config.js';
-import {modelSettingsPath,readModelSettings} from '../dist/onboarding/model-settings.js';
+import {modelSettingsPath,readModelSettings,NEW_SUBSCRIPTION_DEFAULTS} from '../dist/onboarding/model-settings.js';
+import {claudeModelCatalog} from '../dist/onboarding/model-catalog.js';
 import {WorkDeliverySettings} from '../dist/work/delivery-settings.js';
 const koPage=async(browser,options)=>{const page=await browser.newPage(options);await page.addInitScript(()=>{try{localStorage.setItem('office-lang','ko')}catch{}});return page;};
 
@@ -24,8 +25,13 @@ test('runtime native local settings UI desktop/mobile completes wizard, probes p
     const settings=new ControlSettings(config,auth,{},providerFetch,mcp,activity,bootstrap),deliverySettings=WorkDeliverySettings.fromConfig(config);
     let maintenance={enabled:true,revision:0,interval_hours:24,next_due_at:null,state:'idle',clients:[{id:'codex',label:'Codex',installed:true,managed_update:true,eligibility_reason:'eligible',reason:'updated',last_success_at:'2026-09-30T00:00:00.000Z'}]},maintenanceSaves=0,maintenanceUpdates=0,host;
     const maintenanceView=()=>({...maintenance,preference_saved:maintenanceSaves>0});
+    // This native UI fixture supplies its connected-client catalog as well as
+    // auth and provider replies. An installed developer account is not fixture
+    // evidence that the new-install default or tested Claude alias is available.
+    const fixtureCatalogs={codex:{source:'fixture_codex_app_server',status:'available',models:[{id:NEW_SUBSCRIPTION_DEFAULTS.codex,label:'Fixture Codex default'}],fetched_at:'2026-09-30T00:00:00.000Z'},claude:claudeModelCatalog(),opencode:{source:'fixture_opencode_cli',status:'unavailable',models:[],fetched_at:null}};
     const server=createServer(async(req,res)=>{
       if(req.url==='/test/'){res.end('<h1>Control Center</h1>');return;}
+      if(req.url==='/test/settings/models'&&req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify(fixtureCatalogs));return;}
       if(req.url==='/test/settings/maintenance/status'&&req.method==='GET'){res.setHeader('content-type','application/json');res.end(JSON.stringify(maintenanceView()));return;}
       if(req.url==='/test/settings/maintenance/settings'&&req.method==='POST'){assert.equal(req.headers['x-agent-driver'],'human-settings');let body='';for await(const chunk of req)body+=String(chunk);const input=JSON.parse(body);assert.equal(input.revision,maintenance.revision);maintenance={...maintenance,revision:maintenance.revision+1,enabled:input.enabled,state:input.enabled?'idle':'disabled'};maintenanceSaves++;res.setHeader('content-type','application/json');res.end(JSON.stringify(maintenanceView()));return;}
       if(req.url==='/test/settings/maintenance/update-now'&&req.method==='POST'){assert.equal(req.headers['x-agent-driver'],'human-settings');maintenanceUpdates++;maintenance={...maintenance,state:maintenance.enabled?'idle':'disabled'};res.setHeader('content-type','application/json');res.end(JSON.stringify({state:maintenanceUpdates===2?'deferred_busy':maintenance.state,attempted_ids:[],updated_ids:[],skipped:maintenanceUpdates===2?[{id:'codex',reason:'busy'}]:[],next_due_at:null}));return;}

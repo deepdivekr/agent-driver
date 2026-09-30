@@ -68,7 +68,7 @@ test('runtime contract Work tool catalog distinguishes durable drafts, local art
  assert.equal(map.runtime_pack_run.effect,'local_write');assert.equal(map.runtime_pack_execute_approved.effect,'external_write');assert.equal(map.runtime_windows_step.effect,'external_write');
  for(const name of ['runtime_files_request','runtime_files_scan','runtime_files_classify','runtime_files_propose','runtime_windows_design','runtime_windows_start'])assert.equal(map[name].effect,'draft_only');
  assert.equal(map.office_browser_read.effect,'read_only');assert.equal(map.runtime_pack_status.effect,'read_only');
- assert.match(map.office_result_draft.description,/actual TXT.*Agent Office/u);assert.match(map.office_result_draft.description,/explicitly requested CSV, JSON, Word or Excel/u);
+ assert.match(map.office_result_draft.description,/actual TXT, JSON or CSV.*Agent Office/u);assert.match(map.office_result_draft.description,/explicitly requested CSV, JSON, Word or Excel/u);
  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/"Office 결과 파일".*Agent Office/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/An explicit CSV, JSON, Word or Excel format requires actual bytes/u);
  for(const name of ['runtime_files_grant','runtime_files_apply','runtime_pack_approve','runtime_coding_last','runtime_windows_act'])assert.equal(map[name],undefined);
  assert.match(map.runtime_files_request.description,/never grants access/u);assert.match(map.runtime_pack_execute_approved.description,/cannot approve/u);
@@ -478,4 +478,32 @@ test('runtime fixture artifactless successful Pack read gives a scoped Office dr
  await assert.rejects(x.toolkit.execute('office_result_read',{request_id:packId},'direct-read'),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_RESULT_PACK_ARTIFACT_NOT_AVAILABLE');
  const read=await x.toolkit.execute('office_result_read',{request_id:draftId},'draft-read');assert.equal(read.text,'One classified record; no message sent.\n');
  assert.deepEqual(x.calls,[]);assert.equal(x.store.officeRuns(x.config.project.id,x.work.id).length,1);
+});
+
+
+test('runtime native Work JSON and CSV artifacts are format-valid, fresh readback and immutable across format changes',async t=>{
+ const x=await fixture(t);
+ for(const [format,text]of [['json','[{"category":"quake","count":2}]'],['csv','id,category\n1,"quake, shallow"\n']]){
+  const requestId='structured-'+format,args={text,format};
+  const result=await x.toolkit.execute('office_result_draft',args,requestId);
+  assert.equal(result.artifact.format,format);assert.ok(result.artifact.path.endsWith('.'+format));
+  assert.equal(await readFile(result.artifact.path,'utf8'),text.endsWith('\n')?text:text+'\n');
+  assert.equal((await x.toolkit.receipt('office_result_draft',result,requestId)).effect_state,'verified');
+  assert.equal((await x.toolkit.execute('office_result_read',{request_id:requestId},'read-'+format)).text,text.endsWith('\n')?text:text+'\n');
+  await assert.rejects(x.toolkit.execute('office_result_draft',{text:'replacement',format:'txt'},requestId),/WORK_RESULT_REQUEST_ID_CONFLICT/u);
+  assert.equal((await x.toolkit.execute('office_result_draft',args,requestId)).deduplicated,true);
+ }
+ for(const [format,text]of [['json','plain text'],['csv','id,value\n1'],['csv','id,id\n1,2']])assert.throws(()=>x.toolkit.validate('office_result_draft',{format,text},'invalid-'+format),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_RESULT_FORMAT_INVALID');
+ const legacy=await x.toolkit.execute('office_result_draft',{text:'original TXT'},'legacy-format');
+ await assert.rejects(x.toolkit.execute('office_result_draft',{format:'json',text:'{}'},'legacy-format'),/WORK_RESULT_REQUEST_ID_CONFLICT/u);
+ assert.equal(await readFile(legacy.artifact.path,'utf8'),'original TXT\n');
+ assert.equal(x.calls.length,0);
+});
+
+test('runtime contract Work field preflight reports declared schema before dispatch and omits sensitive field names',async t=>{
+ const x=await fixture(t,{spec:proposal('monitor.watch'),packs:{sources:[{id:'release',kind:'http',url:'https://example.org/releases',parameters:[],format:'json',json_fields:['version','first_released','session_cookie']}],targets:[],models:'off'}});
+ const watch={version:1,family:'monitor.watch',request:'Watch first release',sources:[{id:'release',parameters:{}}],filters:[],deduplicate_by:[],comparison_fields:['first_release'],mode:'any_change',value_field:null,interval_seconds:60};
+ assert.throws(()=>x.toolkit.validate('runtime_pack_run',{recipe:watch},'typo'),error=>{assert.equal(error.code,'PACK_DECLARED_SOURCE_FIELD_MISSING');assert.match(error.detail,/first_released/u);assert.doesNotMatch(error.detail,/session_cookie/u);return true;});
+ assert.equal(x.calls.length,0);assert.equal(x.store.officeRuns(x.config.project.id,x.work.id).length,0);
+ assert.equal(x.toolkit.validate('runtime_pack_run',{recipe:{...watch,comparison_fields:['first_released']}},'corrected').recipe.comparison_fields[0],'first_released');
 });

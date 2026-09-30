@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {execFile,spawn} from 'node:child_process';
-import {readFileSync,mkdtempSync,rmSync,writeFileSync} from 'node:fs';
+import {readFileSync,mkdtempSync,rmSync,writeFileSync,statSync,statfsSync,accessSync,constants} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {promisify} from 'node:util';
@@ -20,6 +20,30 @@ import {stopSupervisor} from '../dist/supervisor/manager.js';
 import {stopTerminalHost} from '../dist/terminal/manager.js';
 const budget=(overrides={})=>({domain:'test-'+randomUUID(),cpu_percent:20,memory_mb:128,tasks_max:64,...overrides});
 async function until(fn,ms=6000){const end=performance.now()+ms;while(performance.now()<end){if(await fn())return;await delay(25);}throw Error('resource barrier timeout');}
+async function resourceFixtureUnavailable(){
+  if(process.platform!=='linux'||!process.getuid)return 'Linux systemd user/cgroup v2 fixture is required';
+  const uid=process.getuid(),bus=`/run/user/${uid}/bus`;
+  let env;
+  try{env=managerEnvironment();}catch(error){if(error.code==='ENOENT'&&error.path===bus)return `systemd user bus fixture is absent at ${bus}`;throw error;}
+  // Read actual ownership without activating a service or creating a fake bus.
+  const owner=await exec('/usr/bin/busctl',['--user','--timeout=3','call','org.freedesktop.DBus','/org/freedesktop/DBus','org.freedesktop.DBus','NameHasOwner','s','org.freedesktop.systemd1'],{env,timeout:4000,maxBuffer:1024});
+  assert.ok(['b true','b false'].includes(owner.stdout.trim()),'unexpected systemd manager ownership response');
+  if(owner.stdout.trim()==='b false')return 'the user bus has no running systemd user manager';
+  const group=`/sys/fs/cgroup/user.slice/user-${uid}.slice/user@${uid}.service`;
+  try{assert.ok(statSync(group).isDirectory(),'systemd user cgroup must be a directory');}
+  catch(error){if(error.code==='ENOENT'&&error.path===group)return `delegated systemd user cgroup fixture is absent at ${group}`;throw error;}
+  assert.equal(statfsSync(group).type,0x63677270,'resource fixture must use actual cgroup v2');
+  const controllers=readFileSync(group+'/cgroup.controllers','utf8').trim().split(/\s+/);
+  if(['cpu','memory','pids'].some(name=>!controllers.includes(name)))return 'cpu, memory and pids controllers are not delegated to the systemd user manager';
+  for(const path of [group,group+'/cgroup.procs',group+'/cgroup.subtree_control'])try{accessSync(path,constants.W_OK);}
+  catch(error){if(['EACCES','EROFS'].includes(error.code))return 'the systemd user cgroup fixture has no writable delegation';throw error;}
+  return null;
+}
+function resourceTest(name,run){return test(name,async t=>{
+  const missing=await resourceFixtureUnavailable();if(missing){t.skip(`BLOCKED_ENV: ${missing}`);return;}
+  // Once prerequisites exist, every original runtime assertion runs unchanged.
+  await run(t);
+});}
 async function setup(t,overrides={}){
   const limits=budget(overrides),handle=await ensureBudget(limits),scopes=[];
   t.after(async()=>{
@@ -60,7 +84,7 @@ test('runtime contract resource budgets reject unbounded, inherited, malformed a
   assert.notEqual(budgetIdentity(a).description,budgetIdentity(b).description);
 });
 
-test('runtime native resource slice reads actual limits and rejects other members or changed domain config',async t=>{
+resourceTest('runtime native resource slice reads actual limits and rejects other members or changed domain config',async t=>{
   const {limits,handle,launch}=await setup(t);
   assert.equal(readBudget(handle).limits.cpu_max,'20000 100000');
   assert.equal(readBudget(handle).limits.memory_max,128*1048576);
@@ -73,7 +97,7 @@ test('runtime native resource slice reads actual limits and rejects other member
   assert.throws(()=>assertBudgetMembership({...handle,inode:handle.inode+1}),/IDENTITY_CHANGED/);
 });
 
-test('runtime native aggregate CPU quota throttles two concurrent scopes while unrelated sentinel survives',async t=>{
+resourceTest('runtime native aggregate CPU quota throttles two concurrent scopes while unrelated sentinel survives',async t=>{
   const {handle,launch}=await setup(t,{memory_mb:256});
   // The sentinel must outlive even a slow, still-bounded scope startup.
   const sentinel=spawn('/usr/bin/sleep',['60'],{stdio:'ignore'});t.after(()=>sentinel.kill());
@@ -94,7 +118,7 @@ test('runtime native aggregate CPU quota throttles two concurrent scopes while u
   assert.equal(readFileSync('/proc/'+sentinel.pid+'/cgroup','utf8'),sentinelMembership);
 });
 
-test('runtime native resource PID limit rejects finite child attempts and counts kernel denials',async t=>{
+resourceTest('runtime native resource PID limit rejects finite child attempts and counts kernel denials',async t=>{
   const {handle,launch}=await setup(t),before=readBudget(handle);
   const run=await launch('pids');
   await until(()=>run.output().trim().split('\n').length>=2);
@@ -112,7 +136,7 @@ test('runtime native resource PID limit rejects finite child attempts and counts
   assert.equal(after.events.populated,0);
 });
 
-test('runtime native memory exhaustion stays inside the owned cgroup and records OOM without a false PASS',async t=>{
+resourceTest('runtime native memory exhaustion stays inside the owned cgroup and records OOM without a false PASS',async t=>{
   const {handle,launch}=await setup(t,{cpu_percent:100,memory_high_mb:128}),before=readBudget(handle);
   const sentinel=spawn('/usr/bin/sleep',['20'],{stdio:'ignore'});t.after(()=>sentinel.kill());
   const run=await launch('memory'),result=await run.done,after=readBudget(handle);
@@ -122,7 +146,7 @@ test('runtime native memory exhaustion stays inside the owned cgroup and records
   assert.equal(sentinel.exitCode,null);
 });
 
-test('runtime native changed kernel limit is detected before target code starts',async t=>{
+resourceTest('runtime native changed kernel limit is detected before target code starts',async t=>{
   const {limits,handle}=await setup(t);
   await exec('/usr/bin/systemctl',['--user','set-property','--runtime',handle.unit,'CPUQuota=30%'],{env:managerEnvironment()});
   try{
@@ -133,7 +157,7 @@ test('runtime native changed kernel limit is detected before target code starts'
   }
 });
 
-test('runtime native execution main SIGKILL removes its owned descendants, not just the direct child',async t=>{
+resourceTest('runtime native execution main SIGKILL removes its owned descendants, not just the direct child',async t=>{
   const {handle,launch}=await setup(t,{memory_mb:256}),run=await launch('descendant');
   await until(()=>run.output().trim().split('\n').length>=2);
   const descendant=JSON.parse(run.output().trim().split('\n')[1]).descendant;
@@ -146,7 +170,7 @@ test('runtime native execution main SIGKILL removes its owned descendants, not j
   await until(()=>processIdentitySync(descendant)==='dead'&&readBudget(handle).events.populated===0);
 });
 
-test('runtime native bounded resource execution stops after its exact launching owner dies',async t=>{
+resourceTest('runtime native bounded resource execution stops after its exact launching owner dies',async t=>{
   const {limits,handle}=await setup(t,{memory_mb:256});
   const parent=spawn(process.execPath,[new URL('./helpers/resource-parent.mjs',import.meta.url).pathname,JSON.stringify(limits)],{stdio:['pipe','pipe','pipe']});
   let output='',stderr='',unit=null;
@@ -173,7 +197,7 @@ test('runtime native bounded resource execution stops after its exact launching 
   assert.equal(stderr,'');
 });
 
-test('runtime native sandbox preserves its exact output and cancellation contract inside aggregate resources',async t=>{
+resourceTest('runtime native sandbox preserves its exact output and cancellation contract inside aggregate resources',async t=>{
   const {limits,handle}=await setup(t,{cpu_percent:100,memory_mb:256});
   const snapshot=mkdtempSync(join(tmpdir(),'apd-resource-snapshot-'));t.after(()=>rmSync(snapshot,{recursive:true,force:true}));
   const good=await runSandbox(snapshot,['--eval',"process.stdout.write('resource-isolated')"],'',4000,()=>false,limits);
@@ -186,7 +210,7 @@ test('runtime native sandbox preserves its exact output and cancellation contrac
   await until(()=>readBudget(handle).events.populated===0);
 });
 
-test('runtime native configured resource boundary contains actual supervisor worker and Chromium without changing save semantics',async t=>{
+resourceTest('runtime native configured resource boundary contains actual supervisor worker and Chromium without changing save semantics',async t=>{
   const {limits,handle}=await setup(t,{cpu_percent:100,memory_mb:1024,tasks_max:256});
   const root=mkdtempSync(join(tmpdir(),'apd-resource-browser-')),fixture=await startFixture();
   const spec=makeCase('resource','S02',83,'normal'),url=fixture.create(spec),path=join(root,'host.json');
@@ -223,7 +247,7 @@ test('runtime native configured resource boundary contains actual supervisor wor
   }
 });
 
-test('runtime fixture configured resource terminal host and CLI inherit one budget and survive gateway replacement',async t=>{
+resourceTest('runtime fixture configured resource terminal host and CLI inherit one budget and survive gateway replacement',async t=>{
   const {limits,handle,scopes}=await setup(t,{cpu_percent:100,memory_mb:256,tasks_max:128});
   const root=mkdtempSync(join(tmpdir(),'apd-resource-terminal-')),path=join(root,'host.json');
   writeFileSync(path,JSON.stringify({schema_version:1,project_id:'resource-terminal',caller_ref:'test',account_ref:'test',
@@ -249,7 +273,7 @@ test('runtime fixture configured resource terminal host and CLI inherit one budg
   }
 });
 
-test('runtime native in-flight budget changes terminate the owned execution tree without adopting relaxed limits',async t=>{
+resourceTest('runtime native in-flight budget changes terminate the owned execution tree without adopting relaxed limits',async t=>{
   const {handle,launch}=await setup(t,{memory_mb:256}),run=await launch('descendant');
   await until(()=>run.output().trim().split('\n').length>=2);
   const descendant=JSON.parse(run.output().trim().split('\n')[1]).descendant;

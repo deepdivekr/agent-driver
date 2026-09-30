@@ -87,7 +87,7 @@ test('API review hold preserves a leased sibling screen and read operation, fenc
   visual.release=async(...args)=>{active.delete(args[1]);return release(...args);};
   const {api,config}=await setup(t,{maxContexts:2,visual}),run=await start(api),[a,b]=run.dispatches;
   api.swarm.providers.llm_fallback.workflow=async()=> 'HUMAN_REVIEW';
-  const held=await api.call('runtime_swarm_report',{run_id:a.run_id,worker_id:a.worker_id,lease_token:a.lease_token,report:result(a.worker_id)});
+  const held=await api.call('runtime_swarm_report',{run_id:a.run_id,worker_id:a.worker_id,lease_token:a.lease_token,report:{status:'needs_human',summary:'The source requires human review.',error_code:'BROWSER_AUTH_REQUIRED'}});
   assert.equal(held.status,'needs_human');assert.equal(held.workers.find(item=>item.id===b.worker_id).status,'leased');
   assert.equal(active.has(a.worker_id),false);assert.equal(active.has(b.worker_id),true);assert.equal(visual.released.some(item=>item.workerId===b.worker_id),false);
   assert.throws(()=>api.store.claimBrowserHandoff(config.project.id,config.project.profileRef,'example.test'),/AUTH_WAIT_FOR_ACTIVE_WORKERS/);
@@ -135,7 +135,7 @@ test('decision activity lights Jev only at an actual provider call and identifie
   api.swarm.providers.decision={id:'contract-jev',async systemOne(){calls++;const event=events().at(-1);assert.equal(event.body.decision_layer,'jev');assert.equal(event.body.surface_id,lease.surface_id);throw Error('CONTRACT_PROVIDER_UNAVAILABLE');}};
   await api.call('runtime_swarm_report',{run_id:lease.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,report:result(lease.worker_id)});
   const layers=events().map(item=>item.body.decision_layer);
-  assert.equal(calls,2);assert.deepEqual(layers,['jev','code','llm','code','jev','code','llm','code']);
+  assert.equal(calls,1);assert.deepEqual(layers,['jev','code','llm','code']);
   assert.ok(events().every(item=>item.run_id===lease.run_id&&item.body.surface_id===lease.surface_id));
 });
 
@@ -143,11 +143,20 @@ test('Jev-free reports produce LLM and code activity but never a fabricated Jev 
   const {api}=await setup(t),run=await start(api),lease=run.dispatches[0];
   await api.call('runtime_swarm_report',{run_id:lease.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,report:result(lease.worker_id)});
   const layers=api.store.swarmActivities(api.config.project.id,0,1000).filter(item=>item.kind==='worker.activity'&&item.worker_id===lease.worker_id).map(item=>item.body.decision_layer);
-  assert.deepEqual(layers,['llm','code','llm','code']);
+  assert.deepEqual(layers,['llm','code']);
 });
 
-test('a rejected Jev workflow judgment reaches LLM review instead of silently defaulting to continue',async t=>{
+test('ordinary progress uses verified runtime facts without asking unavailable workflow models',async t=>{
   const {api}=await setup(t),run=await start(api),lease=run.dispatches[0];let workflowCalls=0;
+  api.swarm.providers.decision={id:'contract-invalid-jev',async systemOne(){return {model:'contract-invalid',answers:{}};}};
+  api.swarm.providers.llm_fallback.workflow=async()=>{workflowCalls++;return 'HUMAN_REVIEW';};
+  const reported=await api.call('runtime_swarm_report',{run_id:lease.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,report:result(lease.worker_id)});
+  assert.equal(workflowCalls,0);assert.equal(reported.status,'running');assert.deepEqual(reported.reviews,[]);
+  assert.equal(reported.workers.find(item=>item.id===lease.worker_id).status,'succeeded');
+});
+
+test('exceptional review still reaches workflow LLM when the Jev judgment is rejected',async t=>{
+  const {api}=await setup(t,{visual:fakeVisual({fail:'source-2'})}),run=await start(api),lease=run.dispatches[0];let workflowCalls=0;
   api.swarm.providers.decision={id:'contract-invalid-jev',async systemOne(){return {model:'contract-invalid',answers:{}};}};
   api.swarm.providers.llm_fallback.workflow=async()=>{workflowCalls++;return 'HUMAN_REVIEW';};
   const reported=await api.call('runtime_swarm_report',{run_id:lease.run_id,worker_id:lease.worker_id,lease_token:lease.lease_token,report:result(lease.worker_id)});

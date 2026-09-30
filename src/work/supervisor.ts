@@ -25,6 +25,10 @@ import {captureWorkRunAdmissionCheckpoint,createWorkCompletionVerifier,createWor
 import {workImportExecutionOwner} from './import-authority.js';
 import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
 import {connectedSourceCatalog} from '../packs/source-catalog.js';
+import {createNativeCompletionResolver} from './native-completion.js';
+import {assertCustomPackInvocation} from './custom-pack-repeat.js';
+import {assertCustomPackScheduledRun} from './custom-pack-schedule.js';
+import {PACK_ENGINE_VERSION} from '../packs/runtime.js';
 
 const now=()=>new Date().toISOString();
 const activeStates=['queued','running','retry_wait'];
@@ -149,6 +153,10 @@ export class WorkSupervisor {
   start(workId:string,revision:number,costAcknowledged:boolean,timezone?:string,currentRunOnly=true){
     requireCondition(!this.stopped,'WORK_SUPERVISOR_CLOSED');requireCondition(costAcknowledged,'WORK_MODEL_USAGE_CONSENT_REQUIRED');
     assertWorkConnected(this.store,this.config.project.id,workId);
+    const host={config_fingerprint:this.config.fingerprint,engine_binding:hashJson({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})};
+    const custom=assertCustomPackInvocation(this.store,this.config.project.id,workId,'runtime_work_execute',{},host);
+    requireCondition(currentRunOnly||!custom,'CUSTOM_PACK_NEW_CYCLE_REQUIRED');
+    assertCustomPackScheduledRun(this.store,this.config.project.id,workId,host);
     const work=this.store.intakeWork(this.config.project.id,workId);requireCondition(work.revision===revision,'WORK_REVISION_CONFLICT');requireCondition(!work.paused&&work.spec&&['ready','running'].includes(work.status),'WORK_NOT_READY');
     requireCondition(workImportExecutionOwner(this.store,this.config.project.id,workId)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
     const prior=supervisorStatus(this.store,this.config.project.id,workId,this.config);
@@ -193,10 +201,41 @@ export class WorkSupervisor {
   }
   tick(){
     if(this.stopped||!this.activated||this.options.can_start?.()===false)return;const project=this.config.project.id,db=this.store.hermesState,at=Date.now();
-    // Slot claim, new execution record and run binding share one transaction.
+    // Custom cycle preparation is an effect-free, durable registration outside
+    // the slot savepoint. Claim, enqueue and the exact child binding are atomic.
     for(const due of this.schedules.due(at)){
-      const latest=supervisorStatus(this.store,project,due.work_id,this.config);if(!latest||!['succeeded','failed','awaiting_review'].includes(latest.state))continue;
-      db.exec('SAVEPOINT supervisor_schedule');try{const claim=this.schedules.claim(due);if(claim){const id=randomUUID(),stamp=now(),prior=db.prepare('SELECT timezone FROM office_supervisor WHERE run_id=?').get(latest.run_id);db.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,config_hash,model_revision,timezone,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(id,project,due.work_id,due.work_revision,'queued',this.config.fingerprint,readModelSettings(modelSettingsPath(this.config))?.revision??0,prior?.timezone??null,stamp,stamp);this.schedules.markStarted(claim,id);}db.exec('RELEASE supervisor_schedule');}catch{db.exec('ROLLBACK TO supervisor_schedule; RELEASE supervisor_schedule');}
+      const latest=supervisorStatus(this.store,project,due.work_id,this.config);
+      try{
+        if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
+        const custom=this.api.customPackSchedules.binding(due.work_id);
+        requireCondition(!this.schedules.customPackRequired(due.work_id)||custom,'CUSTOM_PACK_SCHEDULE_BINDING_MISSING');
+        if((custom&&latest&&!['succeeded','failed'].includes(latest.state))||(!custom&&(!latest||!['succeeded','failed','awaiting_review'].includes(latest.state))))continue;
+        let executionWorkId=due.work_id,executionRevision=due.work_revision;
+        if(custom){
+          requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
+          const prepared=this.api.customPackSchedules.prepareDue(due,{config_fingerprint:this.config.fingerprint,engine_binding:hashJson({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})});
+          executionWorkId=prepared.work.id;executionRevision=prepared.work.revision;
+        }
+        db.exec('SAVEPOINT supervisor_schedule');
+        try{
+          const claim=this.schedules.claim(due);
+          if(claim){
+            const previous=custom?db.prepare('SELECT run_id,work_revision,config_hash FROM office_supervisor WHERE project_id=? AND work_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(project,executionWorkId):null;
+            requireCondition(!previous||Number(previous.work_revision)===executionRevision&&previous.config_hash===this.config.fingerprint,'CUSTOM_PACK_SCHEDULE_RUN_CHANGED');
+            const inherited=latest?db.prepare('SELECT timezone FROM office_supervisor WHERE run_id=?').get(latest.run_id):null;
+            const id=previous?String(previous.run_id):randomUUID(),stamp=now(),zone=custom?this.schedules.status(due.work_id)?.timezone??null:inherited?.timezone??null;
+            if(!previous)db.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,config_hash,model_revision,timezone,current_run_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,project,executionWorkId,executionRevision,'queued',this.config.fingerprint,readModelSettings(modelSettingsPath(this.config))?.revision??0,zone,custom?1:0,stamp,stamp);
+            this.schedules.markStarted(claim,id,custom?executionWorkId:undefined);
+          }
+          db.exec('RELEASE supervisor_schedule');
+        }catch(error){db.exec('ROLLBACK TO supervisor_schedule; RELEASE supervisor_schedule');if(custom)throw error;}
+      }catch(error){
+        const reason=error instanceof Error&&/^[A-Z][A-Z0-9_]{0,100}$/u.test(error.message)?error.message:'CUSTOM_PACK_SCHEDULE_UNAVAILABLE';
+        // Repeated blocked ticks retain one useful diagnosis rather than
+        // generating the same activity every second. No slot or effect exists.
+        const prior=db.prepare("SELECT summary FROM office_activity WHERE project_id=? AND work_id=? AND kind='schedule.blocked' ORDER BY id DESC LIMIT 1").get(project,due.work_id);
+        if(prior?.summary!==reason)workActivity(this.store,project,due.work_id,'schedule.blocked',reason);
+      }
     }
     for(const row of db.prepare("SELECT * FROM office_supervisor WHERE project_id=? AND state IN ('queued','running','retry_wait') ORDER BY created_at LIMIT 50").all(project) as Row[]){
       if(this.active.size>=(this.options.max_parallel??2))break;if(this.active.has(row.run_id)||row.owner&&row.lease_until_ms>at||row.retry_at_ms>at)continue;
@@ -211,6 +250,9 @@ export class WorkSupervisor {
     const heartbeat=setInterval(()=>{try{db.prepare('UPDATE office_supervisor SET lease_until_ms=? WHERE project_id=? AND run_id=? AND owner=?').run(Date.now()+30000,project,row.run_id,row.owner);}catch{}},3000);heartbeat.unref();
     const guard=()=>{
       requireCondition(!this.stopped,'WORK_SUPERVISOR_STOPPED');assertWorkConnected(this.store,project,row.work_id);const current=db.prepare('SELECT state,owner,lease_until_ms FROM office_supervisor WHERE project_id=? AND run_id=?').get(project,row.run_id);const work=this.store.intakeWork(project,row.work_id);
+      const host={config_fingerprint:this.config.fingerprint,engine_binding:hashJson({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})};
+      assertCustomPackInvocation(this.store,project,row.work_id,'runtime_work_execute',{},host);
+      assertCustomPackScheduledRun(this.store,project,row.work_id,host,row.run_id);
       requireCondition(workImportExecutionOwner(this.store,project,row.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
       requireCondition(!work.paused&&current?.state!=='paused','WORK_PAUSED');requireCondition(current?.owner===row.owner&&Number(current.lease_until_ms)>Date.now(),'WORK_EXECUTION_LEASE_LOST');requireCondition(work.revision===row.work_revision,'WORK_REVISION_CONFLICT');requireCondition(loadHostConfig(this.config.path).fingerprint===row.config_hash,'CONFIG_CHANGED');requireCondition((readModelSettings(modelSettingsPath(this.config))?.revision??0)===row.model_revision,'MODEL_SETTINGS_CHANGED');
     };
@@ -248,7 +290,7 @@ export class WorkSupervisor {
       guard();let admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
       let completionDenial:{code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED'|'WORK_COMPLETION_BATCH_CONTRADICTS'|'WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL';check_id:string;verdict:'unsupported'|'unknown'}|null=null;
       let verificationTransportUnavailable:string|null=null;
-      const independentVerifier=createWorkCompletionVerifier(model,{guard,originalUserRequest,literalRefMode:true,progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{
+      const independentVerifier=createWorkCompletionVerifier(model,{guard,originalUserRequest,literalRefMode:true,nativeResolver:createNativeCompletionResolver(this.store,this.config,row.work_id),progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{
         workActivity(this.store,project,row.work_id,'supervisor.verification.audit',JSON.stringify(event));
         if(event.status==='unavailable'&&['STRUCTURED_MODEL_TIMEOUT','STRUCTURED_MODEL_UNAVAILABLE','CLIENT_TIMEOUT','MCP_SAMPLING_UNAVAILABLE','MODEL_PROVIDER_UNAVAILABLE'].includes(event.code))verificationTransportUnavailable=event.code;
         else if(event.status==='accepted'||event.status==='rejected')verificationTransportUnavailable=null;
@@ -369,6 +411,7 @@ export class WorkSupervisor {
       guard();admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
       const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
         {tools:toolkit.catalog(),guard,signal:controller.signal,
+          toolRequestId:(name,args,fallback)=>toolkit!.requestId(name,args,fallback),
           checkpoint:saveCheckpoint,
           progress:event=>workActivity(this.store,project,row.work_id,event.kind,event.summary,{run_id:row.run_id,stage_id:event.stage_id,...(spec.plan.steps.find(step=>step.id===event.stage_id)?{stage_binding:stageBinding(spec.plan.steps.find(step=>step.id===event.stage_id)!)}:{}),...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.tool_name?{tool_name:event.tool_name}:{}),...(event.reason?{reason:event.reason}:{}),...(event.validation?{validation:event.validation}:{}),...(event.kind==='tool.started'?{status:'running'}:event.kind==='tool.result'?{status:event.status??'unknown'}:{})}),
           validateTool:async(name,args,context)=>{await toolkit!.validate(name,args,context.request_id);},

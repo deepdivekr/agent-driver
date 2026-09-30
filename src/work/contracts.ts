@@ -4,6 +4,7 @@ import {basePackFamilyId} from '../taskpacks/base-pack-catalog.js';
 import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 import {hasBusinessStages,initialWorkPlan,modelWorkPlan,modelWorkPlanSchema,validateWorkPlan,workPlanSchema} from './plan.js';
 import {workResultGetSchema,workResultsListSchema} from './results.js';
+import {nativeCompletionPredicateSchema,nativeCompletionTextIsCanonical} from './completion-checks.js';
 
 const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u);
 const sentence=z.string().trim().min(1).max(2000);
@@ -19,7 +20,7 @@ export const workQuestionSchema=z.object({
 const workProposalFields=z.object({
   title:sentence.max(160),
   desired_outcome:sentence,
-  completion_checks:z.array(z.object({id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),result:sentence.max(500),evidence:sentence.max(500)}).strict()).min(1).max(8),
+  completion_checks:z.array(z.object({id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),result:sentence.max(500),evidence:sentence.max(500),native_check:nativeCompletionPredicateSchema.optional()}).strict().refine(nativeCompletionTextIsCanonical,'NATIVE_COMPLETION_TEXT_NOT_CANONICAL')).min(1).max(8),
   assumptions:z.array(z.object({field:sentence.max(120),value:sentence.max(500),basis:sentence.max(500)}).strict()).max(8),
   route:z.object({kind:z.enum(['pack','swarm','workflow','unknown']),pack_family:basePackFamilyId.nullable()}).strict(),
   requested_effect:z.enum(['read_only','draft_only','local_file_write','external_effect_requested','unknown']),

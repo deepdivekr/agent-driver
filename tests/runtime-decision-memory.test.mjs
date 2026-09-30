@@ -91,27 +91,29 @@ async function swarmSetup(t,{learning='reuse',wrongMemory=false,modelDrift=false
 }
 async function run(x,planId,requestId){const r=await x.api.call('runtime_swarm_run',{request_id:requestId,plan_id:planId}),batch=await x.api.call('runtime_swarm_tick',{run_id:r.run_id});for(const d of batch.dispatches)await x.api.call('runtime_swarm_report',{run_id:r.run_id,worker_id:d.worker_id,lease_token:d.lease_token,report:report(d.worker_id)});return x.api.call('runtime_swarm_status',{run_id:r.run_id});}
 
-test('runtime fixture swarm next-run memory reduces fallback after restart without reusing unverified quality scores or changing gates',async t=>{
+test('runtime fixture ordinary swarm progress is deterministic across restart without reusing unverified quality scores or changing gates',async t=>{
   const x=await swarmSetup(t),plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan;
   let before=x.model.calls.length;const first=await run(x,plan.plan_id,'first-run'),cold=x.model.calls.length-before;
-  assert.equal(first.status,'completed');assert.equal(cold,4);assert.ok(x.requests.every(r=>!r.state.verified_previous_cases));
+  assert.equal(first.status,'completed');assert.equal(cold,2);assert.ok(x.requests.every(r=>!r.state.verified_previous_cases));
   x.reopen();before=x.model.calls.length;const second=await run(x,plan.plan_id,'second-run'),warm=x.model.calls.length-before;
   assert.equal(second.status,'completed');assert.equal(warm,2);assert.equal(second.workers.at(-1).quality.required_score,.75);
-  const status=await x.api.call('runtime_decision_status',{});assert.equal(status.memory.verified,2);assert.equal(status.memory.candidate,4);assert.equal(status.profile_promotion_exposed,false);
-  const references=x.requests.filter(r=>r.state.verified_previous_cases);assert.equal(references.length,2);assert.ok(references.every(r=>Object.keys(r.questions).join()==='next_step'));
-  const journal=await auditDecisionJournal(join(x.root,'data','decisions','swarm.jsonl'));assert.equal(journal.valid_labels.length,4);assert.ok(journal.valid_labels.every(l=>l.split==='unassigned'&&l.evidence_level==='fixture'));
+  const status=await x.api.call('runtime_decision_status',{});assert.equal(status.memory.verified,0);assert.equal(status.memory.candidate,4);assert.equal(status.profile_promotion_exposed,false);
+  assert.ok(x.requests.every(r=>!Object.hasOwn(r.questions,'next_step')));
+  const references=x.requests.filter(r=>r.state.verified_previous_cases);assert.equal(references.length,0);
+  const journal=await auditDecisionJournal(join(x.root,'data','decisions','swarm.jsonl'));assert.equal(journal.valid_labels.length,0);
   assert.equal(second.execution_authority,false);assert.equal(second.approval_granted,false);
 });
 
-test('runtime fixture swarm memory audit rejects a wrong warm answer and falls back without stopping the task',async t=>{
+test('runtime fixture an incorrect workflow provider cannot override ordinary committed worker facts',async t=>{
   const x=await swarmSetup(t,{wrongMemory:true}),plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan;
   await run(x,plan.plan_id,'first-run');x.reopen();const second=await run(x,plan.plan_id,'second-run');assert.equal(second.status,'completed');
-  const status=await x.api.call('runtime_decision_status',{});assert.ok(status.memory.revoked>0);assert.ok(x.model.calls.length>=9);
+  const status=await x.api.call('runtime_decision_status',{});assert.equal(status.memory.revoked,0);assert.equal(x.model.calls.length,5);
+  assert.ok(x.requests.every(r=>!Object.hasOwn(r.questions,'next_step')));
 });
 
 test('runtime fixture swarm learning off neither stores nor injects examples on repeated executions',async t=>{
   const x=await swarmSetup(t,{learning:'off'}),plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan;
-  await run(x,plan.plan_id,'first-run');await run(x,plan.plan_id,'second-run');assert.equal(x.model.calls.length,9);
+  await run(x,plan.plan_id,'first-run');await run(x,plan.plan_id,'second-run');assert.equal(x.model.calls.length,5);
   const status=await x.api.call('runtime_decision_status',{});assert.equal(status.memory.verified,0);assert.equal(status.memory.candidate,0);
   assert.ok(x.requests.every(r=>!r.state.verified_previous_cases));
 });
@@ -136,22 +138,24 @@ test('runtime fixture a Work-bound swarm uses its existing judgments unless the 
   assert.equal(x.api.swarm.status(r.run_id).status,'completed');assert.equal(x.requests.length,before);
 });
 
-test('runtime fixture swarm memory audits a resolved model change before accepting its confident answer',async t=>{
+test('runtime fixture workflow model drift does not require a new progress judgment on repeated healthy runs',async t=>{
   const x=await swarmSetup(t,{modelDrift:true}),plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan;
   await run(x,plan.plan_id,'first-run');x.reopen();const second=await run(x,plan.plan_id,'second-run');assert.equal(second.status,'completed');
-  assert.ok((await x.api.call('runtime_decision_status',{})).memory.revoked>0);assert.ok(x.model.calls.length>=9);
+  assert.equal((await x.api.call('runtime_decision_status',{})).memory.revoked,0);assert.equal(x.model.calls.length,5);
+  assert.ok(x.requests.every(r=>!Object.hasOwn(r.questions,'next_step')));
 });
 
-test('runtime fixture swarm memory survives a temporary Jev outage while falling back to LLM',async t=>{
+test('runtime fixture ordinary progress does not depend on availability of the workflow memory provider',async t=>{
   const x=await swarmSetup(t,{warmOutage:true}),plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan;
   await run(x,plan.plan_id,'first-run');x.reopen();const second=await run(x,plan.plan_id,'second-run');assert.equal(second.status,'completed');
-  const status=await x.api.call('runtime_decision_status',{});assert.equal(status.memory.revoked,0);assert.equal(status.memory.verified,2);assert.equal(x.model.calls.length,9);
+  const status=await x.api.call('runtime_decision_status',{});assert.equal(status.memory.revoked,0);assert.equal(status.memory.verified,0);assert.equal(x.model.calls.length,5);
+  assert.ok(x.requests.every(r=>!Object.hasOwn(r.questions,'next_step')));
 });
 
 test('runtime fixture a stale active calibration uses LLM without inheriting old thresholds or stopping the run',async t=>{
   const x=await swarmSetup(t),active=join(x.root,'data','decisions','registry','active');await mkdir(active,{recursive:true});
   await writeFile(join(active,'swarm.control.fixture.json'),JSON.stringify({format:1,scope:'fixture',catalog_id:'swarm.control',catalog_sha256:'f'.repeat(64),profile_sha256:'e'.repeat(64),previous_profile_sha256:null,activated_at:new Date().toISOString()}));
   const plan=(await x.api.call('runtime_swarm_plan',{goal:'Read two sources.',context:{}})).plan,result=await run(x,plan.plan_id,'after-upgrade');
-  assert.equal(result.status,'completed');assert.equal(x.requests.length,0);assert.equal(x.model.calls.length,5);
+  assert.equal(result.status,'completed');assert.equal(x.requests.length,0);assert.equal(x.model.calls.length,3);
   const status=await x.api.call('runtime_decision_status',{});assert.equal(status.decisions.find(d=>d.catalog_id==='swarm.control').error,'DECISION_ACTIVE_CATALOG_MISMATCH');assert.equal(status.memory.verified,0);
 });

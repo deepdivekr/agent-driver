@@ -119,13 +119,13 @@ async function interruptedRead(){
   const first=hooks({async executeTool(){throw Error('WORK_RESULT_RECEIPT_NOT_FOUND');}}),initial=await new BoundedWorkClientExecutor(model([choose()])).execute(request,first);
   assert.equal(initial.checkpoint.pending.dispatched,true);assert.equal(initial.checkpoint.pending.effect,'read_only');return initial;
 }
-test('known local-record inspect error is saved as a failed read receipt, not a phantom interrupted operation',async()=>{
+for(const code of ['PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE','PACK_LOCAL_RECORD_READ_FIELD_MISSING'])test(`known local-record inspect error ${code} is saved as a failed read receipt, not a phantom interrupted operation`,async()=>{
   const inspectTool={...readTool,name:'runtime_pack_local_record_inspect'},provider=model([choose('runtime_pack_local_record_inspect',{target:'review',identity:70565781})]);
-  const host=hooks({tools:[inspectTool],async executeTool(){throw Error('PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE');}});
+  const host=hooks({tools:[inspectTool],async executeTool(){throw Error(code);}});
   const result=await new BoundedWorkClientExecutor(provider).execute(request,host);
-  assert.equal(result.status,'retryable_failure');assert.equal(result.reason,'PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE');
+  assert.equal(result.status,'retryable_failure');assert.equal(result.reason,code);
   assert.equal(result.checkpoint.pending,null);assert.equal(result.checkpoint.observations.length,1);
-  const observed=result.checkpoint.observations[0];assert.equal(observed.invocation.dispatched,true);assert.equal(observed.receipt.value.status,'read_failed');assert.equal(observed.receipt.value.error,'PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE');assert.equal(observed.receipt.value.result_observation,'error_returned');assert.equal(observed.receipt.effect_state,'none');assert.deepEqual(observed.receipt.evidence_ids,[]);
+  const observed=result.checkpoint.observations[0];assert.equal(observed.invocation.dispatched,true);assert.equal(observed.receipt.value.status,'read_failed');assert.equal(observed.receipt.value.error,code);assert.equal(observed.receipt.value.result_observation,'error_returned');assert.equal(observed.receipt.effect_state,'none');assert.deepEqual(observed.receipt.evidence_ids,[]);
   assert.equal(host.saved.at(-1).pending,null);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/historical runtime_pack_local_record_inspect read_interrupted.*newly validated read-only inspect/u);
 });
 test('a saved read retry is preflighted without falsifying its prior dispatched history, then corrected with fresh evidence',async()=>{

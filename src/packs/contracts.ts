@@ -11,12 +11,16 @@ export type Row=z.infer<typeof rowSchema>;
 const selector=z.string().min(1).max(400);
 const fields=z.record(field,z.object({selector,kind:z.enum(['text','select','checkbox'])}).strict());
 const remote=z.object({url:z.string().url(),parameters:z.array(key).max(20).default([])});
+const numericColumns=z.array(field).max(100).refine(columns=>new Set(columns).size===columns.length,'duplicate numeric column').optional();
 export const sourceSchema=z.discriminatedUnion('kind',[
-  z.object({id:key,kind:z.literal('file'),path:z.string().min(1),format:z.enum(['json','csv'])}).strict(),
-  remote.extend({id:key,kind:z.literal('http'),format:z.enum(['json','csv']),json_fields:z.array(field).min(1).max(100).refine(fields=>new Set(fields).size===fields.length,'duplicate JSON projection field').optional()}).strict().superRefine((source,context)=>{
+  z.object({id:key,kind:z.literal('file'),path:z.string().min(1),format:z.enum(['json','csv']),numeric_columns:numericColumns}).strict(),
+  remote.extend({id:key,kind:z.literal('http'),format:z.enum(['json','csv']),numeric_columns:numericColumns,json_fields:z.array(field).min(1).max(100).refine(fields=>new Set(fields).size===fields.length,'duplicate JSON projection field').optional()}).strict().superRefine((source,context)=>{
     if(source.json_fields&&source.format!=='json')context.addIssue({code:'custom',message:'json_fields requires JSON format'});
+    if(source.json_fields&&source.numeric_columns?.some(column=>!source.json_fields!.includes(column)))context.addIssue({code:'custom',message:'numeric column missing from JSON projection'});
   }),
-  remote.extend({id:key,kind:z.literal('browser'),rows:selector,columns:z.record(field,selector),ready:selector,auth_gate:selector,auth_required:z.boolean().default(true),account_selector:selector,account_text:z.string().min(1)}).strict(),
+  remote.extend({id:key,kind:z.literal('browser'),rows:selector,columns:z.record(field,selector),numeric_columns:numericColumns,ready:selector,auth_gate:selector,auth_required:z.boolean().default(true),account_selector:selector,account_text:z.string().min(1)}).strict().superRefine((source,context)=>{
+    if(source.numeric_columns?.some(column=>!Object.hasOwn(source.columns,column)))context.addIssue({code:'custom',message:'numeric column missing from browser columns'});
+  }),
 ]);
 export const targetSchema=z.object({
   id:key,family:z.enum(['form.draft-submit','record.update','choose.stage']),
@@ -38,9 +42,11 @@ export const targetSchema=z.object({
 export const localRecordSchema=z.object({
   id:key,path:z.string().min(1),identity_field:field,
   fields:z.array(field).min(1).max(100),
+  read_fields:z.array(field).max(100).optional(),
 }).strict().superRefine((value,context)=>{
   if(new Set(value.fields).size!==value.fields.length||value.fields.includes(value.identity_field))context.addIssue({code:'custom',message:'local record editable fields must be unique and exclude identity'});
-  if([value.identity_field,...value.fields].some(name=>/(?:password|token|secret|api.?key|auth|session|cookie)/iu.test(name)))context.addIssue({code:'custom',message:'credential-like local record field forbidden'});
+  if(value.read_fields&&new Set(value.read_fields).size!==value.read_fields.length)context.addIssue({code:'custom',message:'local record readable fields must be unique'});
+  if([value.identity_field,...value.fields,...(value.read_fields??[])].some(name=>/(?:password|token|secret|api.?key|auth|session|cookie)/iu.test(name)))context.addIssue({code:'custom',message:'credential-like local record field forbidden'});
 });
 export const packPolicySchema=z.object({
   sources:z.array(sourceSchema).max(64).default([]),targets:z.array(targetSchema).max(32).default([]),local_records:z.array(localRecordSchema).max(32).default([]),

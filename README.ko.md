@@ -1,5 +1,10 @@
 # Agent Office
 
+구체적인 반복 업무는 검증된 Work를 이름과 불변 버전이 있는 커스텀 Pack으로
+저장하고, 새 회차마다 새로운 결과를 확인하며 재사용할 수 있습니다.
+[커스텀 Pack 사용 경로](docs/custom-pack-operation.md) ·
+[리팩토링 기준 문서](docs/custom-pack-refactoring-plan.md)
+
 **AI 에이전트가 내 컴퓨터에서 업무를 실행하고, 중단된 지점부터 이어가게 하는 로컬 MCP 서버입니다.**
 
 [English](README.md) · **한국어** · [v0.4.0 변경 내역](docs/releases/v0.4.0.md)

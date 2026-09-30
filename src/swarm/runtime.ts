@@ -11,7 +11,7 @@ import {authProfile,authSites,authSite,blockedAuthSites,requireSiteAuth} from '.
 import {ARTIFACT_QUALITY_WEIGHTS,SWARM_DECISION_CATALOG,artifactQualityRequest,dispatchRequest,swarmDecisionProfile,workflowRequest} from './decision.js';
 import {swarmPlanSchema,swarmWorkerReportSchema,type SwarmResearchMode,type SwarmReviewItem,type SwarmRunSnapshot} from './contracts.js';
 import {type SwarmLlmDecisionFallback,type SwarmPlanner} from './planner.js';
-import {SwarmDecisionLearning,type SwarmLearningMode} from './learning.js';
+import {SwarmDecisionLearning,verifiedWorkflowAnswer,type SwarmLearningMode} from './learning.js';
 import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 
 export interface SwarmRuntimeProviders {planner?:SwarmPlanner;llm_fallback?:SwarmLlmDecisionFallback;decision?:DecisionProvider;learning?:SwarmLearningMode;}
@@ -270,7 +270,12 @@ export class SwarmRuntime{
     // a progress checkpoint reopens that judgment and confounds repeat-run state.
     const states=Object.values(snapshot.workers),allDone=states.every(item=>item.status==='succeeded'),allTerminal=states.every(item=>['succeeded','skipped_deadline'].includes(item.status)),workflowState={goal:snapshot.plan.goal,reported_worker:workerId,all_workers_verified:allDone,partial_evidence:allTerminal&&!allDone,workers:states.map(item=>({id:item.id,status:item.status}))};let next:'CONTINUE'|'REOBSERVE'|'LLM_REPLAN'|'HUMAN_REVIEW'|'COMPLETE'|'HOLD'=allDone?'COMPLETE':'CONTINUE',workflowAccepted=false;
     const workflowFacts={all_workers_verified:allDone,partial_evidence:allTerminal&&!allDone,review_count:snapshot.reviews.length,failed_workers:states.filter(item=>['failed','needs_human','skipped_deadline'].includes(item.status)).length,ready_readonly_workers:this.ready(snapshot).filter(item=>snapshot.plan.workers.find(task=>task.id===item.id)?.effect==='read_only').length,active_workers:states.filter(item=>item.status==='leased').length};
-    const enrichedWorkflowState={...workflowState,runtime_facts:workflowFacts},workflowPacket=workflowRequest(enrichedWorkflowState),workflowBinding=plane?learning.binding(snapshot,plane,workflowPacket.questions):null;
+    // The existing reducer proves ordinary progress from host-owned worker
+    // facts. Model judgment is reserved for exceptional states; it must not
+    // reopen a settled result or strand healthy work on a transport failure.
+    const deterministicNext=verifiedWorkflowAnswer(workflowFacts),terminalPartial=allTerminal&&!allDone;
+    if(deterministicNext){next=deterministicNext;workflowAccepted=true;}else if(terminalPartial)workflowAccepted=true;
+    const enrichedWorkflowState={...workflowState,runtime_facts:workflowFacts},workflowPacket=workflowRequest(enrichedWorkflowState),workflowBinding=!workflowAccepted&&plane?learning.binding(snapshot,plane,workflowPacket.questions):null;
     let workflowEvaluation:DecisionBatchResult|null=null,workflowTeacher:'COMPLETE'|'CONTINUE'|'REOBSERVE'|'LLM_REPLAN'|'HUMAN_REVIEW'|'HOLD'|null=null;
     if(plane&&workflowBinding)try{
       let examples:ReturnType<SwarmDecisionLearning['references']>=[];try{examples=learning.references(snapshot,workflowBinding,workflowFacts);}catch{learning.event(snapshot,workerId,'memory_unavailable',{stage:'read'});}

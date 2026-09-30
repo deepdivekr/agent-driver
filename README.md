@@ -96,6 +96,10 @@ Windows clients should use the WSL command shown in the Control Center.
 
 A **Work** holds your request, completion checks, progress, and run history.
 
+For a specific recurring task, save an independently verified Work as a named
+custom Pack version. Each new cycle reuses its procedure and verifies fresh
+output. [Custom Pack operation](docs/custom-pack-operation.md)
+
 ### From request to result
 
 The detail page groups source visits and tool activity under outcome-based work stages. A finished tool call is not a verified result.

@@ -152,6 +152,13 @@ for(const point of ['intent_committed','before_replace','after_replace'])test(`r
  }finally{store.close();}
 });
 test('runtime native verifier parent SIGKILL terminates the observed sandbox process tree',async t=>{
+ const children=`/proc/${process.pid}/task/${process.pid}/children`;
+ try{readFileSync(children,'utf8');}catch(error){
+  if(error.code==='ENOENT'&&statSync(`/proc/${process.pid}/task/${process.pid}`).isDirectory()){
+   t.skip('BLOCKED_ENV: the live kernel omits /proc/PID/task/PID/children; descendant oracle requires CONFIG_PROC_CHILDREN');return;
+  }
+  throw error;
+ }
  const root=mkdtempSync(join(tmpdir(),'apd-verifier-death-'));
  const child=spawn(process.execPath,[fileURLToPath(new URL('./helpers/verifier-parent.mjs',import.meta.url)),root],{stdio:['ignore','ignore','pipe']});let stderr='';child.stderr.on('data',b=>{stderr+=b;});
  t.after(()=>{if(child.exitCode===null&&child.signalCode===null)child.kill('SIGKILL');rmSync(root,{recursive:true,force:true});});
