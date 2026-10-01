@@ -690,10 +690,13 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const value=object(item.receipt.value),trace=item.invocation.tool_name===controlledTraceTool;
       const result=['office_result_draft','office_result_read'].includes(item.invocation.tool_name)&&typeof value?.text==='string';
       // The saved file's identity (request ID, hash, bytes, read cursor) precedes its text so a save check can be decided.
-      const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):result?`${JSON.stringify({...value,text:undefined})}\n${value!.text as string}`:JSON.stringify(item.receipt.value);
+      // A page read is shown with its address, title and first links before its text, so a check about a link the
+      // page listed is not lost to truncation (live: "the truncated browser record does not show the URL").
+      const pageRead=!result&&!trace&&value?.provenance==='live_browser_dom'&&Array.isArray(value.links)&&typeof value.text==='string';
+      const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):result?`${JSON.stringify({...value,text:undefined})}\n${value!.text as string}`:pageRead?`${JSON.stringify({url:value!.url,title:value!.title,requested_url:value!.requested_url,links:(value!.links as unknown[]).slice(0,25)})}\n${JSON.stringify({...value,links:undefined,url:undefined,title:undefined,requested_url:undefined})}`:JSON.stringify(item.receipt.value);
       // A text resource read (a CSV/JSON feed) is the source data itself; truncating it at 3000 characters left
       // the judgment unable to compare rows (live), so it gets the same room as a result file.
-      const limit=trace?4000:result||value?.provenance==='http_text_resource'?12000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
+      const limit=trace?4000:result||value?.provenance==='http_text_resource'?12000:pageRead?6000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
       return {evidence_id:id,tool_name:item.invocation.tool_name,observed_at:item.observed_at,truncated:content.length<full.length,content,full_length:full.length,keep:result||trace,leaves:observableLeaves(item.receipt.value)};
     });
     // Fit the 40KB call budget by shortening the largest source receipts instead of giving up (live: five pages of

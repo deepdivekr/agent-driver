@@ -190,3 +190,15 @@ test('A7: an oversized light input is fitted by shortening the largest source re
   assert.ok(input.evidence.filter(item=>item.evidence_id.startsWith('ev-page-')).some(item=>item.truncated),'Large source pages are shortened and marked.');
   assert.ok(input.evidence.find(item=>item.evidence_id==='ev-draft-1').content.endsWith(right),'The result file is never shortened.');
 });
+
+// A7 live: a search page receipt was cut at 3000 characters before its links, so a check about the first result's
+// URL could not be decided. A page read shows its address, title and first links ahead of its text.
+test('A7: a page read is shown with its links before its text',async t=>{
+  const search={invocation:{request_id:'search-0',turn:0,stage_id:'collect',tool_name:'office_web_search',arguments:{},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url:'https://www.bing.com/search?q=x',title:'x - Search',text:'filler '.repeat(900),links:[{text:'Node.js Releases',url:'https://nodejs.org/en/about/previous-releases'}],provenance:'live_browser_dom',requested_url:'https://www.bing.com/search?q=x',effect:'read_only'},evidence_ids:['ev-search-0'],effect_state:'none',retry_safe:true},observed_at:at(0)};
+  const model=fixture(supported('ev-search-0','https://nodejs.org/en/about/previous-releases')),audits=[];
+  const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event)});
+  assert.equal(await verify(checks,sealed(t,[search,draft(1)]),claimFor(['ev-search-0','ev-draft-1'])),true,JSON.stringify(audits.map(event=>event.code)));
+  assert.deepEqual(model.kinds,['light']);
+  const shown=model.inputs[0].evidence.find(item=>item.evidence_id==='ev-search-0').content;
+  assert.ok(shown.indexOf('previous-releases')<shown.indexOf('filler'),'Links come before the page text.');
+});
