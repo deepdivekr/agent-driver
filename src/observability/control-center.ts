@@ -4,7 +4,7 @@ import {dirname} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {PackStore,type RuntimeActivity} from '../packs/store.js';
-import {type HostConfig} from '../interface/config.js';
+import {workAutonomy,type HostConfig} from '../interface/config.js';
 import {readSwarmDashboard} from '../swarm/dashboard.js';
 import {BrowserConnections} from './browser-connections.js';
 import {ControlSettings} from './control-settings.js';
@@ -147,7 +147,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     const previous=supervisorStatus(store,config.project.id,work.work_id,config);
     if(previous)return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,accepted:false,deduplicated:true,state:previous.state,run_id:previous.run_id,reason:previous.reason}};
     if(work.definition_status!=='ready'||work.paused){const reason=work.reason??(work.paused?'WORK_PAUSED':work.definition_status==='awaiting_details'?'WORK_DETAILS_REQUIRED':work.definition_status==='defining'?'WORK_DEFINITION_IN_PROGRESS':'WORK_DEFINITION_REQUIRED');workActivity(store,config.project.id,work.work_id,'dispatch.waiting',`Work start is waiting: ${reason}`,{stage_id:'admission',status:work.definition_status,reason});return {...work,admission:{requested:true,accepted:false,deduplicated:false,state:work.definition_status,reason}};}
-    try{const route=workDispatchOptions(store,config,work.work_id),admission=dispatcher.start({work_id:work.work_id,revision:work.revision,executor:route.executor??'client',cost_acknowledged:intent.cost_acknowledged,current_run_only:true,...(intent.timezone?{timezone:intent.timezone}:{})});return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,...admission}};}
+    try{const route=workDispatchOptions(store,config,work.work_id),admission=dispatcher.start({work_id:work.work_id,revision:work.revision,executor:route.executor??'client',cost_acknowledged:intent.cost_acknowledged,current_run_only:workAutonomy(config)!=='delegated',...(intent.timezone?{timezone:intent.timezone}:{})});return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,...admission}};}
     catch(error){const reason=error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'WORK_EXECUTION_REQUEST_FAILED';return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,accepted:false,deduplicated:false,state:'blocked',reason}};}
   };
   const server=createServer(async (request:IncomingMessage,response:ServerResponse)=>{

@@ -1,0 +1,46 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
+import {tmpdir} from 'node:os';
+import {join} from 'node:path';
+import {loadHostConfig,workAutonomy} from '../dist/interface/config.js';
+import {setWorkModelDataApproval} from '../dist/onboarding/connection.js';
+import {draftPublicForm} from '../dist/work/execution-tools.js';
+
+// Part B1: the owner's standing delegation. A Work the owner asked for runs to its
+// result and keeps its own schedule without a click per run; absent means per-run.
+test('B1: autonomy is read live from the host file; a new AI-data approval delegates and keeps an explicit per-run choice',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'work-autonomy-')),path=join(root,'host.json');t.after(()=>rm(root,{recursive:true,force:true}));
+  const base={schema_version:1,project_id:'autonomy',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production'};
+  await writeFile(path,JSON.stringify(base));const config=loadHostConfig(path);
+  assert.equal(workAutonomy(config),'per_run','No policy means the per-run behaviour existing installs have.');
+  await setWorkModelDataApproval(path,true);assert.equal(workAutonomy(config),'delegated','Read live, no restart.');
+  assert.equal(loadHostConfig(path).fingerprint,config.fingerprint,'The policy is not part of the run binding.');
+  await writeFile(path,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'per_run'}}));
+  await setWorkModelDataApproval(path,true);assert.equal(JSON.parse(await readFile(path,'utf8')).work.autonomy,'per_run','An explicit owner choice is kept.');
+});
+
+// P6 (live): a public order form draft. The page may only GET; nothing is submitted.
+test('B5: a public form draft fills text, radio, select and checkbox fields, reads them back and cannot submit',async t=>{
+  let posts=0;
+  const html=`<!doctype html><title>Order</title><form method="post" action="/post" id="f">
+    <label>Customer name: <input name="custname"></label>
+    <label><input type="radio" name="size" value="small"> Small</label><label><input type="radio" name="size" value="medium"> Medium</label>
+    <label>Crust <select name="crust"><option value="thin">Thin</option><option value="deep">Deep dish</option></select></label>
+    <label><input type="checkbox" name="topping" value="bacon"> Bacon</label><input type="password" name="secret">
+    <button>Submit order</button></form><script>document.querySelector('[name=custname]').addEventListener('input',()=>fetch('/post',{method:'POST',body:'x'}).catch(()=>{}));</script>`;
+  const server=createServer((request,response)=>{if(request.method!=='GET'){posts++;response.writeHead(200);response.end('posted');return;}response.writeHead(200,{'content-type':'text/html'});response.end(html);});
+  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{server.close(resolve);server.closeAllConnections();}));
+  const url=`http://127.0.0.1:${server.address().port}/form`;
+  await assert.rejects(draftPublicForm({url,fields:[{name:'custname',value:'Kim'}]}),/FORM_DRAFT_LEFT_PAGE/u,'A page that tries to send data while being filled is not reported as a clean draft.');
+  assert.equal(posts,0,'The host aborted the non-GET request.');
+  const quiet=createServer((request,response)=>{if(request.method!=='GET'){posts++;response.end();return;}response.writeHead(200,{'content-type':'text/html'});response.end(html.replace(/<script>.*<\/script>/su,''));});
+  await new Promise(resolve=>quiet.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{quiet.close(resolve);quiet.closeAllConnections();}));
+  const draft=await draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{name:'custname',value:'Kim'},{name:'size',value:'Medium'},{label:'Crust',value:'Deep dish'},{name:'topping',value:true}]});
+  assert.equal(draft.status,'succeeded');assert.equal(draft.submitted,false);assert.equal(draft.non_get_requests,0);
+  assert.deepEqual(draft.fields.map(field=>[field.kind,field.observed]),[['text','Kim'],['radio','medium'],['select','deep'],['checkbox',true]]);
+  await assert.rejects(draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{name:'secret',value:'x'}]}),/FORM_FIELD_NOT_ALLOWED/u);
+  await assert.rejects(draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{name:'size',value:'Gigantic'}]}),/FORM_OPTION_NOT_FOUND/u);
+  assert.equal(posts,0);
+});

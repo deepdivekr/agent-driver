@@ -25,6 +25,7 @@ import {nativeProcessRunner} from '../integrations/subscription-auth.js';
 import {readLocalGitCheckpoint} from '../coding/local-checkpoint.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {knownLoginSites,readyAuthTargets,detectAuthGate} from '../swarm/browser-auth.js';
+import {WorkSchedules} from './schedule.js';
 
 /** Potential effect, not a claim that a particular call performed a write.
  * Drafts also have durable state and must not be replayed after a lost reply.
@@ -34,7 +35,7 @@ const effects={
   runtime_pack_catalog:'read_only',runtime_pack_plan:'read_only',runtime_pack_local_record_inspect:'read_only',runtime_pack_run:'local_write',runtime_pack_status:'read_only',runtime_pack_execute_approved:'external_write',runtime_pack_watch_tick:'local_write',runtime_pack_watch_pause:'local_write',runtime_pack_events:'read_only',
   runtime_files_roots:'read_only',runtime_files_request:'draft_only',runtime_files_scan:'draft_only',runtime_files_inspect:'read_only',runtime_files_classify:'draft_only',runtime_files_propose:'draft_only',runtime_files_report:'read_only',
   runtime_windows_catalog:'read_only',runtime_windows_design:'draft_only',runtime_windows_start:'draft_only',runtime_windows_step:'external_write',runtime_windows_status:'read_only',
-  runtime_work_context:'read_only',runtime_coding_projects:'read_only',runtime_coding_start:'local_write',runtime_coding_step:'local_write',runtime_coding_status:'read_only',runtime_coding_pause:'draft_only',runtime_coding_reconcile:'read_only',office_web_search:'read_only',office_social_search:'read_only',office_browser_read:'read_only',office_browser_links:'read_only',office_result_draft:'local_write',office_result_read:'read_only',office_pack_source_read:'read_only',office_pack_receipt_read:'read_only',
+  runtime_work_context:'read_only',runtime_coding_projects:'read_only',runtime_coding_start:'local_write',runtime_coding_step:'local_write',runtime_coding_status:'read_only',runtime_coding_pause:'draft_only',runtime_coding_reconcile:'read_only',office_web_search:'read_only',office_social_search:'read_only',office_schedule_status:'read_only',office_form_draft:'draft_only',office_browser_read:'read_only',office_browser_links:'read_only',office_result_draft:'local_write',office_result_read:'read_only',office_pack_source_read:'read_only',office_pack_receipt_read:'read_only',
 } as const satisfies Record<string,WorkClientTool['effect']>;
 type ExecutionToolName=keyof typeof effects;
 const injectWork=new Set(['runtime_pack_plan','runtime_pack_local_record_inspect','runtime_pack_run','runtime_files_request','runtime_files_scan','runtime_files_propose','runtime_files_report','runtime_windows_design','runtime_windows_start','runtime_work_context','runtime_coding_start']);
@@ -56,6 +57,45 @@ function executedPackContract(recipe:Recipe){
     ...('numeric_columns' in recipe?{numeric_columns:recipe.numeric_columns,sort:recipe.sort}:{}),
     ...('comparison_fields' in recipe?{comparison_fields:recipe.comparison_fields,mode:recipe.mode,interval_seconds:recipe.interval_seconds,value_field:recipe.value_field}:{}),
   };
+}
+const formDraftInput=z.object({url:z.string().url().max(4096),fields:z.array(z.object({name:z.string().trim().min(1).max(200).optional(),label:z.string().trim().min(1).max(200).optional(),value:z.union([z.string().max(2000),z.boolean()])}).strict().refine(field=>Boolean(field.name||field.label),'name or label required')).min(1).max(30)}).strict();
+/** Fill a public web form in a fresh runtime-owned headless page and read the values back. The page can only
+ * GET: every other request is aborted by the host, the page is closed afterwards, and nothing is ever submitted. */
+export async function draftPublicForm(input:z.infer<typeof formDraftInput>){
+  const {chromium}=await import('playwright'),browser=await chromium.launch({headless:true});
+  try{
+    const context=await browser.newContext(),page=await context.newPage();let blocked=0;
+    await context.route('**/*',route=>{if(route.request().method()==='GET')return route.continue();blocked++;return route.abort();});
+    await page.goto(input.url,{waitUntil:'domcontentloaded',timeout:20000});
+    const entryUrl=page.url(),fields:Array<Record<string,unknown>>=[];
+    for(const field of input.fields){
+      const byName=field.name?page.locator(`[name=${JSON.stringify(field.name)}]`):null,group=byName&&await byName.count()>0?byName:field.label?page.getByLabel(field.label,{exact:false}):byName;
+      requireCondition(group&&await group.count()>0,'FORM_FIELD_NOT_FOUND');
+      const first=group.first(),tag=(await first.evaluate(element=>element.tagName)).toLowerCase(),type=((await first.getAttribute('type'))??'').toLowerCase();
+      requireCondition(!['password','file','hidden','submit','button','image','reset'].includes(type),'FORM_FIELD_NOT_ALLOWED');
+      let kind='text',observed:unknown;
+      if(type==='radio'){
+        kind='radio';requireCondition(typeof field.value==='string','FORM_VALUE_TEXT_REQUIRED');const wanted=(field.value as string).trim().toLowerCase();let chosen=-1;
+        for(let index=0;index<await group.count()&&chosen<0;index++){
+          const option=group.nth(index),value=((await option.getAttribute('value'))??'').toLowerCase(),label=(await option.evaluate(element=>(element as HTMLInputElement).labels?.[0]?.textContent??element.parentElement?.textContent??'')).trim().toLowerCase();
+          if(value===wanted||label===wanted||label.includes(wanted))chosen=index;
+        }
+        requireCondition(chosen>=0,'FORM_OPTION_NOT_FOUND');await group.nth(chosen).check();observed=await group.nth(chosen).getAttribute('value');requireCondition(await group.nth(chosen).isChecked(),'FORM_VALUE_NOT_APPLIED');
+      }else if(type==='checkbox'){
+        kind='checkbox';const target=typeof field.value==='boolean'?first:group.and(page.locator(`[value=${JSON.stringify(field.value)}]`)).first();
+        await target.setChecked(field.value!==false);observed=await target.isChecked();
+      }else if(tag==='select'){
+        kind='select';requireCondition(typeof field.value==='string','FORM_VALUE_TEXT_REQUIRED');
+        await first.selectOption({label:field.value as string}).catch(()=>first.selectOption(field.value as string));observed=await first.inputValue();
+      }else{
+        requireCondition(typeof field.value==='string'&&(tag==='input'||tag==='textarea'),'FORM_VALUE_TEXT_REQUIRED');await first.fill(field.value as string);observed=await first.inputValue();requireCondition(observed===field.value,'FORM_VALUE_NOT_APPLIED');
+      }
+      fields.push({...(field.name?{name:field.name}:{}),...(field.label?{label:field.label}:{}),kind,requested:field.value,observed});
+    }
+    const screenshot=await page.screenshot({fullPage:true,type:'png'});
+    requireCondition(page.url()===entryUrl&&blocked===0,'FORM_DRAFT_LEFT_PAGE');
+    return {status:'succeeded',url:entryUrl,title:await page.title(),fields,filled:fields.length,submitted:false,non_get_requests:blocked,navigated_away:false,screenshot_sha256:sha(screenshot),screenshot_bytes:screenshot.length,provenance:'owned_headless_form_draft',executor:'playwright',effect:'draft_only',observed_at:new Date().toISOString(),note:'The draft existed only in this runtime-owned page, which is now closed. No request other than GET could leave the page.'};
+  }finally{await browser.close().catch(()=>{});}
 }
 const browserInput=z.object({url:z.string().url().max(4096),offset:z.number().int().min(0).max(8_000_000).default(0),max_bytes:z.number().int().min(1000).max(60000).default(12000)}).strict();
 const textResourcePath=/\.(?:csv|tsv|json|geojson|txt|xml|atom|rss)$/iu,textResourceType=/^(?:text\/|application\/(?:json|geo\+json|xml|csv|rss\+xml|atom\+xml))/iu;
@@ -250,6 +290,8 @@ export class WorkExecutionTools {
     descriptors.push({name:'office_web_search',description:'Search the public web when the user supplied a topic but no source URL. Choose google (default), bing or duckduckgo; the host constructs its fixed public search URL from query text (maximum 512 characters). Returns actual DOM text and observed links only, with timestamps and executor; no generated search results. For observed Google unusual traffic in headless or the managed Playwright guest, the host hands the identical Google query directly to registered Aside once, skipping the guest retry. Never replace that query with Bing or DuckDuckGo. If environment_block=true is returned, follow next_action for Aside connection or user confirmation; no repeat or profile cycling. For another public-provider challenge, an independent source within scope may be used. Never solve CAPTCHA, sign in or bypass access controls. Credentials and private-host query URLs are rejected. Follow only actually observed links. Pack models=off does not disable this tool or the configured Work LLM.',input_schema:z.toJSONSchema(z.object(searchArguments).strict(),{io:'input'}),effect:'read_only'});
     const socialSites=this.socialSites();
     if(socialSites.length)descriptors.push({name:'office_social_search',description:`Read current ticker/social discussion from one historically ready, registered browser profile only. Offered sites: ${socialSites.join(', ')}. The host constructs a bounded search entry URL, reobserves the live page and checks the signed-in marker. A prior ready observation is not proof of current access or of source quality. No cross-profile fallback, login, challenge bypass, post or message. Use actual DOM URLs/timestamps as unverified source observations, not as verified news claims.`,input_schema:z.toJSONSchema(socialSearchInput,{io:'input'}),effect:'read_only'});
+    descriptors.push({name:'office_schedule_status',description:'Read whether the host has scheduled this Work to run again (daily, weekly or interval), with its next run time. A recurring Work scheduled by the host rereads its source on every run, so it needs no separate watch connection. Cite this receipt as the evidence that future checks are set.',input_schema:z.toJSONSchema(z.object({}).strict()),effect:'read_only'});
+    descriptors.push({name:'office_form_draft',description:'Fill fields of a public https web form in a fresh runtime-owned page and read the values back, without submitting. Give each field its exact name attribute or visible label and the value (text; an option value or label for radio/select; true/false for a checkbox). The host aborts every non-GET request and closes the page afterwards, so the draft is evidence of what would be entered, never a submission. Read the form with office_browser_read first to learn its field names.',input_schema:z.toJSONSchema(formDraftInput,{io:'input'}),effect:'draft_only'});
     descriptors.push({name:'office_browser_links',description:'List a bounded page of exact user-supplied and observed URLs plus configured browser environments. Defaults: offset=0, limit=20 (maximum 40); byte limits may return fewer complete URLs. If has_more, request next_offset with the returned snapshot_id. A changed snapshot requires restarting at offset=0. Never infer an omitted or unobserved URL; this tool does not open pages or grant access.',input_schema:z.toJSONSchema(browserLinksInput,{io:'input'}),effect:'read_only'});
     descriptors.push({name:'office_result_draft',description:'Save an actual TXT, JSON or CSV Work result/report inside Agent Office. Supply format=json or format=csv with valid content for structured output; omitted format preserves TXT compatibility. "Office result file" or "Office 결과 파일" refers to an app artifact, not automatically a Microsoft Word/Excel document. If the user specified no file format, TXT is valid when it preserves the requested content; never claim a TXT artifact satisfies an explicitly requested CSV, JSON, Word or Excel format. Write observed source evidence in the requested language without invented facts. The host rereads exact bytes and SHA-256 before a verified receipt. Returns text, artifact metadata and request_id. Use office_result_read with that request_id for readback; runtime_files_report is for user folders. Creates only an Office-owned file, never sends a message or changes an external service.',input_schema:z.toJSONSchema(resultInput),effect:'local_write'});
     descriptors.push({name:'office_result_read',description:'Read an Office-owned TXT/JSON/CSV output using its exact successful host invocation request_id, never an arbitrary path. Streams a check of the entire file SHA-256, byte count and UTF-8 validity; returns only a bounded page preserving the original BOM and final newline. offset defaults to 0, max_bytes to 12000. For has_more, use the returned next_offset with the same request_id. Page text is not the entire file: do not claim full inspection or parse a partial JSON page as complete JSON. Remove an initial BOM only after assembling a complete JSON document. Full artifact metadata remains verified on every page. Pack outputs require a bound task-free successful or local-record draft-only run. Failed-quality output, foreign Work files and binary formats remain unavailable. Existing verified receipts survive resume.',input_schema:z.toJSONSchema(resultReadInput),effect:'read_only'});
@@ -528,6 +570,12 @@ export class WorkExecutionTools {
     if(name==='office_web_search')return this.searchRequest(args);
     if(name==='office_social_search')return this.socialRequest(args);
     if(name==='office_browser_links'){this.browserLinksPage(args);return browserLinksInput.parse(args);}
+    if(name==='office_schedule_status')return z.object({}).strict().parse(args);
+    if(name==='office_form_draft'){
+      const input=formDraftInput.parse(args),url=new URL(input.url),site=url.hostname.toLowerCase().replace(/^www\./u,'');
+      if(url.protocol!=='https:'||url.username||url.password||privateHostname(url.hostname)||Object.hasOwn(knownLoginSites,site))throw new WorkClientToolInputError('FORM_URL_NOT_ALLOWED','Nothing was opened. A draft can be filled only on a public https page; signed-in and private forms need a host-registered draft target.');
+      return input;
+    }
     if(name==='office_result_draft')return validatedResultInput(args);
     if(name==='office_result_read')return this.validateResultRead(args);
     if(name==='office_pack_receipt_read'){
@@ -583,6 +631,16 @@ export class WorkExecutionTools {
   async execute(name:string,args:Record<string,unknown>,requestId:string){
     this.guard();this.store.intakeWork(this.config.project.id,this.workId);
     if(name==='office_browser_links')return this.browserLinksPage(args);
+    if(name==='office_schedule_status'){
+      const status=new WorkSchedules(this.store,this.config.project.id).status(this.workId);
+      return {status:'succeeded',work_id:this.workId,schedule_enabled:Boolean(status?.enabled),schedule_state:status?.state??'none',definition:status?.definition??null,next_run_at:status?.next_run_at??null,reason:status?.reason??null,observed_at:new Date().toISOString(),provenance:'host_work_schedule',effect:'read_only'};
+    }
+    if(name==='office_form_draft'){
+      const input=this.validate(name,args,requestId) as z.infer<typeof formDraftInput>;
+      workActivity(this.store,this.config.project.id,this.workId,'draft.started','Filling a public form draft in a runtime-owned page. Nothing can be submitted from it.',{tool_name:name,status:'running',target_url:input.url});
+      try{const value=await draftPublicForm(input);this.guard();workActivity(this.store,this.config.project.id,this.workId,'draft.observed',`${value.filled} field(s) filled and read back · submitted: no`,{tool_name:name,status:'succeeded',target_url:value.url});return value;}
+      catch(error){if(error instanceof Error&&/^FORM_[A-Z_]+$/u.test(error.message))throw new WorkClientToolInputError(error.message,'The draft was not completed and nothing was submitted. Read the form with office_browser_read and use its exact field names or visible labels.');throw error;}
+    }
     if(name==='office_pack_receipt_read'){
       const input=this.validate(name,args,requestId) as z.infer<typeof packReceiptReadInput>,run=this.ownPack(input.run_id),bytes=Buffer.from(JSON.stringify(run.result),'utf8');
       requireCondition(input.offset<=bytes.length,'WORK_RESULT_PAGE_OFFSET_INVALID');

@@ -34,7 +34,9 @@ const CodingProjectSchema=z.object({id:identifier,root:z.string().min(1),allow_w
 const CodingConfigSchema=z.object({projects:z.array(CodingProjectSchema).min(1).max(20),model_data_approved:z.boolean().default(false)}).strict();
 export type CodingConfig=z.infer<typeof CodingConfigSchema>;
 /** Human consent that one-line Work text and import evidence may be sent to the selected AI. Read live, never bound to run fingerprints. */
-const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional()}).strict();
+/** `autonomy` is the owner's standing delegation (plan B1): `delegated` lets a Work the owner asked for run to
+ * its result and keep its own recurring schedule without a click per run. External submissions keep their gates. */
+const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional(),autonomy:z.enum(['per_run','delegated']).optional()}).strict();
 export type WorkConfig=z.infer<typeof WorkConfigSchema>;
 export const HostConfigSchema=z.object({
   schema_version:z.literal(1), project_id:identifier, caller_ref:identifier,
@@ -143,6 +145,10 @@ export function loadHostConfig(path:string):HostConfig {
     browserExecutors:raw.browser_executors??null,
     legacyWorkflows:raw.workflows??null,workflowBridge:raw.workflow_bridge??null,
     fingerprint:createHash('sha256').update(JSON.stringify({raw:{...raw,work:undefined},worktree,data,coding,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
+}
+/** Read live like the consent: a policy change applies to the next admission without a restart. Absent means per-run. */
+export function workAutonomy(config:Pick<HostConfig,'path'>):'per_run'|'delegated'{
+  try{return HostConfigSchema.parse(JSON.parse(readFileSync(config.path,'utf8'))).work?.autonomy==='delegated'?'delegated':'per_run';}catch{return 'per_run';}
 }
 /** Work-definition consent is read from disk on each use so a running MCP server or Control Center sees a new approval without restart. */
 export function workModelDataApproved(config:Pick<HostConfig,'path'|'swarm'|'packs'|'coding'|'work'>):boolean{
