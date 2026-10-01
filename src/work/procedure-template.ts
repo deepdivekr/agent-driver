@@ -107,15 +107,31 @@ export function fillTemplate(template:ProcedureTemplate,values:ReadonlyMap<strin
   return out+template.text.slice(cursor);
 }
 
-export interface ScriptStep {tool:string;arguments:Record<string,unknown>;summary:string;advance?:boolean;}
+export type ScriptStep={tool:string;arguments:Record<string,unknown>;summary:string;advance?:boolean}|{complete:true;summary:string};
 /** Drives one repeat of a templated procedure. Stateless about evidence: it only reads what the run observed. */
 export class ProcedureScript {
   private readonly attempted=new Set<number>();private readonly values=new Map<string,string>();
-  private readonly contexts=new Map<string,string>();private abandoned=false;private drafted=false;
-  constructor(private readonly template:ProcedureTemplate,private readonly jev:JevSystemOneTransport|undefined,private readonly onPaidJudgment:(calls:number)=>void=()=>{},private readonly note:(summary:string)=>void=()=>{}){}
+  private readonly contexts=new Map<string,string>();private abandoned=false;private drafted=false;private completed=false;
+  /** The text this script saved, once it has. */
+  produced:string|null=null;
+  /** `trusted`: the template held up in earlier verified runs, so the host also proposes completion itself. */
+  constructor(private readonly template:ProcedureTemplate,private readonly jev:JevSystemOneTransport|undefined,private readonly onPaidJudgment:(calls:number)=>void=()=>{},private readonly note:(summary:string)=>void=()=>{},readonly trusted=false){}
+  /** The run consists of nothing but this script's reads, its save and the readback of that save. */
+  ownsRun(observations:WorkClientCheckpoint['observations']):boolean{
+    if(this.produced===null||this.abandoned)return false;
+    const drafts=observations.filter(item=>item.invocation.tool_name===DRAFT&&item.invocation.dispatched);
+    return drafts.length===1&&drafts[0]!.receipt.status==='succeeded'&&drafts[0]!.invocation.arguments.text===this.produced
+      &&observations.every(item=>!item.invocation.dispatched||[READ,DRAFT,'office_result_read','office_controlled_run_trace'].includes(item.invocation.tool_name))
+      &&observations.filter(item=>item.invocation.dispatched&&item.invocation.tool_name===READ).length===this.template.reads.length;
+  }
   private stop(reason:string):null{this.abandoned=true;this.note(reason);return null;}
   async next(checkpoint:WorkClientCheckpoint):Promise<ScriptStep|null>{
-    if(this.abandoned||this.drafted)return null;
+    if(this.abandoned)return null;
+    if(this.drafted){
+      // After the save and its readback a trusted template has nothing left for a model to decide.
+      if(!this.trusted||this.completed||!this.ownsRun(checkpoint.observations)||!checkpoint.observations.some(item=>item.invocation.tool_name==='office_result_read'&&item.receipt.status==='succeeded'))return null;
+      this.completed=true;return {complete:true,summary:'The saved procedure was repeated: the same sources were read, the values were taken from the same places, and the result was saved and read back.'};
+    }
     if(checkpoint.observations.some(item=>item.invocation.tool_name===DRAFT&&item.invocation.dispatched))return this.stop('A result was already saved in this run; the saved template is not applied.');
     const urls:string[]=[],observedAt:string[]=[];
     for(let index=0;index<this.template.reads.length;index++){
@@ -147,8 +163,8 @@ export class ProcedureScript {
         if(decision.decider!=='jev'||decision.label!=='same_field')return this.stop('The fast judgment did not confirm a changed value; the AI continues.');
       }
     }
-    this.drafted=true;const now=new Date().toISOString();
-    return {tool:DRAFT,arguments:{format:this.template.format,text:fillTemplate(this.template,this.values,urls,observedAt,now),...(this.template.label?{label:this.template.label}:{})},
+    this.drafted=true;const now=new Date().toISOString();this.produced=fillTemplate(this.template,this.values,urls,observedAt,now);
+    return {tool:DRAFT,arguments:{format:this.template.format,text:this.produced,...(this.template.label?{label:this.template.label}:{})},
       summary:changed.length?`Saving the result from the verified template; ${changed.length} changed value${changed.length===1?'':'s'} confirmed by the fast judgment.`:'Saving the result from the verified template; the pages show the same values.',advance:true};
   }
 }

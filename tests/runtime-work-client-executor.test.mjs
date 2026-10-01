@@ -415,3 +415,13 @@ test('the executor sees recent receipts in full and only the opening of long tex
   assert.ok(JSON.stringify(view).length<JSON.stringify(checkpoint).length/2);
   assert.equal(executorView({...checkpoint,observations:checkpoint.observations.slice(0,3)}).observations[0].receipt.value.text.length,12000);
 });
+
+// Live: one page per model turn made a ten-article task take ten turns, each carrying everything read so far.
+test('one decision can ask for several reads; the host runs them all before the next model turn, and only reads',async()=>{
+  const many={...choose('browser_read',{url:'https://example.test/1'}),also_read:[{tool_name:'browser_read',arguments_json:JSON.stringify({url:'https://example.test/2'})},{tool_name:'send_message',arguments_json:JSON.stringify({text:'hi'})},{tool_name:'browser_read',arguments_json:'not json'},{tool_name:'browser_read',arguments_json:JSON.stringify({url:'https://example.test/3'})}]};
+  const provider=model([many,done()]),host=hooks({tools:[readTool,writeTool]}),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'succeeded');
+  assert.deepEqual(host.executions.map(item=>[item.name,item.args.url]),[['browser_read','https://example.test/1'],['browser_read','https://example.test/2'],['browser_read','https://example.test/3']],'Three reads, in order; the write and the unparsable entry are not run.');
+  assert.equal(provider.calls.length,2,'Three reads cost one model turn.');
+  assert.equal(result.checkpoint.observations.filter(item=>item.invocation.dispatched).length,3);
+});

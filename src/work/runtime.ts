@@ -3,7 +3,7 @@ import {type PackStore} from '../packs/store.js';
 import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
 import {knownLoginSites,readyAuthTargets} from '../swarm/browser-auth.js';
 import {browserHostCompatible,browserPreferenceSchema} from '../browser/executor-contracts.js';
-import {loadHostConfig,type HostConfig,workModelDataApproved} from '../interface/config.js';
+import {loadHostConfig,type HostConfig,workAutonomy,workModelDataApproved} from '../interface/config.js';
 import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {requireCondition} from '../core/contracts.js';
 import {WINDOWS_WORKFLOWS} from '../desktop/windows-workflows.js';
@@ -15,7 +15,7 @@ import {bindWorkIntakeOptions,readWorkIntakeOptions} from './intake-options.js';
 import {connectedSourceCatalog,observedWorkSourceSchemas} from '../packs/source-catalog.js';
 import {sealCollectionContract} from './collection-contract.js';
 import {applyAutoSources} from '../packs/auto-sources.js';
-import {procedureCandidates} from './procedures.js';
+import {identicalProcedure,procedureCandidates} from './procedures.js';
 import {NATIVE_COMPLETION_RESULT,NATIVE_COMPLETION_EVIDENCE,NATIVE_SOURCE_ROWS_COMPLETION_RESULT,NATIVE_WATCH_COMPLETION_RESULT,NATIVE_WATCH_COMPLETION_EVIDENCE} from './completion-checks.js';
 
 const credential=/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u;
@@ -155,6 +155,16 @@ export class WorkRuntime {
       workActivity(this.store,project,work_id,'definition.started','Analyzing the Work instructions, completion conditions and available capabilities.',{stage_id:'definition',status:'running'});
       const previous=work.spec as WorkProposal|null;
       const input={work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:previous,user_directions:this.store.workDirections(project,work_id),user_intake:readWorkIntakeOptions(this.store,project,work_id)};
+      // Shortest path: the same request was planned and verified before. Its plan is used again; no planner call.
+      const twin=!previous&&Object.keys(work.answers).length===0&&workAutonomy(this.config)==='delegated'?identicalProcedure(this.store,project,work.prompt):null;
+      if(twin){
+        const reused=structuredClone(twin.spec) as WorkProposal&{questions?:unknown[]};reused.questions=[];(reused as {procedure_selection?:unknown}).procedure_selection={id:twin.id,fit_reason:'The same request was completed and verified before.'};
+        requireCondition(!leaseLost,'WORK_DEFINITION_LEASE_LOST');assertWorkConnected(this.store,project,work_id);
+        const defined=this.store.finishWorkDefinition(project,work_id,owner,reused,[],'ready',()=>{sealCollectionContract(this.store,this.config,work_id,reused);});
+        workActivity(this.store,project,work_id,'definition.reused','The verified plan of the same earlier request is used again; the planner was not asked.',{stage_id:'definition',status:'ready'});
+        workActivity(this.store,project,work_id,'definition.finished','Work analysis finished; the execution plan is ready.',{stage_id:'definition',status:'ready'});
+        return this.public(defined);
+      }
       const candidates=procedureCandidates(this.store,project,work.prompt);
       const instructions=WORK_DEFINITION_INSTRUCTIONS+'\n'+WORK_PLANNING_CONTEXT_INSTRUCTIONS+'\n'+WORK_CONNECTED_SOURCE_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS+(candidates.length?'\n'+WORK_PROCEDURE_SELECTION_INSTRUCTIONS:''),modelInput={...input,...this.planningContext(),host_execution_facts:HOST_EXECUTION_FACTS,...(candidates.length?{verified_procedure_candidates:candidates}:{})};
       const schema=z.toJSONSchema(workProposalSchema);

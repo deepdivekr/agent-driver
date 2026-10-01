@@ -9,7 +9,7 @@ import {applyAutoSources} from '../packs/auto-sources.js';
 import {paidJudgmentsToday,countPaidJudgment} from '../packs/paid-judgments.js';
 import {ProcedureScript} from './procedure-template.js';
 import {optionalTypeSafeTransportFromHostEnvironment} from '../taskpack/typesafe-jev.js';
-import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,selectedProcedure,similarProcedure,REPLAY_SIMILARITY} from './procedures.js';
+import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,selectedProcedure,similarProcedure,REPLAY_SIMILARITY,TRUSTED_TEMPLATE_RUNS} from './procedures.js';
 import {allocateWorkModels} from './task-models.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {modelSettingsPath,readModelSettings,effectiveModelEnvironment} from '../onboarding/model-settings.js';
@@ -365,8 +365,17 @@ export class WorkSupervisor {
         else if(event.status==='rejected'&&id&&event.code==='WORK_COLLECTION_CONTRACT_NOT_VERIFIED')completionDenial={code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED',check_id:id,verdict:'unknown',...reason};
         if((event.status==='rejected'||event.status==='unavailable')&&verifierOutputCodes.has(event.code))verifierOutputUnusable=event.code;
       }});
+      let script:ProcedureScript|null=null,templateRuns=0;
       const verifyCompletion:NonNullable<Parameters<BoundedWorkClientExecutor['execute']>[1]['verifyCompletion']>=this.options.verifyCompletion??(async(checks,observations,claim)=>{
         guard();verificationCutpoint=true;completionDenial=null;verificationTransportUnavailable=null;verifierOutputUnusable=null;denialReason=null;
+        // Shortest path for a proven repeat: the result is the trusted template filled with values the host itself
+        // took from the same places of the same sources in this run (changed ones confirmed by the fast judgment).
+        // That is a typed, code-checkable contract, so no model is asked. Every tenth such run is still verified in full.
+        if(script?.trusted&&script.ownsRun(observations)&&templateRuns%10!==9){
+          workActivity(this.store,project,row.work_id,'supervisor.verification','Verified in code: the trusted template of this task was repeated on the same sources and the saved result is its output.',{run_id:row.run_id,stage_id:'completion.verify',status:'verified'});
+          workActivity(this.store,project,row.work_id,'supervisor.verification.calls','Independent verification used 0 model calls · verified',{run_id:row.run_id,stage_id:'completion.verify',status:'verified'});
+          return true;
+        }
         const verifierCallStart=model.calls.length;
         const verifierBoundary=()=>{
           const failures=model.calls.slice(verifierCallStart).filter(call=>call.status==='failed').map(call=>call.failure_kind);
@@ -500,10 +509,11 @@ export class WorkSupervisor {
       const reusable=Boolean(offered&&(offered.similarity>=REPLAY_SIMILARITY||chosen?.grade==='regular'));
       const paidOpen=paidJudgmentsToday(this.store,project)<workDelegation(this.config).paid_judgment_daily_calls;
       const fastJudgment=paidOpen?optionalTypeSafeTransportFromHostEnvironment(effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)))).transport??undefined:undefined;
-      const script=offered?.template&&reusable&&!checkpoint?new ProcedureScript(offered.template,fastJudgment,calls=>countPaidJudgment(this.store,project,calls),summary=>workActivity(this.store,project,row.work_id,'procedure.handed_over',summary,{run_id:row.run_id,stage_id:'execution',status:'running'})):null;
+      templateRuns=offered?.template_runs??0;
+      script=offered?.template&&reusable&&!checkpoint?new ProcedureScript(offered.template,fastJudgment,calls=>countPaidJudgment(this.store,project,calls),summary=>workActivity(this.store,project,row.work_id,'procedure.handed_over',summary,{run_id:row.run_id,stage_id:'execution',status:'running'}),templateRuns>=TRUSTED_TEMPLATE_RUNS):null;
             if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
       const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,...(hostSchedule?{host_schedule:hostSchedule}:{}),...(offered?{verified_procedure:procedureGuidance(offered)}:{}),connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason. If spec.collection_contract exists, use its exact recipe through runtime_pack_run without a new runtime_pack_plan. The host verifies every matching observed source row and actual output in code; do not read source pages just to obtain another model approval of covered checks. Reuse an unchanged same-Work receipt via runtime_pack_status for completion-only recovery; never rewrite a successful artifact just for verification. Remaining semantic checks still need their own evidence.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
-        {tools:toolkit.catalog(),guard,signal:controller.signal,...(script?{script:state=>script.next(state)}:offered&&reusable?{replay:offered.steps.filter(step=>!momentBound(step.arguments))}:{}),
+        {tools:toolkit.catalog(),guard,signal:controller.signal,...(script?{script:state=>script!.next(state)}:offered&&reusable?{replay:offered.steps.filter(step=>!momentBound(step.arguments))}:{}),
           toolRequestId:(name,args,fallback)=>toolkit!.requestId(name,args,fallback),
           packRequestRecovery:(invocation,prior)=>toolkit!.packRequestRecovery(invocation,prior),
           checkpoint:saveCheckpoint,
@@ -526,7 +536,7 @@ export class WorkSupervisor {
       if(settingsChangeReasons.has(result.reason??'')&&['retryable_failure','paused'].includes(result.status)&&!customPackWorkBinding(this.store,project,row.work_id))state='queued';
       if(this.stopped&&result.status==='paused')state='queued';
       if(state==='succeeded'&&result.completion_verified){
-        const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations,offered?.id,{keepTemplate:Boolean(script)&&result.model_calls.length<=2});
+        const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations,offered?.id,{keepTemplate:Boolean(script?.ownsRun(result.checkpoint.observations)),templateRun:Boolean(script?.ownsRun(result.checkpoint.observations)),spec});
         if(saved)workActivity(this.store,project,row.work_id,'procedure.saved',`The verified procedure of this Work was saved for similar requests (${saved.steps.length} step${saved.steps.length===1?'':'s'}, verified ${saved.successes} time${saved.successes===1?'':'s'}).`,{run_id:row.run_id,stage_id:'execution',status:'saved'});
       }else if(offered&&['failed','awaiting_review'].includes(state))recordProcedureFailure(this.store,project,offered.id);
       this.finish(row,state,result.reason,{summary:result.summary,text:result.summary,completion_verified:result.completion_verified,checks:spec.completion_checks,model_calls:result.model_calls.length,observations:result.checkpoint.observations.length,...(workAutonomy(this.config)==='delegated'?{policy_version:workPolicyVersion(this.config)}:{})},watchReadyAt,{progressed,...(modelWait?{retryDelayMs:modelRetryDelay(row.attempts)}:{})});
