@@ -76,6 +76,21 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
   `CONFIG_RELOAD_REQUIRED`로 남긴다. 효과가 불확실한 실행은 다시 묶지 않는다.
   커스텀 Pack 회차는 기존 결속을 유지한다(Part B 범위).
 
+### A5. 위험도에 비례한 검증 — 완료(중간 등급 제외)
+- `completionRiskTier(observations)`: 등급은 호스트가 봉인한 닫힌 trace에서만 정한다.
+  trace가 없거나 열려 있거나 receipt가 봉인 뒤 바뀌었거나, 외부 쓰기나 Office 소유가 아닌
+  로컬 쓰기가 있으면 엄격 등급이다.
+- 가벼움 등급(읽기·초안·Office 결과 파일·Pack 산출물만): 원래 요청 검사를 포함한 모든 의미
+  검사를 짧은 판정 1회로 묻는다. 입력은 원래 요청, 검사, 성공 receipt의 내용
+  (결과 파일 본문 12000자, 그 밖 JSON 3000자, trace 진술 4000자, 전체 40KB 이하)이다.
+  receipt별 배치 검사와 leaf 색인은 쓰지 않는다.
+- 분명한 거부(`unsupported`)는 바로 거부하고 이유를 수정 단계로 넘긴다(감사 기록에는 해시만).
+  판단 불가·근거 없는 인용·형식 오류는 기존 엄격 경로로 넘어간다.
+- 감사 기록에 `verifier:'light'`와 `WORK_COMPLETION_LIGHT_VERIFIED`를 남긴다.
+- supervisor 수준 확인: 읽기 전용 Pack Work가 검증 모델 호출 1회(가벼움)로 `succeeded`.
+- 중간 등급(사용자 폴더 쓰기 후 대상 다시 읽기)은 구현하지 않았다. 해당 Work는 엄격 경로다.
+- 새 테스트: `runtime-work-completion-risk-tier`(7개).
+
 ### 테스트 환경 메모
 - 이 컨테이너의 Playwright 1.63은 Chromium 1243을 기대하지만 설치본은 1194다.
   테스트 실행 때만 스크래치 경로에 1194를 1243 이름으로 연결한 shim을 쓴다(커밋하지 않음).
@@ -93,7 +108,13 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
 - ledger 196 RQ, public boundary PASS, diff check PASS.
 - frozen quick suite는 A7에서 최종 소스로 실행한다.
 
+### A5 검증 (fixture 기준)
+- TypeScript build PASS.
+- Work 관련 테스트 전체: 723 PASS / 0 FAIL, 새 `runtime-work-completion-risk-tier` 7 PASS.
+  기존 fixture는 가벼움 지시문을 모르므로 형식 오류로 엄격 경로로 넘어가 같은 결과를 낸다.
+
 ## 다음 행동
 
-A5(위험도 비례 검증), A6(지시문 축소), A7(frozen quick suite와 진행 기록)을 진행한다.
-Swarm 결과 경로의 수정 루프(A2 잔여)는 A5 이후 다시 판단한다.
+A6(지시문 축소: 금지 문장 목록 → 코드 거부 테스트 → 문장 제거 → 크기 테스트),
+A7(frozen quick suite와 진행 기록)을 진행한다.
+Swarm 결과 경로의 수정 루프(A2 잔여)와 중간 등급(A5 잔여)은 A6 이후 다시 판단한다.
