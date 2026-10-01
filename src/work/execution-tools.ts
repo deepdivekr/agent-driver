@@ -873,13 +873,21 @@ export class WorkExecutionTools {
         if(unusualSearchTraffic(url,observed))this.environmentBlockedQueries.add(search.query);
         this.allowedUrls.delete(url);this.allowedUrls.delete(new URL(observed.url).href);
         workActivity(this.store,this.config.project.id,this.workId,'search.blocked','The public search provider returned an observed access challenge. No login, challenge bypass or browser replay was attempted.',{tool_name:name,status:'retryable_failure',reason:'WORK_SEARCH_PROVIDER_CHALLENGE',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{}),source:{url:safeControlText(observed.url,2048),title:safeControlText(observed.title,200),observed_at:observed.observed_at}});
-        return {...observed,links,omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',search_provider:search.provider,search_access:'challenge_observed',status:'retryable_failure',reason:'WORK_SEARCH_PROVIDER_CHALLENGE',...(unusualSearchTraffic(url,observed)?(this.foregroundBrowser()?{next_action:browser.target?.engine==='aside'?'user_browser_confirmation':'connect_aside',environment_block:true,provider_change_allowed:false}:{next_action:'search_with_bing_or_open_a_known_official_page',environment_block:true,provider_change_allowed:true}):{})};
+        // A page's text is what a result rests on; its link list is navigation. The receipt keeps the text whole and as
+        // many links as fit beside it (live: 120 links stayed and the article body was cut to a third, so neither the
+        // executor nor verification saw the article). More links are read with office_browser_links.
+        const fitted=[...links];
+        const fits=()=>Buffer.byteLength(JSON.stringify({...observed,links:fitted}))<=14500;
+        while(fitted.length>8&&!fits())fitted.length=Math.max(8,Math.floor(fitted.length*0.8));
+        return {...observed,links:fitted,...(fitted.length<links.length?{links_not_shown:links.length-fitted.length}:{}),omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',search_provider:search.provider,search_access:'challenge_observed',status:'retryable_failure',reason:'WORK_SEARCH_PROVIDER_CHALLENGE',...(unusualSearchTraffic(url,observed)?(this.foregroundBrowser()?{next_action:browser.target?.engine==='aside'?'user_browser_confirmation':'connect_aside',environment_block:true,provider_change_allowed:false}:{next_action:'search_with_bing_or_open_a_known_official_page',environment_block:true,provider_change_allowed:true}):{})};
       }
       this.allowedUrls.add(new URL(observed.url).href);
       for(const link of links){try{const next=assertBrowserUrl(link.url,[new URL(link.url).origin],this.config.environment==='fixture');if(this.allowedUrls.has(next.href)||next.origin===origin||next.protocol==='https:'&&!privateHostname(next.hostname))this.allowedUrls.add(next.href);}catch{}}
       workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${observed.title} · ${observed.url}`,{tool_name:name,status:'succeeded',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{}),source:{url:safeControlText(observed.url,2048),title:safeControlText(observed.title,200),observed_at:observed.observed_at}});
       // Never rewrite observed hrefs or fill absent links with model guesses.
-      return {...observed,links,omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',...(socialSite?{social_site:socialSite,social_access:'signed_in_marker_observed'}:{}),...(search?{search_provider:search.provider,search_access:'unclassified_dom'}:{})};
+      const fittedLinks=[...links];
+      while(fittedLinks.length>8&&Buffer.byteLength(JSON.stringify({...observed,links:fittedLinks}))>14500)fittedLinks.length=Math.max(8,Math.floor(fittedLinks.length*0.8));
+      return {...observed,links:fittedLinks,...(fittedLinks.length<links.length?{links_not_shown:links.length-fittedLinks.length}:{}),omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',...(socialSite?{social_site:socialSite,social_access:'signed_in_marker_observed'}:{}),...(search?{search_provider:search.provider,search_access:'unclassified_dom'}:{})};
     }
     requireCondition(this.catalog().some(t=>t.name===name),'WORK_TOOL_NOT_AVAILABLE');
     const input=this.normalizedInput(name,args,requestId);
