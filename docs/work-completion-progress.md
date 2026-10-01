@@ -359,8 +359,10 @@ Part A 잔여(Swarm 수정 루프, 중간 등급, 지시문 축소)보다 완료
 - 사다리 실측(Aside 등록, 6ebf753): "구글에서 … 검색해 첫 결과를 저장" 업무에서 headless Google이 차단되자 Aside로 1회 전환해
   Google 결과를 관측하고 저장·검증까지 `succeeded`(326초, 엄격 검증 5회). Aside 첫 작업 시간 초과(`operation_refused`)가 재시도 뒤에도
   1회 남아 실행 재시도로 넘어갔다. 9차 세트 7건에서는 백그라운드가 전부 처리해 Aside 전환이 0회였다.
-- 검증: frozen quick suite 1988/1989(24a92ca; 남은 1건은 기본 검색 제공자 기대값으로 수정 완료), 이후 변경분은 관련 테스트 묶음 통과.
-  최종 suite 결과는 아래 "최종 검증"에 적는다.
+- 최종 검증(d83fc80): frozen quick suite **1990/1990 PASS**, BLOCKED_ENV 0, NOT_RUN 0. public boundary PASS.
+- 환경 메모: 측정 중 디스크가 가득 찼다(여유 90MB). 원인은 9/29~9/30의 릴리스 설치 검증(`scripts/release/verify-install.mjs`)이
+  남긴 임시 설치 7개(약 9GB)였고, 소유자 확인 후 삭제했다. 스크립트는 이제 보고서 작성 뒤 임시 설치를 지운다
+  (`AGENT_OFFICE_KEEP_INSTALL=1`이면 유지). 제품 자체는 추적 파일 15MB다.
 
 ### 남은 것
 - B2(자동 Pack화·성적), B3(계획 단계 Pack 선택), B4(재생·Jev), B6(실행 중 방향 전환), B7은 시작하지 않았다.
