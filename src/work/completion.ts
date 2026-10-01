@@ -722,6 +722,19 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const largest=assembled.filter(item=>!item.keep&&item.content.length>1500).sort((a,b)=>b.content.length-a.content.length)[0];if(!largest)break;
       largest.content=largest.content.slice(0,Math.max(1500,Math.floor(largest.content.length/2)));largest.truncated=true;
     }
+    // The readback of a saved result repeats its whole text. It is shown once: the readback keeps its identity
+    // line and says which receipt holds the identical text (live: a 9.5 KB digest shown twice left no room for its
+    // sources and the judgment was never asked).
+    const texts=new Map<string,string>();
+    for(const item of assembled){
+      const at=item.content.indexOf('\n');if(!item.keep||at<0||!['office_result_draft','office_result_read'].includes(item.tool_name))continue;
+      const body=item.content.slice(at+1),first=texts.get(body);
+      if(first&&body.length>400)item.content=`${item.content.slice(0,at)}\n[The text read back is identical to the saved result shown in ${first}.]`;else texts.set(body,item.evidence_id);
+    }
+    for(let pass=0;pass<40&&sized()>38000;pass++){
+      const largest=assembled.filter(item=>!item.keep&&item.content.length>1500).sort((a,b)=>b.content.length-a.content.length)[0];if(!largest)break;
+      largest.content=largest.content.slice(0,Math.max(1500,Math.floor(largest.content.length/2)));largest.truncated=true;
+    }
     const evidence=assembled.map(({full_length:_full,keep:_keep,leaves,...item})=>{shown.set(item.evidence_id,{content:item.content,leaves});return item;});
     const input={...request,evidence};
     if(!evidence.length||Buffer.byteLength(JSON.stringify(input))>40000)return null;

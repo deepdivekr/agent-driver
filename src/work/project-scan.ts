@@ -32,6 +32,8 @@ export interface ProjectScan {
   readme_excerpt:string|null;commands:string[];scripts:string[];evidence:ProjectSignalEvidence[];unknowns:string[];recommendations:string[];
   limits:{max_files:number;max_bytes:number;truncated:boolean;context_chars?:number;context_truncated?:boolean};
   authority:{execution:false;project_write:false;jev_call:false};
+  /** Public HTTPS addresses written in the files of the owner's import scope (feeds, public APIs). No credentials. */
+  public_urls?:string[];
 }
 function safeText(value:string,max=160){
   const cleaned=redact(value).replace(/[\r\n\t\u0000-\u001f]/gu,' ').replace(/https?:\/\/\S+/giu,'[URL]').trim();
@@ -117,7 +119,7 @@ export async function scanProject(rawPath:string,scope=''):Promise<ProjectScan>{
     for(const path of candidates)if(!relevance.has(path)&&strong.some(stem=>basename(path).toLowerCase().startsWith(stem)))relevance.set(path,1);
   }
   candidates.sort((a,b)=>(relevance.get(b)??0)-(relevance.get(a)??0)||Number(preferred.has(basename(b)))-Number(preferred.has(basename(a)))||Number(implementationExtensions.has(extname(b)))-Number(implementationExtensions.has(extname(a)))||relative(root,a).localeCompare(relative(root,b)));
-  const evidence:ProjectSignalEvidence[]=[],found=new Set<string>(),digest=createHash('sha256'),commands=new Set<string>(),scripts=new Set<string>();let filesRead=0,bytesRead=0,contextChars=0,generalContextChars=0,contextTruncated=false,scopeEvidence=0,purpose:string|null=null,readmeExcerpt:string|null=null;
+  const evidence:ProjectSignalEvidence[]=[],found=new Set<string>(),digest=createHash('sha256'),commands=new Set<string>(),scripts=new Set<string>();const publicUrls=new Set<string>();let filesRead=0,bytesRead=0,contextChars=0,generalContextChars=0,contextTruncated=false,scopeEvidence=0,purpose:string|null=null,readmeExcerpt:string|null=null;
   for(const path of candidates){
     if(filesRead>=MAX_FILES||bytesRead>=MAX_BYTES){truncated=true;break;}
     const resolved=await realpath(path).catch(()=>null);if(!resolved||!resolved.startsWith(root+sep))continue;
@@ -136,6 +138,11 @@ export async function scanProject(rawPath:string,scope=''):Promise<ProjectScan>{
       if(readmeExcerpt===null)readmeExcerpt=safeText(content.replace(/^#.*$/gmu,'').slice(0,900),500);
     }
     if(basename(path)==='package.json')try{const parsed=JSON.parse(content) as {description?:unknown;scripts?:Record<string,unknown>};if(purpose===null&&typeof parsed.description==='string')purpose=safeText(parsed.description);for(const name of Object.keys(parsed.scripts??{}).slice(0,20))if(/^[a-z0-9:_-]{1,50}$/iu.test(name))scripts.add(name);}catch{}
+    if(relevance.has(path))for(const match of content.matchAll(/https:\/\/[A-Za-z0-9.-]+\.[A-Za-z]{2,}[^\s'"`<>)\]]*/gu)){
+      try{const url=new URL(match[0].replace(/[.,;:]+$/u,''));
+        if(publicUrls.size<30&&!url.username&&!url.password&&!/^(?:localhost|127\.|10\.|192\.168\.)/u.test(url.hostname)&&!/\.(?:local|internal|example|test)$/u.test(url.hostname)&&![...url.searchParams.keys()].some(key=>/token|key|secret|auth|password|session/iu.test(key))&&!/\$\{|%7B/u.test(url.href))publicUrls.add(url.href);
+      }catch{/* Not an address. */}
+    }
     const lines=content.split(/\r?\n/gu);
     // An in-scope file is evidence in itself: its opening is shown even when no generic signal matches.
     if(relevance.has(path)&&evidence.length<100&&scopeEvidence<24){
@@ -167,5 +174,5 @@ export async function scanProject(rawPath:string,scope=''):Promise<ProjectScan>{
   if(!found.has('delivery'))unknowns.push('결과 전달 경로 미확인');
   if(kind==='unknown')unknowns.push('에이전틱 흐름 또는 봇의 실제 동작은 추가 확인 필요');
   if(truncated)unknowns.push('스캔 크기·깊이·근거 수 제한으로 읽지 못한 코드가 있음');
-  return {format:1,root,kind,purpose,files_read:filesRead,bytes_read:bytesRead,content_sha256:digest.digest('hex'),readme_excerpt:readmeExcerpt,commands:[...commands],scripts:[...scripts],evidence,unknowns,recommendations:recommendation(kind,found),limits:{max_files:MAX_FILES,max_bytes:MAX_BYTES,truncated,context_chars:contextChars,context_truncated:contextTruncated},authority:{execution:false,project_write:false,jev_call:false}};
+  return {format:1,root,kind,purpose,files_read:filesRead,bytes_read:bytesRead,content_sha256:digest.digest('hex'),readme_excerpt:readmeExcerpt,commands:[...commands],scripts:[...scripts],evidence,unknowns,recommendations:recommendation(kind,found),...(publicUrls.size?{public_urls:[...publicUrls]}:{}),limits:{max_files:MAX_FILES,max_bytes:MAX_BYTES,truncated,context_chars:contextChars,context_truncated:contextTruncated},authority:{execution:false,project_write:false,jev_call:false}};
 }

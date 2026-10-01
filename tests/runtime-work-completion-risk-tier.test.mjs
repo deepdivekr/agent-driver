@@ -218,15 +218,18 @@ test('A7: a page read is shown with its links before its text',async t=>{
 // Live: a news digest that read sixty pages went to twenty-seven strict batches and nine minutes without a decision.
 test('A5: a wide run shows the verifier the reads its saved result rests on and lists the others; one light call decides',async t=>{
   const page=(turn,url,body)=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{url},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url,title:`Title ${turn}`,text:body+' '+'filler '.repeat(900)},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn%60)});
-  const pages=Array.from({length:30},(_,i)=>page(i,`https://example.org/post-${i}`,`Post ${i} says agents improved.`));
-  const digest='Digest of the sources read on 2026-10-01: 1. Post 3 — https://example.org/post-3 — agents improved. 2. Post 17 — https://example.org/post-17 — agents improved.';
-  const saved={...draft(30),receipt:{...draft(30).receipt,value:{...draft(30).receipt.value,text:digest}}};
+  // A long digest that names twelve of its sources, saved and read back in full.
+  const digest='Digest of the sources read on 2026-10-01: 1. Post 3 — https://example.org/post-3 — agents improved. 2. Post 17 — https://example.org/post-17 — agents improved. '+[4,6,8,10,12,14,16,18,20,22].map(i=>`Post ${i} — https://example.org/post-${i}/ — agents improved.`).join(' ')+' Limits: '+'no author stated; '.repeat(520);
+  const pages=Array.from({length:29},(_,i)=>page(i,`https://example.org/post-${i}${i%2?'':'/'}`,`Post ${i} says agents improved.`));
+  const saved={...draft(29),receipt:{...draft(29).receipt,value:{...draft(29).receipt.value,text:digest}}};
+  const readback={invocation:{request_id:'read-1',turn:30,stage_id:'write',tool_name:'office_result_read',arguments:{request_id:'draft-1'},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{status:'succeeded',request_id:'draft-1',text:digest,bytes:digest.length},evidence_ids:['ev-read-1'],effect_state:'none',retry_safe:true},observed_at:at(30)};
   const model=fixture(input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:['ev-draft-1'],quotes:[{evidence_id:'ev-draft-1',quote:'Post 17 — https://example.org/post-17'}],reason:'The saved digest names the posts and they are shown.'}))})),audits=[];
   const notes=[],verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event),progress:event=>notes.push(event.summary)});
-  const all=sealed(t,[...pages,saved]),verdict=await verify(checks,all,claimFor(['ev-draft-1']));assert.equal(verdict,true,JSON.stringify({tier:completionRiskTier(all),kinds:model.kinds.slice(0,2),notes:notes.slice(0,3)}));
-  assert.deepEqual(model.kinds,['light'],'Thirty-one receipts are decided by one call.');
+  const all=sealed(t,[...pages,saved,readback]),verdict=await verify(checks,all,claimFor(['ev-draft-1']));assert.equal(verdict,true,JSON.stringify({tier:completionRiskTier(all),kinds:model.kinds.slice(0,2),notes:notes.slice(0,3)}));
+  assert.deepEqual(model.kinds,['light'],'Thirty-two receipts are decided by one call.');
   const input=model.inputs[0],shownIds=input.evidence.map(item=>item.evidence_id);
   assert.ok(shownIds.includes('ev-source-3')&&shownIds.includes('ev-source-17')&&shownIds.includes('ev-draft-1'));assert.ok(!shownIds.includes('ev-source-5'),'A read the result does not name is not shown in full.');
-  assert.equal(input.other_reads_not_shown.length,27,'post-1 is a prefix of the named post-17 and is shown too.');assert.deepEqual(input.other_reads_not_shown[0],{tool_name:'office_browser_read',url:'https://example.org/post-0',title:'Title 0'});
+  assert.ok(input.other_reads_not_shown.length>=14&&input.other_reads_not_shown.some(item=>item.url==='https://example.org/post-5'));
+  assert.ok(digest.length>9000);assert.match(input.evidence.find(item=>item.evidence_id==='ev-read-1').content,/identical to the saved result shown in ev-draft-1/u,'The readback does not repeat the 9 KB text.');
   assert.ok(Buffer.byteLength(JSON.stringify(input))<=40000);
 });
