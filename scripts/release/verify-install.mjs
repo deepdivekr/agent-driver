@@ -1,7 +1,7 @@
 // Real package installation in temporary homes; the seeded Work uses an injected model.
 // No personal credentials, production processes, or real-site effects are used.
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,readFile,writeFile,appendFile} from 'node:fs/promises';
+import {mkdtemp,mkdir,readFile,writeFile,appendFile,rm} from 'node:fs/promises';
 import {spawn} from 'node:child_process';
 import {tmpdir,homedir} from 'node:os';
 import {join,resolve} from 'node:path';
@@ -97,5 +97,8 @@ try{
 finally{
   report.finished_at=new Date().toISOString();
   const path=join(evidence,runId+'.json');await writeFile(path,JSON.stringify(report,null,2)+'\n');
-  console.log(JSON.stringify({status:report.status,evidence:path,root:base,error:report.error}));
+  // Each run installs five full copies (over 1 GB). Leftovers from earlier runs filled a disk (2026-10-01), so the
+  // installs are removed once the report is written. Set AGENT_OFFICE_KEEP_INSTALL=1 to inspect a failed run.
+  const kept=process.env.AGENT_OFFICE_KEEP_INSTALL==='1';if(!kept)await rm(base,{recursive:true,force:true}).catch(()=>{});
+  console.log(JSON.stringify({status:report.status,evidence:path,root:kept?base:null,error:report.error}));
 }
