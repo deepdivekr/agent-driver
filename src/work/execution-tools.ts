@@ -108,7 +108,11 @@ export async function draftPublicForm(input:z.infer<typeof formDraftInput>){
     return {status:'succeeded',url:entryUrl,title:await page.title(),fields,filled:fields.length,submitted:false,non_get_requests:blocked,navigated_away:false,screenshot_sha256:sha(screenshot),screenshot_bytes:screenshot.length,provenance:'owned_headless_form_draft',executor:'playwright',effect:'draft_only',observed_at:new Date().toISOString(),note:'The draft existed only in this runtime-owned page, which is now closed. No request other than GET could leave the page.'};
   }finally{await browser.close().catch(()=>{});}
 }
-const browserInput=z.object({url:z.string().url().max(4096),offset:z.number().int().min(0).max(8_000_000).default(0),max_bytes:z.number().int().min(1000).max(60000).default(12000)}).strict();
+// One read returns at most this much text. A receipt larger than the checkpoint keeps is cut in the middle, and
+// verification cannot judge a cut receipt (live: a 28 KB page compacted to 14 KB, "ends mid-link"). The rest of a
+// page is read with the next offset.
+const READ_PAGE_BYTES=10000;
+const browserInput=z.object({url:z.string().url().max(4096),offset:z.number().int().min(0).max(8_000_000).default(0),max_bytes:z.number().int().min(1000).max(60000).default(10000).transform(value=>Math.min(value,READ_PAGE_BYTES))}).strict();
 const textResourcePath=/\.(?:csv|tsv|json|geojson|txt|xml|atom|rss)$/iu,textResourceType=/^(?:text\/|application\/(?:json|geo\+json|xml|csv|rss\+xml|atom\+xml))/iu;
 const TEXT_RESOURCE_LIMIT=8_000_000;
 /** A public text resource (a CSV/JSON feed) is read by the host over HTTPS,

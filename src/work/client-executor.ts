@@ -293,7 +293,9 @@ export function executorView(checkpoint:WorkClientCheckpoint):WorkClientCheckpoi
 }
 /** The executor is told how far the run has gone. A wide task has no natural end to exploring (live: ninety reads in
  * twenty minutes and no saved result); past the mark it is asked to save what is established and name what is not. */
-const WRAP_UP_READS=24,WRAP_UP_SECONDS=420,READ_LIMIT_BEFORE_RESULT=30,READBACK_TOOLS=new Set(['office_result_read','runtime_pack_status','office_schedule_status','office_pack_source_read']);
+// 22 reads leave room in the 32-receipt window for the save, its readback and the reads of a correction (live: a
+// correction's reads pushed cited receipts out and the Work failed on a claim to evidence that was gone).
+const WRAP_UP_READS=16,WRAP_UP_SECONDS=420,READ_LIMIT_BEFORE_RESULT=22,READBACK_TOOLS=new Set(['office_result_read','runtime_pack_status','office_schedule_status','office_pack_source_read']);
 export function runBudget(checkpoint:WorkClientCheckpoint,nowMs=Date.now()):{run_budget?:{reads_done:number;elapsed_seconds:number;wrap_up:true;instruction:string}}{
   const dispatched=checkpoint.observations.filter(item=>item.invocation.dispatched&&item.invocation.tool_name!=='office_controlled_run_trace');
   if(!dispatched.length||dispatched.some(item=>item.receipt.status==='succeeded'&&item.invocation.effect!=='read_only'))return {};
@@ -673,7 +675,7 @@ export class BoundedWorkClientExecutor {
           if(after.length>=3){await refuse('WORK_CLIENT_COMPLETION_REPAIR_TOOL_BUDGET','This correction attempt has used its three tool dispatches. Propose complete with the evidence now available, or wait with a concrete reason.');continue;}
         }
         // The checkpoint keeps the latest 32 receipts, and verification can only judge what is kept. A run that has
-        // not saved a result yet stops reading at 30, so the result it then saves rests on receipts that still exist
+        // not saved a result yet stops reading at the limit, so the result it then saves rests on receipts that still exist
         // (live: sixty reads, and the digest's sources had already left the window).
         if(tool.effect==='read_only'&&!READBACK_TOOLS.has(tool.name)&&!checkpoint.observations.some(item=>item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.invocation.effect!=='read_only')
           &&(checkpoint.evicted_observations?.count??0)+checkpoint.observations.filter(item=>item.invocation.dispatched).length>=READ_LIMIT_BEFORE_RESULT){

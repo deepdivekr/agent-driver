@@ -680,11 +680,11 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       if(item.receipt.status!=='succeeded')continue;
       if(['local_write','external_write'].includes(item.invocation.effect)&&item.receipt.effect_state!=='verified')return null;
       // The host's own trace of a long run is larger than a tool receipt; it is shown by its statements, not whole.
-      const serialized=JSON.stringify(item.receipt.value);if(typeof serialized!=='string'||item.invocation.tool_name!==controlledTraceTool&&Buffer.byteLength(serialized)>16000)return null;
+      const serialized=JSON.stringify(item.receipt.value);if(typeof serialized!=='string'||item.invocation.tool_name!==controlledTraceTool&&Buffer.byteLength(serialized)>16000){lightNote=`a receipt of ${item.invocation.tool_name} is larger than one judgment can hold`;return null;}
       const fingerprint=hashJson({value:item.receipt.value,effect_state:item.receipt.effect_state});
       for(const id of item.receipt.evidence_ids){if(!identifier.safeParse(id).success||fingerprints.has(id)&&fingerprints.get(id)!==fingerprint)return null;fingerprints.set(id,fingerprint);evidenceIds.add(id);}
     }
-    if(claim.completed_checks.some(check=>check.evidence_ids.length===0||check.evidence_ids.some(id=>!evidenceIds.has(id))))return null;
+    if(claim.completed_checks.some(check=>check.evidence_ids.length===0||check.evidence_ids.some(id=>!evidenceIds.has(id)))){lightNote='the completion claim cites a receipt that is no longer in the run record';return null;}
     const turn=Math.max(0,...observations.map(item=>item.invocation.turn+1)),stage_id='completion.verify';
     const superseded=supersededOutputEvidence(observations),shown=new Map<string,{content:string;leaves:string[]}>();
     // A wide run (a digest of many pages) cannot show every page it read. The saved result says which sources it
@@ -731,13 +731,13 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const body=item.content.slice(at+1),first=texts.get(body);
       if(first&&body.length>400)item.content=`${item.content.slice(0,at)}\n[The text read back is identical to the saved result shown in ${first}.]`;else texts.set(body,item.evidence_id);
     }
-    for(let pass=0;pass<40&&sized()>38000;pass++){
+    for(let pass=0;pass<40&&sized()>(wide?54000:38000);pass++){
       const largest=assembled.filter(item=>!item.keep&&item.content.length>1500).sort((a,b)=>b.content.length-a.content.length)[0];if(!largest)break;
       largest.content=largest.content.slice(0,Math.max(1500,Math.floor(largest.content.length/2)));largest.truncated=true;
     }
     const evidence=assembled.map(({full_length:_full,keep:_keep,leaves,...item})=>{shown.set(item.evidence_id,{content:item.content,leaves});return item;});
     const input={...request,evidence};
-    if(!evidence.length||Buffer.byteLength(JSON.stringify(input))>40000)return null;
+    if(!evidence.length||Buffer.byteLength(JSON.stringify(input))>(wide?56000:40000)){lightNote=`the evidence does not fit one call (${Buffer.byteLength(JSON.stringify(input))} bytes)`;return null;}
     await guarded();await options.progress?.({kind:'model.started',turn,stage_id,summary:'Light verification: reads, drafts and Office-owned outputs only; one compact semantic check.'});await guarded();
     let answer:z.infer<typeof lightVerificationSchema>;
     try{await guarded();answer=lightVerificationSchema.parse(await model.call('verify',WORK_COMPLETION_LIGHT_INSTRUCTIONS,input,z.toJSONSchema(lightVerificationSchema)));await guarded();}
