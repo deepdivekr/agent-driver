@@ -5,7 +5,9 @@ const args=process.argv.slice(2),command=args[0]??'help',options=new Map<string,
 // Default stdio is only a bridge to the shared service. Explicit-config stdio
 // remains a bounded compatibility path; neither preloads unrelated commands.
 async function dispatch():Promise<boolean>{
-  if(command==='mcp'&&args.length===1){const {approvedMcpConfigPath}=await import('./onboarding/connection.js');await (await import('./interface/mcp-proxy.js')).serveMcpProxy(approvedMcpConfigPath());return true;}
+  // An MCP client the owner registered starts `agent-office mcp`: that is the same choice of the default
+  // non-interfering mode as running connect, so a first start records it instead of closing the connection.
+  if(command==='mcp'&&(args.length===1||args.length===2&&args[1]==='--all-tools')){const {approvedMcpConfigPath,approveNonInterferingConnection}=await import('./onboarding/connection.js');await approveNonInterferingConnection();await (await import('./interface/mcp-proxy.js')).serveMcpProxy(approvedMcpConfigPath(),{allTools:args[1]==='--all-tools'});return true;}
   if(command==='mcp-service'){
     requireCondition(args.length===4&&['start','stop','status','headers'].includes(args[1]??'')&&args[2]==='--config'&&args[3],'INVALID_OPTIONS');
     const manager=await import('./interface/mcp-service-manager.js');

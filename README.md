@@ -114,6 +114,11 @@ with Aside connected ([record](docs/work-completion-acceptance-set.md)). Each to
 
 How it behaves by default:
 
+- **Small MCP surface.** `agent-office mcp` lists 10 Work tools (about 2k tokens) instead of all 114 (about 29k).
+  Every other tool keeps its name and stays callable; `agent-office mcp --all-tools` lists them all.
+- **Works right after install.** `agent-office connect` records the default non-interfering mode, so MCP starts
+  without another click. The first Work asks once for permission to send its text to your AI.
+
 - **Ask first.** The Work form asks the conditions that matter before it starts. Uncheck it for a quick run.
 - **Runs to the result.** After you allow AI use once, a Work you start runs to its result and keeps its own
   schedule (`work.autonomy: delegated`). Submissions, payments and messages to other people still ask you.

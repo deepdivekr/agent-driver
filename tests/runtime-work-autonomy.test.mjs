@@ -60,3 +60,15 @@ test('B1: a flat model proposal becomes a schedule and a stated cadence without 
   assert.equal(cadenceInterval('다음 달 첫 영업일에 한 번'),null);
   for(const rule of ['Every day at 20:00 in Asia/Seoul','매일 오전 9시에 확인','daily at 9 am'])assert.equal(cadenceInterval(rule),null,'A rule with a clock time is left to the normalizer: '+rule);
 });
+
+// Clean-install check: the full MCP surface is 114 tools and about 115 KB of descriptions in every client
+// session. The default listing is the Work surface; every other tool keeps its name and stays callable.
+test('B1: the default MCP listing is the compact Work surface and can be widened explicitly',async()=>{
+  const {COMPACT_MCP_TOOLS,compactMcpTools}=await import('../dist/interface/mcp-proxy.js'),{tools}=await import('../dist/interface/catalog.js');
+  const all=Object.keys(tools).map(name=>({name})),listed=compactMcpTools(all).map(tool=>tool.name);
+  assert.ok(all.length>100,'The full catalog stays intact for callers that name a tool.');
+  assert.ok(listed.length<=12&&listed.length>=8,String(listed.length));
+  for(const name of ['runtime_work_start','runtime_work_status','runtime_work_answer','runtime_work_result'])assert.ok(listed.includes(name),name);
+  assert.ok([...COMPACT_MCP_TOOLS].every(name=>Object.hasOwn(tools,name)),'Every listed name is a real tool.');
+  assert.ok(!listed.some(name=>/^runtime_(?:pack|swarm|terminal|coding|windows|files)_/u.test(name)));
+});
