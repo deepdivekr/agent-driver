@@ -368,3 +368,19 @@ test('subscription exhaustion never consumes an ambient paid API key',async t=>{
   const configured=new ConfiguredStructuredModel(path,{OPENAI_API_KEY:'fixture-not-real-paid-key-12345'}, {api:()=>({calls:[],async call(){paid++;return done();}}),subscription:()=>({calls:[],async call(){throw Error('STRUCTURED_MODEL_UNAVAILABLE');}})});
   const result=await new BoundedWorkClientExecutor(configured).execute(request,hooks());assert.equal(result.status,'waiting_model');assert.equal(paid,0);
 });
+
+// Plan B4, replay. Live: guidance alone did not shorten a repeated request (6 model turns both times). The read
+// steps of a verified procedure are proposed by the host in place of model turns; everything after is the normal loop.
+test('B4: verified read steps are replayed without a model turn; writes, unknown tools and already observed reads are not',async()=>{
+  const replay=[{tool:'browser_read',arguments:{url:'https://example.test/news'}},{tool:'send_message',arguments:{text:'hi'}},{tool:'gone_tool',arguments:{}},{tool:'browser_read',arguments:{url:'https://example.test/news'}}];
+  const provider=model([done()]),host=hooks({tools:[readTool,writeTool],replay}),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);
+  assert.deepEqual(host.executions.map(item=>[item.name,item.args]),[['browser_read',{url:'https://example.test/news'}]],'One read is dispatched through the normal tool path; the write and the duplicate are never proposed.');
+  assert.equal(provider.calls.length,1,'The model is asked only for the decision after the replayed read.');
+  assert.deepEqual(host.events.filter(event=>['procedure.replayed','model.started'].includes(event.kind)).map(event=>event.kind),['procedure.replayed','model.started']);
+  const plain=model([choose(),done()]);await new BoundedWorkClientExecutor(plain).execute(request,hooks());assert.equal(plain.calls.length,2,'Without a procedure the same Work takes two model turns.');
+  // A replayed read that fails is an ordinary failed observation; the model continues from it.
+  const failing=model([choose('browser_read',{url:'https://example.test/other'}),done()]);let n=0;
+  const recovered=await new BoundedWorkClientExecutor(failing).execute(request,hooks({replay:[replay[0]],async executeTool(){return n++===0?{status:'retryable_failure',value:{error:'TIMEOUT'},evidence_ids:[],effect_state:'none',retry_safe:true}:receipt;}}));
+  assert.equal(recovered.status,'succeeded');assert.equal(failing.calls.length,2);
+});

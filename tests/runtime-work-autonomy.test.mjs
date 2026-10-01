@@ -81,7 +81,7 @@ test('B1: the default MCP listing is the compact Work surface and can be widened
 
 // B2–B4 first slice: a verified Work leaves its procedure; a similar later request gets it as guidance.
 test('B2: a verified procedure is saved, offered to a similar request, and dropped when it keeps failing',async t=>{
-  const {PackStore}=await import('../dist/packs/store.js'),{recordVerifiedProcedure,similarProcedure,recordProcedureFailure,procedureSteps,requestTerms,procedureGuidance}=await import('../dist/work/procedures.js');
+  const {PackStore}=await import('../dist/packs/store.js'),{recordVerifiedProcedure,similarProcedure,recordProcedureFailure,procedureSteps,requestTerms,procedureGuidance,REPLAY_SIMILARITY}=await import('../dist/work/procedures.js');
   const root=await mkdtemp(join(tmpdir(),'work-procedure-')),store=new PackStore(join(root,'runtime.sqlite'));t.after(async()=>{store.close();await rm(root,{recursive:true,force:true});});
   const observation=(turn,tool,args,status='succeeded',dispatched=true)=>({invocation:{request_id:`r-${turn}`,turn,stage_id:'s',tool_name:tool,arguments:args,effect:'read_only',dispatched},receipt:{status,value:{},evidence_ids:[`e-${turn}`],effect_state:'none',retry_safe:true},observed_at:new Date().toISOString()});
   const run=[observation(0,'office_web_search',{query:'python downloads',provider:'google'},'retryable_failure'),observation(1,'office_browser_read',{url:'https://www.python.org/downloads/',offset:0,max_bytes:12000}),observation(2,'office_result_draft',{format:'json',text:'{"long":"content"}',label:'versions',request_id:'x'}),observation(3,'office_result_read',{request_id:'r-2'}),observation(4,'office_controlled_run_trace',{})];
@@ -91,10 +91,50 @@ test('B2: a verified procedure is saved, offered to a similar request, and dropp
   assert.equal(similarProcedure(store,'p',request),null);
   const saved=recordVerifiedProcedure(store,'p','work-1',request,run);assert.equal(saved.successes,1);
   const again=similarProcedure(store,'p','Python과 Node.js 최신 안정 버전을 공식 사이트에서 확인해 JSON 파일로 저장해줘');
-  assert.equal(again.id,saved.id);assert.ok(again.similarity>=0.5);assert.match(procedureGuidance(again).meaning,/guidance, not evidence/u);
+  assert.equal(again.id,saved.id);assert.ok(again.similarity>=REPLAY_SIMILARITY,'Particles do not make a reworded request a different task (live: 0.5 before stemming).');
+  assert.equal(recordVerifiedProcedure(store,'p','work-1b','Python과 Node.js의 최신 안정 버전을 공식 사이트에서 확인해 JSON 파일로 저장해줘',run,again.id).successes,2,'A guided run that passed verification is the offered procedure\'s next success, not a duplicate.');
+  assert.equal(store.hermesState.prepare('SELECT count(*) c FROM office_procedure').get().c,1);assert.match(procedureGuidance(again).meaning,/guidance, not evidence/u);
   assert.equal(similarProcedure(store,'p','USGS 공개 피드에서 지난 24시간 지진을 CSV 저장해줘'),null,'An unrelated request gets nothing.');
   assert.equal(similarProcedure(store,'other-project',request),null,'Procedures stay inside their project.');
-  assert.equal(recordVerifiedProcedure(store,'p','work-2',request,run).successes,2,'The same request verified again raises its score.');
-  recordProcedureFailure(store,'p',saved.id);assert.ok(similarProcedure(store,'p',request),'Two verified runs against one failure: still offered.');
+  assert.equal(recordVerifiedProcedure(store,'p','work-2',request,run).successes,3,'The same request verified again raises its score.');
+  recordProcedureFailure(store,'p',saved.id);recordProcedureFailure(store,'p',saved.id);assert.ok(similarProcedure(store,'p',request),'Three verified runs against two failures: still offered.');
   recordProcedureFailure(store,'p',saved.id);assert.equal(similarProcedure(store,'p',request),null,'A procedure that fails as often as it succeeds is no longer offered.');
+});
+
+// B1: `awaiting_review` is not a place to leave the owner when the run only read. Live, a fresh attempt of a
+// Work whose verification stayed undecided completed; under delegation the host makes that attempt itself, once.
+test('B1: under delegation an unverified read-only run gets exactly one fresh attempt; per-run installs stop as before',async t=>{
+  const {PackStore}=await import('../dist/packs/store.js'),{WorkRuntime}=await import('../dist/work/runtime.js'),{WorkSupervisor}=await import('../dist/work/supervisor.js');
+  const proposal={title:'자료 확인',desired_outcome:'원본의 값을 결과에 남긴다',completion_checks:[{id:'records',result:'원본 제목과 값 23 확인',evidence:'실제 파일 조회 결과'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};
+  const recipe={version:1,family:'research.search',request:'자료를 확인해줘',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],query:'',search_fields:['title'],sort:null,limit:10};
+  const scenario=async(work,acceptFromRun)=>{
+    const root=await mkdtemp(join(tmpdir(),'work-fresh-')),host=join(root,'host.json');await writeFile(join(root,'source.json'),JSON.stringify([{id:'one',title:'Observed source',value:23}]));
+    await writeFile(host,JSON.stringify({schema_version:1,project_id:'fresh',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[{id:'records',kind:'file',path:'source.json',format:'json'}],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true},work}));
+    let runs=0;const calls=[],model={calls,async call(purpose,instructions,input){
+      calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture',duration_ms:0});
+      if(instructions.startsWith('Define one durable'))return proposal;
+      if(instructions.startsWith('Execute the registered Work')){
+        if(input.checkpoint.observations.length===0)runs++;
+        const result=input.checkpoint.observations.find(o=>o.invocation.tool_name==='runtime_pack_run');
+        return result?{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Observed source: 23',completed_checks:input.completion_checks.map(c=>({id:c.id,evidence_ids:result.receipt.evidence_ids})),wait_reason:null}
+          :{action:'tool',stage_id:'collect',tool_name:'runtime_pack_run',arguments_json:JSON.stringify({work_id:input.work_id,request_id:'placeholder',recipe}),summary:'Read the source.',completed_checks:[],wait_reason:null};
+      }
+      return {checks:input.checks.map(check=>{
+        const ids=check.allowed_evidence_ids.filter(id=>input.observations.some(o=>o.tool_name!=='office_controlled_run_trace'&&o.evidence_ids.includes(id)&&JSON.stringify(o.value).includes('Observed source')));
+        const refs=ids.map(id=>({evidence_id:id,quote_ref:input.literal_leaf_manifest?.find(record=>record.evidence_ids.includes(id))?.leaf_refs.find(([,path])=>path.endsWith('/title'))?.[0]}));
+        return runs>=acceptFromRun&&ids.length&&refs.every(row=>typeof row.quote_ref==='string')?{id:check.id,verdict:'supported',evidence_ids:ids,evidence_quote_refs:refs,reason:'The receipt contains the title and value.'}:{id:check.id,verdict:'unknown',evidence_ids:[],evidence_quote_refs:[],reason:'Undecided.'};
+      })};
+    }};
+    const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
+    const started=await new WorkRuntime(store,config,model).start({request_id:'fresh',prompt:'자료를 확인해줘'}),supervisor=new WorkSupervisor(store,config,model,{tick_ms:25});
+    t.after(async()=>{await supervisor.close();store.close();await rm(root,{recursive:true,force:true});});
+    supervisor.start(started.work_id,started.revision,true);
+    const rows=()=>store.hermesState.prepare('SELECT state FROM office_supervisor WHERE work_id=? ORDER BY created_at,rowid').all(started.work_id).map(row=>row.state);
+    const settled=states=>states.every(state=>['succeeded','failed','awaiting_review'].includes(state));
+    let last=[];for(let i=0;i<400;i++){const states=rows();if(settled(states)&&settled(last)&&states.length===last.length&&i>0)break;last=states;await new Promise(resolve=>setTimeout(resolve,50));}
+    return {states:rows(),attempts:store.hermesState.prepare("SELECT count(*) c FROM office_activity WHERE work_id=? AND kind='supervisor.fresh_attempt'").get(started.work_id).c};
+  };
+  assert.deepEqual(await scenario({model_data_approved:true,autonomy:'delegated'},2),{states:['awaiting_review','succeeded'],attempts:1},'The fresh attempt completes; the unverified run stays in history.');
+  assert.deepEqual(await scenario({model_data_approved:true,autonomy:'delegated'},99),{states:['awaiting_review','awaiting_review'],attempts:1},'A fresh attempt that also fails stops for the owner.');
+  assert.deepEqual(await scenario({model_data_approved:true,autonomy:'per_run'},99),{states:['awaiting_review'],attempts:0},'Without delegation nothing is started on the owner\'s behalf.');
 });

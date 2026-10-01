@@ -17,7 +17,9 @@ const init=(store:PackStore)=>store.hermesState.exec(table);
 /** Words that carry the task: letters and digits, two characters or more, without the most common fillers. */
 export function requestTerms(request:string):string[]{
   const stop=new Set(['the','and','for','from','with','that','this','into','해줘','해주세요','저장해줘','확인해','에서','으로','하고','그리고','한번','한']);
-  return [...new Set((request.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}.]{1,}/gu)??[]).map(term=>term.replace(/\.+$/u,'')).filter(term=>term.length>=2&&!stop.has(term)))].slice(0,60);
+  // A Korean particle at the end of a word is not part of the task word ("json으로" and "json" are the same term).
+  const stem=(term:string)=>{const cut=term.replace(/(?:에서|으로|[의을를은는이가과와로에도])$/u,'');return cut.length>=2?cut:term;};
+  return [...new Set((request.toLowerCase().match(/[\p{L}\p{N}][\p{L}\p{N}.]{1,}/gu)??[]).map(term=>term.replace(/\.+$/u,'')).filter(term=>term.length>=2&&!stop.has(term)).map(stem))].slice(0,60);
 }
 const overlap=(a:readonly string[],b:readonly string[])=>{if(!a.length||!b.length)return 0;const other=new Set(b),shared=a.filter(term=>other.has(term)).length;return shared/(a.length+b.length-shared);};
 function cleanArguments(value:unknown,depth=0):unknown{
@@ -31,10 +33,11 @@ export function procedureSteps(observations:readonly Observation[]):SavedProcedu
   return observations.filter(item=>item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.invocation.tool_name!==trace&&item.invocation.tool_name!=='office_result_read')
     .slice(0,16).map(item=>({tool:item.invocation.tool_name,arguments:cleanArguments(item.invocation.arguments) as Record<string,unknown>}));
 }
-/** Called once for a Work whose completion the host verified. Idempotent per request text. */
-export function recordVerifiedProcedure(store:PackStore,project:string,workId:string,request:string,observations:readonly Observation[]):SavedProcedure|null{
+/** Called once for a Work whose completion the host verified. One procedure per request text or offered procedure. */
+export function recordVerifiedProcedure(store:PackStore,project:string,workId:string,request:string,observations:readonly Observation[],offeredId?:string):SavedProcedure|null{
   const steps=procedureSteps(observations),terms=requestTerms(request);if(!steps.length||terms.length<2)return null;
-  init(store);const id=hashJson({request:request.trim()}).slice(0,32),at=new Date().toISOString(),db=store.hermesState;
+  // A run that was guided by a saved procedure and passed verification is that procedure's next success.
+  init(store);const id=offeredId??hashJson({request:request.trim()}).slice(0,32),at=new Date().toISOString(),db=store.hermesState;
   const existing=db.prepare('SELECT successes,failures FROM office_procedure WHERE project_id=? AND id=?').get(project,id) as {successes:number;failures:number}|undefined;
   if(existing)db.prepare('UPDATE office_procedure SET steps=?,source_work_id=?,successes=successes+1,updated_at=? WHERE project_id=? AND id=?').run(JSON.stringify(steps),workId,at,project,id);
   else db.prepare('INSERT INTO office_procedure(project_id,id,request,terms,steps,source_work_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(project,id,safeControlText(request,2000),JSON.stringify(terms),JSON.stringify(steps),workId,at,at);
@@ -55,5 +58,7 @@ export function similarProcedure(store:PackStore,project:string,request:string,t
   }
   return best;
 }
+/** Above this similarity the request is the same task reworded or repeated, and its read steps are replayed. */
+export const REPLAY_SIMILARITY=0.75;
 export const procedureGuidance=(procedure:SavedProcedure)=>({from_request:procedure.request,verified_runs:procedure.successes,steps:procedure.steps,
   meaning:'A procedure that completed a similar request and passed verification. Reuse its sources and order when they fit this request; adapt arguments to the current request. It is guidance, not evidence or permission: this run needs its own receipts and is verified on its own.'});

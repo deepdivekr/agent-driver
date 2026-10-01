@@ -2,10 +2,10 @@ import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
-import {workDelegation,loadHostConfig,type HostConfig} from '../interface/config.js';
+import {workAutonomy,workDelegation,loadHostConfig,type HostConfig} from '../interface/config.js';
 import {RuntimeApi} from '../interface/api.js';
 import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
-import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,similarProcedure} from './procedures.js';
+import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,similarProcedure,REPLAY_SIMILARITY} from './procedures.js';
 import {allocateWorkModels} from './task-models.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
@@ -476,7 +476,7 @@ export class WorkSupervisor {
       const offered=similarProcedure(this.store,project,work.prompt);
       if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
       const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,...(hostSchedule?{host_schedule:hostSchedule}:{}),...(offered?{verified_procedure:procedureGuidance(offered)}:{}),connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason. If spec.collection_contract exists, use its exact recipe through runtime_pack_run without a new runtime_pack_plan. The host verifies every matching observed source row and actual output in code; do not read source pages just to obtain another model approval of covered checks. Reuse an unchanged same-Work receipt via runtime_pack_status for completion-only recovery; never rewrite a successful artifact just for verification. Remaining semantic checks still need their own evidence.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
-        {tools:toolkit.catalog(),guard,signal:controller.signal,
+        {tools:toolkit.catalog(),guard,signal:controller.signal,...(offered&&offered.similarity>=REPLAY_SIMILARITY?{replay:offered.steps}:{}),
           toolRequestId:(name,args,fallback)=>toolkit!.requestId(name,args,fallback),
           packRequestRecovery:(invocation,prior)=>toolkit!.packRequestRecovery(invocation,prior),
           checkpoint:saveCheckpoint,
@@ -499,10 +499,21 @@ export class WorkSupervisor {
       if(settingsChangeReasons.has(result.reason??'')&&['retryable_failure','paused'].includes(result.status)&&!customPackWorkBinding(this.store,project,row.work_id))state='queued';
       if(this.stopped&&result.status==='paused')state='queued';
       if(state==='succeeded'&&result.completion_verified){
-        const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations);
+        const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations,offered?.id);
         if(saved)workActivity(this.store,project,row.work_id,'procedure.saved',`The verified procedure of this Work was saved for similar requests (${saved.steps.length} step${saved.steps.length===1?'':'s'}, verified ${saved.successes} time${saved.successes===1?'':'s'}).`,{run_id:row.run_id,stage_id:'execution',status:'saved'});
       }else if(offered&&['failed','awaiting_review'].includes(state))recordProcedureFailure(this.store,project,offered.id);
       this.finish(row,state,result.reason,{summary:result.summary,text:result.summary,completion_verified:result.completion_verified,checks:spec.completion_checks,model_calls:result.model_calls.length,observations:result.checkpoint.observations.length},watchReadyAt,{progressed,...(modelWait?{retryDelayMs:modelRetryDelay(row.attempts)}:{})});
+      // B1: under delegation a run of a read/draft Work, or one that only wrote Office outputs, that ended without a
+      // verified completion gets one fresh attempt of the same Work. The unverified run and its receipts stay in
+      // history; a run that was itself the fresh attempt stops for the owner.
+      const runs=this.store.hermesState,repeatable=(['read_only','draft_only'].includes(spec.requested_effect)||result.checkpoint.observations.every(item=>['read_only','draft_only'].includes(item.invocation.effect)||item.invocation.tool_name.startsWith('office_')||item.receipt.effect_state==='none'))&&result.checkpoint.observations.every(item=>item.receipt.effect_state!=='uncertain');
+      if(state==='awaiting_review'&&repeatable&&workAutonomy(this.config)==='delegated'&&!customPackWorkBinding(this.store,project,row.work_id)
+        &&runs.prepare('SELECT state FROM office_supervisor WHERE run_id=?').get(row.run_id)?.state==='awaiting_review'
+        &&!runs.prepare("SELECT 1 FROM office_activity WHERE project_id=? AND work_id=? AND kind='supervisor.fresh_attempt' AND metadata LIKE ? LIMIT 1").get(project,row.work_id,`%"run_id":"${row.run_id}"%`)){
+        const id=randomUUID(),stamp=now();
+        runs.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,config_hash,model_revision,timezone,current_run_only,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)').run(id,project,row.work_id,row.work_revision,'queued',this.config.fingerprint,readModelSettings(modelSettingsPath(this.config))?.revision??0,row.timezone??null,row.current_run_only,stamp,stamp);
+        workActivity(this.store,project,row.work_id,'supervisor.fresh_attempt','The result could not be verified. The Work is attempted once more from the start; the unverified run stays in the history.',{run_id:id,stage_id:'execution',status:'queued',...(result.reason?{reason:result.reason}:{})});
+      }
     }catch(error){const reason=error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'WORK_EXECUTION_FAILED';const state=this.stopped?'queued':['WORK_RECONCILIATION_REQUIRED'].includes(reason)?'reconciliation_required':['WORK_PAUSED','WORK_REVISION_CONFLICT'].includes(reason)?'paused':settingsChangeReasons.has(reason)&&!customPackWorkBinding(this.store,project,row.work_id)?'queued':['CONFIG_CHANGED','MODEL_SETTINGS_CHANGED','SCHEDULE_CONFIGURATION_REQUIRED','SWARM_DIRECTION_REQUIRES_REVIEW','WORK_EXECUTOR_CHANGE_REQUIRES_REVIEW','ORIGINAL_RUNTIME_CONNECTION_REQUIRED'].includes(reason)?'waiting_connection':reason==='STRUCTURED_MODEL_UNSUPPORTED'?'waiting_model':'failed';this.finish(row,state,reason,null);workActivity(this.store,project,row.work_id,'supervisor.stopped',reason,{stage_id:'execution',status:state,reason});
     }finally{clearInterval(heartbeat);await toolkit?.close();}
   }
