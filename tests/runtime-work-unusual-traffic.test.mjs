@@ -130,9 +130,11 @@ test('runtime fixture the default public headless placement keeps authenticated 
 test('runtime fixture a scheme-less site in the request is readable and an unlisted URL is refused before dispatch',async t=>{
   const x=await setup(t,{prompt:'nodejs.org 블로그 최신 글 제목과 httpbin.org/forms/post 양식을 확인하고 Node.js와 sample.json은 이름일 뿐이다',observe:(target,url)=>observation(url)}),tools=x.create();
   for(const url of ['https://nodejs.org','https://nodejs.org/','https://httpbin.org/forms/post'])assert.doesNotThrow(()=>tools.validate('office_browser_read',{url},'user-site'),url);
-  for(const url of ['https://node.js/','https://sample.json/','https://example.net/unlisted']){
-    assert.throws(()=>tools.validate('office_browser_read',{url},'unlisted'),error=>error.name==='WorkClientToolInputError'&&error.code==='BROWSER_URL_NOT_OBSERVED'&&/office_web_search/u.test(error.detail),url);
-  }
+  const proposed=()=>workTail(x.store,x.config.project.id,x.work.work_id).filter(event=>event.kind==='source.proposed').map(event=>event.metadata.target_url);
+  assert.deepEqual(proposed(),[],'User-written sites are not model proposals.');
+  for(const url of ['https://node.js/','https://sample.json/'])tools.validate('office_browser_read',{url},'name-only');
+  assert.deepEqual(proposed(),['https://node.js/','https://sample.json/'],'Names such as Node.js or sample.json were not read as user-written sites; opening them is a recorded model proposal.');
+  assert.throws(()=>tools.validate('office_browser_read',{url:'http://example.net/unlisted'},'unlisted'),error=>error.name==='WorkClientToolInputError'&&error.code==='BROWSER_URL_NOT_OBSERVED'&&/office_web_search/u.test(error.detail));
   assert.equal(opens(x).length,0,'Nothing is opened by validation.');
   const value=await tools.execute('office_browser_read',{url:'https://nodejs.org'},'user-site');
   assert.equal(value.url,'https://nodejs.org');assert.deepEqual(opens(x).map(event=>event.url),['https://nodejs.org']);
@@ -171,4 +173,18 @@ test('runtime contract a public text resource is read over HTTPS in pages with i
   const x=await setup(t,{prompt:'Read https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.csv',observe:(target,url)=>observation(url)}),tools=x.create();
   assert.equal(tools.validate('office_browser_read',{url:'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/4.5_day.csv',max_bytes:5000}).max_bytes,5000,'Paging arguments are accepted.');
   assert.equal(calls.length,2,'Only the two shared-fetcher reads reached the network stub.');
+});
+
+// B5 (owner decision): a public https page the model knows for the named source may
+// be opened; the host records only what the page shows. Private hosts, login sites,
+// challenge pages and credential-like parameters keep the user-written/observed rule.
+test('runtime fixture a model-proposed public https URL is readable and recorded; private, login, challenge and credential URLs are refused',async t=>{
+  const x=await setup(t,{prompt:'USGS 지난 24시간 규모 4.5 이상 지진을 CSV로 저장해줘',observe:(target,url)=>observation(url)}),tools=x.create();
+  const page='https://earthquake.usgs.gov/earthquakes/feed/v1.0/geojson.php';
+  assert.doesNotThrow(()=>tools.validate('office_browser_read',{url:page},'proposed'));
+  const value=await tools.execute('office_browser_read',{url:page},'proposed');assert.equal(value.url,page);
+  assert.ok(workTail(x.store,x.config.project.id,x.work.work_id).some(event=>event.kind==='source.proposed'&&event.metadata.target_url===page),'The proposal is recorded separately from the observation.');
+  for(const url of ['http://example.org/plain','https://192.168.0.1/admin','https://intranet.local/report','https://x.com/home','https://example.org/?session=abc','https://www.google.com/sorry/index']){
+    assert.throws(()=>tools.validate('office_browser_read',{url},'refused'),error=>error.name==='WorkClientToolInputError'&&error.code==='BROWSER_URL_NOT_OBSERVED',url);
+  }
 });
