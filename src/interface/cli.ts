@@ -6,7 +6,7 @@ import {requireCondition} from '../core/contracts.js';
 import {ensureSupervisor,stopSupervisor,supervisorStatus} from '../supervisor/manager.js';
 import {Supervisor} from '../supervisor/supervisor.js';
 import {stopTerminalHost} from '../terminal/manager.js';
-import {approvedMcpConfigPath} from '../onboarding/connection.js';
+import {approvedMcpConfigPath,approveNonInterferingConnection} from '../onboarding/connection.js';
 export const interfaceHelp=`
 Host-configured agent interface (JSON output):
   doctor --config PATH --json
@@ -65,6 +65,9 @@ export async function runInterfaceCli(args:string[],onMcpClosed?:()=>Promise<voi
   const allowed=new Set(['--config',...(command==='mcp'?[]:['--json']),...extras,...((command==='task'&&sub==='resume')||(command==='recovery'&&sub==='prepare')?['--generation']:[])]);
   for(const key of o.keys())requireCondition(allowed.has(key),'UNKNOWN_OPTION');
   requireCondition(!(o.has('--config')&&o.has('--config-file')),'AMBIGUOUS_CONFIG');
+  // An MCP client the owner registered starts `agent-office mcp`: that is the same choice of the default
+  // non-interfering mode as running connect, so a first start records it instead of closing the connection.
+  if(command==='mcp'&&!o.has('--config'))await approveNonInterferingConnection();
   const configPath=o.get('--config')??(command==='project'?o.get('--config-file'):command==='mcp'?approvedMcpConfigPath():undefined);requireCondition(configPath,'CONFIG_REQUIRED');
   const config=loadHostConfig(configPath);
   if(command==='dashboard'){
