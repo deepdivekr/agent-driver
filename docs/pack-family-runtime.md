@@ -4,7 +4,7 @@
 
 ```text
 사용자의 한 줄 요청
-  → runtime_pack_plan
+  → Work 정의 또는 runtime_pack_plan
   → 호출 에이전트가 연결 목록과 schema로 최초 recipe 설계
   → runtime이 source/target/field/effect를 다시 검증
   → 코드 수집·정규화 + 필요 지점 Jev 판단 + 불확실 시 LLM/unknown
@@ -12,7 +12,7 @@
   → 검증된 recipe만 같은 요청·설정·engine version에 재사용
 ```
 
-사용자는 family나 JSON recipe를 선택하지 않는다. MCP 클라이언트는 `runtime_pack_plan`을 자연어 시작점으로 사용한다. 연결이 없으면 사이트 이름이나 selector를 지어내지 않고, 필요한 로그인 브라우저/파일/데이터 소스 연결만 요청한다.
+사용자는 family나 JSON recipe를 선택하지 않는다. 일반 MCP Pack 호출은 `runtime_pack_plan`을 자연어 시작점으로 사용한다. 수집 계약이 이미 고정된 Work는 정의 단계의 정확한 recipe로 `runtime_pack_run`을 호출하므로 같은 계획을 다시 생성하지 않는다. 연결이 없으면 사이트 이름이나 selector를 지어내지 않고, 필요한 로그인 브라우저/파일/데이터 소스 연결만 요청한다.
 
 ## 구현된 family
 
@@ -37,7 +37,9 @@ TypeSafe 패턴에 맞춰 Jev에는 현재 한 행 또는 현재 브라우저 �
 
 제출 없이 양식만 채울 때는 target에 `draft_only: true`를 지정한다. 이 경우 `readback_url`은 생략할 수 있고, 결과는 `draft_ready`다. 승인 화면을 열거나 승인 토큰을 외부에 전달하지 않으며 `runtime_pack_execute_approved`도 `PACK_DRAFT_ONLY`로 거절한다. 익명 공개 폼(`auth_required: false`)은 이 초안 모드에서만 허용된다. 초안 브라우저는 일반 form 제출, non-read HTTP와 WebSocket을 차단한다. 사이트 자체의 비정상 GET 쓰기까지 막는 보안 샌드박스는 아니다.
 
-host 설정의 `packs.sources`와 `packs.targets`는 설치/connector 화면이 만드는 내부 설정이다. 사용자용 Pack 메뉴가 아니다. 파일 소스는 읽기만 하고 `.env`, credential 디렉터리는 거절한다. HTTP 소스는 HTTPS GET, redirect 없음, 응답 8 MiB/10,000행 제한이다. fixture 외 평문 HTTP는 거절한다. 브라우저 source/target은 agent-owned persistent profile만 사용한다.
+host 설정의 `packs.sources`와 `packs.targets`는 설치/connector 화면이 만드는 내부 설정이다. 사용자용 Pack 메뉴가 아니다. 파일 소스는 읽기만 하고 `.env`, credential 디렉터리는 거절한다. HTTP 소스는 HTTPS GET이며 redirect는 허용하지 않는다. 파일·HTTP의 JSON/CSV 수집·저장에는 임의의 바이트·행 수 상한을 두지 않는다. 전체 데이터를 스트리밍으로 읽고 저장하지만, 행 배열·체크포인트에는 데이터에 비례한 메모리와 디스크가 필요하다. fixture 외 평문 HTTP는 거절한다. 브라우저 관측 한도와 프로필 권한은 별도다.
+
+단일 등록 파일·HTTP 소스의 수집 업무는 최초 LLM이 해석한 출처·기간·필터·전체 관측 범위·저장 형식을 Work 계약으로 고정할 수 있다. 코드는 원본 전체에서 조건에 맞는 결과를 다시 계산하고 실제 저장 파일 전체와 대조한다. 이 계약이 포괄하는 수집 조건에는 추가 LLM 승인이 필요 없다. 나머지 요약·분류·작업 절차 조건과 계약 없는 기존 업무는 기존 독립 검증을 유지한다. 최초 해석의 정확성이나 관측하지 않은 원격 페이지의 완전성까지 코드가 보증하는 것은 아니다.
 
 외부 write는 MCP 호출자가 승인할 수 없다. runtime 내부의 loopback approval dispatcher만 비밀 token을 받고, 기본 브라우저의 로컬 화면에 pre-submit PNG와 snapshot을 보여 준다. URL·CSRF·approval token은 MCP에 반환하지 않고, MCP에는 capture/hash/만료와 대기 상태만 보인다. 승인 후에도 최신 폼·기존 레코드가 snapshot과 다르면 중단한다. 응답을 잃었을 때 readback으로 조정하며 consumed approval로 두 번 클릭하지 않는다. loopback 화면과 위조·origin·단일 사용은 fixture에서 검증했으며, 각 OS의 실제 기본 브라우저 실행은 아직 `user_environment` 증거가 없다.
 

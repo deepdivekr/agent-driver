@@ -2,6 +2,65 @@
 
 This is an **in-progress checkpoint**, not a completion or release report.
 
+### Latest: October 1 sealed collection committed (98768b9)
+
+The user approved the request-bound code completion policy; the older pause below
+is historical. `fix/main-work-reliability` on merged main e0a8e07 now includes
+atomic first-definition/replan sealing, exact pre-dispatch guards, complete
+source/output comparison, optional semantic-only remaining verification, Codex
+schema compatibility and removal of arbitrary file/HTTP row/byte ceilings.
+Build and focused90/90 passed. First quick1887/1893 retained6failures; fixed the
+legacy null-contract closed-trace gate and ESM cycle, and corrected bounded
+verifier fixtures. Final quick1911/1911 passed on98768b9 (1910 tests plus one
+integrity check; zeroFAIL/BLOCKED_ENV/NOT_RUN) with1043 unchanged input hashes.
+Receipt: `runtime-tests-2026-10-01T03-06-36-160Z.json`. Public summary:
+`docs/verification/main-e0a8e07-collection-validation.json`.
+
+New actual Codex6.1-sol/low collection completed: independently derived35 of36
+rows, all values/multiplicity/order/hash checks pass, one Pack run, zero additional
+completion-verifier calls. Initial design and four worker decisions still use
+the model. Original file-USGS runtime also verified completion while preserving
+the historical output. Its independent checker initially rejected a changed
+display title despite identical data; every-page byte/identity/full-coverage
+checks now accept the unchanged audit,4/4. Original matrix acceptance is1/24,
+not all24. Actual Claude
+remains signed out. No API/Jev charge, external message or submission occurred.
+
+Owned service2609608/session27270 stopped cleanly with outputs preserved. Final
+compiled source/output rechecks passed for both saved real Works without another
+model call; two user-environment rows were appended after the quick reporter
+exited, retaining prior evidence. Next: docs/ledger, documentation commit and
+authorized branch push.
+Do not merge/release or replace the personal installation. Read
+`docs/custom-pack-refactoring-progress.md` and the main-retest verification doc.
+
+### Earlier: October 1 user-requested completion-policy pause
+
+Read `docs/custom-pack-refactoring-progress.md`'s completion-policy pause before
+older checkpoints below. Current checkout is `office-main-live-e0a8e07`, branch
+`fix/main-work-reliability`, based on merged main e0a8e07. Uncommitted schema,
+failure-classification, streaming collection/export and source-page fixes are
+preserved. Last shared build preceded the final HTTP idle/header timeout fixes;
+do not claim all current source has passed the focused tests or frozen quick.
+The escaped JSON result-page budget repair is not implemented.
+
+The real fresh Node research probe completed on the schema patch with original
+goal verification; this is a separate 25th probe, not a success among the original
+24 cases. The original file-USGS run read all saved source pages and its existing
+output, but was paused at the user's request before final acceptance. No original
+Work was duplicated or relabeled. Normal pause returned HTTP200 and `paused`;
+matrix active list is empty. The owned matrix service PID2578905/session67797
+remains idle; use the private receipt to recheck identity, never restart blindly.
+
+Read-only audit: `src/work/completion.ts:496` always appends original-request LLM
+verification; `src/work/supervisor.ts:293` always enables it. Native checks cannot
+currently close the whole Work without it. The requested review supports replacing
+this universal gate with a request-bound deterministic completion path for pure
+collection, retaining semantic verification only for actual semantic requirements.
+No completion-policy change was implemented. Await the user's direction before
+resuming implementation/live tests. Node22.22.0/npm11.11.0; actual Codex6.1-sol/low;
+Claude live compatibility remains untested because its CLI is signed out.
+
 ### October 1 commit checkpoint
 
 At the user's request, production fixes discovered during the real-use matrix are being committed with their regression coverage, separate from the CLI-maintenance/default-model commit `36b5b37`. The runtime changes cover definition leases, stage/Pack identity validation, bounded completion correction and verification-only retries, source catalogs and HTTP/readback provenance, local-record preparation, scoped watch controls, form capture/readback and bounded CLI deadlines. No private matrix capability receipt, authentication material or generated result is staged. Immediately before committing, all 1002 input hashes in `runtime-tests-2026-09-30T19-13-14-021Z.json` still matched; its 1776 cases are PASS. These regression results do not certify the 24 actual Work goals: the retained matrix report still records 0 accepted completions, 23 incomplete/failed acceptance cases and 1 unfinished case. No push, release, duplicate Work or runtime restart is part of this commit operation.

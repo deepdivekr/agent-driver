@@ -1,8 +1,9 @@
 # 커스텀 Pack 신뢰성 리팩토링 — Source of Truth
 
-Status: R0–R5 and post-refactor corrections implemented; available local validation complete; authorized protected-branch merge pending required CI.
-Baseline: 0b11f1850a2afa846f191ce356aa4f486284b41f.
-Branch: refactor/custom-pack-reliability.
+Status: R0–R5 merged in main e0a8e07; October 1 post-main collection/reliability fixes implemented and locally verified. Original 24-case acceptance remains partial (1/24).
+Current baseline: e0a8e0790b64ff663fa87f5d894b415a1d6f1843.
+Current branch: fix/main-work-reliability.
+Original refactor baseline: 0b11f1850a2afa846f191ce356aa4f486284b41f (refactor/custom-pack-reliability).
 
 이 문서는 제품 방향, 구현 범위, 수용 기준의 기준 문서다.
 진행 상태와 실제 검증 결과는 custom-pack-refactoring-progress.md에 기록한다.
@@ -104,7 +105,18 @@ Office의 10/250개 동시 Work 부하 시험으로 해석하지 않는다.
 - 감시에는 별도 native_watch_observations 계약을 사용한다. 기준/후속 관측,
   요청된 최소 관측 간격, 실제 비교 필드, 변경/하락 판정, 같은 회차의 로컬
   이벤트를 코드로 확인한다. 금지 행동 부재는 별도 닫힌 실행 기록으로 판단한다.
-- 원본 사용자 요구의 독립 의미 검증은 계속 수행한다.
+- 2026-10-01 사용자 승인에 따라 수집·변환 업무의 최초 LLM 해석(출처,
+  기간, 필터, 전체 수집 범위, 저장 형식)을 호스트가 업무 계약으로 고정한다.
+  코드는 저장된 원본 전체에 그 조건을 다시 적용해 누락·중복·값·형식을
+  실제 산출물과 대조한다. 정답 행 수를 사례별 상수로 고정하지 않는다.
+- 최초 계약으로 표현된 수집 조건을 모두 코드로 확인한 경우 추가 LLM
+  승인은 요구하지 않는다. 나머지 요약·분류 등 의미 조건만 모델이 검증한다.
+  계약이 없는 기존 업무는 기존 독립 목표 검증을 유지하며, 사용자 지시를
+  바꾸거나 새 증거를 과거 receipt에 덧붙이지 않는다. 새 계약은 정상 정의·
+  명시적 재계획·검증된 반복 준비 경로에서만 봉인한다.
+- 등록된 파일/명시적인 HTTP 응답 전체와 원격 서비스의 모든 페이지는
+  구분한다. 관측하지 않은 페이지·시점·기간의 완전성을 주장하지 않는다.
+  실행기가 최초 계약의 출처·조건을 바꾸면 거절하고 재계획을 요구한다.
 - 과거 성공/모순 evidence를 숨기거나 조건을 약화해 통과시키지 않는다.
 - 검증만 재개하는 경로와 bounded repair를 재사용한다.
 - 지속적인 검증 재사용은 관측 시간/방향/범위/내용 변화가 안전하게
@@ -187,6 +199,18 @@ Office의 10/250개 동시 Work 부하 시험으로 해석하지 않는다.
 
 ## 6. 벤치마킹 적용 범위
 
+### October 1 user-directed capacity correction
+
+The user explicitly requested no arbitrary file-collection size limit. Remove
+the 8 MiB / 10,000-row ceilings from file/HTTP collection, exports, artifact
+readback and native output verification together. Read/hash/write in chunks and
+keep model evidence pages bounded; a page is never the entire original. Preserve
+complete inputs/results and report missing coverage or resource errors instead
+of declaring partial processing complete. This does not add PDF/EXE parsing or
+remove schema, path, approval, browser-DOM or per-model-call protections. Existing
+in-memory row/checkpoint storage still consumes resources in proportion to rows;
+do not claim infinite capacity or constant-memory end-to-end processing.
+
 - Rakazo: 상태 전이, 실행 중 지시의 대상 binding, 실제 산출물 검증 방식.
   전체 DB/큐/Pi runtime과 범용 MCP marketplace는 이전하지 않는다.
 - Grok CLI bridge: 필요한 경우 정확한 턴/세션 제어와 접수/실행 불명 구분.
@@ -211,7 +235,9 @@ Office의 10/250개 동시 Work 부하 시험으로 해석하지 않는다.
 ## 7. 운영 불변조건
 
 - 사용자 원문과 명시적 후속 지시가 목표의 기준이다.
-- typed native proof는 해당 계약만 증명하며 전체 사용자 목표를 주장하지 않는다.
+- typed native proof만으로 전체 사용자 목표를 주장하지 않는다. 최초 목표와
+  봉인된 수집 계약의 연결, 현재 출처/결과의 전체 대조, 나머지 의미 조건을
+  각각 확인한다. 수집 계약이 전체 요구를 포괄하면 코드 검증으로 완료한다.
 - 완전하지 않은 trace로 금지 행동의 부재를 증명하지 않는다.
 - 새 결과는 새 실행의 실제 입력/출력으로 검사한다.
 - 압축 이후에도 새 마켓플레이스/플랫폼 작업으로 범위를 넓히지 않는다.

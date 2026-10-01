@@ -1,0 +1,96 @@
+{
+  "verified_at": "2026-10-01T03:15:59.370Z",
+  "baseline_revision": "e0a8e0790b64ff663fa87f5d894b415a1d6f1843",
+  "implementation_revision": "98768b951a60574a4dd57640dfcc11b60774818c",
+  "branch": "fix/main-work-reliability",
+  "environment": {
+    "os": "WSL Ubuntu-24.04",
+    "node": "22.22.0",
+    "npm": "11.11.0",
+    "actual_codex_cli": "0.159.2",
+    "actual_model": "gpt-6.1-sol",
+    "actual_effort": "low",
+    "actual_claude": "BLOCKED_ENV: signed out"
+  },
+  "build": "PASS",
+  "ledger": {"status": "PASS", "requirements": 196},
+  "publication_boundary": {"status": "PASS", "files_checked": 768, "findings": []},
+  "diff_check": "PASS",
+  "focused_checks": {"PASS": 90, "FAIL": 0, "includes_input_integrity": true},
+  "frozen_quick": {
+    "receipt": "runtime-tests-2026-10-01T03-06-36-160Z.json",
+    "status": "PASS",
+    "counts": {"PASS": 1911, "FAIL": 0, "BLOCKED_ENV": 0, "NOT_RUN": 0},
+    "actual_test_cases": 1910,
+    "input_integrity_checks": 1,
+    "input_count": 1043,
+    "input_manifest_sha256": "2fad5a089c562999e78b933fabd1f64a01d3a90b443e66de818ef6ab4febbf71",
+    "changed_inputs": [],
+    "evidence_levels": {
+      "unit": 652,
+      "contract_fake": 670,
+      "fixture_integration": 391,
+      "native_integration": 198
+    }
+  },
+  "actual_acceptance": {
+    "new_natural_language_collection": {
+      "status": "PASS",
+      "evidence_level": "user_environment",
+      "source_rows": 36,
+      "dynamically_computed_matching_rows": 35,
+      "actual_output_rows": 35,
+      "exact_values_order_columns_and_multiplicity": true,
+      "unchanged_original_and_complete_output_hash": true,
+      "pack_executions": 1,
+      "additional_completion_verifier_model_calls": 0,
+      "worker_model_calls": 4,
+      "initial_definition_uses_model": true
+    },
+    "original_file_usgs_recovery": {
+      "status": "PASS",
+      "evidence_level": "user_environment",
+      "same_work_and_original_artifact": true,
+      "completion_verified": true,
+      "independent_checks_passed": 4,
+      "independent_checks_total": 4,
+      "complete_output_bytes": 4748,
+      "pack_executions": 1
+    },
+    "final_compiled_native_recheck": {
+      "saved_work_outputs_passed": 2,
+      "additional_model_calls": 0,
+      "is_new_upstream_observation": false
+    },
+    "original_matrix_accepted": 1,
+    "original_matrix_total": 24,
+    "remaining_original_cases_unaccepted": 23,
+    "new_probe_is_part_of_original_matrix": false,
+    "report_rows_appended": 2,
+    "prior_report_rows_preserved": true
+  },
+  "retained_failures": [
+    {
+      "receipt": "runtime-tests-2026-10-01T02-43-24-459Z.json",
+      "PASS": 1887,
+      "FAIL": 6,
+      "resolution": "Fixed legacy null-contract trace gating and an ESM initialization cycle; aligned fixtures to the existing bounded verifier protocol."
+    },
+    {
+      "receipt": "runtime-tests-2026-10-01T03-01-10-967Z.json",
+      "PASS": 87,
+      "FAIL": 3,
+      "resolution": "Corrected before final focused and frozen whole-suite verification."
+    }
+  ],
+  "limits": [
+    "Sealing prevents execution drift; it cannot prove the first LLM interpretation matches every natural-language nuance.",
+    "Code-only collection covers one registered file or explicit HTTP response with JSON/CSV transforms, not arbitrary browser pagination, PDF/EXE parsing or semantic extraction.",
+    "Complete observed input is not proof of all remote pages or current upstream freshness.",
+    "There are no arbitrary collection byte/row ceilings; in-memory rows and checkpoints still scale with data size.",
+    "The original 24-case matrix is not complete; no all-family release-readiness claim.",
+    "Claude schema fixtures are not live Claude certification.",
+    "No main merge, release, personal installation replacement or external message/submission is included."
+  ],
+  "owned_test_service": "stopped_cleanly"
+}

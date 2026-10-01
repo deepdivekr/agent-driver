@@ -26,7 +26,11 @@ particular Pack. They are not a new product workstream.
 - Model output is a proposal. Host scope, effect, approval, and identity gates own
   execution authority.
 - Technical/native checks may establish only their explicit typed contract.
-  Preserve independent verification of the original user goal.
+  For collection, seal the first interpretation of the user's source, period,
+  filters, complete input scope and output format; independently compare actual
+  sources/results to that contract in code. Use model verification for remaining
+  semantic conditions or legacy Works without a sealed contract, not a mandatory
+  second model approval of every deterministic collection result.
 - Verification retries must not repeat completed effects. Unknown writes require
   reconciliation. Known safe reads can refresh missing evidence within bounds.
 - Reuse verification procedures and valid bound results; inspect each new run's

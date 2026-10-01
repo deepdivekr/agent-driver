@@ -6,6 +6,95 @@ Initial implementation revision: 50fa080580e97ed8b2cf0fa51c20c67ef0607cf8.
 Reviewed implementation revision: 0c6770a11f44f75c196c69c6b174e421245e72e2.
 Delivery branch: refactor/custom-pack-reliability.
 
+## October 1 real-user main retest checkpoint
+
+### Current: sealed collection committed and final local validation complete
+
+Source branch: `fix/main-work-reliability`, based on merged main `e0a8e07`.
+Implementation commit: `98768b951a60574a4dd57640dfcc11b60774818c`.
+The first model interpretation now seals the registered source/parameters,
+date/value filters, deduplication, requested fields/sort and JSON/CSV output.
+Definition and sealing commit atomically. Execution cannot replace that recipe;
+completion reopens the same Work's source, latest matching run and whole output.
+Purely covered collection conditions use code; remaining semantic/process
+conditions share the existing independent verifier. An absent contract preserves
+legacy goal verification. Initial interpretation can still be wrong: this is not
+a claim that code can prove arbitrary natural-language meaning.
+
+File/HTTP collection, export and readback no longer apply the old 8 MiB or
+10,000-row ceilings. Model pages remain bounded and explicitly partial; they
+are not the complete source. Rows/checkpoints still consume proportional memory.
+Codex schema transport now supports provably disjoint unions without weakening
+the host validator; model-facing parameter pairs avoid unsupported propertyNames.
+Claude's original schema is retained. Real Codex design succeeded; actual Claude
+is signed out and has not been certified by fixture compatibility tests.
+
+Final build and focused90/90 passed, including one input-integrity check.
+HTML-as-empty-CSV, file-source reparse and failed-repeat atomicity fixes are
+included. Earlier client/schema/retry/watch65/65 is a separate overlapping run.
+First whole quick1887/1893 retained six failures. Fixed the legacy null-contract
+closed-trace regression and an ESM import cycle; corrected bounded-verifier
+fixtures without reducing their original-goal/source/output assertions. Final
+frozen whole quick passed1911/1911 on98768b9:1910 tests plus one integrity check,
+zeroFAIL/BLOCKED_ENV/NOT_RUN. All1043 input hashes remained unchanged.
+Receipt: `runtime-tests-2026-10-01T03-06-36-160Z.json`.
+Input manifest SHA256:
+`2fad5a089c562999e78b933fabd1f64a01d3a90b443e66de818ef6ab4febbf71`.
+The public source-bound summary is
+[`main-e0a8e07-collection-validation.json`](verification/main-e0a8e07-collection-validation.json).
+
+A new actual Codex Work completed at02:48:38Z: independent full CSV/JSON parsing
+found36 source rows and dynamically derived35 matching rows with exact values,
+duplicate multiplicity, fields/order and hashes. One Pack execution; no extra
+completion-verifier model call (first definition and four worker decisions still
+use the model). The original file-USGS runtime also completed at02:50:06Z while
+reusing its unchanged artifact. Its independent checker initially confused a
+changed display title with changed output; after independently checking every
+byte range/identity and full coverage, the unchanged audit passes all4checks.
+Original matrix acceptance is1/24, not all24. The final compiled verifier also
+rechecked both saved contracts/outputs successfully without another model call.
+
+Owned service2609608/session27270 stopped cleanly after completion; files and
+receipts preserved. Two user-environment acceptance rows were appended to
+`tests/report.json` after the final quick reporter exited; older rows and failures
+remain. Ledger196, publication boundary768 files and diff checks pass.
+The implementation and evidence documentation are delivered on the same
+authorized branch; verify its remote HEAD before continuing. No merge, release
+or personal installation replacement.
+
+### Earlier: request-bound collection completion resumed
+
+The user approved fixing the first LLM interpretation of source, period, filters,
+complete collection scope and storage format as the Work contract. Implementation
+is in progress on `fix/main-work-reliability` above merged main `e0a8e07`.
+Code will independently compare complete observed inputs and actual outputs to
+that sealed contract; only remaining semantic conditions require a model.
+Legacy Works without a contract retain independent goal verification. Prior
+receipts remain unchanged. The isolated matrix service was cleanly stopped before
+the shared build. Next unit: definition/replan sealing, exact execution guard,
+code completion routing, then focused tests and an actual USGS Work resume.
+
+### User-requested pause: completion policy review
+
+The user requested a pause to review why deterministic collection still requires
+an LLM completion judgment. Product edits/builds/live retries are paused. The
+same file-USGS Work was paused through the normal control endpoint (HTTP200);
+the private matrix reports no active Works. Preserve its original files and
+receipts. The owned test service remains idle; consult the private matrix receipt
+for its process identity before any restart. No release or personal install change.
+
+Read-only inspection confirms `completion.ts` adds an `original_user_request`
+model check even after native technical checks pass; supervisor always supplies
+that original request. Pure collection needs a request-bound machine-checkable
+completion contract before this gate can be removed safely. Do not delete the
+gate solely because the Pack has a successful receipt. Policy changes are not
+implemented. Pending local capacity/schema patches remain uncommitted: focused
+checks passed, but the latest HTTP idle-timeout/classification changes and the
+whole frozen regression are not yet validated. Result-page JSON-escaping budget
+repair was identified but not implemented before the pause.
+
+The actual Windows/WSL host tested merged main `e0a8e07` in an isolated checkout with retained Phase112 private data. Build/ledger and focused68/68 pass; frozen quick1860/1861 has one retained intermittent watch failure (unchanged focused retry6/6 pass), with no changed input hashes. Actual fresh intake and the native subscription transport both reproduce HTTP400: `completion_checks/items/native_check/anyOf/0: oneOf is not permitted`. New Work analysis/replanning therefore does not work with the configured real Codex default. Existing24 Works were attempted without rewriting old proof; 0 new independent completions. Pending cases were paused at the blocker, not counted as completed failures. See [main retest](verification/main-e0a8e07-live-retest.md) for the exact source, evidence, environment correction and owned-service cleanup. This is not a release or a claim that prior23 cases have been repaired.
+
 ## 추가 검토 결과와 머지 권한
 
 사용자는 미비점 재점검, 수정 커밋과 main 머지를 명시적으로 요청했다.
@@ -146,9 +235,11 @@ PASS였다. baseline 0b11f18의 세 테스트 파일을 같은 환경에서 별�
 
 1. AGENTS.md, 최종 계획서와 이 기록을 읽고 git 상태/원격 revision을 대조한다.
    제품 방향은 구체적인 사용자 소유 반복 업무의 관제센터다.
-2. 구현과 로컬 검증은 끝났다. 전달 브랜치의 검증 문서 커밋과 push를 확인하고,
-   필수 runtime CI가 통과한 PR을 승인된 main에 머지한다. main이 이미 전달
-   HEAD를 포함한다면 머지도 완료된 것이다. PR/runtime 규칙은 우회하지 않는다.
-3. 지원 호스트 및 비공개 사례의 남은 한계를 유지한다. 개인 설치/공개 태그를
-   바꾸거나 과거 Work를 완료로 소급하지 않는다. 새 마켓플레이스 작업으로
-   범위를 넓히지 않는다.
+2. 원래 리팩토링은 main e0a8e07에 이미 머지됐다. 현재는 그 위의
+   fix/main-work-reliability와 구현98768b9, 최종1911/1911 검증이 기준이다.
+   이 후속 브랜치의 문서 커밋/push를 확인한다. 이번 전달은 main 머지나
+   release 승인이 아니다.
+3. 기존24건 중 남은23건은 원래 Work ID·산출물·조건·실패 기록을 보존하며
+   재개해야 한다. 공개 검증 JSON의 별도 신규 수집 probe를 matrix 성공으로
+   합치지 않는다. 실제 Claude 인증 확인과 개인 설치/공개 태그 변경도
+   별도 범위다. 새 마켓플레이스 작업으로 범위를 넓히지 않는다.
