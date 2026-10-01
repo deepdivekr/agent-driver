@@ -78,3 +78,23 @@ test('B1: the default MCP listing is the compact Work surface and can be widened
   assert.ok([...COMPACT_MCP_TOOLS].every(name=>Object.hasOwn(tools,name)),'Every listed name is a real tool.');
   assert.ok(!listed.some(name=>/^runtime_(?:pack|swarm|terminal|coding|windows|files)_/u.test(name)));
 });
+
+// B2–B4 first slice: a verified Work leaves its procedure; a similar later request gets it as guidance.
+test('B2: a verified procedure is saved, offered to a similar request, and dropped when it keeps failing',async t=>{
+  const {PackStore}=await import('../dist/packs/store.js'),{recordVerifiedProcedure,similarProcedure,recordProcedureFailure,procedureSteps,requestTerms,procedureGuidance}=await import('../dist/work/procedures.js');
+  const root=await mkdtemp(join(tmpdir(),'work-procedure-')),store=new PackStore(join(root,'runtime.sqlite'));t.after(async()=>{store.close();await rm(root,{recursive:true,force:true});});
+  const observation=(turn,tool,args,status='succeeded',dispatched=true)=>({invocation:{request_id:`r-${turn}`,turn,stage_id:'s',tool_name:tool,arguments:args,effect:'read_only',dispatched},receipt:{status,value:{},evidence_ids:[`e-${turn}`],effect_state:'none',retry_safe:true},observed_at:new Date().toISOString()});
+  const run=[observation(0,'office_web_search',{query:'python downloads',provider:'google'},'retryable_failure'),observation(1,'office_browser_read',{url:'https://www.python.org/downloads/',offset:0,max_bytes:12000}),observation(2,'office_result_draft',{format:'json',text:'{"long":"content"}',label:'versions',request_id:'x'}),observation(3,'office_result_read',{request_id:'r-2'}),observation(4,'office_controlled_run_trace',{})];
+  assert.deepEqual(procedureSteps(run),[{tool:'office_browser_read',arguments:{url:'https://www.python.org/downloads/'}},{tool:'office_result_draft',arguments:{format:'json',label:'versions'}}],'Only successful dispatched steps, without run-scoped arguments, readbacks or the trace.');
+  assert.ok(requestTerms('Python과 Node.js 최신 안정 버전을 각 공식 사이트에서 확인해 JSON으로 저장해줘').includes('node.js'));
+  const request='Python과 Node.js 최신 안정 버전을 각 공식 사이트에서 확인해 JSON으로 저장해줘';
+  assert.equal(similarProcedure(store,'p',request),null);
+  const saved=recordVerifiedProcedure(store,'p','work-1',request,run);assert.equal(saved.successes,1);
+  const again=similarProcedure(store,'p','Python과 Node.js 최신 안정 버전을 공식 사이트에서 확인해 JSON 파일로 저장해줘');
+  assert.equal(again.id,saved.id);assert.ok(again.similarity>=0.5);assert.match(procedureGuidance(again).meaning,/guidance, not evidence/u);
+  assert.equal(similarProcedure(store,'p','USGS 공개 피드에서 지난 24시간 지진을 CSV 저장해줘'),null,'An unrelated request gets nothing.');
+  assert.equal(similarProcedure(store,'other-project',request),null,'Procedures stay inside their project.');
+  assert.equal(recordVerifiedProcedure(store,'p','work-2',request,run).successes,2,'The same request verified again raises its score.');
+  recordProcedureFailure(store,'p',saved.id);assert.ok(similarProcedure(store,'p',request),'Two verified runs against one failure: still offered.');
+  recordProcedureFailure(store,'p',saved.id);assert.equal(similarProcedure(store,'p',request),null,'A procedure that fails as often as it succeeds is no longer offered.');
+});
