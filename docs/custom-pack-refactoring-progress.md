@@ -10,6 +10,25 @@ Delivery branch: refactor/custom-pack-reliability.
 
 ### Current continuation: remaining 23 original Works
 
+Next completed unit (04:28Z): fresh local-record status now recomputes the full
+registered original plus exact recipe, compares the complete retained JSON draft
+bytes and verifies originals unchanged, without replay/backfilling old receipts.
+Draft browser catalog/plan advertise the already enforced before/after capture
+contract but never claim site readiness. Oversized immutable verification records
+remain in the database and can be read losslessly through same-Work result-hash
+bound pages; status presents an explicitly incomplete reference. Focused32/32
+PASS, receipt runtime-tests-2026-10-01T04-28-12-046Z; previous31/32 failed only
+because the new fixture omitted required target-policy fields and is retained.
+Build and ledger196 passed. The prior whole quick session70386 ended without
+a final reporter receipt: it is NOT certified as complete. Its process is dead.
+The earlier matrix2714971 also disappeared before final verification; original
+receipts/checkpoints remain. Runner skill applied to launch the exact same
+isolated server detached with owned PID2747013 (wrapper2747006), private log and
+job receipt. Paused original food/record/form cases resumed through normal
+controls. Current original acceptance remains1/24;23 active/queued is admission,
+not completion. Whole regression must finish on a frozen final revision before
+publishing its counts. Never substitute focused or partial output for that result.
+
 Latest implementation unit (October1, before final frozen regression): retained
 source field names are now supplied for explicit same-Work replanning, with
 binding/hash checks and no raw values or freshness assertion. Focused46/46 passed.

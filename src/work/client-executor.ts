@@ -58,13 +58,13 @@ const validatedDecisionOutput=workClientDecisionSchema.superRefine(decisionField
 /** After all business stages are reported, only reread a saved result belonging
  * to this checkpoint. Host preflight still verifies current scope and bytes. */
 function savedResultReadback(plan:WorkPlan,reports:ReturnType<typeof currentStageReports>,checkpoint:WorkClientCheckpoint,decision:{tool_name:string|null;arguments_json:string|null}):boolean{
-  if(reports.length!==businessSteps(plan).length||!['runtime_pack_status','office_result_read'].includes(decision.tool_name??''))return false;
+  if(reports.length!==businessSteps(plan).length||!['runtime_pack_status','office_result_read','office_pack_receipt_read','office_pack_source_read'].includes(decision.tool_name??''))return false;
   let args:Record<string,unknown>;try{args=JSON.parse(decision.arguments_json??'null');}catch{return false;}
   if(!args||typeof args!=='object'||Array.isArray(args)||args.work_id!==undefined&&args.work_id!==checkpoint.work_id)return false;
   return checkpoint.observations.some(item=>{
     if(!item.invocation.dispatched||item.receipt.status!=='succeeded'||item.receipt.effect_state!=='verified')return false;
     const value=item.receipt.value as Record<string,unknown>|null;
-    if(decision.tool_name==='runtime_pack_status')return item.invocation.tool_name==='runtime_pack_run'&&typeof args.run_id==='string'&&value?.run_id===args.run_id;
+    if(['runtime_pack_status','office_pack_receipt_read','office_pack_source_read'].includes(decision.tool_name??''))return item.invocation.tool_name==='runtime_pack_run'&&typeof args.run_id==='string'&&value?.run_id===args.run_id;
     return ['runtime_pack_run','office_result_draft'].includes(item.invocation.tool_name)&&typeof args.request_id==='string'&&item.invocation.request_id===args.request_id;
   });
 }

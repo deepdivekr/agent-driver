@@ -6,10 +6,27 @@ import {rowSchema,type Row} from './contracts.js';
 import {applyFilters,deduplicate,encodedRowsChunks,hashEncodedRows,hashScopedFile,iterateParsedRows,normalizeNumericColumns,scopedFileChunks,sortRows} from './data.js';
 import {type PackRun,PackStore} from './store.js';
 import {normalizeDeclaredSourceRows,sourceNormalizationMatches,type SourceEvidence} from './sources.js';
+import {assertLocalRecordUnchanged,localRecordDraft} from './local-records.js';
 
 const object=(value:unknown):Record<string,unknown>|null=>value!==null&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
 const hash=(value:unknown)=>snapshotHash(value);
 const sensitiveRow=(row:Row)=>Object.keys(row).some(key=>/^(?:password|passwd|cookie|authorization|access_token|refresh_token|api_key)$/iu.test(key))||/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(JSON.stringify(row));
+
+/** Fresh technical comparison of a retained local-record draft. Never writes
+ * the source/artifact or backfills its immutable old receipt. */
+export async function localRecordDraftCertificate(config:HostConfig,run:PackRun){
+  try{
+    if(run.status!=='draft_ready'||run.task_id!==null||run.recipe.family!=='record.update'||!config.packs)return null;
+    const recipe=run.recipe,target=config.packs.local_records.find(item=>item.id===recipe.target),result=object(run.result),artifact=object(result?.artifact);
+    if(!target||result?.local_record_draft!==true||result.external_submit!==false||result.originals_modified!==false||!artifact||typeof artifact.path!=='string'||resolve(dirname(artifact.path))!==resolve(join(dirname(config.dbPath),'pack-artifacts')))return null;
+    const current=await localRecordDraft(target,recipe.values,recipe.expected_before_sha256);
+    if(current.receipt.source_sha256!==result.source_sha256||current.receipt.before_sha256!==result.before_sha256||current.receipt.after_sha256!==result.after_sha256)return null;
+    const expected=hashEncodedRows(current.rows,'json'),actual=await hashScopedFile(artifact.path);
+    if(artifact.format!=='json'||artifact.rows!==current.rows.length||artifact.originals_modified!==false||actual.sha256!==expected.sha256||actual.bytes!==expected.bytes||artifact.sha256!==actual.sha256||artifact.bytes!==actual.bytes)return null;
+    await assertLocalRecordUnchanged(target,current.receipt.source_sha256);
+    return {version:1,scope:'current_registered_original_to_retained_local_record_draft',run_id:run.id,target:target.id,recipe_sha256:hash(recipe),checked_at:new Date().toISOString(),matched_rows:current.receipt.matched_rows,source_rows:current.rows.length,source_sha256:current.receipt.source_sha256,artifact_sha256:actual.sha256,artifact_bytes:actual.bytes,exact_full_array_match:true,non_target_rows_unchanged:true,non_target_fields_unchanged:true,original_unchanged_at_check:true,observed_before_values:current.receipt.observed_before_values,observed_after_values:current.receipt.observed_after_values,user_goal_verified:'not_asserted'};
+  }catch{return null;}
+}
 
 /** Lossless, bounded readback of this run's already collected research rows.
  * No network/file reread, freshness claim or inferred fields. An incomplete,

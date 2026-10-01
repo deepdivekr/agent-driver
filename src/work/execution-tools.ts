@@ -18,7 +18,7 @@ import {PACK_ENGINE_VERSION} from '../packs/runtime.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {assertCustomPackInvocation,customPackWorkBinding} from './custom-pack-repeat.js';
 import {assertSealedCollectionRecipe} from './collection-contract.js';
-import {nativeOutputCertificate,savedNativeSourceReadback,savedNativeSourceReadbackPage,savedResearchSourceReadback} from '../packs/native-output-certificate.js';
+import {localRecordDraftCertificate,nativeOutputCertificate,savedNativeSourceReadback,savedNativeSourceReadbackPage,savedResearchSourceReadback} from '../packs/native-output-certificate.js';
 import {dirname,join,resolve} from 'node:path';
 import {mkdir,open,realpath,stat} from 'node:fs/promises';
 import {nativeProcessRunner} from '../integrations/subscription-auth.js';
@@ -34,7 +34,7 @@ const effects={
   runtime_pack_catalog:'read_only',runtime_pack_plan:'read_only',runtime_pack_local_record_inspect:'read_only',runtime_pack_run:'local_write',runtime_pack_status:'read_only',runtime_pack_execute_approved:'external_write',runtime_pack_watch_tick:'local_write',runtime_pack_watch_pause:'local_write',runtime_pack_events:'read_only',
   runtime_files_roots:'read_only',runtime_files_request:'draft_only',runtime_files_scan:'draft_only',runtime_files_inspect:'read_only',runtime_files_classify:'draft_only',runtime_files_propose:'draft_only',runtime_files_report:'read_only',
   runtime_windows_catalog:'read_only',runtime_windows_design:'draft_only',runtime_windows_start:'draft_only',runtime_windows_step:'external_write',runtime_windows_status:'read_only',
-  runtime_work_context:'read_only',runtime_coding_projects:'read_only',runtime_coding_start:'local_write',runtime_coding_step:'local_write',runtime_coding_status:'read_only',runtime_coding_pause:'draft_only',runtime_coding_reconcile:'read_only',office_web_search:'read_only',office_social_search:'read_only',office_browser_read:'read_only',office_browser_links:'read_only',office_result_draft:'local_write',office_result_read:'read_only',office_pack_source_read:'read_only',
+  runtime_work_context:'read_only',runtime_coding_projects:'read_only',runtime_coding_start:'local_write',runtime_coding_step:'local_write',runtime_coding_status:'read_only',runtime_coding_pause:'draft_only',runtime_coding_reconcile:'read_only',office_web_search:'read_only',office_social_search:'read_only',office_browser_read:'read_only',office_browser_links:'read_only',office_result_draft:'local_write',office_result_read:'read_only',office_pack_source_read:'read_only',office_pack_receipt_read:'read_only',
 } as const satisfies Record<string,WorkClientTool['effect']>;
 type ExecutionToolName=keyof typeof effects;
 const injectWork=new Set(['runtime_pack_plan','runtime_pack_local_record_inspect','runtime_pack_run','runtime_files_request','runtime_files_scan','runtime_files_propose','runtime_files_report','runtime_windows_design','runtime_windows_start','runtime_work_context','runtime_coding_start']);
@@ -127,6 +127,7 @@ function resultBytes(text:string,format:unknown){
 }
 const resultReadInput=z.object({request_id:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u),offset:z.number().int().min(0).default(0),max_bytes:z.number().int().min(4).max(12000).default(12000)}).strict();
 const packSourceReadInput=z.object({run_id:watchRunId,source_id:z.string().min(1).max(120),offset:z.number().int().min(0).default(0),max_bytes:z.number().int().min(4).max(8192).default(8192)}).strict();
+const packReceiptReadInput=z.object({run_id:watchRunId,result_sha256:z.string().regex(/^[a-f0-9]{64}$/u),offset:z.number().int().min(0).default(0),max_bytes:z.number().int().min(4).max(8192).default(8192)}).strict();
 /** The Work receipt JSON has a smaller budget than the raw UTF-8 page.
  * Cut on code-point boundaries and advance by exactly the bytes returned. */
 function boundedResultPage(text:string,maxEncodedBytes:number){
@@ -223,6 +224,7 @@ export class WorkExecutionTools {
     const context=descriptors.find(item=>item.name==='runtime_work_context');
     if(context)context.description+=' Omit reference_ids to read the core Work context. If selecting excerpts, use only IDs from this Work reference_map.references; tool receipt evidence_ids are a different namespace and cannot be used as reference_ids.';
     const packStatus=descriptors.find(item=>item.name==='runtime_pack_status');
+    if(packStatus)packStatus.description+=' Local-record draft status includes a fresh local_record_draft_certificate only when current whole originals and retained draft bytes match the exact bound recipe. Large verification metadata is a paged reference, never discarded: read office_pack_receipt_read with its run_id and result_sha256 until next_offset is null. A reference/summary is not the full verification record.';
     if(packStatus)packStatus.description+=' For a successful task-free portal.collect or file.pipeline run, native_output_certificate independently rechecks saved observed rows through the native transform against exact local artifact bytes and fresh file-source hashes. saved_source_readback is only a bounded preview; use office_pack_source_read with this run_id and an exact recipe source_id, following next_offset until the full saved original observation is read. Neither proves that recipe filters match the user goal or that remote sources remain current.';
     descriptors.push({name:'office_browser_read',description:'Open and read a URL explicitly supplied by the user, or a link in an already observed page. Returns live text, links, timestamp and executor. Read-only; never submits or signs in. Independent same-environment executor fallback is automatic.',input_schema:z.toJSONSchema(z.object({url:z.string().url().max(4096)}).strict()),effect:'read_only'});
     descriptors.push({name:'office_web_search',description:'Search the public web when the user supplied a topic but no source URL. Choose google (default), bing or duckduckgo; the host constructs its fixed public search URL from query text (maximum 512 characters). Returns actual DOM text and observed links only, with timestamps and executor; no generated search results. For observed Google unusual traffic in headless or the managed Playwright guest, the host hands the identical Google query directly to registered Aside once, skipping the guest retry. Never replace that query with Bing or DuckDuckGo. If environment_block=true is returned, follow next_action for Aside connection or user confirmation; no repeat or profile cycling. For another public-provider challenge, an independent source within scope may be used. Never solve CAPTCHA, sign in or bypass access controls. Credentials and private-host query URLs are rejected. Follow only actually observed links. Pack models=off does not disable this tool or the configured Work LLM.',input_schema:z.toJSONSchema(z.object(searchArguments).strict(),{io:'input'}),effect:'read_only'});
@@ -232,6 +234,7 @@ export class WorkExecutionTools {
     descriptors.push({name:'office_result_draft',description:'Save an actual TXT, JSON or CSV Work result/report inside Agent Office. Supply format=json or format=csv with valid content for structured output; omitted format preserves TXT compatibility. "Office result file" or "Office 결과 파일" refers to an app artifact, not automatically a Microsoft Word/Excel document. If the user specified no file format, TXT is valid when it preserves the requested content; never claim a TXT artifact satisfies an explicitly requested CSV, JSON, Word or Excel format. Write observed source evidence in the requested language without invented facts. The host rereads exact bytes and SHA-256 before a verified receipt. Returns text, artifact metadata and request_id. Use office_result_read with that request_id for readback; runtime_files_report is for user folders. Creates only an Office-owned file, never sends a message or changes an external service.',input_schema:z.toJSONSchema(resultInput),effect:'local_write'});
     descriptors.push({name:'office_result_read',description:'Read an Office-owned TXT/JSON/CSV output using its exact successful host invocation request_id, never an arbitrary path. Streams a check of the entire file SHA-256, byte count and UTF-8 validity; returns only a bounded page preserving the original BOM and final newline. offset defaults to 0, max_bytes to 12000. For has_more, use the returned next_offset with the same request_id. Page text is not the entire file: do not claim full inspection or parse a partial JSON page as complete JSON. Remove an initial BOM only after assembling a complete JSON document. Full artifact metadata remains verified on every page. Pack outputs require a bound task-free successful or local-record draft-only run. Failed-quality output, foreign Work files and binary formats remain unavailable. Existing verified receipts survive resume.',input_schema:z.toJSONSchema(resultReadInput),effect:'read_only'});
     if(this.spec.route.kind==='pack'&&['portal.collect','file.pipeline'].includes(this.spec.route.pack_family??''))descriptors.push({name:'office_pack_source_read',description:'Read one bounded page of original saved source observations from a successful native portal.collect or file.pipeline Pack run of this Work. Supply its exact run_id and one source_id from that run recipe; offset defaults to 0, max_bytes to 8192. Follow next_offset and assemble every page before claiming a full source read. This rechecks the saved native certificate and source binding, but does not fetch fresh remote data, prove the user goal, grant a new source, or read an arbitrary path.',input_schema:z.toJSONSchema(packSourceReadInput),effect:'read_only'});
+    if(this.spec.route.kind==='pack')descriptors.push({name:'office_pack_receipt_read',description:'Read bounded UTF-8 pages of the unchanged durable result of an exact same-Work Pack run. Use result_sha256 from the status reference, and follow every next_offset before claiming whole inspection. This does not rerun a Pack, modify evidence, verify business completion, fetch sources or allow paths. Changed results reject the old hash.',input_schema:z.toJSONSchema(packReceiptReadInput),effect:'read_only'});
     return descriptors;
   }
   private table(name:string){return Boolean(this.store.desktopState.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));}
@@ -476,6 +479,11 @@ export class WorkExecutionTools {
     if(name==='office_browser_links'){this.browserLinksPage(args);return browserLinksInput.parse(args);}
     if(name==='office_result_draft')return validatedResultInput(args);
     if(name==='office_result_read')return this.validateResultRead(args);
+    if(name==='office_pack_receipt_read'){
+      const input=packReceiptReadInput.parse(args),run=this.ownPack(input.run_id);
+      requireCondition(run.result!==null&&hashJson(run.result)===input.result_sha256,'WORK_PACK_RESULT_CHANGED');
+      return input;
+    }
     if(name==='office_pack_source_read'){
       const input=packSourceReadInput.parse(args),run=this.ownPack(input.run_id);
       const recipe=run.recipe;
@@ -524,6 +532,17 @@ export class WorkExecutionTools {
   async execute(name:string,args:Record<string,unknown>,requestId:string){
     this.guard();this.store.intakeWork(this.config.project.id,this.workId);
     if(name==='office_browser_links')return this.browserLinksPage(args);
+    if(name==='office_pack_receipt_read'){
+      const input=this.validate(name,args,requestId) as z.infer<typeof packReceiptReadInput>,run=this.ownPack(input.run_id),bytes=Buffer.from(JSON.stringify(run.result),'utf8');
+      requireCondition(input.offset<=bytes.length,'WORK_RESULT_PAGE_OFFSET_INVALID');
+      if(input.offset<bytes.length)requireCondition((bytes[input.offset]!&0xc0)!==0x80,'WORK_RESULT_PAGE_OFFSET_INVALID');
+      let end=Math.min(bytes.length,input.offset+input.max_bytes);
+      while(end<bytes.length&&(bytes[end]!&0xc0)===0x80)end--;
+      const page=boundedResultPage(bytes.subarray(input.offset,end).toString('utf8'),8192),next=input.offset+page.returnedBytes;
+      requireCondition(input.offset===bytes.length||page.returnedBytes>0,'WORK_RESULT_PAGE_OFFSET_INVALID');
+      this.dispatched.set(requestId,{name,input});
+      return {status:'succeeded',scope:'durable_same_work_pack_result_page',run_id:run.id,result_sha256:input.result_sha256,view_sha256:sha(bytes),total_bytes:bytes.length,offset:input.offset,returned_bytes:page.returnedBytes,next_offset:next<bytes.length?next:null,has_more:next<bytes.length,full_result_read:input.offset===0&&next===bytes.length,user_goal_verified:'not_asserted',text:page.text};
+    }
     if(name==='office_pack_source_read'){
       const input=this.validate(name,args,requestId) as z.infer<typeof packSourceReadInput>,run=this.ownPack(input.run_id);
       const page=await savedNativeSourceReadbackPage(this.store,this.config,run,{source_id:input.source_id,offset:input.offset,max_bytes:input.max_bytes});
@@ -863,7 +882,8 @@ export class WorkExecutionTools {
     }
     // Only this host's scoped durable-run comparison produces this observation.
     // Its state proves an execution phase, never the business outcome by itself.
-    let scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null,executed_contract:executedContract,host_run_observation:hostRunObservation}:name==='runtime_pack_status'&&data?{...data,executed_contract:executedContract,host_run_observation:hostRunObservation,native_output_certificate:outputCertificate,saved_source_readback:sourceReadback}:value;
+    const recordCertificate=name==='runtime_pack_status'&&data&&hostRunObservation&&typeof data.run_id==='string'?await localRecordDraftCertificate(this.config,this.ownPack(data.run_id)):null;
+    let scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null,executed_contract:executedContract,host_run_observation:hostRunObservation}:name==='runtime_pack_status'&&data?{...data,executed_contract:executedContract,host_run_observation:hostRunObservation,native_output_certificate:outputCertificate,saved_source_readback:sourceReadback,...(recordCertificate?{local_record_draft_certificate:recordCertificate}:{})}:value;
     if(name==='runtime_pack_status'&&sourceReadback?.scope==='saved_source_observations_before_filtering'&&Buffer.byteLength(JSON.stringify(scopedValue))>16000){
       // This optional inline source preview must not crowd out the immutable
       // result/contract/certificate. Originals remain available losslessly via
@@ -872,6 +892,13 @@ export class WorkExecutionTools {
       const preview=sourceReadback as Awaited<ReturnType<typeof savedNativeSourceReadback>>;
       sourceReadback=preview?{...preview,source_rows_complete:preview.observed_source_rows===0,truncated:preview.observed_source_rows!==0,sources:preview.sources.map(source=>({...source,rows:[],rows_returned:0,complete:source.rows_total===0}))}:null;
       scopedValue={...object(scopedValue),saved_source_readback:sourceReadback};
+    }
+    if(name==='runtime_pack_status'&&hostRunObservation&&Buffer.byteLength(JSON.stringify(scopedValue))>16000){
+      const result=object(data?.result),verification=object(result?.verification);
+      if(result&&verification&&typeof data?.run_id==='string'){
+        const reference={tool:'office_pack_receipt_read',run_id:data.run_id,result_sha256:hashJson(result),total_bytes:Buffer.byteLength(JSON.stringify(result)),full_verification_included:false};
+        scopedValue={...object(scopedValue),result:{...result,verification:{scope:verification.scope??'unobserved',all_checks_passed:verification.all_checks_passed??'unobserved',originals_modified:verification.originals_modified??'unobserved',readback:reference}},result_view:'verification_metadata_paged',durable_result_readback:reference};
+      }
     }
     const receiptValue=correctableQuality&&status==='retryable_failure'?{...object(scopedValue),correction:{kind:'data_quality',reason:'PACK_SOURCE_EVIDENCE_VERIFICATION_FAILED',automatic_correction_allowed:true,user_confirmation_required:false,quality_checks_passed:false,next_action:'Inspect preserved source records and verification receipts; correct only grounded recipe fields or collect missing evidence, then retry a validated recipe. Do not invent evidence, weaken requested checks or mark unverified data complete.'}}:watchFieldCorrection?{...object(scopedValue),correction:{kind:'source_contract',reason:'WATCH_COMPARISON_FIELD_MISSING',...watchFieldCorrection,automatic_field_substitution:false,new_pack_request_required:true,user_confirmation_required:false,next_action:'The prior watch baseline did not start. Use only these actually observed source field names to choose comparison_fields in a new monitor.watch recipe with a distinct request ID. Do not replay the failed request, infer a missing field, weaken the requested comparison, or claim a baseline/tick already exists.'}}:scopedValue;
     return {status,value:receiptValue,evidence_ids:status==='succeeded'&&id?[id]:[],effect_state:effectState,retry_safe:!challengedSearch&&!socialBlocked&&!watchFieldCorrection&&effectState==='none'&&(readOnly||status!=='succeeded')};

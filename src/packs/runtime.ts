@@ -14,7 +14,7 @@ import {browserCatalog,publicBrowserRecovery,type BrowserRouteOptions} from '../
 import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 import {applyFilters,deduplicate,normalizeNumericColumns,sortRows,exportRows,hashEncodedRows,hashScopedFile} from './data.js';
 import {judgeRow,ROW_DECISION_CATALOG,rowDecisionProfile,type LabelResult} from './judgment.js';
-import {verifiedDraftBrowserReadbacks,writeProtocol} from './browser-write.js';
+import {BROWSER_DRAFT_READBACK_CONTRACT,verifiedDraftBrowserReadbacks,writeProtocol} from './browser-write.js';
 import {type PreparedApproval} from '../taskpack/protocol.js';
 import {PACK_ENGINE_VERSION} from './engine-version.js';
 export {PACK_ENGINE_VERSION} from './engine-version.js';
@@ -211,7 +211,7 @@ export class FamilyRuntime {
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(this.accepting,'PACK_RUNTIME_DRAINING');
     const tool=packTools[name as keyof typeof packTools];requireCondition(tool,'UNKNOWN_TOOL');const input=tool.schema.parse(args) as Record<string,unknown>;
-    if(name==='runtime_pack_catalog')return {families:BASE_PACK_CATALOG,connected:this.config.packs!==null,models:this.config.packs?.models??'off',execution:'bounded_sources_and_reviewed_browser_targets',public_site_coverage:'not_universal'};
+    if(name==='runtime_pack_catalog')return {families:BASE_PACK_CATALOG,connected:this.config.packs!==null,models:this.config.packs?.models??'off',execution:'bounded_sources_and_reviewed_browser_targets',public_site_coverage:'not_universal',...(this.config.packs?.targets.some(target=>target.draft_only)?{browser_draft_readback_contract:BROWSER_DRAFT_READBACK_CONTRACT}:{})};
     if(name==='runtime_pack_plan'){
       const prompt=String(input.prompt);requireCondition(!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(prompt),'CREDENTIAL_LIKE_INPUT');
       const work=input.work_id?this.store.intakeWork(this.config.project.id,String(input.work_id)):null;
@@ -227,7 +227,7 @@ export class FamilyRuntime {
       return {status:cached?'ready_to_run':'needs_agent_design',dispatch_allowed:false,cache_hit:cached!==null,recipe:cached,instructions:PACK_DESIGN_INSTRUCTIONS+' Browser collection may select browser.environment and preferred_engine from browser_executors. These preferences never authorize another environment or transfer credentials. Browser write targets still use their approved write adapter; do not promise submission on a read-only executor.',browser_executors:browserCatalog(this.config),
         ...(work?{execution_binding:workExecutionBinding(work),requested_family:spec!.route.pack_family,bound_runs}:{}),
         families:BASE_PACK_CATALOG,windows_profiles:WINDOWS_WORKFLOWS.map(({id,title,family,example})=>({id,title,family,example})),windows_route:'For desktop work use runtime_windows_design from a ready Work, then start/step. Profiles are optional examples, never an app allowlist. Use current executor capabilities and preserve the requested target; native readiness is separate from browser connections.',recipe_schema:z.toJSONSchema(recipeSchema),connections:{sources:connectedSourceCatalog(this.config).map(source=>({...source,...(source.parameter_names?{parameters:source.parameter_names}:{})})),
-          targets:[...(this.config.packs?.targets.map(t=>({id:t.id,family:t.family,fields:Object.keys(t.fields),identity_field:t.identity_field,draft_only:t.draft_only,submission_enabled:!t.draft_only,auth_required:t.auth_required}))??[]),...(this.config.packs?.local_records.map(record=>({id:record.id,kind:'local_record',family:'record.update',fields:record.fields,editable_fields:record.fields,readable_fields:readableLocalRecordFields(record),identity_field:record.identity_field,draft_only:true,submission_enabled:false,auth_required:false,inspect_tool:'runtime_pack_local_record_inspect'}))??[])]},next_action:bound_runs.length?'inspect_bound_run_before_new_execution':cached?work?'runtime_pack_run_with_execution_binding':'runtime_pack_run_with_new_request_id':'caller_design_from_observed_data_or_request_connection'};
+          targets:[...(this.config.packs?.targets.map(t=>({id:t.id,family:t.family,fields:Object.keys(t.fields),identity_field:t.identity_field,draft_only:t.draft_only,submission_enabled:!t.draft_only,auth_required:t.auth_required,...(t.draft_only?{draft_readback_contract:BROWSER_DRAFT_READBACK_CONTRACT}:{})}))??[]),...(this.config.packs?.local_records.map(record=>({id:record.id,kind:'local_record',family:'record.update',fields:record.fields,editable_fields:record.fields,readable_fields:readableLocalRecordFields(record),identity_field:record.identity_field,draft_only:true,submission_enabled:false,auth_required:false,inspect_tool:'runtime_pack_local_record_inspect'}))??[])]},next_action:bound_runs.length?'inspect_bound_run_before_new_execution':cached?work?'runtime_pack_run_with_execution_binding':'runtime_pack_run_with_new_request_id':'caller_design_from_observed_data_or_request_connection'};
     }
     this.fresh();
     if(name==='runtime_pack_local_record_inspect'){

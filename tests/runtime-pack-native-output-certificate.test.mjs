@@ -33,6 +33,20 @@ async function fixture(t){
 }
 const portal={version:1,family:'portal.collect',request:'Collect observed IDs',sources:[{id:'rows',parameters:{}}],filters:[{field:'status',op:'eq',value:'Open'}],deduplicate_by:['id'],columns:['id'],format:'csv'};
 const file={version:1,family:'file.pipeline',request:'Normalize and sort all observed rows',sources:[{id:'rows',parameters:{}}],filters:[],deduplicate_by:['id'],columns:['id','score'],numeric_columns:['score'],sort:{field:'score',direction:'desc'},format:'json'};
+
+test('large immutable verification metadata is available losslessly through same-Work hash-bound pages',async t=>{
+  const x=await fixture(t),own=x.work('portal.collect','portal'),foreign=x.work('portal.collect','foreign'),result=await own.toolkit.execute('runtime_pack_run',{recipe:portal},'paged-receipt-run');
+  const stored=x.api.store.packRun(x.config.project.id,result.run_id),large={...stored.result,verification:{scope:'supplied_source_snapshot',all_checks_passed:true,originals_modified:false,receipts:Array.from({length:140},(_,i)=>({id:'proof-'+i,quote:'실제 원문 🎯 '+i,source_sha256:'a'.repeat(64),verdict:'supported'}))}};
+  x.api.store.hermesState.prepare('UPDATE family_run SET result=? WHERE id=?').run(JSON.stringify(large),stored.id);
+  const view=await status(own.toolkit,stored.id,'paged-receipt-status'),bounded=boundWorkToolValue(view.receipt.value),ref=bounded.durable_result_readback;
+  assert.equal(bounded.result_view,'verification_metadata_paged');assert.equal(ref.full_verification_included,false);assert.ok(Buffer.byteLength(JSON.stringify(bounded))<=16000);
+  const args={run_id:stored.id,result_sha256:ref.result_sha256,max_bytes:8192};let offset=0,text='',sha=null,pages=0;
+  do{const page=await own.toolkit.execute('office_pack_receipt_read',{...args,offset},'read-receipt-'+pages++);assert.equal(page.result_sha256,ref.result_sha256);assert.equal(page.full_result_read,false);assert.equal(sha===null||sha===page.view_sha256,true);sha=page.view_sha256;text+=page.text;offset=page.next_offset;}while(offset!==null);
+  assert.deepEqual(JSON.parse(text),large);assert.equal(text,JSON.stringify(large));assert.ok(pages>1);
+  await assert.rejects(foreign.toolkit.execute('office_pack_receipt_read',args,'foreign-receipt'),/WORK_TOOL_RUN_SCOPE_MISMATCH/u);
+  await assert.rejects(own.toolkit.execute('office_pack_receipt_read',{...args,result_sha256:'0'.repeat(64)},'changed-hash'),/WORK_PACK_RESULT_CHANGED/u);
+  assert.equal(JSON.stringify(x.api.store.packRun(x.config.project.id,stored.id).result),JSON.stringify(large));assert.equal(x.api.store.hermesState.prepare('SELECT COUNT(*) AS n FROM family_run').get().n,1);
+});
 async function status(toolkit,runId,requestId){const value=await toolkit.execute('runtime_pack_status',{run_id:runId},requestId);return {value,receipt:await toolkit.receipt('runtime_pack_status',value,requestId)};}
 
 test('fresh same-Work status certifies exact observed portal/file transformations, never user-goal semantics',async t=>{
