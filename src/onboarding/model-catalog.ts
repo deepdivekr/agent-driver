@@ -34,8 +34,13 @@ export async function codexModelCatalog(executable?:string,timeoutMs=8_000):Prom
   });
 }
 
-/** Claude's stable aliases follow its current client release; arbitrary IDs remain editable in settings. */
-export function claudeModelCatalog():ModelCatalog{return catalog('claude_cli_aliases',[{id:'sonnet',label:'Sonnet (latest)'},{id:'opus',label:'Opus (latest)'},{id:'haiku',label:'Haiku (latest)'}]);}
+/** Documented IDs are picker choices, not proof of this account's availability. Client aliases may vary by provider. */
+export function claudeModelCatalog():ModelCatalog{return catalog('claude_documented_ids_and_aliases',[
+  {id:'claude-sonnet-5-5',label:'Claude Sonnet 5.5 · exact ID (account unverified)'},
+  {id:'sonnet',label:'Sonnet · client alias (version may vary)'},
+  {id:'opus',label:'Opus · client alias (version may vary)'},
+  {id:'haiku',label:'Haiku · client alias (version may vary)'},
+]);}
 export async function opencodeModelCatalog(environment:NodeJS.ProcessEnv=process.env,runner:SafeProcessRunner=nativeProcessRunner):Promise<ModelCatalog>{
   let executable:string;try{executable=resolveSubscriptionClientExecutable('opencode',environment);}catch{return unavailable('opencode_cli');}
   try{const result=await runner.run({executable,args:['models'],timeout_ms:8_000});if(result.code!==0)return unavailable('opencode_cli');

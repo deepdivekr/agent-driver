@@ -11,7 +11,7 @@ import {loadHostConfig} from '../dist/interface/config.js';
 import {PackStore} from '../dist/packs/store.js';
 import {FamilyRuntime} from '../dist/packs/runtime.js';
 import {WorkExecutionTools} from '../dist/work/execution-tools.js';
-import {BoundedWorkClientExecutor,WorkClientToolInputError} from '../dist/work/client-executor.js';
+import {BoundedWorkClientExecutor,WorkClientToolInputError,WORK_CLIENT_EXECUTION_INSTRUCTIONS} from '../dist/work/client-executor.js';
 import {initialWorkPlan} from '../dist/work/plan.js';
 import {initWorkExecution} from '../dist/work/activity.js';
 import {CodingRuntime} from '../dist/coding/runtime.js';
@@ -19,6 +19,7 @@ import {nativeProcessRunner} from '../dist/integrations/subscription-auth.js';
 import {sha} from '../dist/packs/data.js';
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 import {setSiteAuth} from '../dist/swarm/browser-auth.js';
+import {workPlanningContext,WORK_DEFINITION_INSTRUCTIONS} from '../dist/work/runtime.js';
 
 const model={calls:[],async call(){throw Error('No paid model in this test');}};
 const proposal=(family='research.search')=>({title:'Disposable work',desired_outcome:'Observe the delegated source',completion_checks:[{id:'source',result:'Read source',evidence:'Source receipt'}],assumptions:[],route:{kind:'pack',pack_family:family},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],plan:initialWorkPlan('Observe the delegated source','read_only')});
@@ -49,11 +50,26 @@ test('runtime contract missing Pack policy and unregistered sources are rejected
  assert.deepEqual(empty.calls,[]);assert.deepEqual(empty.store.officeRuns(empty.config.project.id,empty.work.id),[]);
  assert.match(absent.toolkit.catalog().find(tool=>tool.name==='office_web_search').description,/Never replace that query with Bing or DuckDuckGo/u);
 });
+test('runtime contract registered Pack file source is not treated as an ungranted user folder',async t=>{
+ const source={id:'nyc311_file',kind:'file',path:join(tmpdir(),'registered-pack-source.json'),format:'json'};
+ const x=await fixture(t,{spec:proposal('file.pipeline'),packs:{sources:[source],targets:[],models:'off'}});
+ const context=workPlanningContext(x.store,x.config);
+ assert.deepEqual(context.connected_file_sources,[{kind:'file',id:'nyc311_file',format:'json'}]);
+ assert.equal(JSON.stringify(context).includes(source.path),false,'Planning inventory does not reveal the registered local path');
+ assert.match(WORK_DEFINITION_INSTRUCTIONS,/registered Pack file source.*runtime_pack_plan and runtime_pack_run/u);
+ const mistaken={purpose:'Inspect connected nyc311_file to prepare its pipeline',read_content:true,allow_move:false};
+ assert.throws(()=>x.toolkit.validate('runtime_files_request',mistaken,'mistaken-folder'),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_PACK_FILE_ALREADY_CONNECTED'&&error.not_dispatched===true);
+ await assert.rejects(x.toolkit.execute('runtime_files_request',mistaken,'direct-mistaken-folder'),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_PACK_FILE_ALREADY_CONNECTED');
+ assert.deepEqual(x.calls,[],'No folder permission request was dispatched');
+ assert.doesNotThrow(()=>x.toolkit.validate('runtime_files_request',{purpose:'Organize a different unregistered user folder',allow_move:true},'real-folder'));
+});
 test('runtime contract Work tool catalog distinguishes durable drafts, local artifacts and external-capable effects; no grant/approve or cross-Work resume tool',async t=>{
  const x=await fixture(t),map=Object.fromEntries(x.toolkit.catalog().map(v=>[v.name,v]));
  assert.equal(map.runtime_pack_run.effect,'local_write');assert.equal(map.runtime_pack_execute_approved.effect,'external_write');assert.equal(map.runtime_windows_step.effect,'external_write');
  for(const name of ['runtime_files_request','runtime_files_scan','runtime_files_classify','runtime_files_propose','runtime_windows_design','runtime_windows_start'])assert.equal(map[name].effect,'draft_only');
  assert.equal(map.office_browser_read.effect,'read_only');assert.equal(map.runtime_pack_status.effect,'read_only');
+ assert.match(map.office_result_draft.description,/actual TXT, JSON or CSV.*Agent Office/u);assert.match(map.office_result_draft.description,/explicitly requested CSV, JSON, Word or Excel/u);
+ assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/"Office 결과 파일".*Agent Office/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/An explicit CSV, JSON, Word or Excel format requires actual bytes/u);
  for(const name of ['runtime_files_grant','runtime_files_apply','runtime_pack_approve','runtime_coding_last','runtime_windows_act'])assert.equal(map[name],undefined);
  assert.match(map.runtime_files_request.description,/never grants access/u);assert.match(map.runtime_pack_execute_approved.description,/cannot approve/u);
 });
@@ -76,6 +92,17 @@ test('runtime fixture ticker social read uses only the historically ready regist
  loginLimited=true;const blocked=await tool.execute('office_social_search',{site:'x.com',query:'ASTS'},'social-limited');
  assert.equal(blocked.social_access,'not_verified');assert.equal(blocked.reason,'WORK_SOCIAL_LOGIN_LIMITED');assert.deepEqual(blocked.links,[]);assert.equal((await tool.receipt('office_social_search',blocked,'social-limited')).status,'retryable_failure');assert.deepEqual(selected,['neo-social']);
  await assert.rejects(tool.execute('office_social_search',{site:'x.com',query:'ASTS'},'social-retry'),/WORK_SOCIAL_PROFILE_NOT_READY/u);
+});
+test('runtime contract invalid Pack status ID is correctable before dispatch without exposing foreign runs',async t=>{
+ const x=await fixture(t),owned=x.store.beginPack(x.config.project.id,'owned-status',recipe,'binding',x.work.id).run;
+ const foreign=ready(x.store,x.config),other=x.store.beginPack(x.config.project.id,'foreign-status',recipe,'binding',foreign.id).run;
+ assert.throws(()=>x.toolkit.validate('runtime_pack_status',{run_id:other.id},'invalid-read'),error=>{
+   assert.ok(error instanceof WorkClientToolInputError);assert.equal(error.code,'WORK_TOOL_RUN_SCOPE_MISMATCH');
+   assert.ok(error.detail.includes(owned.id));assert.equal(error.detail.includes(other.id),false);return true;
+ });
+ assert.equal(x.calls.length,0);
+ assert.equal(x.toolkit.validate('runtime_pack_status',{run_id:owned.id},'valid-read').run_id,owned.id);
+ await assert.rejects(x.toolkit.execute('runtime_pack_status',{run_id:other.id},'still-foreign'),/WORK_TOOL_RUN_SCOPE_MISMATCH/u);
 });
 test('runtime fixture generic acronym article does not infer a signed-in social source',async t=>{
  const x=await fixture(t,{spec:{...proposal(),desired_outcome:'Read a generic API article'},prompt:'API 기사 리서치'});
@@ -169,7 +196,7 @@ test('runtime native Office result draft is scoped, immutable per request, hash-
  const x=await fixture(t),args={label:'Source summary',text:'Read the observed source.\nA second factual sentence.'};
  const result=await x.toolkit.execute('office_result_draft',args,'report-one');assert.equal(result.external_delivery,false);assert.equal(result.work_id,x.work.id);assert.equal(result.run_id,x.toolkit.runId);assert.equal(result.title,args.label);assert.match(result.artifact.path,new RegExp(x.work.id));
  assert.equal(await readFile(result.artifact.path,'utf8'),args.text+'\n');assert.equal((await x.toolkit.receipt('office_result_draft',result,'report-one')).effect_state,'verified');
- const readback=await x.toolkit.execute('office_result_read',{request_id:result.request_id},'read-report');assert.equal(readback.text,args.text);assert.equal(readback.verified_by,'independent_sha256_and_bytes_readback');assert.deepEqual(readback.artifact,result.artifact);
+ const readback=await x.toolkit.execute('office_result_read',{request_id:result.request_id},'read-report');assert.equal(readback.text,args.text+'\n');assert.equal(Buffer.byteLength(readback.text),readback.page.returned_bytes);assert.equal(readback.verified_by,'independent_sha256_and_bytes_readback');assert.deepEqual(readback.artifact,result.artifact);
  await assert.rejects(x.toolkit.execute('office_result_read',{request_id:'unobserved-report'},'not-ours'),/WORK_RESULT_RECEIPT_NOT_FOUND/u);await assert.rejects(x.toolkit.execute('office_result_read',{request_id:'report-one',path:'/other-work.txt'},'arbitrary-path'));
  const again=await x.toolkit.execute('office_result_draft',args,'report-one');assert.equal(again.deduplicated,true);assert.equal(again.artifact.path,result.artifact.path);
  await assert.rejects(x.toolkit.execute('office_result_draft',{...args,text:'Conflicting replacement'},'report-one'),/WORK_RESULT_REQUEST_ID_CONFLICT/u);assert.equal(await readFile(result.artifact.path,'utf8'),args.text+'\n');
@@ -197,7 +224,7 @@ test('runtime native Office result read resumes only verified same Work/run pers
  x.store.desktopState.exec('CREATE TABLE office_supervisor(run_id TEXT PRIMARY KEY,project_id TEXT,work_id TEXT,checkpoint TEXT)');
  x.store.desktopState.prepare('INSERT INTO office_supervisor VALUES(?,?,?,?)').run(x.toolkit.runId,x.config.project.id,x.work.id,JSON.stringify({observations:[{invocation:{tool_name:'office_result_draft',request_id:'persisted-report'},receipt}]}));
  const restored=new WorkExecutionTools(x.store,x.config,x.api,x.work.id,x.toolkit.runId,x.spec,x.work.prompt,()=>{},model);t.after(()=>restored.close());
- assert.equal((await restored.execute('office_result_read',{request_id:'persisted-report'},'read-after-restart')).text,'Persisted result');
+ assert.equal((await restored.execute('office_result_read',{request_id:'persisted-report'},'read-after-restart')).text,'Persisted result\n');
  const otherRun=new WorkExecutionTools(x.store,x.config,x.api,x.work.id,randomUUID(),x.spec,x.work.prompt,()=>{},model);t.after(()=>otherRun.close());
  await assert.rejects(otherRun.execute('office_result_read',{request_id:'persisted-report'},'wrong-run'),/WORK_RESULT_RECEIPT_NOT_FOUND/u);
 });
@@ -278,6 +305,24 @@ test('runtime contract Work planning references never mask a changed tool schema
  x.api.call=async()=>({...full,requested_family:'form.draft-submit'});await assert.rejects(x.toolkit.execute('runtime_pack_plan',{prompt:'Change the family'},'bad-plan-family'),/WORK_TOOL_PACK_FAMILY_MISMATCH/u);assert.equal(await readFile(x.source,'utf8'),x.original);
 });
 
+test('runtime fixture successful Pack alias feedback resumes readback under the host ID without rerunning the Pack',async t=>{
+ const x=await qualityReadFixture(t),canonical='successful-pack-host-id',alias='model-success-alias';
+ const value=await x.toolkit.execute('runtime_pack_run',{request_id:alias,recipe:x.good},canonical),receipt=await x.toolkit.receipt('runtime_pack_run',value,canonical);
+ assert.equal(receipt.status,'succeeded');assert.equal(receipt.effect_state,'verified');assert.equal(value.request_id,canonical);
+ x.checkpoint.observations.push({invocation:{request_id:canonical,turn:1,stage_id:'source',tool_name:'runtime_pack_run',arguments:{request_id:alias,recipe:x.good},effect:'local_write',dispatched:true},receipt,observed_at:new Date().toISOString()});
+ x.checkpoint.turn=2;x.save(x.checkpoint);
+ const before=await readFile(value.result.artifact.path),packCount=x.store.officeRuns(x.config.project.id,x.work.id).length,callCount=x.calls.length,executed=[];
+ const planning={calls:[],async call(_purpose,_instructions,input){
+   this.calls.push(structuredClone(input));
+   if(this.calls.length===1)return {action:'tool',stage_id:'read-alias',tool_name:'office_result_read',arguments_json:JSON.stringify({request_id:alias}),summary:'Read the already verified Pack output.',completed_checks:[],wait_reason:null};
+   if(this.calls.length===2){const rejected=input.checkpoint.observations.at(-1);assert.equal(rejected.invocation.dispatched,false);assert.equal(rejected.receipt.value.issues[0].code,'WORK_RESULT_REQUEST_ID_REQUIRED');assert.match(rejected.receipt.value.issues[0].message,new RegExp(canonical,'u'));assert.deepEqual(rejected.receipt.evidence_ids,[]);return {action:'tool',stage_id:'read-canonical',tool_name:'office_result_read',arguments_json:JSON.stringify({request_id:canonical}),summary:'Read the same output using the host ID.',completed_checks:[],wait_reason:null};}
+   return {action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Verified Pack output was read.',completed_checks:[{id:'source',evidence_ids:input.checkpoint.observations.at(-1).receipt.evidence_ids}],wait_reason:null};
+ }};
+ const result=await new BoundedWorkClientExecutor(planning).execute({work_id:x.work.id,run_id:x.toolkit.runId,prompt:x.work.prompt,completion_checks:x.spec.completion_checks,checkpoint:x.checkpoint,max_turns:3},{tools:x.toolkit.catalog(),checkpoint:x.save,validateTool:(name,args,context)=>x.toolkit.validate(name,args,context.request_id),executeTool:async(name,args,context)=>{executed.push(name);return x.toolkit.receipt(name,await x.toolkit.execute(name,args,context.request_id),context.request_id);},verifyCompletion:async(_checks,observations)=>{const read=observations.at(-1).receipt;return read.status==='succeeded'&&read.effect_state==='none'&&read.value.request_id===canonical&&JSON.stringify(JSON.parse(read.value.text))===JSON.stringify([{name:'Alpha',value:42}]);}});
+ assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);assert.deepEqual(executed,['office_result_read']);assert.equal(planning.calls.length,3);
+ assert.equal(x.calls.length,callCount);assert.equal(x.store.officeRuns(x.config.project.id,x.work.id).length,packCount);assert.deepEqual(await readFile(value.result.artifact.path),before);assert.equal(await readFile(x.source,'utf8'),x.original);
+});
+
 for(const identity of ['canonical','alias'])test(`runtime fixture known owned quality result ${identity} read gives undispatched correction and the bounded Work finishes from a new verified receipt`,async t=>{
  const x=await qualityReadFixture(t),before=await readFile(x.value.result.artifact.path),executed=[];
  const planning={calls:[],inputs:[],async call(_purpose,_instructions,input){
@@ -349,7 +394,7 @@ test('runtime contract source integrity cannot be forged by model output, foreig
 test('runtime contract data quality correction cannot turn real approvals, unknown writes or unproven reviews into automatic execution',async t=>{
  const x=await fixture(t),owned=x.store.beginPack(x.config.project.id,'reviewed-data',recipe,'binding',x.work.id).run,report={verification:{scope:'supplied_source_snapshot',all_checks_passed:false,originals_modified:false,receipts:[{status:'unobserved',reason:'SOURCE_OR_VALUE_MISSING'}]}};
  x.store.finishPack(x.config.project.id,owned.id,'needs_review',report,null);
- const raw={run_id:owned.id,status:'needs_review',result:report,task_id:null};assert.equal((await x.toolkit.receipt('runtime_pack_run',raw,'task-free-review')).status,'retryable_failure');assert.equal((await x.toolkit.receipt('runtime_pack_run',raw,'task-free-review')).effect_state,'none');
+ const raw={run_id:owned.id,status:'needs_review',result:report,task_id:null};assert.equal((await x.toolkit.receipt('runtime_pack_run',raw,owned.request_id)).status,'retryable_failure');assert.equal((await x.toolkit.receipt('runtime_pack_run',raw,owned.request_id)).effect_state,'none');
  x.store.finishPack(x.config.project.id,owned.id,'needs_review',{verification:{...report.verification,originals_modified:true}},null);const unproven={...raw,result:{verification:{...report.verification,originals_modified:true}}};assert.equal((await x.toolkit.receipt('runtime_pack_run',unproven,'not-proven')).status,'waiting_approval');
  x.store.finishPack(x.config.project.id,owned.id,'waiting_approval',report,null);assert.equal((await x.toolkit.receipt('runtime_pack_run',{...raw,status:'waiting_approval'},'approval')).status,'waiting_approval');
  const task=randomUUID();x.store.desktopState.prepare('UPDATE family_run SET status=?,task_id=?,result=? WHERE id=?').run('needs_review',task,JSON.stringify(report),owned.id);
@@ -366,13 +411,99 @@ test('runtime native verified Pack artifact readback survives restart and reject
  const foreign=ready(x.store,x.config,x.spec),foreignRun=randomUUID();x.store.desktopState.prepare('INSERT INTO office_supervisor VALUES(?,?,?,?)').run(foreignRun,x.config.project.id,foreign.id,checkpoint);const foreignTools=new WorkExecutionTools(x.store,x.config,x.api,foreign.id,foreignRun,x.spec,foreign.prompt,()=>{},model);t.after(()=>foreignTools.close());await assert.rejects(foreignTools.execute('office_result_read',{request_id:'pack-output'},'copied-foreign-receipt'),/WORK_TOOL_RUN_SCOPE_MISMATCH/u);
  await writeFile(result.result.artifact.path,'changed output bytes');await assert.rejects(restored.execute('office_result_read',{request_id:'pack-output'},'bad-bytes'),/WORK_RESULT_READBACK_MISMATCH/u);await assert.rejects(restored.execute('office_result_read',{request_id:'pack-output',path:source},'raw-path'));
 });
-test('runtime contract Pack readback rejects binary formats and oversize output without granting arbitrary folder access',async t=>{
+test('runtime contract Pack readback rejects binary formats without granting arbitrary folder access',async t=>{
  const x=await fixture(t),run=x.store.beginPack(x.config.project.id,'binary-readback',recipe,'binding',x.work.id).run;
  // Match the actual Office-owned artifact root rather than a user folder.
  const artifactRoot=join(dirname(x.config.dbPath),'pack-artifacts');await mkdir(artifactRoot,{recursive:true});
- for(const [id,format,bytes,expected]of [['binary','xlsx',Buffer.from([0,255,123,12]),'WORK_RESULT_UNSUPPORTED_FORMAT'],['large','txt',Buffer.alloc(16001,65),'WORK_RESULT_READBACK_TOO_LARGE']]){
+ for(const [id,format,bytes,expected]of [['binary','xlsx',Buffer.from([0,255,123,12]),'WORK_RESULT_UNSUPPORTED_FORMAT']]){
   const path=join(artifactRoot,`${run.id}-${id}.${format}`);await writeFile(path,bytes);const result={artifact:{path,sha256:sha(bytes),bytes:bytes.length,format,originals_modified:false}};x.store.finishPack(x.config.project.id,run.id,'succeeded',result,null);
-  const raw={run_id:run.id,status:'succeeded',task_id:null,result},receipt=await x.toolkit.receipt('runtime_pack_run',raw,id);assert.equal(receipt.effect_state,'verified');await assert.rejects(x.toolkit.execute('office_result_read',{request_id:id},`${id}-read`),new RegExp(expected));
+  const raw={run_id:run.id,status:'succeeded',task_id:null,result},receipt=await x.toolkit.receipt('runtime_pack_run',raw,run.request_id);assert.equal(receipt.effect_state,'verified');await assert.rejects(x.toolkit.execute('office_result_read',{request_id:run.request_id},`${id}-read`),new RegExp(expected));
  }
  assert.equal(x.calls.length,0);assert.deepEqual(x.store.localFileExplorer(x.config.project.id).roots(),[]);
+});
+
+test('runtime native large Pack artifacts use bounded verified UTF-8 pages and retain full integrity checks',async t=>{
+ const x=await fixture(t),run=x.store.beginPack(x.config.project.id,'paged-output',recipe,'binding',x.work.id).run;
+ const root=join(dirname(x.config.dbPath),'pack-artifacts');await mkdir(root,{recursive:true});
+ const path=join(root,run.id+'.txt'),bytes=Buffer.from('실제 자료 🌤️\n'.repeat(4000));await writeFile(path,bytes);
+ const result={artifact:{path,sha256:sha(bytes),bytes:bytes.length,format:'txt',originals_modified:false}};
+ x.store.finishPack(x.config.project.id,run.id,'succeeded',result,null);
+ assert.equal((await x.toolkit.receipt('runtime_pack_run',{run_id:run.id,status:'succeeded',task_id:null,result},'paged-output')).effect_state,'verified');
+ let offset=0,parts=[],pages=0;
+ do{const page=await x.toolkit.execute('office_result_read',{request_id:'paged-output',offset,max_bytes:12000},'page-'+pages++);
+   assert.equal(page.artifact.sha256,sha(bytes));assert.equal(page.page.total_bytes,bytes.length);assert.ok(page.page.returned_bytes<=12000);assert.equal(Buffer.byteLength(page.text),page.page.returned_bytes);assert.ok(!page.text.includes('\uFFFD'));
+   parts.push(page.text);offset=page.page.next_offset;
+ }while(offset!==null);
+ assert.ok(pages>1);assert.equal(parts.join(''),bytes.toString('utf8'));
+ await assert.rejects(x.toolkit.execute('office_result_read',{request_id:'paged-output',offset:1},'bad-offset'),/WORK_RESULT_PAGE_OFFSET_INVALID/);
+ await writeFile(path,Buffer.concat([bytes,Buffer.from('changed')]));
+ await assert.rejects(x.toolkit.execute('office_result_read',{request_id:'paged-output',offset:12000},'changed'),/WORK_RESULT_READBACK_MISMATCH/);
+ assert.deepEqual(x.store.localFileExplorer(x.config.project.id).roots(),[]);
+});
+
+test('runtime contract Pack result read rejects an alias of the durable host request ID, including after resume',async t=>{
+ const x=await fixture(t),canonical='canonical-pack-result',alias='aliased-pack-result';
+ const run=x.store.beginPack(x.config.project.id,canonical,recipe,'binding',x.work.id).run;
+ const root=join(dirname(x.config.dbPath),'pack-artifacts');await mkdir(root,{recursive:true});
+ const path=join(root,run.id+'.json'),bytes=Buffer.from('[{"value":42}]','utf8');await writeFile(path,bytes);
+ const result={artifact:{path,sha256:sha(bytes),bytes:bytes.length,format:'json',originals_modified:false}};
+ x.store.finishPack(x.config.project.id,run.id,'succeeded',result,null);
+ const value={run_id:run.id,status:'succeeded',task_id:null,result};
+ const wrong=await x.toolkit.receipt('runtime_pack_run',value,alias);
+ assert.notEqual(wrong.effect_state,'verified');
+ await assert.rejects(x.toolkit.execute('office_result_read',{request_id:alias},'alias-read'),/WORK_RESULT_RECEIPT_NOT_FOUND/u);
+ const verified=await x.toolkit.receipt('runtime_pack_run',value,canonical);
+ assert.equal(verified.effect_state,'verified');
+ x.store.desktopState.exec('CREATE TABLE office_supervisor(run_id TEXT PRIMARY KEY,project_id TEXT,work_id TEXT,checkpoint TEXT)');
+ const forged={observations:[{invocation:{tool_name:'runtime_pack_run',request_id:alias},receipt:{...verified,value}},{invocation:{tool_name:'runtime_pack_run',request_id:canonical},receipt:verified}]};
+ x.store.desktopState.prepare('INSERT INTO office_supervisor VALUES(?,?,?,?)').run(x.toolkit.runId,x.config.project.id,x.work.id,JSON.stringify(forged));
+ const restored=new WorkExecutionTools(x.store,x.config,x.api,x.work.id,x.toolkit.runId,x.spec,x.work.prompt,()=>{},model);t.after(()=>restored.close());
+ await assert.rejects(restored.execute('office_result_read',{request_id:alias},'alias-after-resume'),/WORK_RESULT_RECEIPT_NOT_FOUND/u);
+ assert.equal((await restored.execute('office_result_read',{request_id:canonical},'canonical-after-resume')).text,bytes.toString('utf8'));
+});
+
+test('runtime fixture artifactless successful Pack read gives a scoped Office draft ID without dispatch or file-scope failure',async t=>{
+ const x=await fixture(t,{spec:proposal('inbox.triage')}),packId='triage-host-id',draftId='saved-report-host-id';
+ const triage={version:1,family:'inbox.triage',request:'Classify connected records',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],judgment:{question:'Classify record',labels:{normal:'Routine'}},draft_by_label:{normal:'Internal note'}};
+ const run=x.store.beginPack(x.config.project.id,packId,triage,'binding',x.work.id).run,rows={items:[{record:{id:'one'},label:'normal',draft:'Internal note',sent:false}],unknown_count:0,external_messages_sent:0};
+ x.store.finishPack(x.config.project.id,run.id,'succeeded',rows,null);
+ const packValue={run_id:run.id,status:'succeeded',task_id:null,result:rows},packReceipt=await x.toolkit.receipt('runtime_pack_run',packValue,packId);
+ assert.equal(packReceipt.effect_state,'verified');
+ const draft=await x.toolkit.execute('office_result_draft',{text:'One classified record; no message sent.'},draftId),draftReceipt=await x.toolkit.receipt('office_result_draft',draft,draftId);
+ assert.equal(draftReceipt.effect_state,'verified');
+ x.store.desktopState.exec('CREATE TABLE office_supervisor(run_id TEXT PRIMARY KEY,project_id TEXT,work_id TEXT,checkpoint TEXT)');
+ const observations=[{invocation:{tool_name:'runtime_pack_run',request_id:packId},receipt:packReceipt},{invocation:{tool_name:'office_result_draft',request_id:draftId},receipt:draftReceipt}];
+ x.store.desktopState.prepare('INSERT INTO office_supervisor VALUES(?,?,?,?)').run(x.toolkit.runId,x.config.project.id,x.work.id,JSON.stringify({observations}));
+ await assert.rejects(x.toolkit.validate('office_result_read',{request_id:packId},'preflight'),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_RESULT_PACK_ARTIFACT_NOT_AVAILABLE'&&error.detail.includes(draftId)&&!error.detail.includes(draft.artifact.path));
+ await assert.rejects(x.toolkit.execute('office_result_read',{request_id:packId},'direct-read'),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_RESULT_PACK_ARTIFACT_NOT_AVAILABLE');
+ const read=await x.toolkit.execute('office_result_read',{request_id:draftId},'draft-read');assert.equal(read.text,'One classified record; no message sent.\n');
+ assert.deepEqual(x.calls,[]);assert.equal(x.store.officeRuns(x.config.project.id,x.work.id).length,1);
+});
+
+
+test('runtime native Work JSON and CSV artifacts are format-valid, fresh readback and immutable across format changes',async t=>{
+ const x=await fixture(t);
+ for(const [format,text]of [['json','[{"category":"quake","count":2}]'],['csv','id,category\n1,"quake, shallow"\n']]){
+  const requestId='structured-'+format,args={text,format};
+  const result=await x.toolkit.execute('office_result_draft',args,requestId);
+  assert.equal(result.artifact.format,format);assert.ok(result.artifact.path.endsWith('.'+format));
+  assert.equal(await readFile(result.artifact.path,'utf8'),text.endsWith('\n')?text:text+'\n');
+  assert.equal((await x.toolkit.receipt('office_result_draft',result,requestId)).effect_state,'verified');
+  assert.equal((await x.toolkit.execute('office_result_read',{request_id:requestId},'read-'+format)).text,text.endsWith('\n')?text:text+'\n');
+  await assert.rejects(x.toolkit.execute('office_result_draft',{text:'replacement',format:'txt'},requestId),/WORK_RESULT_REQUEST_ID_CONFLICT/u);
+  assert.equal((await x.toolkit.execute('office_result_draft',args,requestId)).deduplicated,true);
+ }
+ for(const [format,text]of [['json','plain text'],['csv','id,value\n1'],['csv','id,id\n1,2']])assert.throws(()=>x.toolkit.validate('office_result_draft',{format,text},'invalid-'+format),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_RESULT_FORMAT_INVALID');
+ const legacy=await x.toolkit.execute('office_result_draft',{text:'original TXT'},'legacy-format');
+ await assert.rejects(x.toolkit.execute('office_result_draft',{format:'json',text:'{}'},'legacy-format'),/WORK_RESULT_REQUEST_ID_CONFLICT/u);
+ assert.equal(await readFile(legacy.artifact.path,'utf8'),'original TXT\n');
+ assert.equal(x.calls.length,0);
+});
+
+test('runtime contract Work field preflight reports declared schema before dispatch and omits sensitive field names',async t=>{
+ const x=await fixture(t,{spec:proposal('monitor.watch'),packs:{sources:[{id:'release',kind:'http',url:'https://example.org/releases',parameters:[],format:'json',json_fields:['version','first_released','session_cookie']}],targets:[],models:'off'}});
+ const watch={version:1,family:'monitor.watch',request:'Watch first release',sources:[{id:'release',parameters:{}}],filters:[],deduplicate_by:[],comparison_fields:['first_release'],mode:'any_change',value_field:null,interval_seconds:60};
+ assert.throws(()=>x.toolkit.validate('runtime_pack_run',{recipe:watch},'typo'),error=>{assert.equal(error.code,'PACK_DECLARED_SOURCE_FIELD_MISSING');assert.match(error.detail,/first_released/u);assert.doesNotMatch(error.detail,/session_cookie/u);return true;});
+ assert.equal(x.calls.length,0);assert.equal(x.store.officeRuns(x.config.project.id,x.work.id).length,0);
+ assert.equal(x.toolkit.validate('runtime_pack_run',{recipe:{...watch,comparison_fields:['first_released']}},'corrected').recipe.comparison_fields[0],'first_released');
 });

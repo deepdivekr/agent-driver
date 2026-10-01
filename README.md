@@ -96,6 +96,10 @@ Windows clients should use the WSL command shown in the Control Center.
 
 A **Work** holds your request, completion checks, progress, and run history.
 
+For a specific recurring task, save an independently verified Work as a named
+custom Pack version. Each new cycle reuses its procedure and verifies fresh
+output. [Custom Pack operation](docs/custom-pack-operation.md)
+
 ### From request to result
 
 The detail page groups source visits and tool activity under outcome-based work stages. A finished tool call is not a verified result.
@@ -143,6 +147,9 @@ Importing alone does not start a duplicate bot or activate a new schedule. Monit
 [Work import](docs/work-migration.md) · [Remote management](docs/remote-office.md)
 
 ## Updates and limits
+
+AI settings include **Auto-update CLIs** and **Update now**. Supported user-owned Linux/WSL CLIs are checked every 24 hours while Office is running and idle; active clients are left alone.
+Save the preference to enable automatic checks. Windows automatic updates are not supported yet.
 
 Finish active work, disconnect MCP clients, and close the Control Center before rerunning the installer.
 If the shared server is still running, follow the [stop and reconnect guide](docs/mcp-resource-lifecycle.md).

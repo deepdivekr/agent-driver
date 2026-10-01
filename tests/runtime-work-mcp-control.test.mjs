@@ -15,6 +15,7 @@ import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {workExecuteSchema as dispatcherExecuteSchema} from '../dist/work/dispatch.js';
 import {supervisorActionSchema} from '../dist/work/supervisor.js';
 import {workTail} from '../dist/work/activity.js';
+import {catalogCompletionFixture} from './helpers/catalog-completion-fixture.mjs';
 
 const proposal={title:'Read Pack catalog',desired_outcome:'Report the registered search Pack family.',completion_checks:[{id:'catalog',result:'Find the research.search Pack in the host catalog.',evidence:'The observed host Pack family ID.'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};
 function model(options={}){
@@ -26,9 +27,8 @@ function model(options={}){
       if(actionCount++===0)await options.firstAction?.();
       if(!input.checkpoint.observations.length)result={action:'tool',stage_id:'catalog',tool_name:'runtime_pack_catalog',arguments_json:'{}',summary:'Read the configured host catalog.',completed_checks:[],wait_reason:null};
       else result={action:'complete',stage_id:'result',tool_name:null,arguments_json:null,summary:'The host catalog includes research.search.',completed_checks:[{id:'catalog',evidence_ids:input.checkpoint.observations.at(-1).receipt.evidence_ids}],wait_reason:null};
-    }else if(schema.properties?.checks){
-      const id=input.checks[0].allowed_evidence_ids[0];result={checks:[{id:'catalog',verdict:'supported',evidence_ids:[id],evidence_quotes:[{evidence_id:id,quote:'research.search'}],reason:'The observed catalog has this family ID.'}]};
-    }else throw Error('UNEXPECTED_FIXTURE_SCHEMA');
+    }else if(schema.properties?.findings||schema.properties?.checks)result=catalogCompletionFixture(input,schema);
+    else throw Error('UNEXPECTED_FIXTURE_SCHEMA');
     this.calls.push({purpose,provider:'contract_fixture',model:'fixture-model',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return result;
   }};
 }

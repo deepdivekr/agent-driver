@@ -8,6 +8,7 @@ const activityMetadataSchema=z.object({
   stage_id:z.string().max(100).optional(),worker_id:z.string().max(100).optional(),tool_name:z.string().max(100).optional(),status:z.string().max(80).optional(),
   pack_family:z.string().max(100).optional(),route_kind:z.string().max(40).optional(),executor:z.string().max(160).optional(),
   engine:z.string().max(40).optional(),environment:z.string().max(80).optional(),reason:z.string().max(160).optional(),
+  validation:z.object({code:z.enum(['WORK_CLIENT_DECISION_OUTPUT_INVALID','WORK_CLIENT_DECISION_CORRECTION_FAILED']),output_sha256:z.string().regex(/^[a-f0-9]{64}$/),issues:z.array(z.object({path:z.string().max(100),code:z.string().max(60),message:z.string().max(180)}).strict()).max(8)}).strict().optional(),
   model_provider:z.string().max(60).optional(),model_name:z.string().max(200).optional(),model_effort:z.enum(['low','medium','high']).optional(),
   model_role:z.enum(['planner','worker','verifier','synthesis']).optional(),model_continuity:z.enum(['new_session','resumed_session','checkpoint_only']).optional(),
   source:z.object({url:z.string().url().max(2048),title:z.string().max(200),observed_at:z.string().datetime()}).strict().optional(),
@@ -20,7 +21,8 @@ export function withWorkActivityContext<T>(context:ActivityContext,action:()=>T)
 /** Only explicit host fields, never arguments, page bodies or provider reasoning. */
 function safeMetadata(raw:unknown):WorkActivityMetadata|undefined{
   const parsed=activityMetadataSchema.safeParse(raw);if(!parsed.success)return undefined;
-  const metadata=Object.fromEntries(Object.entries(parsed.data).filter(([key])=>key!=='source').map(([key,value])=>[key,safeControlText(String(value),key==='target_url'?2048:160)])) as WorkActivityMetadata;
+  const metadata=Object.fromEntries(Object.entries(parsed.data).filter(([key])=>key!=='source'&&key!=='validation').map(([key,value])=>[key,safeControlText(String(value),key==='target_url'?2048:160)])) as WorkActivityMetadata;
+  if(parsed.data.validation){const validation=parsed.data.validation;metadata.validation={code:validation.code,output_sha256:validation.output_sha256,issues:validation.issues.map(issue=>({path:safeControlText(issue.path,100),code:safeControlText(issue.code,60),message:safeControlText(issue.message,180)}))};}
   if(parsed.data.source){const source=parsed.data.source,url=safeControlText(source.url,2048);try{new URL(url);metadata.source={url,title:safeControlText(source.title,200),observed_at:source.observed_at};}catch{/* Sensitive or invalid URLs are not public source evidence. */}}
   return metadata;
 }

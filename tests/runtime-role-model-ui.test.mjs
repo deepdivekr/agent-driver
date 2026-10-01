@@ -16,7 +16,7 @@ async function setup(t){
   const auth={async connections(){return [];},view(){return {};},close(){},async start(){throw Error('NO_AUTH_CALL');}},mcp={async view(){return {registered_count:1,agent_driver:{installed:true},clients:[]};}},bootstrap={view(){return {clients:[]};},async install(){throw Error('NO_INSTALL');}};
   const settings=new ControlSettings(config,auth,{},()=>{throw Error('NO_API_CALL');},mcp,undefined,bootstrap);let host;
   const server=createServer(async(req,res)=>{if(!await settings.handle(req,res,req.url.slice(1),host)){res.writeHead(404);res.end();}});await new Promise(r=>server.listen(0,'127.0.0.1',r));host='127.0.0.1:'+server.address().port;
-  t.after(async()=>{settings.close();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});});return {url:'http://'+host+'/settings',path};
+  t.after(async()=>{await settings.close();server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});});return {url:'http://'+host+'/settings',path};
 }
 
 test('runtime fixture subscription role settings save exact choices, refresh catalog and hide in API mode on KO/EN desktop/mobile',{timeout:60000},async t=>{

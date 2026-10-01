@@ -26,7 +26,7 @@ async function fixture(t){
   const bootstrap={view(){return {clients:ids.map(id=>({id,label:({codex:'Codex',claude:'Claude Code',opencode:'OpenCode',cursor:'Cursor CLI',hermes:'Hermes'})[id],installed:installed.has(id),managed_install:true,docs_url:'https://example.test/docs'}))};},async install(id,onStage){calls.push('install:'+id);await onStage('downloading');installed.add(id);return this.view();}};
   const mcp={async view(){return {agent_driver:{installed:true},clients:ids.map(id=>({id,automatic:true,registration:'not_registered'})),registered_count:0,windows_bridge:{command:'wsl.exe',args:['--exec','node','mcp']}};}};
   const settings=new ControlSettings(config,auth,{},fetch,mcp,undefined,bootstrap);let host;const server=createServer(async(req,res)=>{if(!await settings.handle(req,res,req.url.slice(1),host)){res.writeHead(404);res.end();}});await new Promise(r=>server.listen(0,'127.0.0.1',r));host='127.0.0.1:'+server.address().port;
-  t.after(async()=>{settings.close();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});});
+  t.after(async()=>{await settings.close();server.closeAllConnections();await new Promise(r=>server.close(r));await rm(root,{recursive:true,force:true});});
   return {url:'http://'+host+'/settings',calls,flows,signedIn,config};
 }
 

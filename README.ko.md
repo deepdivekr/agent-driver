@@ -1,5 +1,10 @@
 # Agent Office
 
+구체적인 반복 업무는 검증된 Work를 이름과 불변 버전이 있는 커스텀 Pack으로
+저장하고, 새 회차마다 새로운 결과를 확인하며 재사용할 수 있습니다.
+[커스텀 Pack 사용 경로](docs/custom-pack-operation.md) ·
+[리팩토링 기준 문서](docs/custom-pack-refactoring-plan.md)
+
 **AI 에이전트가 내 컴퓨터에서 업무를 실행하고, 중단된 지점부터 이어가게 하는 로컬 MCP 서버입니다.**
 
 [English](README.md) · **한국어** · [v0.4.0 변경 내역](docs/releases/v0.4.0.md)
@@ -143,6 +148,9 @@ API에서 구독으로의 인계도 등록된 연결과 정책을 따릅니다.
 [업무 가져오기](docs/work-migration.md) · [원격 관리](docs/remote-office.md)
 
 ## 업데이트와 제약
+
+AI 설정의 **CLI 자동 업데이트**와 **지금 업데이트**를 이용하세요. 지원하는 사용자 소유 Linux/WSL CLI를 관제센터가 켜져 있고 업무가 없을 때 24시간마다 확인합니다. 실행 중인 클라이언트는 건드리지 않습니다.
+설정을 저장해야 자동 확인이 시작됩니다. Windows 자동 업데이트는 아직 지원하지 않습니다.
 
 진행 중인 업무를 마치고 MCP 클라이언트와 관제센터를 종료한 뒤 설치 명령을 다시 실행합니다.
 공유 서버가 남아 있다면 [종료·재연결 안내](docs/mcp-resource-lifecycle.md)를 따르세요.

@@ -107,9 +107,16 @@ export function loadHostConfig(path:string):HostConfig {
   const packs=raw.packs??null;
   if(packs){
     for(const items of [packs.sources,packs.targets])requireCondition(new Set(items.map(s=>s.id)).size===items.length,'DUPLICATE_PACK_CONNECTION');
+    requireCondition(new Set([...packs.targets.map(target=>target.id),...packs.local_records.map(record=>record.id)]).size===packs.targets.length+packs.local_records.length,'DUPLICATE_PACK_TARGET');
     for(const source of packs.sources)if(source.kind==='file'){
       source.path=resolve(worktree,source.path);
       requireCondition(!/(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|\.secrets|\.ssh|\.aws|credentials(?:\.json)?)(?:[\\/]|$)/iu.test(source.path),'PACK_SECRET_SOURCE_FORBIDDEN');
+    }
+    for(const record of packs.local_records){
+      record.path=resolve(worktree,record.path);
+      const rel=relative(worktree,record.path);
+      requireCondition(rel!==''&&rel!=='..'&&!rel.startsWith('../')&&!isAbsolute(rel),'PACK_LOCAL_RECORD_OUTSIDE_WORKTREE');
+      requireCondition(!/(?:^|[\\/])(?:\.env(?:\.[^\\/]*)?|\.secrets|\.ssh|\.aws|credentials(?:\.json)?)(?:[\\/]|$)/iu.test(record.path),'PACK_LOCAL_RECORD_SECRET_PATH');
     }
     const urls=[...packs.sources.flatMap(s=>s.kind==='file'?[]:[s.url]),...packs.targets.flatMap(t=>t.readback_url?[t.url,t.readback_url]:[t.url])];
     for(const value of urls){const url=new URL(value);requireCondition((url.protocol==='https:'||raw.environment==='fixture'&&url.protocol==='http:'&&url.hostname==='127.0.0.1')&&!url.username&&!url.password&&!url.hash,'PACK_URL_NOT_ALLOWED');requireCondition(![...url.searchParams.keys()].some(k=>/token|password|api.?key|secret/iu.test(k)),'PACK_URL_CONTAINS_SECRET');}

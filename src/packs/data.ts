@@ -65,6 +65,9 @@ export function deduplicate(rows:Row[],keys:string[]){
     requireCondition(old===undefined||old===hash,'DUPLICATE_KEY_CONFLICT');seen.set(key,hash);return old===undefined;
   });
 }
+export function normalizeNumericColumns(rows:Row[],columns:string[]){return rows.map(row=>{
+  const copy={...row};for(const field of columns){const value=copy[field];requireCondition(typeof value==='number'||typeof value==='string'&&/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value),'INVALID_NUMERIC_VALUE');const number=Number(value);requireCondition(Number.isFinite(number),'INVALID_NUMERIC_VALUE');copy[field]=number;}return copy;
+});}
 export function sortRows(rows:Row[],sort:{field:string;direction:'asc'|'desc'}|null){
   if(!sort)return rows;
   requireCondition(rows.every(r=>r[sort.field]!==undefined&&r[sort.field]!==null),'SORT_FIELD_MISSING');

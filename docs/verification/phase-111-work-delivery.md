@@ -36,3 +36,7 @@ The isolated actual-use server was safely stopped after confirming zero active W
 - Publish through protected PR/CI and inspect the release assets plus published installer.
 
 No real messenger send is authorized for this validation. Generated original files remain app downloads; messenger delivery sends result text. Uncertain delivery requires reconciliation rather than automated retry.
+
+## Final publication
+
+PR34 merged as `7efc86253b2476672b38f91cc519b5a94b424cce`; main CI36672600844 runtime/release passed and published immutable v0.4.0. PR/main artifacts contain1659PASS/1NOT_RUN for unavailable headed display, not1660 remote passes; the omitted fixture passed locally. Exact-main CI installer6/6, published-tag installer6/6 and downloaded Release installer asset fresh1/1 passed. All installed commits match the published tag, with fixture models and zero external model calls. Source archive and installer bytes/checksums independently matched. [Post-publication receipt](../validation/v0.4.0-publication.json) records scope and retained limits; the tag's preceding gate snapshot remains immutable.

@@ -15,6 +15,7 @@ import {allocateWorkModels} from '../dist/work/task-models.js';
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 import {initialWorkPlan,validateWorkPlan} from '../dist/work/plan.js';
 import {stageBinding} from '../dist/work/stages.js';
+import {observedCompletionFixture} from './helpers/observed-completion-fixture.mjs';
 
 const goal='Research six physical AI sources, preserve citations and summarize their common findings.';
 const draft=()=>{const sources=Array.from({length:6},(_,i)=>({id:`source-${i+1}`,role:'Read one source',objective:`Read https://example.test/source-${i+1} and report the observed evidence.`,stage:'source_read',source_urls:[`https://example.test/source-${i+1}`],executor:'sub_agent',depends_on:[],required_capabilities:[],effect:'read_only',completion_evidence:['Source-backed fact cards.'],max_steps:12,timeout_ms:75000}));return {summary:'Read six sources in parallel, reduce and synthesize.',workers:[...sources,{...sources[0],id:'reduce',role:'Reduce evidence',objective:'Combine all source facts without losing their evidence.',stage:'reduction',source_urls:[],depends_on:sources.map(worker=>worker.id)},{...sources[0],id:'final',role:'Synthesize results',objective:'Produce the final source-backed digest.',stage:'synthesis',source_urls:[],depends_on:['reduce']}]};};
@@ -27,7 +28,16 @@ async function setup(t,options={}){
     calls.push({purpose,provider:'fixture',model:'fixture-llm',status:'accepted',elapsed_ms:1,input_sha256:'a'.repeat(64),input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});
     if(instructions.startsWith('Define one durable'))return proposal;
     if(instructions.startsWith('Assess only the listed business stages'))return {completed_stages:input.stages.map(stage=>({stage_id:stage.id,evidence_ids:[stage.verified_workers?.[0]?.evidence_ids?.[0]??stage.host_readbacks?.find(item=>item.tool_name==='office_result_read')?.evidence_ids?.[0]]}))};
-    if(instructions.startsWith('Independently verify'))return {checks:input.checks.map(check=>({id:check.id,verdict:options.finalUnsupported?'unknown':'supported',evidence_ids:[check.allowed_evidence_ids[0]],evidence_quotes:[{evidence_id:check.allowed_evidence_ids[0],quote:'Physical AI evidence-backed result.'}],reason:options.finalUnsupported?'The requested extra field was not observed.':'The independently read-back final result contains a source-backed summary.'}))};
+    if(instructions.startsWith('Independently verify')){
+      if(options.finalUnsupported)return {checks:input.checks.map(check=>({id:check.id,verdict:'unknown',evidence_use:'observed_result',evidence_ids:[],evidence_quote_refs:[],reason:'The requested extra field was not observed.'}))};
+      return observedCompletionFixture(input,{prompt:/Research (?:six|one) physical AI source/u,needle:'Physical AI',accept:item=>item.tool_name==='office_swarm_readback',assertResult:value=>{
+        const readback=value.observations.find(item=>item.tool_name==='office_swarm_readback')?.value;
+        const single=/Research one physical AI source/u.test(value.original_user_request.prompt);
+        assert.equal(readback?.required_workers,single?1:8);assert.equal(readback?.source_coverage?.length,single?1:6);
+        assert.ok(readback.source_coverage.every(source=>source.source_urls.length>0&&source.readback?.verified));
+        assert.ok(value.observations.some(item=>item.tool_name==='office_result_draft'&&item.effect_state==='verified'),'The Office report must have a verified saved receipt.');
+      }});
+    }
     if(purpose==='design')return options.plan??draft();
     if(instructions.startsWith('Revise only the allowed existing worker')){
       await options.rebaseHook?.(input);
@@ -56,7 +66,7 @@ async function setup(t,options={}){
   },async release(_run,worker){released.push(worker);},async close(){}};
   const api=new RuntimeApi(loadHostConfig(path),{swarmModel:model,swarmVisual:visual});
   t.after(async()=>{api.close();await api.drain();await rm(root,{recursive:true,force:true});});
-  const work=await api.call('runtime_work_start',{request_id:'supervised-work',prompt:goal});
+  const work=await api.call('runtime_work_start',{request_id:'supervised-work',prompt:options.prompt??goal});
   const saved=[],events=[],hooks={guard:()=>{},checkpoint:value=>saved.push(structuredClone(value)),progress:event=>events.push(event)};
   return {api,model,work,saved,events,hooks,reads,released,inputs,peak:()=>peak};
 }
@@ -176,7 +186,7 @@ test('runtime contract supervised Swarm executes three parallel source workers a
 });
 
 test('runtime fixture single-worker adaptive research verifies completion and writes the same evidence-backed Work result',async t=>{
-  const plan={summary:'One bounded source is enough.',workers:[draft().workers[0]]},x=await setup(t,{plan}),results=new WorkResults(x.api.store),s=new WorkSupervisor(x.api.store,x.api.config,x.model,{api:x.api,tick_ms:20});
+  const plan={summary:'One bounded source is enough.',workers:[draft().workers[0]]},x=await setup(t,{plan,prompt:'Research one physical AI source, preserve its citation and summarize its finding.'}),results=new WorkResults(x.api.store),s=new WorkSupervisor(x.api.store,x.api.config,x.model,{api:x.api,tick_ms:20});
   t.after(()=>s.close());s.start(x.work.work_id,x.work.revision,true);let end;
   for(let i=0;i<300;i++){end=supervisorStatus(x.api.store,x.api.config.project.id,x.work.work_id);if(['succeeded','failed','awaiting_review'].includes(end?.state))break;await delay(20);}
   assert.equal(end.state,'succeeded',JSON.stringify(end));assert.equal(end.result.completion_verified,true);

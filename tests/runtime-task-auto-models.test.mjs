@@ -17,6 +17,7 @@ import {readWorkDetail} from '../dist/observability/work-view.js';
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 import {chromium} from 'playwright';
 import {startControlCenter} from '../dist/observability/control-center.js';
+import {observedCompletionFixture} from './helpers/observed-completion-fixture.mjs';
 
 const roles=['planner','worker','verifier','synthesis'];
 const choice={mode:'subscription',client:'codex',role_model_mode:'auto',client_models:{codex:'base-model',claude:'base-review',opencode:null},codex_reasoning_effort:'high',api_model:'api-model',reasoning:'high',jev:'off'};
@@ -35,7 +36,7 @@ async function setup(t,options={}){
   const answer=async(purpose,instructions,input)=>{
     if(instructions.startsWith('Assign the four'))return options.allocation?options.allocation(input):allocation();
     if(instructions.startsWith('Define one durable'))return proposal;
-    if(instructions.startsWith('Independently verify'))return {checks:input.checks.map(check=>{const ids=check.allowed_evidence_ids.filter(id=>input.observations.some(o=>o.tool_name!=='office_controlled_run_trace'&&o.evidence_ids.includes(id)));return {id:check.id,verdict:'supported',evidence_ids:ids,evidence_quotes:ids.map(id=>({evidence_id:id,quote:'Observed source'})),reason:'Actual file result contains the requested value.'};})};
+    if(instructions.startsWith('Independently verify'))return observedCompletionFixture(input,{prompt:/Read the local source/u,needle:'Observed source',accept:item=>item.tool_name==='runtime_pack_run',assertResult:value=>assert.ok(value.observations.some(item=>item.tool_name==='runtime_pack_run'&&JSON.stringify(item.value).includes('23')),'The requested value 23 must be observed.')});
     if(instructions.startsWith('Execute the registered Work')){
       const result=input.checkpoint.observations.find(o=>o.invocation.tool_name==='runtime_pack_run');
       return result?{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Observed source: 23',completed_checks:input.completion_checks.map(c=>({id:c.id,evidence_ids:result.receipt.evidence_ids})),wait_reason:null}:{action:'tool',stage_id:'read',tool_name:'runtime_pack_run',arguments_json:JSON.stringify({work_id:input.work_id,request_id:'host-overrides-id',recipe}),summary:'Read the source through the Pack.',completed_checks:[],wait_reason:null};

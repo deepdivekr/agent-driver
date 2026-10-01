@@ -11,8 +11,8 @@ const observations=()=>Array.from({length:9},(_,index)=>({
 }));
 const claim=ids=>({action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'A model claim, not evidence.',completed_checks:[{id:'combined',evidence_ids:ids}],wait_reason:null});
 function model(options={}){
-  const inputs=[];return {inputs,calls:[],async call(purpose,instructions,input){
-    inputs.push(structuredClone(input));let result;
+  const inputs=[],instructionsSeen=[];return {inputs,instructionsSeen,calls:[],async call(purpose,instructions,input){
+    inputs.push(structuredClone(input));instructionsSeen.push(instructions);let result;
     if(input.batch_index){
       if(options.outage&&input.batch_index===2)throw Error('STRUCTURED_MODEL_UNAVAILABLE');
       result={findings:input.observations.flatMap(record=>input.checks.filter(check=>check.allowed_evidence_ids.some(id=>record.evidence_ids.includes(id))).map(check=>{
@@ -36,9 +36,13 @@ test('runtime contract oversized evidence inspects every whole receipt, then ver
   assert.equal(await verify(checks,items,claim(items.flatMap(item=>item.receipt.evidence_ids))),true);
   const batches=provider.inputs.filter(input=>input.batch_index),final=provider.inputs.at(-1);
   assert.ok(batches.length>=2);assert.equal(provider.inputs.length,batches.length+1);assert.equal(final.projection,'host_validated_leaf_findings');
+  assert.ok(batches.every(batch=>batch.batch_scope.unit==='individual_receipt_contribution'&&batch.batch_scope.cross_receipt_sufficiency==='final_verifier_only'&&batch.batch_scope.missing_other_batch_is_not_unresolved));
+  assert.match(provider.instructionsSeen[0],/their absence HERE is not unresolved_material/u);
   assert.deepEqual(batches.flatMap(batch=>batch.observations.map(item=>item.record_id)),items.map((_,index)=>`record_${index}`));
   assert.ok(batches.every(batch=>Buffer.byteLength(JSON.stringify(batch))<=64000));assert.ok(Buffer.byteLength(JSON.stringify(final))<=64000);
   assert.equal(final.manifest.length,items.length);assert.match(final.evidence_manifest_sha256,/^[a-f0-9]{64}$/u);assert.equal(audits.at(-1).status,'accepted');assert.equal(audits.at(-1).evidence_manifest_sha256,final.evidence_manifest_sha256);
+  const inspected=audits.filter(event=>event.code==='WORK_COMPLETION_BATCH_INSPECTED');assert.equal(inspected.length,batches.length);assert.deepEqual(inspected.flatMap(event=>event.batch_findings.map(finding=>`${finding.check_id}/${finding.record_id}`)),batches.flatMap(batch=>batch.eligible_pairs.map(pair=>`${pair.check_id}/${pair.record_id}`)));
+  assert.ok(inspected.every(event=>event.batch_findings.every(finding=>finding.relation!=='supports'||finding.quote_refs.every(ref=>/^q_[a-f0-9]{20}$/u.test(ref)))));
   assert.deepEqual(items,before,'Inspection never changes a receipt or invokes a tool.');assert.ok(events.some(event=>/evidence batch/u.test(event.summary)));
 });
 
@@ -90,7 +94,7 @@ test('runtime contract unobserved batch quote can be corrected once against iden
   assert.equal(correction.issue.quote_index,0);
   assert.match(correction.issue.quote_sha256,/^[a-f0-9]{64}$/u);
   assert.equal(correction.issue.quote_bytes,Buffer.byteLength('UNOBSERVED PRIVATE VALUE'));
-  assert.equal(audits[0].status,'rejected');assert.equal(audits.at(-1).status,'accepted');
+  assert.equal(audits.find(event=>event.code==='WORK_COMPLETION_BATCH_QUOTE_UNOBSERVED').status,'rejected');assert.equal(audits.at(-1).status,'accepted');
   assert.deepEqual(provider.inputs.at(-1).observations.flatMap(record=>record.findings.flatMap(finding=>finding.quotes)).filter(quote=>quote==='Beta'),['Beta']);
 });
 

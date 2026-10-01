@@ -1,0 +1,54 @@
+{
+  "version": "0.4.0",
+  "date": "2026-09-30",
+  "status": "PASS",
+  "scope": "Common release publication and bounded verification, not universal workload or live messenger certification",
+  "pull_request": "https://github.com/deepdivekr/agent-office/pull/34",
+  "commit": "7efc86253b2476672b38f91cc519b5a94b424cce",
+  "tag": "v0.4.0",
+  "release": "https://github.com/deepdivekr/agent-office/releases/tag/v0.4.0",
+  "local_regression": {
+    "pass": 1660, "fail": 0, "blocked_env": 0, "not_run": 0,
+    "input_integrity": "PASS",
+    "evidence_levels": {"unit": 490, "contract_fake": 652, "fixture_integration": 324, "native_integration": 194},
+    "long_soak": "excluded"
+  },
+  "protected_ci": {
+    "pull_request_run": 36671655389,
+    "main_run": 36672600844,
+    "main_url": "https://github.com/deepdivekr/agent-office/actions/runs/36672600844",
+    "runtime": "success", "release_job": "success",
+    "pass": 1659, "fail": 0, "blocked_env": 0, "not_run": 1,
+    "not_run_reason": "Headed display unavailable for fixture profile reuse on the CI runner; this case passed in the local full run. PC reboot and live website login are not certified.",
+    "exact_main_installation_cases": 6,
+    "initial_failed_runs_retained": [36671331153, 36671386143]
+  },
+  "published_installation": {
+    "evidence_level": "native_integration",
+    "status": "PASS", "cases": 6, "published_source": true,
+    "scenarios": ["fresh", "upgrade-0.1.0", "upgrade-0.1.1", "upgrade-0.2.0", "upgrade-0.3.0", "upgrade-0.3.1"],
+    "all_installed_commits": "7efc86253b2476672b38f91cc519b5a94b424cce",
+    "model": "fixture", "external_model_calls": 0,
+    "downloaded_release_asset_fresh": {"status": "PASS", "cases": 1, "clean_checkout": true, "external_model_calls": 0}
+  },
+  "assets": {
+    "install.sh": "f16540541c01b0d904f030ec5aa890db6a06932ace6267306b9e9f7c5154c87a",
+    "agent-office-0.4.0.tar.gz": "8c0fe6a312073788911a9f37b4d0bc1683b7cb2fb7732562132fd005bf6d4a7c",
+    "SHA256SUMS": "5977c3965016a70ac5d1e46b0672710146ec9e5d90b91e3ce7d7bfd1bf466fc6",
+    "checksum_comparison": "PASS",
+    "installer_raw_tag_and_candidate_bytes": "identical",
+    "source_archive_uncompressed_bytes_and_git_tag_archive": "identical"
+  },
+  "actual_work": {
+    "evidence_level": "user_environment",
+    "node_official_source": "PASS: one UI start, two historical release dates, independent source/TXT/hash verification, app result",
+    "asts": "awaiting_review: intervention/handoff/resume observed, material evidence unresolved; not a successful completion"
+  },
+  "retained_limits": [
+    "Live Telegram/Slack/Discord receipt not tested; provider-response substitutes do not certify a real messenger account.",
+    "Ubuntu 24.04 x86_64 and Windows 11 WSL2 runtime; native Windows desktop experimental, macOS not certified.",
+    "Login, CAPTCHA, exhausted quotas and uncertain external effects can require user action.",
+    "Issues #6 and #22 remain unresolved acceptance/historical recovery records; no failure-free or power-loss claim."
+  ],
+  "receipt_provenance": "Post-publication receipt; the immutable source tag contains the preceding gate snapshot. Private original reports and personal state are excluded."
+}

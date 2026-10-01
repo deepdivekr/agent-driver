@@ -5,12 +5,19 @@ import {type HostConfig} from '../interface/config.js';
 import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
 import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
+import {type Recipe} from '../packs/contracts.js';
 import {workActivity} from './activity.js';
+import {workReferenceMap} from './context.js';
 import {type WorkProposal} from './contracts.js';
 import {requireCondition} from '../core/contracts.js';
 import {hashJson,type StructuredModel} from '../taskpack/adaptive-spec.js';
-import {WorkClientToolInputError,type WorkClientTool,type WorkClientToolReceipt} from './client-executor.js';
-import {readScopedFile,sha} from '../packs/data.js';
+import {WorkClientToolInputError,type WorkClientTool,type WorkClientToolReceipt,type WorkClientInvocation,type WorkClientCheckpoint} from './client-executor.js';
+import {readScopedFile,sha,MAX_BYTES,parseCsv} from '../packs/data.js';
+import {declaredSourceContractIssues} from '../packs/source-catalog.js';
+import {PACK_ENGINE_VERSION} from '../packs/runtime.js';
+import {snapshotHash} from '../taskpack/contracts.js';
+import {assertCustomPackInvocation,customPackWorkBinding} from './custom-pack-repeat.js';
+import {nativeOutputCertificate,savedResearchSourceReadback} from '../packs/native-output-certificate.js';
 import {dirname,join,resolve} from 'node:path';
 import {mkdir,open,realpath,stat} from 'node:fs/promises';
 import {nativeProcessRunner} from '../integrations/subscription-auth.js';
@@ -23,14 +30,32 @@ import {knownLoginSites,readyAuthTargets,detectAuthGate} from '../swarm/browser-
  * Approval/grant, shell, raw UI actions and cross-Work coding resume are absent.
  */
 const effects={
-  runtime_pack_catalog:'read_only',runtime_pack_plan:'read_only',runtime_pack_run:'local_write',runtime_pack_status:'read_only',runtime_pack_execute_approved:'external_write',
+  runtime_pack_catalog:'read_only',runtime_pack_plan:'read_only',runtime_pack_local_record_inspect:'read_only',runtime_pack_run:'local_write',runtime_pack_status:'read_only',runtime_pack_execute_approved:'external_write',runtime_pack_watch_tick:'local_write',runtime_pack_watch_pause:'local_write',runtime_pack_events:'read_only',
   runtime_files_roots:'read_only',runtime_files_request:'draft_only',runtime_files_scan:'draft_only',runtime_files_inspect:'read_only',runtime_files_classify:'draft_only',runtime_files_propose:'draft_only',runtime_files_report:'read_only',
   runtime_windows_catalog:'read_only',runtime_windows_design:'draft_only',runtime_windows_start:'draft_only',runtime_windows_step:'external_write',runtime_windows_status:'read_only',
   runtime_work_context:'read_only',runtime_coding_projects:'read_only',runtime_coding_start:'local_write',runtime_coding_step:'local_write',runtime_coding_status:'read_only',runtime_coding_pause:'draft_only',runtime_coding_reconcile:'read_only',office_web_search:'read_only',office_social_search:'read_only',office_browser_read:'read_only',office_browser_links:'read_only',office_result_draft:'local_write',office_result_read:'read_only',
 } as const satisfies Record<string,WorkClientTool['effect']>;
 type ExecutionToolName=keyof typeof effects;
-const injectWork=new Set(['runtime_pack_plan','runtime_pack_run','runtime_files_request','runtime_files_scan','runtime_files_propose','runtime_files_report','runtime_windows_design','runtime_windows_start','runtime_work_context','runtime_coding_start']);
+const injectWork=new Set(['runtime_pack_plan','runtime_pack_local_record_inspect','runtime_pack_run','runtime_files_request','runtime_files_scan','runtime_files_propose','runtime_files_report','runtime_windows_design','runtime_windows_start','runtime_work_context','runtime_coding_start']);
+const watchTools=new Set(['runtime_pack_watch_tick','runtime_pack_watch_pause','runtime_pack_events']);
+const watchRunId=z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u);
+const watchTickInput=z.object({run_id:watchRunId}).strict();
+const watchEventsInput=z.object({run_id:watchRunId,after:z.number().int().nonnegative().default(0),limit:z.number().int().min(1).max(100).default(50)}).strict();
 const object=(value:unknown):Record<string,unknown>|null=>value&&typeof value==='object'&&!Array.isArray(value)?value as Record<string,unknown>:null;
+function executedPackContract(recipe:Recipe){
+  const safeValue=(value:unknown)=>typeof value==='string'?value.length<=160&&!/[\\/@:?&=]/u.test(value)&&safeControlText(value,160)===value:value===null||typeof value==='number'&&Number.isFinite(value)||typeof value==='boolean';
+  const collection='sources' in recipe?{
+    sources:recipe.sources.map(source=>({id:source.id,parameter_names:Object.keys(source.parameters).sort()})),
+    filters:recipe.filters.map(filter=>safeValue(filter.value)?{field:filter.field,op:filter.op,value:filter.value}:{field:filter.field,op:filter.op,value_redacted:true}),
+    deduplicate_by:recipe.deduplicate_by,
+  }:{};
+  return {family:recipe.family,version:recipe.version,recipe_sha256:hashJson(recipe),...collection,
+    ...('format' in recipe?{format:recipe.format}:{}),
+    ...('columns' in recipe&&recipe.columns?{columns:recipe.columns}:{}),
+    ...('numeric_columns' in recipe?{numeric_columns:recipe.numeric_columns,sort:recipe.sort}:{}),
+    ...('comparison_fields' in recipe?{comparison_fields:recipe.comparison_fields,mode:recipe.mode,interval_seconds:recipe.interval_seconds,value_field:recipe.value_field}:{}),
+  };
+}
 const browserInput=z.object({url:z.string().url().max(4096)}).strict();
 const browserLinksInput=z.object({offset:z.number().int().min(0).max(100000).default(0),limit:z.number().int().min(1).max(40).default(20),snapshot_id:z.string().regex(/^[a-f0-9]{64}$/u).optional()}).strict();
 const privateHostname=(value:string)=>/^(?:localhost$|.*\.localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.|\[)|\.(?:local|lan|internal)$/iu.test(value);
@@ -86,8 +111,20 @@ function observedSearchChallenge(input:SearchRequest,page:z.infer<typeof browser
     input.provider==='google'&&/our systems have detected unusual traffic from your computer network/iu.test(page.text)||
     input.provider==='duckduckgo'&&/unfortunately, bots use duckduckgo too/iu.test(page.text);
 }
-const resultInput=z.object({text:z.string().trim().min(1).max(16000),label:z.string().trim().min(1).max(120).optional()}).strict();
-const resultReadInput=z.object({request_id:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u)}).strict();
+const resultFormat=z.enum(['txt','json','csv']);
+const resultInput=z.object({text:z.string().min(1).max(16000).refine(text=>text.trim().length>0),label:z.string().trim().min(1).max(120).optional(),format:resultFormat.default('txt')}).strict();
+function validatedResultInput(args:unknown){
+  const input=resultInput.parse(args);
+  if(input.format==='txt')return {...input,text:input.text.trim()};
+  try{if(input.format==='json')JSON.parse(input.text);else parseCsv(input.text);}
+  catch{throw new WorkClientToolInputError('WORK_RESULT_FORMAT_INVALID','No artifact was written. Supply valid JSON or CSV bytes for the selected format; TXT content cannot satisfy an explicitly selected structured format.');}
+  return input;
+}
+function resultBytes(text:string,format:unknown){
+  const extension=resultFormat.parse(format);
+  return Buffer.from(text+(extension==='txt'||!text.endsWith('\n')?'\n':''),'utf8');
+}
+const resultReadInput=z.object({request_id:z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u),offset:z.number().int().min(0).max(MAX_BYTES).default(0),max_bytes:z.number().int().min(4).max(12000).default(12000)}).strict();
 const sourceIntegritySchema=z.array(z.object({
   source_id:z.string().min(1).max(80),before_sha256:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),after_sha256:z.string().regex(/^[a-f0-9]{64}$/u).nullable(),
   before_observed_at:z.string().datetime().nullable(),after_observed_at:z.string().datetime().nullable(),unchanged:z.union([z.boolean(),z.literal('unknown')]),
@@ -104,12 +141,31 @@ export class WorkExecutionTools {
   private recoverableSearchOrigins=new Map<string,BrowserPreference>();
   private environmentBlockedQueries=new Set<string>();
   private blockedSocial=new Set<string>();
-  private resultReceipts=new Map<string,{tool_name:'office_result_draft'|'runtime_pack_run';value:Record<string,unknown>}>();
+  private resultReceipts=new Map<string,{tool_name:'office_result_draft'|'runtime_pack_run'|'runtime_pack_status';value:Record<string,unknown>;pack_request_id?:string}>();
   private packIntegrity=new Map<string,{run_id:string;result_sha256:string;sources:SourceIntegrity}>();
   private dispatched=new Map<string,{name:string;input:Record<string,unknown>;coding_stage?:{id:string;attempts:number};reused_coding_run?:string}>();
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly api:RuntimeApi,readonly workId:string,readonly runId:string,readonly spec:WorkProposal,readonly prompt:string,readonly guard:()=>void,readonly model:StructuredModel,readonly options:{browserFactory?:BrowserRouteOptions['factory']}={}){
     for(const raw of prompt.match(/https?:\/\/[^\s<>"'`]+/gu)??[]){try{this.allowedUrls.add(new URL(raw.replace(/[),.;]+$/u,'')).href);}catch{}}
     this.restoreObservedUrls();
+  }
+  /** The host binds a repeated Pack effect to its immutable cycle before the
+   * invocation is checkpointed. Read observations keep their fresh turn IDs. */
+  requestId(name:string,_args:Record<string,unknown>,fallback:string){
+    return name==='runtime_pack_run'?customPackWorkBinding(this.store,this.config.project.id,this.workId)?.request_id??fallback:fallback;
+  }
+  /** A status read can observe recovery by the existing Family runtime. This
+   * lookup never resumes the Pack, replaces a failed receipt or grants a write. */
+  packRequestRecovery(invocation:WorkClientInvocation,prior:WorkClientCheckpoint['observations']):{state:'observe_success'|'pending';run_id:string}|null{
+    this.guard();
+    if(invocation.tool_name!=='runtime_pack_run'||invocation.effect!=='local_write'||prior.length===0)return null;
+    const binding=assertCustomPackInvocation(this.store,this.config.project.id,this.workId,invocation.tool_name,{...invocation.arguments,request_id:invocation.request_id},{config_fingerprint:this.config.fingerprint,engine_binding:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})});
+    if(!binding||binding.request_id!==invocation.request_id)return null;
+    const runId=object(prior[0]!.receipt.value)?.run_id;
+    if(typeof runId!=='string'||!prior.every(item=>item.invocation.request_id===binding.request_id&&item.invocation.tool_name==='runtime_pack_run'&&item.invocation.effect==='local_write'&&item.receipt.effect_state==='none'&&item.receipt.retry_safe&&['retryable_failure','waiting_auth','waiting_approval'].includes(item.receipt.status)&&object(item.receipt.value)?.run_id===runId))return null;
+    const run=this.ownPack(runId);
+    if(run.request_id!==binding.request_id||run.task_id!==null||snapshotHash(run.recipe)!==snapshotHash(binding.recipe)||run.binding!==snapshotHash({recipe:run.recipe,fingerprint:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})})||!['portal.collect','file.pipeline','research.search','inbox.triage','monitor.watch'].includes(run.recipe.family))return null;
+    if(run.status==='reconciliation_required')return null;
+    return {state:run.status==='succeeded'||run.recipe.family==='monitor.watch'&&run.status==='watching'?'observe_success':'pending',run_id:run.id};
   }
   /** Same-run host receipts are evidence, never model-proposed URLs or a grant.
    * Restore only completed, dispatched DOM reads; pending/uncertain receipts,
@@ -143,16 +199,23 @@ export class WorkExecutionTools {
   }
   catalog():WorkClientTool[]{
     const coding=this.spec.route.kind==='pack'&&this.spec.route.pack_family==='coding.orchestrate';
-    const names=Object.keys(effects).filter(name=>!name.startsWith('office_')&&(!name.startsWith('runtime_coding_')||name==='runtime_coding_projects'||coding)) as ExecutionToolName[];
+    const watch=this.spec.route.kind==='pack'&&this.spec.route.pack_family==='monitor.watch';
+    const names=Object.keys(effects).filter(name=>!name.startsWith('office_')&&(!name.startsWith('runtime_coding_')||name==='runtime_coding_projects'||coding)&&(!watchTools.has(name)||watch)) as ExecutionToolName[];
     const descriptors=names.flatMap(name=>{const tool=(tools as Record<string,{schema:z.ZodType;implemented:boolean;readOnly:boolean}>)[name];if(!tool?.implemented)return [];
-      return [{name,description:`Agent Office ${name}. Scope: this Work only. ${name==='runtime_pack_catalog'?'Its models field is the optional Pack semantic/Jev policy. models=off does not disable the configured Work LLM or office_web_search; use the capabilities supplied in this Work instead of inferring missing configuration. ':''}${name==='runtime_files_roots'?'Only folders explicitly granted to this Work are returned. ':''}${name==='runtime_files_request'?'Creates a permission request, never grants access. ':''}${name==='runtime_files_propose'?'Creates a move preview, never moves files. ':''}${name==='runtime_pack_execute_approved'?'Requires an existing human-approved, unconsumed proposal; cannot approve it. ':''}${name==='runtime_windows_step'?'May change an application or send externally; native host approval and postcondition receipts are mandatory. ':''}${name==='runtime_coding_start'?'Choose one registered project_ref. Creates a bounded Codex/Claude CLI stage plan and local Git handoff for this Work. The host supplies Work/request identity. Reuses this Work existing coding run; never resumes an unrelated session. Model-data consent and registered project policy remain mandatory. ':''}${name==='runtime_coding_step'?'Send only the next prepared stage instruction to the configured Codex/Claude CLI, read its actual response, and verify its Git/check receipts. Only same-run saved CLI session IDs may resume; no --last. Repository writes require this Work write delegation and registered policy. Imported plans/stages retain human approval. ':''}${name==='runtime_coding_status'?'Read actual stage progress, exact CLI replies and verification receipts of this Work coding run; completed stages are not proof of whole Work completion. ':''}${name==='runtime_coding_reconcile'?'Inspect uncertain coding effects without replay or automatic acceptance; report required user review. ':''}Only configured executors and approved connections can run. Unknown effects are fenced, not replayed.`,input_schema:z.toJSONSchema(tool.schema),effect:effects[name]}];});
+      return [{name,description:`Agent Office ${name}. Scope: this Work only. ${watchTools.has(name)?'Supply the exact run_id bound to this monitor Work. Tick reobserves only that due watch; an early tick returns pending and ready_at without claiming a second observation. Events are local only; pause stops further ticks and sends nothing externally. ':''}${name==='runtime_pack_catalog'?'Its models field is the optional Pack semantic/Jev policy. models=off does not disable the configured Work LLM or office_web_search. Registered Pack file sources are already delegated to runtime_pack_run; they do not need runtime_files_roots or runtime_files_request. ':''}${name==='runtime_pack_run'?'Use only connected Pack source IDs; registered file sources are already readable within this Work. A structured successful Pack result without an artifact is not a file for office_result_read. A verified success receipt includes a host-bound executed_contract of safe recipe fields; it proves what was requested, not that the business outcome or artifact readback passed. ':''}${name==='runtime_pack_status'?'A fresh, same-Work succeeded/draft_ready status receipt may include the durable executed_contract after result-hash verification. It describes the executed recipe, but does not prove the output or replace office_result_read. ':''}${name==='runtime_files_roots'?'Only user folders explicitly granted to this Work are returned. This is separate from registered Pack file sources; an empty folder list does not block runtime_pack_run from reading its connected sources. ':''}${name==='runtime_files_request'?'Creates a user-folder permission request, never grants access. Do not request an already registered Pack file source here; use runtime_pack_run with its connected source ID. ':''}${name==='runtime_files_propose'?'Creates a move preview, never moves files. ':''}${name==='runtime_pack_execute_approved'?'Requires an existing human-approved, unconsumed proposal; cannot approve it. ':''}${name==='runtime_windows_step'?'May change an application or send externally; native host approval and postcondition receipts are mandatory. ':''}${name==='runtime_coding_start'?'Choose one registered project_ref. Creates a bounded Codex/Claude CLI stage plan and local Git handoff for this Work. The host supplies Work/request identity. Reuses this Work existing coding run; never resumes an unrelated session. Model-data consent and registered project policy remain mandatory. ':''}${name==='runtime_coding_step'?'Send only the next prepared stage instruction to the configured Codex/Claude CLI, read its actual response, and verify its Git/check receipts. Only same-run saved CLI session IDs may resume; no --last. Repository writes require this Work write delegation and registered policy. Imported plans/stages retain human approval. ':''}${name==='runtime_coding_status'?'Read actual stage progress, exact CLI replies and verification receipts of this Work coding run; completed stages are not proof of whole Work completion. ':''}${name==='runtime_coding_reconcile'?'Inspect uncertain coding effects without replay or automatic acceptance; report required user review. ':''}Only configured executors and approved connections can run. Unknown effects are fenced, not replayed.`,input_schema:z.toJSONSchema(name==='runtime_pack_watch_tick'?watchTickInput:name==='runtime_pack_events'?watchEventsInput:tool.schema),effect:effects[name]}];});
+    const localInspect=descriptors.find(item=>item.name==='runtime_pack_local_record_inspect');
+    if(localInspect)localInspect.description='Read exactly one registered local JSON record in this record.update Work. Supply the exact identity; receive identity_field, explicitly delegated readable fields (including read-only original values), editable_fields, and observed before_sha256. The later runtime_pack_run recipe values must explicitly include the same identity under identity_field even though it is unchanged, plus only allowed changed fields; expected_before_sha256 must be the observed hash. Never guess a hash, open an arbitrary path, change the original or submit externally.';
+    const context=descriptors.find(item=>item.name==='runtime_work_context');
+    if(context)context.description+=' Omit reference_ids to read the core Work context. If selecting excerpts, use only IDs from this Work reference_map.references; tool receipt evidence_ids are a different namespace and cannot be used as reference_ids.';
+    const packStatus=descriptors.find(item=>item.name==='runtime_pack_status');
+    if(packStatus)packStatus.description+=' For a successful task-free portal.collect or file.pipeline run, native_output_certificate independently rechecks saved observed rows through the native transform against exact local artifact bytes and fresh file-source hashes. It does not prove that recipe filters match the user goal or that remote sources remain current.';
     descriptors.push({name:'office_browser_read',description:'Open and read a URL explicitly supplied by the user, or a link in an already observed page. Returns live text, links, timestamp and executor. Read-only; never submits or signs in. Independent same-environment executor fallback is automatic.',input_schema:z.toJSONSchema(z.object({url:z.string().url().max(4096)}).strict()),effect:'read_only'});
     descriptors.push({name:'office_web_search',description:'Search the public web when the user supplied a topic but no source URL. Choose google (default), bing or duckduckgo; the host constructs its fixed public search URL from query text (maximum 512 characters). Returns actual DOM text and observed links only, with timestamps and executor; no generated search results. For observed Google unusual traffic in headless or the managed Playwright guest, the host hands the identical Google query directly to registered Aside once, skipping the guest retry. Never replace that query with Bing or DuckDuckGo. If environment_block=true is returned, follow next_action for Aside connection or user confirmation; no repeat or profile cycling. For another public-provider challenge, an independent source within scope may be used. Never solve CAPTCHA, sign in or bypass access controls. Credentials and private-host query URLs are rejected. Follow only actually observed links. Pack models=off does not disable this tool or the configured Work LLM.',input_schema:z.toJSONSchema(z.object(searchArguments).strict(),{io:'input'}),effect:'read_only'});
     const socialSites=this.socialSites();
     if(socialSites.length)descriptors.push({name:'office_social_search',description:`Read current ticker/social discussion from one historically ready, registered browser profile only. Offered sites: ${socialSites.join(', ')}. The host constructs a bounded search entry URL, reobserves the live page and checks the signed-in marker. A prior ready observation is not proof of current access or of source quality. No cross-profile fallback, login, challenge bypass, post or message. Use actual DOM URLs/timestamps as unverified source observations, not as verified news claims.`,input_schema:z.toJSONSchema(socialSearchInput,{io:'input'}),effect:'read_only'});
     descriptors.push({name:'office_browser_links',description:'List a bounded page of exact user-supplied and observed URLs plus configured browser environments. Defaults: offset=0, limit=20 (maximum 40); byte limits may return fewer complete URLs. If has_more, request next_offset with the returned snapshot_id. A changed snapshot requires restarting at offset=0. Never infer an omitted or unobserved URL; this tool does not open pages or grant access.',input_schema:z.toJSONSchema(browserLinksInput,{io:'input'}),effect:'read_only'});
-    descriptors.push({name:'office_result_draft',description:'Save the Work result/report for the user in this Office. Write the requested final text using observed source evidence and requested language/format, without invented facts. The host independently rereads the file and verifies exact bytes and SHA-256 before issuing a verified receipt. Returns text, artifact metadata and request_id. Use office_result_read with that request_id if additional readback is required; runtime_files_report is for user folders, not Office results. Creates only an Office-owned file, never sends a message or changes an external service.',input_schema:z.toJSONSchema(resultInput),effect:'local_write'});
-    descriptors.push({name:'office_result_read',description:'Read the actual text of an Office-created output using the exact host invocation request_id from a successful verified office_result_draft or runtime_pack_run receipt, not an ID proposed in tool arguments. Supports local TXT/JSON/CSV artifacts up to 16KB. Rechecks bytes and SHA-256; Pack outputs also require a task-free successful run bound to this Work. Only current Work/run receipts may be read, including persisted receipts after resume. A known failed source-quality output is not readable: correct its grounded recipe and obtain a successful verified receipt first. Arbitrary paths, binary files and other Work files are unavailable. Use this tool to inspect saved Pack rows before computing or summarizing them.',input_schema:z.toJSONSchema(resultReadInput),effect:'read_only'});
+    descriptors.push({name:'office_result_draft',description:'Save an actual TXT, JSON or CSV Work result/report inside Agent Office. Supply format=json or format=csv with valid content for structured output; omitted format preserves TXT compatibility. "Office result file" or "Office 결과 파일" refers to an app artifact, not automatically a Microsoft Word/Excel document. If the user specified no file format, TXT is valid when it preserves the requested content; never claim a TXT artifact satisfies an explicitly requested CSV, JSON, Word or Excel format. Write observed source evidence in the requested language without invented facts. The host rereads exact bytes and SHA-256 before a verified receipt. Returns text, artifact metadata and request_id. Use office_result_read with that request_id for readback; runtime_files_report is for user folders. Creates only an Office-owned file, never sends a message or changes an external service.',input_schema:z.toJSONSchema(resultInput),effect:'local_write'});
+    descriptors.push({name:'office_result_read',description:'Read an Office-owned TXT/JSON/CSV output using its exact successful host invocation request_id, never an arbitrary path. Rechecks the entire file SHA-256 and bytes (maximum 8 MiB); returns a bounded UTF-8 page preserving the original BOM and final newline. offset defaults to 0, max_bytes to 12000. For has_more, use the returned next_offset with the same request_id. Page text is not the entire file: do not claim full inspection or parse a partial JSON page as complete JSON. Remove an initial BOM only after assembling a complete JSON document. Full artifact metadata remains verified on every page. Pack outputs require a bound task-free successful or local-record draft-only run. Failed-quality output, foreign Work files and binary formats remain unavailable. Existing verified receipts survive resume.',input_schema:z.toJSONSchema(resultReadInput),effect:'read_only'});
     return descriptors;
   }
   private table(name:string){return Boolean(this.store.desktopState.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));}
@@ -193,9 +256,10 @@ export class WorkExecutionTools {
     const observed=await readLocalGitCheckpoint(project.root,async(root,args,timeout_ms)=>{const result=await nativeProcessRunner.run({executable:process.platform==='win32'?'git.exe':'/usr/bin/git',args:['-C',root,...args],cwd:root,timeout_ms:timeout_ms??10_000});requireCondition(result.code===0,'WORK_CODING_GIT_CHECK_FAILED');return result.stdout;});
     return expected.head===observed.head&&expected.state_sha256===observed.state_sha256;
   }
-  private resultPath(requestId:string){
+  private resultPath(requestId:string,format:unknown='txt'){
+    const extension=resultFormat.parse(format);
     requireCondition(/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(this.workId)&&/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u.test(this.runId)&&/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(requestId),'WORK_RESULT_ID_INVALID');
-    return join(dirname(this.config.dbPath),'work-artifacts',this.workId,this.runId,`report-${hashJson(requestId).slice(0,32)}.txt`);
+    return join(dirname(this.config.dbPath),'work-artifacts',this.workId,this.runId,`report-${hashJson(requestId).slice(0,32)}.${extension}`);
   }
   /** A Work already has a family and the typed tool catalog in its context.
    * Preserve authoritative plan/connection fields; reference only duplicated
@@ -226,6 +290,19 @@ export class WorkExecutionTools {
     const row=this.store.desktopState.prepare('SELECT checkpoint FROM office_supervisor WHERE project_id=? AND work_id=? AND run_id=?').get(this.config.project.id,this.workId,this.runId);
     const checkpoint=row?.checkpoint?object(JSON.parse(String(row.checkpoint))):null;
     return Array.isArray(checkpoint?.observations)?checkpoint.observations:checkpoint?.kind==='swarm'&&Array.isArray(checkpoint.final_observations)?checkpoint.final_observations:[];
+  }
+  private resultReceipt(requestId:string){
+    const cached=this.resultReceipts.get(requestId);if(cached)return cached;
+    for(const item of this.resultObservations()){
+      const record=object(item),invocation=object(record?.invocation),receipt=object(record?.receipt),value=object(receipt?.value);
+      if(invocation?.request_id!==requestId||receipt?.status!=='succeeded'||!value)continue;
+      if((invocation.tool_name==='office_result_draft'||invocation.tool_name==='runtime_pack_run')&&receipt.effect_state==='verified')return {tool_name:invocation.tool_name as 'office_result_draft'|'runtime_pack_run',value,pack_request_id:undefined};
+      if(invocation.tool_name!=='runtime_pack_status'||invocation.dispatched!==true||invocation.effect!=='read_only'||receipt.effect_state!=='none'||typeof value.run_id!=='string'||object(invocation.arguments)?.run_id!==value.run_id)continue;
+      const run=this.ownPack(value.run_id),host=object(value.host_run_observation);
+      if(host?.request_id!==run.request_id||host.result_matches_stored!==true||host.result_sha256!==hashJson(run.result)||hashJson(value.result)!==hashJson(run.result)||value.status!==run.status)continue;
+      return {tool_name:'runtime_pack_status' as const,value,pack_request_id:run.request_id};
+    }
+    return undefined;
   }
   private async fileSnapshots(recipe:Record<string,unknown>):Promise<FileSnapshot[]>{
     const requested=Array.isArray(recipe.sources)?recipe.sources:[],ids=[...new Set(requested.flatMap(item=>typeof object(item)?.id==='string'?[String(object(item)!.id)]:[]))];
@@ -263,13 +340,37 @@ export class WorkExecutionTools {
    */
   private async validateResultRead(args:Record<string,unknown>){
     const input=resultReadInput.parse(args),observations=this.resultObservations();
-    if(this.resultReceipts.has(input.request_id)||observations.some(item=>{const record=object(item),invocation=object(record?.invocation),receipt=object(record?.receipt);return invocation?.request_id===input.request_id&&receipt?.status==='succeeded'&&receipt.effect_state==='verified';}))return input;
+    const exact=observations.find(item=>{const record=object(item),invocation=object(record?.invocation),receipt=object(record?.receipt);return invocation?.request_id===input.request_id&&receipt?.status==='succeeded'&&receipt.effect_state==='verified';});
+    if(this.resultReceipts.has(input.request_id))return input;
+    if(this.resultReceipt(input.request_id)?.tool_name==='runtime_pack_status')return input;
+    if(exact){
+      const invocation=object(object(exact)?.invocation),value=object(object(object(exact)?.receipt)?.value);
+      if(invocation?.tool_name==='runtime_pack_run'&&typeof value?.run_id==='string'){
+        const run=this.ownPack(value.run_id);
+        if(run.request_id===input.request_id&&run.status===value.status&&hashJson(run.result)===hashJson(value.result)&&!object(object(run.result)?.artifact)){
+          const available:string[]=[];
+          for(const item of observations){const candidate=object(item),call=object(candidate?.invocation),receipt=object(candidate?.receipt),draft=object(receipt?.value);
+            if(call?.tool_name!=='office_result_draft'||typeof call.request_id!=='string'||receipt?.status!=='succeeded'||receipt.effect_state!=='verified'||!draft)continue;
+            const current=await this.receipt('office_result_draft',draft,call.request_id);
+            if(current.status==='succeeded'&&current.effect_state==='verified')available.push(call.request_id);
+          }
+          throw new WorkClientToolInputError('WORK_RESULT_PACK_ARTIFACT_NOT_AVAILABLE',`No file was read. This successful Pack has a structured result receipt but no output artifact. Inspect its existing result/items; do not rerun the Pack. ${available.length?`For an Office result file, use the exact verified office_result_draft host request_id: ${[...new Set(available)].join(', ')}.`:'No verified Office result file is available for this Work yet.'}`);
+        }
+      }
+      return input;
+    }
+    const successful=observations.flatMap(item=>{const record=object(item),invocation=object(record?.invocation),receipt=object(record?.receipt),value=object(receipt?.value);return invocation&&typeof invocation.request_id==='string'&&['runtime_pack_run','office_result_draft'].includes(String(invocation.tool_name))&&receipt?.status==='succeeded'&&receipt.effect_state==='verified'&&value?[{invocation,value}]:[];});
+    const alias=successful.find(item=>object(item.invocation.arguments)?.request_id===input.request_id);
+    if(alias)throw new WorkClientToolInputError('WORK_RESULT_REQUEST_ID_REQUIRED',`No file was read. Use the host invocation request_id ${alias.invocation.request_id}, not the model-supplied alias ${input.request_id}. The existing verified receipt belongs to this Work; do not rerun the Pack or create a replacement output.`);
     const candidates=observations.filter(item=>{
       const record=object(item),invocation=object(record?.invocation),receipt=object(record?.receipt),correction=object(object(receipt?.value)?.correction);
       // A persisted model alias only selects feedback, never a file or a grant.
       return invocation?.tool_name==='runtime_pack_run'&&invocation.dispatched===true&&(invocation.request_id===input.request_id||object(invocation.arguments)?.request_id===input.request_id)&&receipt?.status==='retryable_failure'&&receipt.effect_state!=='uncertain'&&correction?.kind==='data_quality';
     });
-    if(candidates.length!==1)return input;
+    if(candidates.length!==1){
+      if(successful.length)throw new WorkClientToolInputError('WORK_RESULT_REQUEST_ID_REQUIRED',`No file was read. Supply one exact successful host invocation request_id from this Work: ${successful.slice(-5).map(item=>item.invocation.request_id).join(', ')}. Do not invent an ID, rerun a successful Pack, or provide a file path.`);
+      return input;
+    }
     const record=object(candidates[0])!,invocation=object(record.invocation)!,receipt=object(record.receipt)!,value=object(receipt.value),canonical=invocation.request_id;
     if(!value||typeof value.run_id!=='string'||typeof canonical!=='string')return input;
     const run=this.ownPack(value.run_id);
@@ -290,6 +391,27 @@ export class WorkExecutionTools {
       if(input.run_id===this.runId)delete input.run_id;
     }
     return input;
+  }
+  private validateContextReferences(input:Record<string,unknown>){
+    const ids=input.reference_ids;
+    if(!Array.isArray(ids)||ids.length===0)return;
+    const allowed=new Set(workReferenceMap(this.store,this.config.project.id,this.workId).references.map(reference=>reference.id));
+    if(ids.some(id=>typeof id!=='string'||!allowed.has(id)))throw new WorkClientToolInputError('WORK_CONTEXT_REFERENCE_ID_INVALID','No context request was dispatched. Omit reference_ids to read the core Work context, or select only IDs from this Work reference_map.references. Tool receipt evidence_ids are not reference_ids.');
+  }
+  private rejectRegisteredFileFolderRequest(input:Record<string,unknown>){
+    if(this.spec.route.kind!=='pack'||this.spec.route.pack_family!=='file.pipeline'||typeof input.purpose!=='string')return;
+    const words=new Set(input.purpose.split(/[^A-Za-z0-9._-]+/u));
+    if(this.config.packs?.sources.some(source=>source.kind==='file'&&words.has(source.id)))throw new WorkClientToolInputError('WORK_PACK_FILE_ALREADY_CONNECTED','The named Pack file source is already registered for this Work. No user-folder permission was requested. Use runtime_pack_plan and runtime_pack_run with that source ID; runtime_files_request is only for a separate unregistered folder.');
+  }
+  private validateLocalRecordRecipe(recipe:Record<string,unknown>){
+    if(recipe.family!=='record.update'||typeof recipe.target!=='string')return;
+    const target=this.config.packs?.local_records.find(record=>record.id===recipe.target);
+    if(!target)return;
+    const values=object(recipe.values),identity=values?.[target.identity_field];
+    if(!values||!Object.hasOwn(values,target.identity_field)||!(typeof identity==='string'&&identity.length>0||typeof identity==='number'&&Number.isFinite(identity)&&(!Number.isInteger(identity)||Number.isSafeInteger(identity))))throw new WorkClientToolInputError('WORK_PACK_LOCAL_RECORD_IDENTITY_REQUIRED',`No Pack run was dispatched. Include the exact inspected ${target.identity_field} identity in recipe.values; it is required even when unchanged. Do not infer it from an earlier inspection.`);
+    if(typeof recipe.expected_before_sha256!=='string')throw new WorkClientToolInputError('WORK_PACK_LOCAL_RECORD_BEFORE_HASH_REQUIRED','No Pack run was dispatched. Supply the current observed before_sha256 from runtime_pack_local_record_inspect as expected_before_sha256. Do not guess a hash.');
+    const changed=Object.keys(values).filter(name=>name!==target.identity_field);
+    if(changed.length===0||changed.some(name=>!target.fields.includes(name)))throw new WorkClientToolInputError('WORK_PACK_LOCAL_RECORD_FIELD_NOT_ALLOWED','No Pack run was dispatched. Include only registered editable fields in recipe.values besides the unchanged identity field, with at least one intended change.');
   }
   /** Pre-dispatch schema checking: no API, grants, model calls or filesystem effects. */
   private searchRequest(raw:unknown){const input=searchInput.parse(raw);if(this.environmentBlockedQueries.has(input.query)&&input.provider!=='google')throw new WorkClientToolInputError('WORK_SEARCH_ENVIRONMENT_BLOCKED','Unusual traffic is an environment block. Keep the same provider and use the registered Aside recovery, or request Aside connection/user confirmation. Do not substitute Bing or DuckDuckGo.');if(this.blockedSearches.has(searchKey(input)))throw new WorkClientToolInputError('WORK_SEARCH_PROVIDER_BLOCKED','This provider returned an observed access challenge for the same query. If environment_block is true, request the indicated Aside connection or user confirmation; do not substitute the provider. Otherwise another independent source within the user scope may be used. Never repeat or bypass a challenge.');return input;}
@@ -328,15 +450,42 @@ export class WorkExecutionTools {
     if(name==='office_web_search')return this.searchRequest(args);
     if(name==='office_social_search')return this.socialRequest(args);
     if(name==='office_browser_links'){this.browserLinksPage(args);return browserLinksInput.parse(args);}
-    if(name==='office_result_draft')return resultInput.parse(args);
+    if(name==='office_result_draft')return validatedResultInput(args);
     if(name==='office_result_read')return this.validateResultRead(args);
+    if(watchTools.has(name)){
+      if(typeof args.run_id!=='string')throw new WorkClientToolInputError('WORK_WATCH_RUN_REQUIRED','Supply the exact monitor run_id returned for this Work. No watch was ticked or changed.');
+      const run=this.ownPack(args.run_id);
+      requireCondition(run.recipe.family==='monitor.watch','WORK_TOOL_PACK_FAMILY_MISMATCH');
+      if(name==='runtime_pack_watch_tick'&&this.store.watchState(this.config.project.id,run.id).paused)throw new WorkClientToolInputError('WORK_WATCH_PAUSED','This watch is paused. No source was reobserved; resume only after an explicit Work direction.');
+    }
     const input=(tools as Record<string,{schema:z.ZodType}>)[name]!.schema.parse(this.normalizedInput(name,args,requestId)) as Record<string,unknown>;
+    if(name.startsWith('runtime_pack_')){
+      try{assertCustomPackInvocation(this.store,this.config.project.id,this.workId,name,input,{config_fingerprint:this.config.fingerprint,engine_binding:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})});}
+      catch(error){if(error instanceof Error&&/^CUSTOM_PACK_/u.test(error.message))throw new WorkClientToolInputError(error.message,'No Pack operation was dispatched. This repeated Work must retain its saved version, recipe, cycle request identity and original completion contract. Prepare a new version/cycle for changed work.');throw error;}
+    }
+    if(name==='runtime_pack_status'){
+      const owned=this.store.officeRuns(this.config.project.id,this.workId).filter(run=>run.source_kind==='pack').map(run=>run.source_id);
+      if(!owned.includes(String(input.run_id)))throw new WorkClientToolInputError('WORK_TOOL_RUN_SCOPE_MISMATCH',`Nothing was dispatched. Use an exact Pack run_id belonging to this Work, not the supervisor run_id or an invented alias. Owned Pack run IDs: ${owned.slice(-5).join(', ')||'none'}. Other Works remain inaccessible.`);
+    }
+    if(name==='runtime_work_context')this.validateContextReferences(input);
+    if(name==='runtime_files_request')this.rejectRegisteredFileFolderRequest(input);
+    if(name==='runtime_pack_local_record_inspect'){
+      requireCondition(this.spec.route.kind==='pack'&&this.spec.route.pack_family==='record.update','WORK_TOOL_PACK_FAMILY_MISMATCH');
+      requireCondition(this.config.packs?.local_records.some(record=>record.id===input.target),'WORK_PACK_TARGET_NOT_CONNECTED');
+    }
     if(name==='runtime_pack_run'){
       const policy=this.config.packs,recipe=object(input.recipe)!;
       if(!policy)throw new WorkClientToolInputError('WORK_PACK_CONNECTION_REQUIRED','No Pack source/target policy is connected. Nothing was executed. For public research use office_web_search, office_browser_read and office_result_draft; do not invent registered sources.');
       if(this.spec.route.kind!=='pack'||recipe.family!==this.spec.route.pack_family)throw new WorkClientToolInputError('WORK_TOOL_PACK_FAMILY_MISMATCH','The recipe must use the family already selected for this Work. Nothing was executed.');
       if(Array.isArray(recipe.sources)&&recipe.sources.some(source=>!policy.sources.some(registered=>registered.id===object(source)?.id)))throw new WorkClientToolInputError('WORK_PACK_SOURCE_NOT_CONNECTED','Choose only a source ID returned by runtime_pack_plan. For unregistered public URLs use the office browser tools. Nothing was executed.');
-      if(typeof recipe.target==='string'&&!policy.targets.some(target=>target.id===recipe.target&&target.family===recipe.family))throw new WorkClientToolInputError('WORK_PACK_TARGET_NOT_CONNECTED','The target must already be registered for this recipe family. Nothing was executed.');
+      if(typeof recipe.target==='string'&&!policy.targets.some(target=>target.id===recipe.target&&target.family===recipe.family)&&!(recipe.family==='record.update'&&policy.local_records.some(target=>target.id===recipe.target)))throw new WorkClientToolInputError('WORK_PACK_TARGET_NOT_CONNECTED','The target must already be registered for this recipe family. Nothing was executed.');
+      const issues=declaredSourceContractIssues(recipe as Recipe,policy.sources);
+      if(issues.length){
+        const safeFields=(fields:string[])=>fields.filter(field=>!/(?:password|token|secret|api.?key|auth|session|cookie)/iu.test(field)).map(field=>safeControlText(field,120));
+        const detail=issues.map(issue=>`${safeControlText(issue.source_id,80)}: missing ${safeFields(issue.missing_fields).join(', ')||'[private field]'}; registered fields ${safeFields(issue.declared_fields).join(', ')||'none'}`).join('; ');
+        throw new WorkClientToolInputError('PACK_DECLARED_SOURCE_FIELD_MISSING',`No Pack run or observation was dispatched. Correct the recipe using exact registered field names. ${detail}. Registration describes the schema; it does not prove source content or freshness.`);
+      }
+      this.validateLocalRecordRecipe(recipe);
     }
     return input;
   }
@@ -344,38 +493,56 @@ export class WorkExecutionTools {
     this.guard();this.store.intakeWork(this.config.project.id,this.workId);
     if(name==='office_browser_links')return this.browserLinksPage(args);
     if(name==='office_result_read'){
-      const {request_id}=resultReadInput.parse(args);let source=this.resultReceipts.get(request_id);
-      if(!source){
-        const item=this.resultObservations().find(value=>{const record=object(value),invocation=object(record?.invocation),receipt=object(record?.receipt);return (invocation?.tool_name==='office_result_draft'||invocation?.tool_name==='runtime_pack_run')&&invocation.request_id===request_id&&receipt?.status==='succeeded'&&receipt.effect_state==='verified';});
-        const found=object(item),invocation=object(found?.invocation),value=object(object(found?.receipt)?.value);
-        if(value&&invocation)source={tool_name:invocation.tool_name as 'office_result_draft'|'runtime_pack_run',value};
-      }
+      const {request_id,offset,max_bytes}=resultReadInput.parse(args),source=this.resultReceipt(request_id);
       requireCondition(source,'WORK_RESULT_RECEIPT_NOT_FOUND');const value=source.value;
       let artifact:Record<string,unknown>|null,path:string,sourceRunId:string|null=null;
       if(source.tool_name==='office_result_draft'){
-        artifact=object(value.artifact);path=this.resultPath(request_id);
+        artifact=object(value.artifact);path=this.resultPath(request_id,artifact?.format);
         requireCondition(value.work_id===this.workId&&value.run_id===this.runId&&artifact?.path===path,'WORK_RESULT_RECEIPT_NOT_FOUND');
       }else{
-        requireCondition(value.status==='succeeded'&&value.task_id===null&&typeof value.run_id==='string','WORK_RESULT_RECEIPT_NOT_FOUND');
-        const run=this.ownPack(value.run_id);requireCondition(run.status==='succeeded'&&run.task_id===null&&hashJson(run.result)===hashJson(value.result),'WORK_RESULT_RECEIPT_NOT_FOUND');
-        artifact=object(object(run.result)?.artifact);requireCondition(typeof artifact?.path==='string'&&resolve(dirname(artifact.path))===resolve(join(dirname(this.config.dbPath),'pack-artifacts')),'WORK_ARTIFACT_SCOPE_MISMATCH');
+        requireCondition(value.task_id===null&&typeof value.run_id==='string','WORK_RESULT_RECEIPT_NOT_FOUND');
+        const run=this.ownPack(value.run_id),recordTarget=run.recipe.family==='record.update'?run.recipe.target:null;
+        const localDraft=run.status==='draft_ready'&&recordTarget!==null&&object(run.result)?.external_submit===false&&object(run.result)?.originals_modified===false&&this.config.packs?.local_records.some(target=>target.id===recordTarget);
+        requireCondition(run.request_id===(source.tool_name==='runtime_pack_status'?source.pack_request_id:request_id)&&(run.status==='succeeded'||localDraft)&&run.status===value.status&&run.task_id===null&&hashJson(run.result)===hashJson(value.result),'WORK_RESULT_RECEIPT_NOT_FOUND');
+        if(source.tool_name==='runtime_pack_status'){
+          const host={config_fingerprint:this.config.fingerprint,engine_binding:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})};
+          assertCustomPackInvocation(this.store,this.config.project.id,this.workId,'runtime_pack_run',{recipe:run.recipe,request_id:run.request_id},host);
+          requireCondition(run.binding===snapshotHash({recipe:run.recipe,fingerprint:host.engine_binding}),'WORK_RESULT_RECEIPT_NOT_FOUND');
+        }
+        artifact=object(object(run.result)?.artifact);
+        if(!artifact)throw new WorkClientToolInputError('WORK_RESULT_PACK_ARTIFACT_NOT_AVAILABLE','No file was read. This Pack has a structured result receipt but no output artifact. Use its verified result/items or a separate verified office_result_draft host request_id. Do not rerun the Pack.');
+        requireCondition(typeof artifact.path==='string'&&resolve(dirname(artifact.path))===resolve(join(dirname(this.config.dbPath),'pack-artifacts')),'WORK_ARTIFACT_SCOPE_MISMATCH');
         path=artifact.path;sourceRunId=run.id;
       }
       requireCondition(artifact&&['txt','json','csv'].includes(String(artifact.format)),'WORK_RESULT_UNSUPPORTED_FORMAT');
-      requireCondition(Number.isInteger(artifact.bytes)&&Number(artifact.bytes)<=16000&&Number(artifact.bytes)>=0&&(await stat(path)).size<=16000,'WORK_RESULT_READBACK_TOO_LARGE');
+      requireCondition(Number.isInteger(artifact.bytes)&&Number(artifact.bytes)<=MAX_BYTES&&Number(artifact.bytes)>=0&&(await stat(path)).size<=MAX_BYTES,'WORK_RESULT_READBACK_TOO_LARGE');
       const bytes=await readScopedFile(path);requireCondition(sha(bytes)===artifact.sha256&&bytes.length===artifact.bytes,'WORK_RESULT_READBACK_MISMATCH');
-      requireCondition(!bytes.includes(0),'WORK_RESULT_UNSUPPORTED_FORMAT');let text:string;try{text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{throw Error('WORK_RESULT_UNSUPPORTED_FORMAT');}
-      return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id,source_tool:source.tool_name,source_run_id:sourceRunId,title:value.title??this.spec.title,text:source.tool_name==='office_result_draft'?text.replace(/\n$/u,''):text,artifact,verified_by:'independent_sha256_and_bytes_readback',external_delivery:false};
+      requireCondition(!bytes.includes(0),'WORK_RESULT_UNSUPPORTED_FORMAT');try{new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes);}catch{throw Error('WORK_RESULT_UNSUPPORTED_FORMAT');}
+      if(offset>bytes.length||offset<bytes.length&&(bytes[offset]!&0xc0)===0x80)throw new WorkClientToolInputError('WORK_RESULT_PAGE_OFFSET_INVALID','Use offset=0 or the exact next_offset from the previous verified page; no page was returned.');
+      let end=Math.min(bytes.length,offset+max_bytes);while(end<bytes.length&&(bytes[end]!&0xc0)===0x80)end--;
+      const text=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true}).decode(bytes.subarray(offset,end));
+      const hasMore=end<bytes.length;
+      return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id,source_tool:source.tool_name,source_run_id:sourceRunId,title:value.title??this.spec.title,text,artifact,page:{offset,returned_bytes:end-offset,total_bytes:bytes.length,next_offset:hasMore?end:null,has_more:hasMore},verified_by:'independent_sha256_and_bytes_readback',external_delivery:false};
     }
     if(name==='office_result_draft'){
-      const input=resultInput.parse(args),path=this.resultPath(requestId),root=join(dirname(this.config.dbPath),'work-artifacts'),directory=dirname(path),bytes=Buffer.from(input.text+'\n','utf8');
+      const input=validatedResultInput(args),path=this.resultPath(requestId,input.format),root=join(dirname(this.config.dbPath),'work-artifacts'),directory=dirname(path),bytes=resultBytes(input.text,input.format);
       for(const part of [root,join(root,this.workId),directory]){await mkdir(part,{recursive:true,mode:0o700});requireCondition(await realpath(part)===resolve(part),'WORK_ARTIFACT_SCOPE_MISMATCH');}
+      // One request binds one format and byte sequence, including simultaneous
+      // calls. The legacy TXT path is kept for saved receipt compatibility.
+      const legacyPath=this.resultPath(requestId),bindingPath=legacyPath+'.binding',binding=Buffer.from(JSON.stringify({format:input.format,sha256:sha(bytes)})+'\n');
+      if(input.format!=='txt'){
+        try{await stat(legacyPath);throw Error('WORK_RESULT_REQUEST_ID_CONFLICT');}
+        catch(error){if((error as NodeJS.ErrnoException).code!=='ENOENT')throw error;}
+      }
+      try{const handle=await open(bindingPath,'wx',0o600);try{await handle.writeFile(binding);await handle.sync();}finally{await handle.close();}}
+      catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;}
+      requireCondition((await readScopedFile(bindingPath)).equals(binding),'WORK_RESULT_REQUEST_ID_CONFLICT');
       let deduplicated=false;
       try{const handle=await open(path,'wx',0o600);try{await handle.writeFile(bytes);await handle.sync();}finally{await handle.close();}}
       catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;deduplicated=true;}
       const saved=await readScopedFile(path);requireCondition(saved.equals(bytes),'WORK_RESULT_REQUEST_ID_CONFLICT');
       workActivity(this.store,this.config.project.id,this.workId,'result.saved',`Result saved: ${input.label??this.spec.title} · ${saved.length} bytes`);
-      return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id:requestId,title:input.label??this.spec.title,text:input.text,artifact:{path,sha256:sha(saved),bytes:saved.length,format:'txt'},deduplicated,external_delivery:false};
+      return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id:requestId,title:input.label??this.spec.title,text:input.text,artifact:{path,sha256:sha(saved),bytes:saved.length,format:input.format},deduplicated,external_delivery:false};
     }
     if(name==='office_browser_read'||name==='office_web_search'||name==='office_social_search'){
       const explicit=name==='office_browser_read'?this.browserRequest(args):null,social=name==='office_social_search'?this.socialRequest(args):null,search=name==='office_web_search'?this.searchRequest(args):explicit?searchFromUrl(explicit.url):null,url=explicit?explicit.url:social?socialSearchEntry(social):searchEntry(search!);
@@ -466,6 +633,14 @@ export class WorkExecutionTools {
     requireCondition(this.catalog().some(t=>t.name===name),'WORK_TOOL_NOT_AVAILABLE');
     const input=this.normalizedInput(name,args,requestId);
     const schema=(tools as Record<string,{schema:z.ZodType}>)[name]!.schema;schema.parse(input);
+    if(name==='runtime_work_context')this.validateContextReferences(input);
+    if(name==='runtime_files_request')this.rejectRegisteredFileFolderRequest(input);
+    if(watchTools.has(name)){
+      requireCondition(typeof input.run_id==='string','WORK_WATCH_RUN_REQUIRED');
+      const run=this.ownPack(input.run_id);
+      requireCondition(run.recipe.family==='monitor.watch','WORK_TOOL_PACK_FAMILY_MISMATCH');
+      if(name==='runtime_pack_watch_tick')requireCondition(!this.store.watchState(this.config.project.id,run.id).paused,'WORK_WATCH_PAUSED');
+    }
     if(name.startsWith('runtime_pack_')&&typeof input.run_id==='string')this.ownPack(input.run_id);
     if(name.startsWith('runtime_windows_')&&typeof input.run_id==='string')this.ownWindows(input.run_id);
     if(name.startsWith('runtime_coding_')&&typeof input.run_id==='string')this.ownCoding(input.run_id);
@@ -475,7 +650,7 @@ export class WorkExecutionTools {
     if(name==='runtime_files_scan')requireCondition(this.folderGranted(String(input.root_id)),'WORK_TOOL_FILE_SCOPE_MISMATCH');
     if(name.startsWith('runtime_files_')&&typeof input.scan_id==='string')this.ownScan(input.scan_id);
     if(name==='runtime_pack_run'){
-      const recipe=object(input.recipe)!;requireCondition(this.spec.route.kind==='pack'&&recipe.family===this.spec.route.pack_family,'WORK_TOOL_PACK_FAMILY_MISMATCH');
+      const recipe=object(input.recipe)!;requireCondition(this.spec.route.kind==='pack'&&recipe.family===this.spec.route.pack_family,'WORK_TOOL_PACK_FAMILY_MISMATCH');this.validateLocalRecordRecipe(recipe);
       if(recipe.browser&&this.spec.browser)requireCondition(object(recipe.browser)?.environment===this.spec.browser.environment,'BROWSER_WORK_ENVIRONMENT_CONFLICT');
     }
     if(name==='runtime_pack_execute_approved'){
@@ -507,7 +682,7 @@ export class WorkExecutionTools {
     // Once dispatched, return the authoritative receipt even if pause/revision
     // changes during the effect. The bounded executor checkpoints it first and
     // applies the live guard before admitting its next operation.
-    const value=await this.api.call(name,input);
+    const rawValue=await this.api.call(name,input),value=name==='runtime_pack_run'?{...object(rawValue),request_id:requestId}:rawValue;
     if(name==='runtime_pack_plan')return this.packPlanView(value);
     if(name==='runtime_pack_run'&&typeof object(value)?.run_id==='string'){
       const data=object(value)!,run=this.ownPack(String(data.run_id));
@@ -526,6 +701,12 @@ export class WorkExecutionTools {
   async receipt(name:string,value:unknown,requestId?:string):Promise<WorkClientToolReceipt>{
     const effect=effects[name as ExecutionToolName];requireCondition(effect,'WORK_TOOL_NOT_AVAILABLE');
     const data=object(value),readOnly=effect==='read_only';
+    if(name==='runtime_pack_watch_tick'&&data?.pending===true){
+      requireCondition(typeof data.run_id==='string'&&Array.isArray(data.processed)&&data.processed.length===0&&Array.isArray(data.recovered)&&data.recovered.length===0,'WORK_WATCH_PENDING_UNVERIFIED');
+      const run=this.ownPack(data.run_id),invocation=requestId?this.dispatched.get(requestId):null,watch=this.store.watchState(this.config.project.id,run.id),reported=object(data.watch);
+      requireCondition(run.recipe.family==='monitor.watch'&&invocation?.name===name&&invocation.input.run_id===run.id&&reported?.run_id===run.id&&reported.cycle===watch.cycle&&reported.next_ms===watch.next_ms&&reported.paused===false&&watch.paused===false&&data.ready_at===new Date(watch.next_ms).toISOString(),'WORK_WATCH_PENDING_UNVERIFIED');
+      return {status:'retryable_failure',value:{...data,status:'not_due'},evidence_ids:[],effect_state:'none',retry_safe:false};
+    }
     let state=String(data?.status??data?.run_status??'succeeded'),status:WorkClientToolReceipt['status']='succeeded';
     const challengedSearch=['office_web_search','office_browser_read'].includes(name)&&data?.provenance==='live_browser_dom'&&data.effect==='read_only'&&data.search_access==='challenge_observed'&&state==='retryable_failure';
     const socialBlocked=['office_social_search','office_browser_read'].includes(name)&&data?.provenance==='live_browser_dom'&&data.effect==='read_only'&&data.social_access==='not_verified'&&state==='retryable_failure';
@@ -538,6 +719,7 @@ export class WorkExecutionTools {
       else if(['waiting_connection','waiting_observation','running'].includes(state))status='retryable_failure';
     }
     let effectState:WorkClientToolReceipt['effect_state']=status==='reconciliation_required'?'uncertain':'none',correctableQuality=false;
+    let watchFieldCorrection:{source_ids:string[];available_fields:string[];missing_fields:string[];prior_run_id:string}|null=null;
     if((name==='runtime_pack_run'||name==='runtime_pack_execute_approved')&&typeof data?.run_id==='string'){
       try{const run=this.ownPack(data.run_id);if(run.task_id&&(this.store.task(run.task_id).effect_state==='unknown'||this.store.proposal(run.task_id).state==='consumed'&&this.store.task(run.task_id).status!=='succeeded')){status='reconciliation_required';effectState='uncertain';}}catch{status='reconciliation_required';effectState='uncertain';}
     }
@@ -551,15 +733,38 @@ export class WorkExecutionTools {
         if(correctableQuality)status='retryable_failure';
       }catch{/* Missing provenance is never grounds to bypass user review. */}
     }
+    // A failed watch baseline has no scheduler, artifact, approval task or
+    // external effect. The checkpoint contains the actual source fields, so
+    // the model can submit a distinct grounded recipe without replaying the
+    // failed Pack request or silently renaming a comparison field.
+    if(name==='runtime_pack_run'&&state==='failed'&&data?.task_id===null&&status!=='reconciliation_required'&&typeof data.run_id==='string'&&requestId){
+      try{
+        const run=this.ownPack(data.run_id),result=object(run.result),execution=this.store.packExecution(this.config.project.id,run.id),sources=object(execution?.checkpoint.sources);
+        let watchAbsent=false;
+        try{this.store.watchState(this.config.project.id,run.id);}catch(error){watchAbsent=error instanceof Error&&error.message==='PACK_WATCH_NOT_FOUND';}
+        if(run.request_id===requestId&&run.status==='failed'&&run.recipe.family==='monitor.watch'&&run.task_id===null&&result?.error==='WATCH_COMPARISON_FIELD_MISSING'&&hashJson(run.result)===hashJson(data.result)&&!result.artifact&&watchAbsent&&sources){
+          const observed=run.recipe.sources.map((source,index)=>{
+            const entry=object(object(sources[String(index)])?.result),evidence=object(entry?.evidence),rows=entry?.rows;
+            return evidence?.source_id===source.id&&Array.isArray(rows)&&rows.length>0&&rows.every(row=>object(row))?rows.map(row=>object(row)!):null;
+          });
+          if(observed.length>0&&observed.every(rows=>rows!==null)){
+            const rows=observed.flatMap(rows=>rows!),allFields=Object.keys(rows[0]!),available=allFields.filter(field=>/^[A-Za-z_][A-Za-z0-9_]{0,79}$/u.test(field)&&!/(?:password|token|secret|api.?key|auth|session|cookie)/iu.test(field)&&rows.every(row=>Object.hasOwn(row,field)&&row[field]!==null)).sort().slice(0,100);
+            const missing=run.recipe.comparison_fields.filter(field=>!rows.every(row=>Object.hasOwn(row,field)&&row[field]!==null));
+            if(missing.length>0&&available.length>0){watchFieldCorrection={source_ids:run.recipe.sources.map(source=>source.id),available_fields:available,missing_fields:missing,prior_run_id:run.id};status='retryable_failure';}
+          }
+        }
+      }catch{/* Unknown or potentially effected failures remain terminal. */}
+    }
     if((status==='succeeded'||correctableQuality)&&(effect==='local_write'||effect==='external_write')){
       let verified=false;
       try{
         if(name==='office_result_draft'&&requestId){
-          const artifact=object(data?.artifact);requireCondition(data?.work_id===this.workId&&data?.run_id===this.runId&&typeof data?.text==='string'&&artifact?.path===this.resultPath(requestId),'WORK_ARTIFACT_SCOPE_MISMATCH');
-          const bytes=await readScopedFile(String(artifact.path));verified=sha(bytes)===artifact.sha256&&bytes.length===artifact.bytes&&bytes.equals(Buffer.from(data.text+'\n','utf8'));
+          const artifact=object(data?.artifact);requireCondition(data?.work_id===this.workId&&data?.run_id===this.runId&&typeof data?.text==='string'&&artifact?.path===this.resultPath(requestId,artifact?.format),'WORK_ARTIFACT_SCOPE_MISMATCH');
+          validatedResultInput({text:data.text,format:artifact.format});
+          const bytes=await readScopedFile(String(artifact.path));verified=sha(bytes)===artifact.sha256&&bytes.length===artifact.bytes&&bytes.equals(resultBytes(data.text,artifact.format));
           if(verified)this.resultReceipts.set(requestId,{tool_name:'office_result_draft',value:data});
         }else if(name==='runtime_pack_run'&&typeof data?.run_id==='string'){
-          const run=this.ownPack(data.run_id);verified=run.status===data.status&&hashJson(run.result)===hashJson(data.result);
+          const run=this.ownPack(data.run_id);verified=Boolean(requestId&&run.request_id===requestId&&run.status===data.status&&hashJson(run.result)===hashJson(data.result));
           if(run.task_id)verified=verified&&this.store.task(run.task_id).effect_state==='none'&&this.store.proposal(run.task_id).state!=='consumed';
           const artifact=object(object(run.result)?.artifact);
           if(artifact){
@@ -569,6 +774,14 @@ export class WorkExecutionTools {
           if(verified&&status==='succeeded'&&run.task_id===null&&artifact&&requestId)this.resultReceipts.set(requestId,{tool_name:'runtime_pack_run',value:data});
         }else if(name==='runtime_pack_execute_approved'&&typeof data?.run_id==='string'){
           const run=this.ownPack(data.run_id);if(run.task_id){const task=this.store.task(run.task_id);verified=task.project_id===this.config.project.id&&task.status==='succeeded'&&task.effect_state==='observed';}
+        }else if((name==='runtime_pack_watch_tick'||name==='runtime_pack_watch_pause')&&typeof data?.run_id==='string'&&requestId){
+          const run=this.ownPack(data.run_id),invocation=this.dispatched.get(requestId),watch=this.store.watchState(this.config.project.id,run.id);
+          const common=run.recipe.family==='monitor.watch'&&invocation?.name===name&&invocation.input.run_id===run.id&&(name==='runtime_pack_watch_pause'||object(data.watch)?.run_id===run.id);
+          if(name==='runtime_pack_watch_pause')verified=Boolean(common&&watch.paused===data.paused&&watch.cycle===data.cycle);
+          else {
+            const items=Array.isArray(data.processed)?data.processed:[],onlyOwn=items.every(item=>object(item)?.run_id===run.id);
+            verified=Boolean(common&&onlyOwn&&items.every(item=>object(item)?.cycle===watch.cycle)&&watch.cycle===object(data.watch)?.cycle&&watch.paused===object(data.watch)?.paused&&data.pending===(items.length===0));
+          }
         }else if(name==='runtime_windows_step'&&typeof data?.run_id==='string'){
           const run=this.ownWindows(data.run_id),receipt=object(Array.isArray(run.receipts)?run.receipts.at(-1):null),input=requestId?this.dispatched.get(requestId)?.input:null;
           verified=Boolean(input&&input.run_id===data.run_id&&typeof input.expected_revision==='number'&&typeof run.revision==='number'&&run.revision>input.expected_revision&&data.revision===run.revision&&run.reason==='POSTCONDITION_VERIFIED'&&receipt?.capture_id&&Array.isArray(receipt.evidence_refs)&&receipt.evidence_refs.length>0&&hashJson(data.receipts)===hashJson(run.receipts));
@@ -582,9 +795,30 @@ export class WorkExecutionTools {
       effectState=verified?(correctableQuality&&!object(object(data?.result)?.artifact)?'none':'verified'):'uncertain';if(!verified)status='reconciliation_required';
     }
     const id=requestId&&/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u.test(requestId)?requestId:null;
-    const scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null}:value;
-    const receiptValue=correctableQuality&&status==='retryable_failure'?{...object(scopedValue),correction:{kind:'data_quality',reason:'PACK_SOURCE_EVIDENCE_VERIFICATION_FAILED',automatic_correction_allowed:true,user_confirmation_required:false,quality_checks_passed:false,next_action:'Inspect preserved source records and verification receipts; correct only grounded recipe fields or collect missing evidence, then retry a validated recipe. Do not invent evidence, weaken requested checks or mark unverified data complete.'}}:scopedValue;
-    return {status,value:receiptValue,evidence_ids:status==='succeeded'&&id?[id]:[],effect_state:effectState,retry_safe:!challengedSearch&&!socialBlocked&&effectState==='none'&&(readOnly||status!=='succeeded')};
+    let executedContract:ReturnType<typeof executedPackContract>|null=null;
+    let hostRunObservation:{state:string;family:string;request_id:string;result_sha256:string;stored_result_sha256:string;response_result_sha256:string;result_matches_stored:true}|null=null;
+    let outputCertificate:Awaited<ReturnType<typeof nativeOutputCertificate>>=null;
+    let sourceReadback:ReturnType<typeof savedResearchSourceReadback>=null;
+    if(name==='runtime_pack_run'&&data&&status==='succeeded'&&effectState==='verified'&&typeof data.run_id==='string'&&requestId){
+      try{const run=this.ownPack(data.run_id);if(run.request_id===requestId&&run.status===data.status&&hashJson(run.result)===hashJson(data.result)){executedContract=executedPackContract(run.recipe);hostRunObservation={state:run.status,family:run.recipe.family,request_id:run.request_id,result_sha256:hashJson(run.result),stored_result_sha256:hashJson(run.result),response_result_sha256:hashJson(data.result),result_matches_stored:true};}}catch{/* Never expose a contract for an unbound or changed run. */}
+    }
+    if(name==='runtime_pack_status'&&data&&status==='succeeded'&&typeof data.run_id==='string'&&requestId){
+      try{
+        const run=this.ownPack(data.run_id),call=this.dispatched.get(requestId);
+        if(call?.name===name&&call.input.run_id===run.id&&['succeeded','draft_ready'].includes(run.status)&&run.status===data.status&&hashJson(run.result)===hashJson(data.result)){
+          executedContract=executedPackContract(run.recipe);
+          hostRunObservation={state:run.status,family:run.recipe.family,request_id:run.request_id,result_sha256:hashJson(run.result),stored_result_sha256:hashJson(run.result),response_result_sha256:hashJson(data.result),result_matches_stored:true};
+          outputCertificate=await nativeOutputCertificate(this.store,this.config,run);
+          sourceReadback=savedResearchSourceReadback(this.store,this.config,run);
+          if(run.task_id===null&&object(object(run.result)?.artifact))this.resultReceipts.set(requestId,{tool_name:'runtime_pack_status',value:data,pack_request_id:run.request_id});
+        }
+      }catch{/* Foreign, changed or unobserved status gains no recipe claim. */}
+    }
+    // Only this host's scoped durable-run comparison produces this observation.
+    // Its state proves an execution phase, never the business outcome by itself.
+    const scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null,executed_contract:executedContract,host_run_observation:hostRunObservation}:name==='runtime_pack_status'&&data?{...data,executed_contract:executedContract,host_run_observation:hostRunObservation,native_output_certificate:outputCertificate,saved_source_readback:sourceReadback}:value;
+    const receiptValue=correctableQuality&&status==='retryable_failure'?{...object(scopedValue),correction:{kind:'data_quality',reason:'PACK_SOURCE_EVIDENCE_VERIFICATION_FAILED',automatic_correction_allowed:true,user_confirmation_required:false,quality_checks_passed:false,next_action:'Inspect preserved source records and verification receipts; correct only grounded recipe fields or collect missing evidence, then retry a validated recipe. Do not invent evidence, weaken requested checks or mark unverified data complete.'}}:watchFieldCorrection?{...object(scopedValue),correction:{kind:'source_contract',reason:'WATCH_COMPARISON_FIELD_MISSING',...watchFieldCorrection,automatic_field_substitution:false,new_pack_request_required:true,user_confirmation_required:false,next_action:'The prior watch baseline did not start. Use only these actually observed source field names to choose comparison_fields in a new monitor.watch recipe with a distinct request ID. Do not replay the failed request, infer a missing field, weaken the requested comparison, or claim a baseline/tick already exists.'}}:scopedValue;
+    return {status,value:receiptValue,evidence_ids:status==='succeeded'&&id?[id]:[],effect_state:effectState,retry_safe:!challengedSearch&&!socialBlocked&&!watchFieldCorrection&&effectState==='none'&&(readOnly||status!=='succeeded')};
   }
   async close(){await Promise.allSettled([...this.browsers.values()].map(b=>b.close()));this.browsers.clear();}
 }

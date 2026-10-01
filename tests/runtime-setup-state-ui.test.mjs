@@ -16,7 +16,7 @@ async function fixture(t){
  const auth={async connections(){return [];},view(){return {state:'idle'};},close(){}},mcp={async view(){return {registered_count:1,agent_driver:{installed:true},clients:[]};}},bootstrap={view(){return {clients:[]};}};
  const settings=new ControlSettings(config,auth,{},fetch,mcp,undefined,bootstrap,browsers);let host;
  const server=createServer(async(req,res)=>{if(!await settings.handle(req,res,req.url.slice(1),host)){res.writeHead(404);res.end();}});await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));host='127.0.0.1:'+server.address().port;
- t.after(async()=>{settings.close();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});});return {root,paths,state,url:'http://'+host+'/settings',browsers};
+  t.after(async()=>{await settings.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));await rm(root,{recursive:true,force:true});});return {root,paths,state,url:'http://'+host+'/settings',browsers};
 }
 const ready=page=>page.waitForFunction(()=>!document.getElementById('browser-setup-refresh')?.disabled);
 test('runtime fixture browser actions guide unknown, missing CLI, disconnected, permission and connected states in both languages and screen sizes',async t=>{

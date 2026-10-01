@@ -37,10 +37,10 @@ try{
   let source='https://github.com/deepdivekr/agent-office.git';
   const baselineSource=join(base,'source');
   await run('git',['clone','--quiet','--no-hardlinks','--no-tags',repo,baselineSource]);
-  for(const baseline of ['v0.1.0','v0.1.1','v0.2.0','v0.3.0'])await run('git',['-C',baselineSource,'fetch','--quiet','origin',`refs/tags/${baseline}:refs/tags/${baseline}`]);
+  for(const baseline of ['v0.1.0','v0.1.1','v0.2.0','v0.3.0'])await run('git',['-C',baselineSource,'fetch','--quiet','--no-tags','origin',`refs/tags/${baseline}:refs/tags/${baseline}`]);
   // The immediately previous public version may not have been fetched into
   // this development checkout. Keep that tag in the disposable clone only.
-  await run('git',['-C',baselineSource,'fetch','--quiet','https://github.com/deepdivekr/agent-office.git','refs/tags/v0.3.1:refs/tags/v0.3.1']);
+  await run('git',['-C',baselineSource,'fetch','--quiet','--no-tags','https://github.com/deepdivekr/agent-office.git','refs/tags/v0.3.1:refs/tags/v0.3.1']);
   if(!published){
     source=baselineSource;
     // Public release tags may already exist on later CI runs. Do not import

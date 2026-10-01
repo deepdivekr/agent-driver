@@ -1,6 +1,12 @@
 import {PackStore} from '../packs/store.js';
 import {FileExplorer} from '../files/explorer.js';
-import {FamilyRuntime} from '../packs/runtime.js';
+import {FamilyRuntime,PACK_ENGINE_VERSION} from '../packs/runtime.js';
+import {CustomPackRegistry} from '../packs/custom-registry.js';
+import {snapshotHash} from '../taskpack/contracts.js';
+import {CustomPackRepeats,assertCustomPackInvocation,customPackVersionsSchema,customPackWorkBinding} from '../work/custom-pack-repeat.js';
+import {workExecutionBinding} from '../work/contracts.js';
+import {CustomPackSchedules,assertCustomPackScheduledRun} from '../work/custom-pack-schedule.js';
+import {WorkSchedules} from '../work/schedule.js';
 import {LocalApprovalDispatcher} from '../packs/local-approval.js';
 import {ensureTerminalHost} from '../terminal/manager.js';
 import {terminalSubmit,terminalList,terminalHistory,terminalOutput} from '../terminal/contracts.js';
@@ -73,6 +79,9 @@ export class RuntimeApi{
   readonly files:FileExplorer;
   readonly windows:WindowsWorkflowRuntime;
   readonly packs:FamilyRuntime;
+  readonly customPacks:CustomPackRegistry;
+  readonly customPackRepeats:CustomPackRepeats;
+  readonly customPackSchedules:CustomPackSchedules;
   readonly work:WorkRuntime;
   readonly workResults:WorkResults;
   readonly imports:WorkImportRuntime;
@@ -108,6 +117,9 @@ export class RuntimeApi{
     this.coding=new CodingRuntime(this.store,config,this.model,options.coding);
     this.codingDialog=new CodingDialogRuntime(this.store,config,this.model,options.coding);
     this.packs=new FamilyRuntime(this.store,config,{approval:options.approval??new LocalApprovalDispatcher(this.store),llm:this.model});
+    this.customPacks=new CustomPackRegistry(this.store);
+    this.customPackRepeats=new CustomPackRepeats(this.store,this.customPacks,(work,prepared)=>this.workResults.setSelection(config.project.id,work.id,{revision:0,target_ids:prepared.completion_contract.delivery_target_ids??this.workResults.settings!.publicState().default_target_ids}));
+    this.customPackSchedules=new CustomPackSchedules(this.store,config.project.id,this.customPacks,this.customPackRepeats,new WorkSchedules(this.store,config.project.id));
     let jev=options.swarmJev;if(!jev&&config.swarm?.enabled)jev=optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport??undefined;
     this.explicitProviders=options.swarmProviders!==undefined;
     this.swarm=new SwarmRuntime(this.store,config,options.swarmProviders??{planner:new LlmSwarmPlanner(this.model),llm_fallback:new LlmSwarmDecisionFallback(this.model),...(jev?{decision:{id:'typesafe-jev',systemOne:(request,settings)=>jev!.systemOne(request,settings)}}:{})});
@@ -126,6 +138,10 @@ export class RuntimeApi{
     this.packs.providers.llm=this.model;this.swarm.providers.planner=new LlmSwarmPlanner(this.model);this.swarm.providers.llm_fallback=new LlmSwarmDecisionFallback(this.model);
   }
   private modelEnvironment(){return effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)));}
+  private customPackHostBinding(){
+    requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
+    return {config_fingerprint:this.config.fingerprint,engine_binding:snapshotHash({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})};
+  }
   private recoverPendingDeliveries(){
     if(this.closed||this.workAdmissionClosed||this.deliveryJobs.size>=4)return;
     try{for(const workId of this.workResults.pendingWorkIds(this.config.project.id,4-this.deliveryJobs.size))this.dispatchWorkPending(workId);}catch{/* Malformed stored settings cannot grant delivery authority. */}
@@ -219,6 +235,30 @@ export class RuntimeApi{
   async call(name:string,args:unknown):Promise<unknown>{
     requireCondition(!this.closed,'RUNTIME_API_CLOSED');
     this.assertWorkToolConnection(name,args);
+    if(name.startsWith('runtime_custom_pack_')){
+      switch(name){
+        case 'runtime_custom_pack_list':z.object({}).strict().parse(args);return {packs:this.customPacks.list(this.config.project.id),result_reuse:false};
+        case 'runtime_custom_pack_versions':{const input=customPackVersionsSchema.parse(args);return {key:input.key,versions:this.customPacks.versions(this.config.project.id,input.key)};}
+        case 'runtime_custom_pack_publish':return this.customPacks.publishVerified(this.config.project.id,args,this.customPackHostBinding());
+        case 'runtime_custom_pack_schedule_configure':{
+          requireCondition(!this.workAdmissionClosed,'WORK_SUPERVISOR_CLOSED');
+          const result=this.customPackSchedules.configure(args,this.customPackHostBinding());
+          const supervisor=await this.supervisedWork();supervisor.activate();
+          return result;
+        }
+        case 'runtime_custom_pack_schedule_status':return this.customPackSchedules.status(z.object({parent_work_id:z.string().uuid()}).strict().parse(args).parent_work_id);
+        case 'runtime_custom_pack_schedule_disable':return this.customPackSchedules.disable(args);
+        case 'runtime_custom_pack_prepare_repeat':{
+          requireCondition(!this.workAdmissionClosed,'WORK_SUPERVISOR_CLOSED');
+          const result=this.customPackRepeats.prepare(this.config.project.id,args,this.customPackHostBinding(),prepared=>{
+            const targetIds=prepared.completion_contract.delivery_target_ids??this.workResults.settings!.publicState().default_target_ids;
+            requireCondition(targetIds.every(id=>id==='app'||this.workResults.settings?.target(id)),'RESULT_DELIVERY_TARGET_UNAVAILABLE');
+          });
+          return {...result.prepared,work_id:result.work.id,revision:result.work.revision,execution_binding:workExecutionBinding(result.work),work:this.work.status({work_id:result.work.id}),created:result.created,execution_started:false,schedule_enabled:false,execute_arguments:{work_id:result.work.id,revision:result.work.revision,executor:'client',current_run_only:true,cost_acknowledged:false},next_action:'runtime_work_execute',next_cycle:'runtime_custom_pack_prepare_repeat_with_new_cycle_id'};
+        }
+        default:throw Error('UNKNOWN_TOOL');
+      }
+    }
     if(name.startsWith('runtime_workflow_'))return this.workflowCompatibility.call(name,args);
     if(name.startsWith('runtime_windows_'))return this.windows.call(name,args);
     if(name.startsWith('runtime_files_'))return this.files.call(name,args);
@@ -254,6 +294,9 @@ export class RuntimeApi{
           requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
           // Invalid admission must not allocate a timer or awaken another queued Work.
           const work=this.store.intakeWork(this.config.project.id,input.work_id);
+          const custom=assertCustomPackInvocation(this.store,this.config.project.id,work.id,'runtime_work_execute',{},this.customPackHostBinding());
+          requireCondition(!custom||input.current_run_only,'CUSTOM_PACK_NEW_CYCLE_REQUIRED');
+          if(custom)assertCustomPackScheduledRun(this.store,this.config.project.id,work.id,this.customPackHostBinding());
           requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
           requireCondition(!work.paused&&work.spec&&['ready','running'].includes(work.status),'WORK_NOT_READY');
           requireCondition(workImportExecutionOwner(this.store,this.config.project.id,input.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
@@ -310,8 +353,40 @@ export class RuntimeApi{
       return routeHumanChannelMessage(args,transport,plane);
     }
     if(name.startsWith('runtime_pack_')){
+      const tool=tools[name as keyof typeof tools];requireCondition(tool,'UNKNOWN_TOOL');
+      const input=tool.schema.parse(args) as Record<string,unknown>;
+      const explicitOwner=typeof input.work_id==='string'?input.work_id:undefined;
+      const runOwner=typeof input.run_id==='string'?(this.store.officeWork(this.config.project.id,'pack',input.run_id) as {id:string}|null)?.id:undefined;
+      const inferredOwners=new Set<string>(runOwner?[runOwner]:[]);
+      // PackStore also binds calls without work_id by the canonical request.
+      // Resolve that same authority before custom-version preflight so omitting
+      // a redundant work_id cannot sidestep the immutable contract gate.
+      if(name==='runtime_pack_run'&&typeof input.request_id==='string'){
+        const intake=this.store.hermesState.prepare('SELECT work_id FROM office_intake WHERE project_id=? AND request_id=?').get(this.config.project.id,input.request_id);
+        if(intake)inferredOwners.add(String(intake.work_id));
+        const prior=this.store.hermesState.prepare('SELECT id FROM family_run WHERE project_id=? AND request_id=?').get(this.config.project.id,input.request_id);
+        const bound=prior?this.store.officeWork(this.config.project.id,'pack',String(prior.id)) as {id:string}|null:null;
+        if(bound)inferredOwners.add(bound.id);
+      }
+      requireCondition(inferredOwners.size<=1&&(!explicitOwner||[...inferredOwners].every(owner=>owner===explicitOwner)),'WORK_RUN_BINDING_CONFLICT');
+      const owner=explicitOwner??inferredOwners.values().next().value;
+      const candidate=owner?customPackWorkBinding(this.store,this.config.project.id,owner):null;
+      const historicalOrPause=name==='runtime_pack_status'||name==='runtime_pack_events'||name==='runtime_pack_watch_pause'&&input.paused===true;
+      if(name==='runtime_pack_run'&&typeof input.request_id==='string'){
+        const expected=this.store.hermesState.prepare('SELECT 1 FROM office_custom_pack_cycle WHERE project_id=? AND request_id=?').get(this.config.project.id,input.request_id);
+        requireCondition(!expected||owner&&candidate,'CUSTOM_PACK_WORK_BINDING_MISSING');
+      }
+      const host=candidate&&!historicalOrPause?this.customPackHostBinding():undefined;
+      const binding=owner?assertCustomPackInvocation(this.store,this.config.project.id,owner,name,input,host):null;
+      if(binding&&owner&&host)assertCustomPackScheduledRun(this.store,this.config.project.id,owner,host);
       const ledger=this.store.storage(this.config),writes=['runtime_pack_run','runtime_pack_execute_approved','runtime_pack_watch_tick'].includes(name),reservation=writes?ledger.reserve('pack_execution',16_777_216):null;
-      let failed=false;try{return await this.packs.call(name,args);}catch(e){failed=true;if(storageError(e)==='STORAGE_FULL')throw Error('STORAGE_FULL',{cause:e});throw e;}
+      let failed=false;try{
+        const result=await this.packs.call(name,input);
+        if(binding&&name==='runtime_pack_plan')return {...result as Record<string,unknown>,status:'ready_to_run',procedure_state:'ready',original_work_verified:true,completion_verified:false,cache_hit:false,recipe:binding.recipe,custom_pack:{key:binding.key,version:binding.version,cycle_id:binding.cycle_id,parameters:binding.parameters,immutable:true,result_reuse:false},next_action:'runtime_pack_run_with_execution_binding'};
+        if(name==='runtime_pack_plan')return {...result as Record<string,unknown>,procedure_state:'draft',original_work_verified:false,completion_verified:false,reuse_scope:'unverified_family_recipe_hint'};
+        if(name==='runtime_pack_catalog')return {...result as Record<string,unknown>,custom_packs:{ready:this.customPacks.list(this.config.project.id),legacy_recipe_state:'draft',ready_requires:'independently_verified_original_work',execution:'prepare_repeat_then_normal_work_execution'}};
+        return result;
+      }catch(e){failed=true;if(storageError(e)==='STORAGE_FULL')throw Error('STORAGE_FULL',{cause:e});throw e;}
       finally{try{ledger.release(reservation);}catch(e){if(!failed)throw e;}}
     }
     if(name.startsWith('runtime_swarm_')){

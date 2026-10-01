@@ -13,6 +13,9 @@ import {workImportPasteSchema} from '../work/import-runtime.js';
 import {codingTools} from '../coding/contracts.js';
 import {migrationPreview,migrationId} from '../work/hermes-migration.js';
 import {remoteDiscover,remotePropose} from '../work/remote.js';
+import {customPackPublishSchema,customPackRepeatSchema} from '../packs/custom-registry.js';
+import {customPackVersionsSchema} from '../work/custom-pack-repeat.js';
+import {customPackScheduleConfigureSchema,customPackScheduleControlSchema} from '../work/custom-pack-schedule.js';
 export const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/);
 export const draftInput=z.object({name:z.string().min(1).max(200),note:z.string().min(1).max(4000)}).strict();
 export const startRequest=z.object({request_id:id,capability:z.literal('fixture.draft.save'),account_ref:id,input:draftInput,deadline_ms:z.number().int().min(1000).max(120000).default(30000)}).strict();
@@ -37,6 +40,13 @@ export const tools={
   runtime_work_import_scan:{schema:z.object({project_ref:id,scope:z.string().trim().max(2000).optional()}).strict(),implemented:true,readOnly:false},
   ...codingTools,
   ...packTools,
+  runtime_custom_pack_publish:{schema:customPackPublishSchema,implemented:true,readOnly:false},
+  runtime_custom_pack_list:{schema:empty,implemented:true,readOnly:true},
+  runtime_custom_pack_versions:{schema:customPackVersionsSchema,implemented:true,readOnly:true},
+  runtime_custom_pack_prepare_repeat:{schema:customPackRepeatSchema,implemented:true,readOnly:false},
+  runtime_custom_pack_schedule_configure:{schema:customPackScheduleConfigureSchema,implemented:true,readOnly:false},
+  runtime_custom_pack_schedule_status:{schema:z.object({parent_work_id:z.string().uuid()}).strict(),implemented:true,readOnly:true},
+  runtime_custom_pack_schedule_disable:{schema:customPackScheduleControlSchema,implemented:true,readOnly:false},
   ...swarmTools,
   ...observabilityTools,
   runtime_channel_route:{schema:humanChannelRouteInput,implemented:true,readOnly:true},

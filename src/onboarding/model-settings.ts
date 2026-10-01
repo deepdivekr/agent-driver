@@ -14,6 +14,8 @@ const key=z.string().min(16).max(4096).refine(value=>!/[\s\x00-\x1f]/u.test(valu
 const provider=z.enum(['openai','anthropic','openrouter','openai_compatible']);
 const clientModels=z.object({codex:modelId.nullable().default(null),claude:modelId.nullable().default(null),opencode:modelId.nullable().default(null)}).strict();
 const codexEffort=z.enum(['none','minimal','low','medium','high','xhigh','max','ultra']);
+/** Preferred new-install subscription choices; account availability is verified by the client catalog. */
+export const NEW_SUBSCRIPTION_DEFAULTS={codex:'gpt-6.1-sol',codex_effort:'low',claude:'claude-sonnet-5-5'} as const;
 const roleModels=z.object({planner:clientModels.optional(),worker:clientModels.optional(),verifier:clientModels.optional(),synthesis:clientModels.optional()}).strict();
 const choice=z.object({mode:z.enum(['subscription','api']),client:z.enum(['auto','mcp','codex','claude','opencode']),client_models:clientModels.default({codex:null,claude:null,opencode:null}),role_model_mode:z.enum(['inherit','manual','auto']).optional(),role_models:roleModels.optional(),codex_reasoning_effort:codexEffort.nullable().optional(),api_to_subscription:z.boolean().default(false),api_provider:provider.default('openai'),api_model:modelId,api_base_url:z.string().max(2048).default(''),reasoning:z.enum(['low','medium','high']),jev:z.enum(['inherit','on','off'])}).strict();
 const verification=z.object({fingerprint:z.string().length(64),provider:provider,model:modelId,verified_at:z.string().datetime()}).strict();
@@ -69,7 +71,15 @@ export function readModelSettings(path:string):ModelSettings|null{
   try{requireCondition(fstatSync(fd).size<=20_000,'MODEL_SETTINGS_TOO_LARGE');return savedSchema.parse(JSON.parse(readFileSync(fd,'utf8')));}catch{throw Error('MODEL_SETTINGS_INVALID');}finally{closeSync(fd);}
 }
 export function effectiveModelEnvironment(saved:ModelSettings|null,base:NodeJS.ProcessEnv=process.env):NodeJS.ProcessEnv{
-  const env={...base};if(!saved)return env;
+  const env={...base};
+  if(!saved){
+    if(env.AGENT_DRIVER_LLM_CLIENT!=='api'){
+      env.AGENT_DRIVER_CODEX_MODEL??=NEW_SUBSCRIPTION_DEFAULTS.codex;
+      env.AGENT_DRIVER_CODEX_REASONING_EFFORT??=NEW_SUBSCRIPTION_DEFAULTS.codex_effort;
+      env.AGENT_DRIVER_CLAUDE_MODEL??=NEW_SUBSCRIPTION_DEFAULTS.claude;
+    }
+    return env;
+  }
   const stored=saved.api_key!==undefined?saved.api_key:saved.openai_key;
   if(stored!==undefined){for(const name of ['AGENT_DRIVER_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY','OPENROUTER_API_KEY'])delete env[name];if(stored!==null)env.AGENT_DRIVER_API_KEY=stored;}
   if(saved.jev_key!==undefined){delete env.TYPESAFE_API_KEY;if(saved.jev_key!==null)env.TYPESAFE_API_KEY=saved.jev_key;}
@@ -94,11 +104,11 @@ export function publicModelSettings(saved:ModelSettings|null,base:NodeJS.Process
   const verified=Boolean(saved?.api_verification&&saved.api_verification.fingerprint===modelSettingsFingerprint(saved,base));
   const apiMode=base.AGENT_DRIVER_LLM_CLIENT==='api',preferred=base.AGENT_DRIVER_LLM_CLIENT?.split(',')[0]?.trim();
   const client:ModelSettings['selection']['client']=apiMode?'auto':preferred==='auto'||preferred==='mcp'||preferred==='codex'||preferred==='claude'||preferred==='opencode'?preferred:'codex';
-  const ambientEffort=codexEffort.safeParse(base.AGENT_DRIVER_CODEX_REASONING_EFFORT);
+  const ambientEffort=codexEffort.safeParse(env.AGENT_DRIVER_CODEX_REASONING_EFFORT);
   const ambientModel=(value:string|undefined)=>{const parsed=modelId.safeParse(value);return parsed.success?parsed.data:null;};
-  // The connected account's catalog is asynchronous. Until the settings UI
-  // confirms a listed model, leave a fresh install on the CLI's own default.
-  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:apiMode?'api':'subscription',client,client_models:{codex:ambientModel(base.AGENT_DRIVER_CODEX_MODEL),claude:ambientModel(base.AGENT_DRIVER_CLAUDE_MODEL),opencode:ambientModel(base.AGENT_DRIVER_OPENCODE_MODEL)},codex_reasoning_effort:ambientEffort.success?ambientEffort.data:null,api_to_subscription:false,api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??FAST_MODEL_DEFAULTS[defaultProvider],api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
+  // These are preferred new-install IDs, not a claim that the connected
+  // subscription currently offers them. The live catalog remains authoritative.
+  return {revision:saved?.revision??0,configured:saved!==null,selection:saved?.selection??{mode:apiMode?'api':'subscription',client,client_models:{codex:ambientModel(env.AGENT_DRIVER_CODEX_MODEL),claude:ambientModel(env.AGENT_DRIVER_CLAUDE_MODEL),opencode:ambientModel(env.AGENT_DRIVER_OPENCODE_MODEL)},codex_reasoning_effort:ambientEffort.success?ambientEffort.data:null,api_to_subscription:false,api_provider:defaultProvider,api_model:base.AGENT_DRIVER_API_MODEL??FAST_MODEL_DEFAULTS[defaultProvider],api_base_url:base.AGENT_DRIVER_API_BASE_URL??'',reasoning:base.AGENT_DRIVER_API_REASONING??'low',jev:'inherit'},onboarding_step:saved?.onboarding_step??0,
     api_key_present:present,api_key_stored:Boolean(saved?.api_key??saved?.openai_key),openai_key_present:present,openai_key_stored:Boolean(saved?.api_key??saved?.openai_key),jev_key_present:Boolean(env.TYPESAFE_API_KEY),jev_key_stored:Boolean(saved?.jev_key),
     api_connection:verified?'ready':'unchecked',api_verified_at:verified?saved!.api_verification!.verified_at:null,
     applies_to:'next_model_call',in_flight_calls:'unchanged',external_worker_models:'client_managed',credentials_exposed:false,storage:'local_private_file'};

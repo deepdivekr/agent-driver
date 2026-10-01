@@ -1,7 +1,7 @@
 import {type Capability,type Lease,type Observation,type Verification,requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {OwnedPersistentPage} from '../taskpack/owned-playwright.js';
-import {ApprovedBrowserProtocol,type ApprovedBrowserAdapter,type BrowserPreparation} from '../taskpack/protocol.js';
+import {ApprovedBrowserProtocol,type ApprovedBrowserAdapter,type BrowserPreparation,type PreparedApproval} from '../taskpack/protocol.js';
 import {snapshotHash,taskPackManifest} from '../taskpack/contracts.js';
 import {type PackStore} from './store.js';
 import {type MutationRecipe,type Target,type Row,rowSchema} from './contracts.js';
@@ -12,6 +12,13 @@ export function targetCapability(target:Target):Capability{return {
   id:`pack.${target.id}`,effect:'write_external',route:`pack.browser.${target.id}`,environments:['owned_headless'],hiddenVerified:false,
   requiresForeground:false,requiresOsInput:false,usesUserTarget:false,requiresClipboard:false,requiresFileDialog:false,verification:'independent_readback',
 };}
+/** Legacy single-readback receipts do not prove both sides of a capture. */
+export function verifiedDraftBrowserReadbacks(prepared:Pick<PreparedApproval,'verified_values'|'verified_values_before_capture'|'verified_values_after_capture'|'capture_sha256'>,expected:Row){
+  const before=prepared.verified_values_before_capture,after=prepared.verified_values_after_capture,legacy=prepared.verified_values;
+  const matches=(observed:Record<string,unknown>|undefined)=>observed&&Object.keys(observed).length===Object.keys(expected).length&&Object.entries(expected).every(([key,value])=>observed[key]===value);
+  requireCondition(matches(before)&&matches(after)&&matches(legacy)&&Object.entries(after!).every(([key,value])=>before![key]===value)&&/^[a-f0-9]{64}$/u.test(prepared.capture_sha256??''),'PACK_DRAFT_READBACK_UNVERIFIED');
+  return {before:before!,after:after!};
+}
 export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe>{
   readonly adapterId:string;private owned:OwnedPersistentPage|undefined;private binding:{taskId:string;lease:Lease;targetRef:string}|undefined;
   private input:MutationRecipe|undefined;private before:Row|null=null;
@@ -42,7 +49,7 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
     if(result.gate!=='ready')return {gate:result.gate,snapshot:{gate:result.gate},capture_ref:result.capture_ref!,detail:{gate:result.gate}};
     await this.owned.page.locator(this.target.ready).waitFor({state:'visible',timeout:10000});
     if(this.target.auth_required)requireCondition((await this.owned.page.locator(this.target.account_selector).innerText()).trim()===this.target.account_text,'PACK_ACCOUNT_MISMATCH');
-    if(!this.target.draft_only){
+    if(!this.target.draft_only||input.family==='record.update'){
       this.before=await this.readback();
       if(input.family==='record.update')requireCondition(this.before!==null&&input.expected_before_sha256===snapshotHash(this.before),'PACK_RECORD_STALE');
       else requireCondition(this.before===null&&input.expected_before_sha256===null,'PACK_RECORD_ALREADY_EXISTS');
@@ -55,9 +62,20 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
       else {requireCondition(typeof value==='string','PACK_TEXT_VALUE_REQUIRED');if(spec.kind==='select')await control.selectOption(value);else await control.fill(value);actual[key]=await control.inputValue();}
       requireCondition(actual[key]===value,'PACK_FORM_VALUE_MISMATCH');
     }
+    if(this.target.draft_only&&input.family==='record.update')requireCondition(snapshotHash(await this.readback())===snapshotHash(this.before),'PACK_DRAFT_RECORD_CHANGED');
     const captured=await this.owned.capture(this.binding.taskId);
+    // The screenshot alone is not a field readback. Reobserve the same controls
+    // after capture so a draft receipt can prove the staged DOM values, too.
+    const after:Row={};
+    for(const [key,value]of Object.entries(actual)){
+      const spec=this.target.fields[key]!,control=this.owned.page.locator(spec.selector);
+      const observed=spec.kind==='checkbox'?await control.isChecked():await control.inputValue();
+      requireCondition(observed===value,'PACK_FORM_VALUE_CHANGED_AFTER_CAPTURE');
+      after[key]=observed;
+    }
     return {gate:'ready',snapshot:{target:this.target.id,family:input.family,values:actual,before:this.before,config:this.config.fingerprint},capture_ref:captured.capture_ref,
-      detail:{fields:Object.keys(actual),draft_only:this.target.draft_only,authentication_verified:this.target.auth_required,submission_enabled:!this.target.draft_only,before_sha256:this.before===null?null:snapshotHash(this.before),capture_sha256:captured.capture_sha256}};
+      ...(this.target.draft_only?{verified_values:after,verified_values_before_capture:actual,verified_values_after_capture:after,capture_sha256:captured.capture_sha256}:{}),
+      detail:{fields:Object.keys(actual),draft_only:this.target.draft_only,authentication_verified:this.target.auth_required,submission_enabled:!this.target.draft_only,before_sha256:this.before===null?null:snapshotHash(this.before),record_unchanged:this.target.draft_only&&input.family==='record.update'?true:null,capture_sha256:captured.capture_sha256}};
   }
   async execute(){
     requireCondition(!this.target.draft_only,'PACK_DRAFT_ONLY');

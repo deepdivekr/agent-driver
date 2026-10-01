@@ -97,6 +97,7 @@ test('authentication requests are not classified as retryable technical failures
 
 test('a transient read worker failure resumes the same run and completes dependent work without replaying its sibling',async t=>{
   const x=await setup(t,{draft:{summary:'Read two sources and combine.',workers:[worker('one'),worker('two'),worker('combine',['one','two'])]},withJev:false});
+  let workflowCalls=0;x.api.swarm.providers.llm_fallback.workflow=async()=>{workflowCalls++;throw Error('WORKFLOW_MODEL_UNAVAILABLE');};
   const plan=await x.api.call('runtime_swarm_plan',{goal:'Recover then combine preserved source evidence.',context:{}}),run=await x.api.call('runtime_swarm_run',{request_id:'retry-completes',plan_id:plan.plan.plan_id}),batch=await x.api.call('runtime_swarm_tick',{run_id:run.run_id});
   const one=batch.dispatches.find(d=>d.worker_id==='one'),two=batch.dispatches.find(d=>d.worker_id==='two');
   await x.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'two',lease_token:two.lease_token,report:report('two')});
@@ -106,6 +107,7 @@ test('a transient read worker failure resumes the same run and completes depende
   const combine=await x.api.call('runtime_swarm_tick',{run_id:run.run_id});assert.equal(combine.dispatch.worker_id,'combine');
   const completed=await x.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'combine',lease_token:combine.dispatch.lease_token,report:report('combine')});
   assert.equal(completed.run_id,run.run_id);assert.equal(completed.status,'completed');assert.equal(completed.workers.find(w=>w.id==='two').attempts,1);assert.equal(completed.workers.find(w=>w.id==='one').attempts,2);assert.equal(completed.reviews.length,0);
+  assert.equal(workflowCalls,0);
 });
 
 test('a read-only quality rejection gets one LLM correction with unchanged acceptance thresholds and preserved feedback',async t=>{
@@ -169,7 +171,9 @@ test('synthesis reserve stops new source reads and a hard deadline ends as parti
   const reserve=await x.api.swarm.batchTick(run.run_id,run.hard_deadline_at_ms-30_000);assert.equal(reserve.dispatches.length,1);assert.equal(reserve.dispatch.stage,'reduction');assert.equal(reserve.workers.filter(item=>item.status==='skipped_deadline').length,6);
   await x.api.swarm.report(run.run_id,'reduce',reserve.dispatch.lease_token,report('reduce'));
   const synthesis=await x.api.swarm.batchTick(run.run_id);assert.equal(synthesis.dispatch.stage,'synthesis');
+  let terminalWorkflowCalls=0;x.api.swarm.providers.llm_fallback.workflow=async()=>{terminalWorkflowCalls++;throw Error('WORKFLOW_MODEL_UNAVAILABLE');};
   const partial=await x.api.swarm.report(run.run_id,'synthesize',synthesis.dispatch.lease_token,report('synthesize'));assert.equal(partial.status,'partial_evidence');assert.notEqual(partial.status,'completed');
+  assert.equal(terminalWorkflowCalls,0);
 
   const y=await setup(t,{draft:standardDraft(),maxWorkers:24,maxConcurrency:16}),started=await y.api.call('runtime_swarm_start',{request_id:'hard-deadline',goal:'Research until the hard deadline.',context:{}}),expired=await y.api.swarm.batchTick(started.run.run_id,started.run.hard_deadline_at_ms);
   assert.equal(expired.status,'partial_evidence');assert.equal(expired.dispatches.length,0);assert.equal(expired.reason,'HARD_DEADLINE_EXCEEDED');assert.ok(expired.reviews.some(item=>item.kind==='deadline'));
@@ -183,7 +187,7 @@ test('swarm mode requires an LLM-created multi-worker DAG, dispatches separate s
   const afterFirst=await x.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'research',lease_token:first.dispatch.lease_token,report:report('research')});assert.equal(afterFirst.status,'running');
   const second=await x.api.call('runtime_swarm_tick',{run_id:run.run_id});assert.equal(second.dispatch.worker_id,'verify');
   const complete=await x.api.call('runtime_swarm_report',{run_id:run.run_id,worker_id:'verify',lease_token:second.dispatch.lease_token,report:report('verify')});assert.equal(complete.status,'completed');assert.ok(complete.workers.every(item=>item.quality.accepted));assert.equal(complete.approval_granted,false);
-  const persisted=await x.api.call('runtime_swarm_status',{run_id:run.run_id});assert.equal(persisted.status,'completed');assert.ok(persisted.decision_events.length>=4);
+  const persisted=await x.api.call('runtime_swarm_status',{run_id:run.run_id});assert.equal(persisted.status,'completed');assert.equal(persisted.decision_events.length,2); // Quality decisions remain; ordinary progress needs no model event.
 });
 
 test('swarm mode permits a single planned worker but still rejects invalid or over-broad task graphs',async t=>{

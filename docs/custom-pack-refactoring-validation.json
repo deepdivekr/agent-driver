@@ -1,0 +1,201 @@
+{
+  "schema_version": 2,
+  "recorded_at": "2026-09-30T23:57:11.500Z",
+  "branch": "refactor/custom-pack-reliability",
+  "implementation_revision": "0c6770a11f44f75c196c69c6b174e421245e72e2",
+  "baseline_revision": "0b11f1850a2afa846f191ce356aa4f486284b41f",
+  "node": "22.22.0",
+  "npm": "11.11.0",
+  "build": "PASS",
+  "focused": {
+    "earlier_related_regressions": 185,
+    "recovery_and_output_regressions": 71,
+    "final_provenance_and_recovery_regressions": 10,
+    "failed": 0,
+    "overlapping_groups_do_not_sum": true
+  },
+  "quick": {
+    "evidence_id": "runtime-tests-2026-09-30T23-47-54-634Z",
+    "total": 1861,
+    "counts": {
+      "PASS": 1848,
+      "FAIL": 0,
+      "BLOCKED_ENV": 12,
+      "NOT_RUN": 1
+    },
+    "totals_include_input_integrity_case": true,
+    "input_integrity": "PASS",
+    "changed_paths": [],
+    "input_manifest_sha256": "14662fd26dc15cc715b0b83f59168057448f86e589123e37be60fc7f52ba9284"
+  },
+  "install": {
+    "status": "PASS",
+    "evidence_id": "2026-09-30T23-48-33.255Z",
+    "implementation_revision": "0c6770a11f44f75c196c69c6b174e421245e72e2",
+    "passed": 6,
+    "failed": 0,
+    "started_at": "2026-09-30T23:48:33.256Z",
+    "finished_at": "2026-09-30T23:50:06.086Z",
+    "work_model": "fixture",
+    "external_model_calls": 0,
+    "cases": [
+      {
+        "scenario": "upgrade-0.1.0",
+        "status": "PASS",
+        "installed_sha": "0c6770a11f44f75c196c69c6b174e421245e72e2"
+      },
+      {
+        "scenario": "upgrade-0.1.1",
+        "status": "PASS",
+        "installed_sha": "0c6770a11f44f75c196c69c6b174e421245e72e2"
+      },
+      {
+        "scenario": "upgrade-0.2.0",
+        "status": "PASS",
+        "installed_sha": "0c6770a11f44f75c196c69c6b174e421245e72e2"
+      },
+      {
+        "scenario": "upgrade-0.3.0",
+        "status": "PASS",
+        "installed_sha": "0c6770a11f44f75c196c69c6b174e421245e72e2"
+      },
+      {
+        "scenario": "upgrade-0.3.1",
+        "status": "PASS",
+        "installed_sha": "0c6770a11f44f75c196c69c6b174e421245e72e2"
+      },
+      {
+        "scenario": "fresh",
+        "status": "PASS",
+        "installed_sha": "0c6770a11f44f75c196c69c6b174e421245e72e2"
+      }
+    ]
+  },
+  "first_post_review_quick": {
+    "implementation_revision": "548ab759c5d139fcbfb674e7d8d0017dbe6d198e",
+    "evidence_id": "runtime-tests-2026-09-30T23-37-45-526Z",
+    "counts": {
+      "PASS": 1847,
+      "FAIL": 1,
+      "BLOCKED_ENV": 12,
+      "NOT_RUN": 1
+    },
+    "input_integrity": "PASS",
+    "resolution": "Execution and status host observations now expose the same stored Pack request ID. The original equality oracle remains intact."
+  },
+  "ledger": {
+    "status": "PASS",
+    "requirements": 196
+  },
+  "public_boundary": "PASS",
+  "blocked_host_checks": {
+    "systemd_user_manager_and_delegated_cgroup_v2": 11,
+    "kernel_proc_children_interface": 1
+  },
+  "not_run": {
+    "headed_browser_saved_profile": "No graphical display is configured."
+  },
+  "private_acceptance": {
+    "phase112_matrix_rerun": false,
+    "historical_result_unchanged": true,
+    "original_user_cases": 23,
+    "reason": "Original private databases, receipts and authenticated user environments are unavailable in this checkout."
+  },
+  "previous_implementation_validation": {
+    "schema_version": 1,
+    "recorded_at": "2026-09-30T21:50:39.467Z",
+    "branch": "refactor/custom-pack-reliability",
+    "implementation_revision": "50fa080580e97ed8b2cf0fa51c20c67ef0607cf8",
+    "baseline_revision": "0b11f1850a2afa846f191ce356aa4f486284b41f",
+    "node": "22.22.0",
+    "npm": "11.11.0",
+    "build": "PASS",
+    "focused_custom_pack_native_and_schedule_tests": {
+      "passed": 51,
+      "failed": 0
+    },
+    "quick": {
+      "evidence_id": "runtime-tests-2026-09-30T21-41-42-030Z",
+      "total": 1846,
+      "counts": {
+        "PASS": 1833,
+        "FAIL": 0,
+        "BLOCKED_ENV": 12,
+        "NOT_RUN": 1
+      },
+      "totals_include_input_integrity_case": true,
+      "input_integrity": "PASS",
+      "changed_paths": [],
+      "input_manifest_sha256": "e5b737872fa4428ad834efc0c8922443d2bd917a695b356df0af95f24bde65db"
+    },
+    "blocked_host_checks": {
+      "systemd_user_manager_and_delegated_cgroup_v2": 11,
+      "kernel_proc_children_interface": 1
+    },
+    "not_run": {
+      "headed_browser_saved_profile": "No graphical display is configured."
+    },
+    "initial_frozen_quick": {
+      "evidence_id": "runtime-tests-2026-09-30T21-23-18-943Z",
+      "passed": 1832,
+      "failed": 13,
+      "not_run": 1,
+      "input_integrity": "PASS",
+      "baseline_same_failure_names": true,
+      "baseline_comparison_files": [
+        "tests/runtime-files.test.mjs",
+        "tests/runtime-resources.test.mjs",
+        "tests/runtime-settings-ui.test.mjs"
+      ],
+      "baseline_comparison": {
+        "total": 31,
+        "passed": 18,
+        "failed": 13
+      },
+      "resolution": "Observed missing host prerequisites are BLOCKED_ENV; settings UI now uses a controlled fixture catalog. Supported-host native oracles are unchanged."
+    },
+    "ledger": {
+      "status": "PASS",
+      "requirements": 196
+    },
+    "public_boundary": "PASS",
+    "live_public_source": {
+      "at": "2026-09-30T21:23:44.915Z",
+      "scope": "live_public_http_numeric_normalization_and_native_artifacts",
+      "private_matrix_rerun": false,
+      "work_goal_acceptance": false,
+      "model_calls": 0,
+      "external_writes": 0,
+      "source_url": "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.csv",
+      "cases": [
+        {
+          "cycle": "first",
+          "status": "PASS",
+          "observed_at": "2026-09-30T21:23:45.192Z",
+          "source_rows": 13,
+          "output_rows": 13,
+          "source_sha256": "cc3c6b63fab5756645b6b8a7bf4e882a4f87e2c616bc3a167a806162a370b7c2",
+          "artifact_sha256": "d5bace68838413f386f4d5edb64d4b609d295c3b12d6063362d7e1e11f9cc124"
+        },
+        {
+          "cycle": "second",
+          "status": "PASS",
+          "observed_at": "2026-09-30T21:23:45.355Z",
+          "source_rows": 13,
+          "output_rows": 13,
+          "source_sha256": "cc3c6b63fab5756645b6b8a7bf4e882a4f87e2c616bc3a167a806162a370b7c2",
+          "artifact_sha256": "d5bace68838413f386f4d5edb64d4b609d295c3b12d6063362d7e1e11f9cc124"
+        }
+      ],
+      "same_cycle_deduplicated": true,
+      "new_cycle_fresh_observation": true,
+      "status": "PASS"
+    },
+    "private_acceptance": {
+      "phase112_matrix_rerun": false,
+      "historical_result_unchanged": true,
+      "original_user_cases": 23,
+      "reason": "Original private databases, receipts and authenticated user environments are unavailable in this checkout."
+    }
+  }
+}

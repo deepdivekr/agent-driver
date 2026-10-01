@@ -388,7 +388,7 @@ function cliFailure(result:ProcessResult,session?:DecisionSessionTurn){
   if(session?.session_id&&/(?:no (?:conversation|session|thread) found|(?:session|conversation|thread)[^\r\n]{0,100}(?:not found|does not exist))/iu.test(detail))throw Error('CLIENT_NATIVE_SESSION_MISSING');
   throw Error(`CLIENT_${classifyClientFailure(detail).toUpperCase()}`);
 }
-async function invokeCli(id:Exclude<SubscriptionClientId,'hermes'>,environment:NodeJS.ProcessEnv,runner:SafeProcessRunner,instructions:string,input:unknown,schema:Record<string,unknown>,purpose:ModelCall['purpose'],session?:DecisionSessionTurn){
+async function invokeCli(id:Exclude<SubscriptionClientId,'hermes'>,environment:NodeJS.ProcessEnv,runner:SafeProcessRunner,instructions:string,input:unknown,schema:Record<string,unknown>,purpose:ModelCall['purpose'],session?:DecisionSessionTurn,role?:string){
   const executable=clientExecutable(id,environment),text=prompt(instructions,input,schema),root=session?.directory??await mkdtemp(join(tmpdir(),'agent-driver-model-'));
   try{
     if(id==='codex'){
@@ -398,7 +398,15 @@ async function invokeCli(id:Exclude<SubscriptionClientId,'hermes'>,environment:N
       const flags=['--json','--skip-git-repo-check',...(!session?['--ephemeral']:[]),'--ignore-user-config','--ignore-rules','--output-schema',schemaPath];
       const prefix=[...(selected?['--model',selected]:[]),'exec',...(effort?['-c',`model_reasoning_effort=${effort}`]:[])];
       const args=session?.session_id?[...prefix,'--sandbox','read-only','resume',...flags,session.session_id,'-']:[...prefix,...flags.slice(0,-2),'--sandbox','read-only',...flags.slice(-2),'-'];
-      const result=await runner.run({executable,args,stdin:text,cwd:root,timeout_ms:purpose==='verify'?modelCallBudget(purpose).timeout_ms:60_000});
+      // A large evidence-bearing turn is not a fast decision even at low
+      // effort. Extend only its deadline, never the selected model/effort or
+      // tool permissions. All deadlines remain bounded; small workers retain
+      // the fast path and verifier budgets remain authoritative.
+      const timeout=purpose==='verify'?modelCallBudget(purpose).timeout_ms:
+        purpose==='design'||role==='planner'?180_000:
+        Buffer.byteLength(text,'utf8')>=32_768?180_000:
+        effort&&['high','xhigh','max','ultra'].includes(effort)?180_000:60_000;
+      const result=await runner.run({executable,args,stdin:text,cwd:root,timeout_ms:timeout});
       if(result.code!==0)cliFailure(result,session);return {value:codexDomainOutput(codexOutput(result.stdout),schema),model:selected??'client_default',...(session?{session_id:nativeSessionId('codex',result.stdout)}:{})};
     }
     if(id==='claude'){
@@ -491,7 +499,7 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
             requireCondition(binding===clientBinding(client,environment,runner),'CLIENT_CONNECTION_CHANGED');
             const scope=this.options.session;let result:Awaited<ReturnType<typeof invokeCli>>;
             if(scope&&['codex','claude'].includes(client)){
-              const resumed=await withDecisionSession(scope,{provider:client,model,instructions,schema,connection:clientBinding(client,environment,runner,false),effort:client==='codex'?environment.AGENT_DRIVER_CODEX_REASONING_EFFORT??null:null},turn=>invokeCli(client,environment,runner,instructions,input,schema,purpose,turn));
+              const resumed=await withDecisionSession(scope,{provider:client,model,instructions,schema,connection:clientBinding(client,environment,runner,false),effort:client==='codex'?environment.AGENT_DRIVER_CODEX_REASONING_EFFORT??null:null},turn=>invokeCli(client,environment,runner,instructions,input,schema,purpose,turn,scope.role));
               result=resumed;continuity={continuity:resumed.continuity,session_turn:resumed.session_turn};
             }else result=await invokeCli(client,environment,runner,instructions,input,schema,purpose);
             model=result.model;value=result.value;accepted=true;
@@ -505,7 +513,7 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
     // A mixed failure cannot be presented as solely an unsupported model.
     const source=otherInvokedFailure??representative();
     if(source)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:source.client,target:null,source_model:source.model,target_model:null,reason:source.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
-    throw Error(purpose==='verify'&&invokedTimeout&&!invokedNonTimeout?'STRUCTURED_MODEL_TIMEOUT':invokedFailure?.reason==='model_unsupported'&&!otherInvokedFailure?'STRUCTURED_MODEL_UNSUPPORTED':'STRUCTURED_MODEL_UNAVAILABLE');
+    throw Error(invokedTimeout&&!invokedNonTimeout?'STRUCTURED_MODEL_TIMEOUT':invokedFailure?.reason==='model_unsupported'&&!otherInvokedFailure?'STRUCTURED_MODEL_UNSUPPORTED':'STRUCTURED_MODEL_UNAVAILABLE');
   }
 }
 
