@@ -21,7 +21,7 @@ test('B1: autonomy is read live from the host file; a new AI-data approval deleg
   await writeFile(path,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'per_run'}}));
   await setWorkModelDataApproval(path,true);assert.equal(JSON.parse(await readFile(path,'utf8')).work.autonomy,'per_run','An explicit owner choice is kept.');
   // The budget of the delegation: host-started (scheduled) runs per day. Read live, kept across a new approval.
-  assert.deepEqual(workDelegation(config),{daily_scheduled_runs:50},'A delegation has a default daily limit.');
+  assert.deepEqual(workDelegation(config),{daily_scheduled_runs:50,registered_folder_moves:true},'A delegation has a default daily limit and covers moves in folders granted for moving.');
   await writeFile(path,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'delegated',delegation:{daily_scheduled_runs:3}}}));
   assert.equal(workDelegation(config).daily_scheduled_runs,3);await setWorkModelDataApproval(path,true);
   assert.equal(JSON.parse(await readFile(path,'utf8')).work.delegation.daily_scheduled_runs,3,'An approval does not reset the owner limit.');
