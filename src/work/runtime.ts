@@ -14,6 +14,7 @@ import {browserCatalog} from '../browser/executor-routing.js';
 import {bindWorkIntakeOptions,readWorkIntakeOptions} from './intake-options.js';
 import {connectedSourceCatalog,observedWorkSourceSchemas} from '../packs/source-catalog.js';
 import {sealCollectionContract} from './collection-contract.js';
+import {applyAutoSources} from '../packs/auto-sources.js';
 import {NATIVE_COMPLETION_RESULT,NATIVE_COMPLETION_EVIDENCE,NATIVE_SOURCE_ROWS_COMPLETION_RESULT,NATIVE_WATCH_COMPLETION_RESULT,NATIVE_WATCH_COMPLETION_EVIDENCE} from './completion-checks.js';
 
 const credential=/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u;
@@ -39,6 +40,7 @@ export const WORK_REPLANNING_INSTRUCTIONS=WORK_DEFINITION_INSTRUCTIONS.replace('
 
 /** Shared definition/replanning inventory. Reading it grants no executor access. */
 export function workPlanningContext(store:PackStore,config:HostConfig,executorCapabilities:unknown={browser_executors:browserCatalog(config)}){
+  applyAutoSources(config);
   return {native_completion_templates:[{kind:'native_pack_output',output_rows_rule:'exact_count',result:NATIVE_COMPLETION_RESULT,evidence:NATIVE_COMPLETION_EVIDENCE},{kind:'native_pack_output',output_rows_rule:'observed_source_rows',result:NATIVE_SOURCE_ROWS_COMPLETION_RESULT,evidence:NATIVE_COMPLETION_EVIDENCE},{kind:'native_watch_observations',result:NATIVE_WATCH_COMPLETION_RESULT,evidence:NATIVE_WATCH_COMPLETION_EVIDENCE}],connected_sources:config.packs?.sources.map(source=>source.id)??[],connected_source_catalog:connectedSourceCatalog(config),connected_file_sources:config.packs?.sources.filter(source=>source.kind==='file').map(source=>({kind:source.kind,id:source.id,format:source.format}))??[],connected_targets:config.packs?.targets.map(target=>target.id)??[],file_tools:{scope:'unregistered user folders only; registered Pack file sources use runtime_pack_plan and runtime_pack_run',access:'runtime_files_request',inspect:['runtime_files_scan','runtime_files_inspect'],context:'runtime_files_classify',propose:'runtime_files_propose',result:'runtime_files_report',approval:'human action inside Work detail; never an MCP call'},coding_projects:config.coding?.projects.map(item=>item.id)??[],executor_capabilities:executorCapabilities,social_source_candidates:(Object.keys(knownLoginSites) as Array<keyof typeof knownLoginSites>).flatMap(site=>readyAuthTargets(store,config,site).filter(browserHostCompatible).map(target=>({site,target_id:target.id,engine:target.engine,environment:target.environment,ready_observation:'historical_only'}))).slice(0,12),windows_profiles:WINDOWS_WORKFLOWS.map(({id,title,family})=>({id,title,family}))};
 }
 

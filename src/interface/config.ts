@@ -7,6 +7,7 @@ import {fileDelegation} from '../terminal/file-contracts.js';
 import {resourceBudgetSchema,type ResourceBudget} from '../resources/budget.js';
 import {storagePolicySchema,type StoragePolicy} from '../storage/budget.js';
 import {packPolicySchema,type PackPolicy} from '../packs/contracts.js';
+import {applyAutoSources} from '../packs/auto-sources.js';
 import {swarmPolicySchema,type SwarmPolicy} from '../swarm/contracts.js';
 import {windowsExecutorConfigSchema,type WindowsExecutorConfig} from '../desktop/cua-contracts.js';
 import {browserExecutorsSchema,type BrowserExecutors} from '../browser/executor-contracts.js';
@@ -39,7 +40,7 @@ export type CodingConfig=z.infer<typeof CodingConfigSchema>;
 /** The delegation policy (plan B1). `registered_folder_moves`: a reviewed-by-code, reversible move plan inside a folder
  * the owner granted with move permission is applied without a click. Submissions, payments, messages to third
  * parties and paid APIs are not part of any delegation and keep their own gates. */
-const WorkDelegationSchema=z.object({daily_scheduled_runs:z.number().int().min(0).max(1000).default(50),registered_folder_moves:z.boolean().default(true)}).strict();
+const WorkDelegationSchema=z.object({daily_scheduled_runs:z.number().int().min(0).max(1000).default(50),registered_folder_moves:z.boolean().default(true),remember_public_sources:z.boolean().default(true)}).strict();
 const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional(),autonomy:z.enum(['per_run','delegated']).optional(),delegation:WorkDelegationSchema.optional()}).strict();
 export type WorkConfig=z.infer<typeof WorkConfigSchema>;
 export const HostConfigSchema=z.object({
@@ -64,6 +65,8 @@ export const HostConfigSchema=z.object({
 export interface HostConfig {
   path:string; fingerprint:string; dbPath:string; environment:'production'|'fixture';
   fixtureUrl:string|null; project:ProjectBinding;
+  /** Sources remembered from public tables the host read (packs/auto-sources.ts). Not part of the fingerprint. */
+  autoSources?:Record<string,{columns:string[];observed_at:string}>;
   recoveryPolicy:'auto_resume'|'prepare_only';
   terminal:TerminalConfig|null;
   resources:ResourceBudget|null;
@@ -144,11 +147,13 @@ export function loadHostConfig(path:string):HostConfig {
   })}:null;
   if(coding){requireCondition(new Set(coding.projects.map(item=>item.id)).size===coding.projects.length,'CODING_PROJECT_DUPLICATE');requireCondition(coding.projects.every(item=>!item.allow_commit||item.allow_write),'CODING_COMMIT_REQUIRES_WRITE');}
   const project:ProjectBinding={id:raw.project_id,callerRef:raw.caller_ref,accountRef:raw.account_ref,worktree,profileRef:resolve(data,'profiles',raw.project_id),allowedOrigins:[...new Set([...(origin?[origin]:[]),...(packs?.targets.map(t=>new URL(t.url).origin)??[])])],capabilities:[...(origin?['fixture.draft.save']:[]),...(terminal?['coding.session']:[]),...(coding?['coding.orchestrate']:[]),...(packs?.targets.map(t=>`pack.${t.id}`)??[])]};
-  return {path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,coding,work:raw.work??null,
+  const config:HostConfig={path:actual,dbPath:resolve(data,'runtime.sqlite'),environment:raw.environment,fixtureUrl:raw.fixture_url??null,project,recoveryPolicy:raw.recovery_policy,terminal,resources:raw.resources??null,storage:raw.storage??null,packs,swarm:raw.swarm??null,observability,coding,work:raw.work??null,
     windowsExecutor:raw.windows_executor??null,
     browserExecutors:raw.browser_executors??null,
     legacyWorkflows:raw.workflows??null,workflowBridge:raw.workflow_bridge??null,
     fingerprint:createHash('sha256').update(JSON.stringify({raw:{...raw,work:undefined},worktree,data,coding,...(terminal?{executableStamp,worktreeIdentity:{device:worktreeStat.dev,inode:worktreeStat.ino}}:{})})).digest('hex')};
+  // Remembered public sources join after the fingerprint: they are learned state, not owner configuration.
+  applyAutoSources(config);return config;
 }
 /** Read live like the consent: a policy change applies to the next admission without a restart. Absent means per-run. */
 export function workAutonomy(config:Pick<HostConfig,'path'>):'per_run'|'delegated'{
@@ -156,7 +161,7 @@ export function workAutonomy(config:Pick<HostConfig,'path'>):'per_run'|'delegate
 }
 /** The delegation's budget, read live. Runs the owner starts are never limited; runs the host starts from a
  * schedule stop at this many per local day so a standing delegation cannot spend the AI allowance unattended. */
-export function workDelegation(config:Pick<HostConfig,'path'>):{daily_scheduled_runs:number;registered_folder_moves:boolean}{
+export function workDelegation(config:Pick<HostConfig,'path'>):{daily_scheduled_runs:number;registered_folder_moves:boolean;remember_public_sources:boolean}{
   try{return WorkDelegationSchema.parse(HostConfigSchema.parse(JSON.parse(readFileSync(config.path,'utf8'))).work?.delegation??{});}catch{return WorkDelegationSchema.parse({});}
 }
 /** The policy version recorded with what the host did on the owner's behalf: changes when the delegation changes. */

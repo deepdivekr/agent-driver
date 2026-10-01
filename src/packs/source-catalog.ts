@@ -51,7 +51,7 @@ export class DeclaredSourceContractError extends Error {
  */
 export function connectedSourceCatalog(config:HostConfig){
   return (config.packs?.sources??[]).map(source=>{
-    const declaredColumns=source.kind==='browser'?Object.keys(source.columns):source.kind==='http'?source.json_fields??[]:[];
+    const declaredColumns=source.kind==='browser'?Object.keys(source.columns):source.kind==='http'?[...(source.json_fields??[])]:[];
     let publicLocation:string|null=null;
     if(source.kind!=='file'){
       try{
@@ -62,7 +62,9 @@ export function connectedSourceCatalog(config:HostConfig){
         }
       }catch{/* Configuration registration is not a successful source read. */}
     }
-    return {id:source.id,kind:source.kind,registration:'configured' as const,observation:'not_asserted' as const,
+    const remembered=config.autoSources?.[source.id];
+    if(remembered&&source.kind==='http'&&!declaredColumns.length)declaredColumns.push(...remembered.columns);
+    return {id:source.id,kind:source.kind,registration:remembered?'remembered_public_read' as const:'configured' as const,observation:'not_asserted' as const,
       ...(source.kind==='file'||source.kind==='http'?{format:source.format}:{}),
       ...(source.kind!=='file'?{public_location:publicLocation,parameter_names:source.parameters}:{}),
       declared_columns:declaredColumns.filter(name=>!/(?:password|token|secret|api.?key|auth|session|cookie)/iu.test(name)).map(name=>safeControlText(name,120)),

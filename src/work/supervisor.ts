@@ -5,6 +5,7 @@ import {type PackStore} from '../packs/store.js';
 import {workAutonomy,workDelegation,workPolicyVersion,loadHostConfig,type HostConfig} from '../interface/config.js';
 import {RuntimeApi} from '../interface/api.js';
 import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
+import {applyAutoSources} from '../packs/auto-sources.js';
 import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,similarProcedure,REPLAY_SIMILARITY} from './procedures.js';
 import {allocateWorkModels} from './task-models.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
@@ -288,6 +289,7 @@ export class WorkSupervisor {
     }
   }
   private async execute(row:Row){
+    applyAutoSources(this.config);
     const db=this.store.hermesState,project=this.config.project.id,controller=new AbortController();this.controllers.set(row.run_id,controller);
     const heartbeat=setInterval(()=>{try{db.prepare('UPDATE office_supervisor SET lease_until_ms=? WHERE project_id=? AND run_id=? AND owner=?').run(Date.now()+30000,project,row.run_id,row.owner);}catch{}},3000);heartbeat.unref();
     const guard=()=>{

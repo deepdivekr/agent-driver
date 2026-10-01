@@ -7,6 +7,7 @@ import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type B
 import {type PackStore} from '../packs/store.js';
 import {type Recipe} from '../packs/contracts.js';
 import {workActivity} from './activity.js';
+import {detectTable,registerAutoSource} from '../packs/auto-sources.js';
 import {workReferenceMap} from './context.js';
 import {type WorkProposal} from './contracts.js';
 import {requireCondition} from '../core/contracts.js';
@@ -118,7 +119,9 @@ export async function readTextResource(url:string,page:{offset:number;max_bytes:
   const observedAt=new Date().toISOString(),final=new URL(response.url||requested.href);requireCondition(final.origin===requested.origin,'BROWSER_RESOURCE_REDIRECT_ORIGIN');
   const offset=Math.min(page.offset,bytes.length),end=Math.min(bytes.length,offset+page.max_bytes),text=bytes.subarray(offset,end).toString('utf8');
   return {url:final.href,title:decodeURIComponent(final.pathname.split('/').pop()||final.hostname),text,links:[] as Array<{text:string;url:string}>,observed_at:observedAt,requested_url:url,provenance:'http_text_resource' as const,executor:'host_http',effect:'read_only' as const,
-    content_type:type.split(';')[0]!.trim(),bytes_total:bytes.length,sha256:sha(bytes),offset,next_offset:end<bytes.length?end:null,has_more:end<bytes.length};
+    content_type:type.split(';')[0]!.trim(),bytes_total:bytes.length,sha256:sha(bytes),offset,next_offset:end<bytes.length?end:null,has_more:end<bytes.length,
+    // Not part of the receipt: the complete body, for the host's own table detection.
+    body:()=>bytes};
 }
 const browserLinksInput=z.object({offset:z.number().int().min(0).max(100000).default(0),limit:z.number().int().min(1).max(40).default(20),snapshot_id:z.string().regex(/^[a-f0-9]{64}$/u).optional()}).strict();
 const bingResultTarget=(value:string)=>{
@@ -531,10 +534,19 @@ export class WorkExecutionTools {
    * already bound by a saved checkpoint for this origin keeps its placement. */
   private async textResource(input:z.infer<typeof browserInput>){
     workActivity(this.store,this.config.project.id,this.workId,'source.started','Reading a public text resource over HTTPS.',{tool_name:'office_browser_read',status:'running',target_url:input.url});
-    const value=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
+    const {body,...value}=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
     this.allowedUrls.add(value.url);
+    // Delegation policy: a public table read completely is remembered as a read-only source for later Works.
+    let remembered:{id:string;format:string;columns:string[];rows:number}|null=null;
+    if(input.offset===0&&workAutonomy(this.config)==='delegated'&&workDelegation(this.config).remember_public_sources){
+      const table=await detectTable(body(),value.content_type,value.url),registered=table?registerAutoSource(this.config,value.url,table):null;
+      if(table&&registered){
+        remembered={id:registered.id,format:table.format,columns:table.columns.slice(0,40),rows:table.rows};
+        if(registered.created)workActivity(this.store,this.config.project.id,this.workId,'source.remembered',`This public ${table.format.toUpperCase()} table (${table.rows} rows) is remembered as source ${registered.id}. A later Work can collect it completely and have its rows checked in code.`,{tool_name:'office_browser_read',status:'succeeded',target_url:value.url});
+      }
+    }
     workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${value.title} · ${value.url}`,{tool_name:'office_browser_read',status:'succeeded',executor:'host_http',source:{url:safeControlText(value.url,2048),title:safeControlText(value.title,200),observed_at:value.observed_at}});
-    return value;
+    return remembered?{...value,table:{rows:remembered.rows,columns:remembered.columns,remembered_source_id:remembered.id}}:value;
   }
   private socialTarget(site:SocialSearchRequest['site']):BrowserTarget|null{
     if(this.blockedSocial.has(site))return null;

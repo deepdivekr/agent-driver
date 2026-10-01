@@ -536,3 +536,21 @@ test('B1: a move plan in a folder granted with move permission is applied under 
     assert.equal(kept.value.state,'preview',label);assert.equal(kept.receipt.status,'waiting_approval',label);assert.ok(existsSync(join(kept.folder,'memo.txt')),label);
   }
 });
+
+test('B5: under delegation a public CSV read is remembered as a source; per-run installs and a switched-off policy remember nothing',async t=>{
+  const csv='time,mag,place\n2026-10-01T01:00:00Z,4.6,Offshore\n2026-10-01T02:00:00Z,5.1,Inland\n',original=globalThis.fetch;
+  globalThis.fetch=async()=>{const response=new Response(csv,{status:200,headers:{'content-type':'text/csv'}});Object.defineProperty(response,'url',{value:'https://data.example.org/feeds/quakes.csv'});return response;};
+  t.after(()=>{globalThis.fetch=original;});
+  const read=async work=>{
+    const x=await fixture(t,{prompt:'Collect the earthquakes feed'}),raw=JSON.parse(await readFile(x.config.path,'utf8'));raw.environment='production';delete raw.fixture_url;raw.work=work;await writeFile(x.config.path,JSON.stringify(raw));
+    const value=await x.toolkit.execute('office_browser_read',{url:'https://data.example.org/feeds/quakes.csv'},'read-1');
+    return {value,config:x.config,activity:x.store.hermesState.prepare("SELECT summary FROM office_activity WHERE kind='source.remembered'").all()};
+  };
+  const delegated=await read({model_data_approved:true,autonomy:'delegated'});
+  assert.match(delegated.value.table.remembered_source_id,/^auto_data_example_org_feeds_quakes_/u);assert.deepEqual(delegated.value.table.columns,['time','mag','place']);assert.equal(delegated.value.table.rows,2);
+  assert.equal(delegated.value.body,undefined,'The complete body is not copied into the receipt.');
+  assert.equal(delegated.config.packs.sources.at(-1).url,'https://data.example.org/feeds/quakes.csv');assert.equal(delegated.activity.length,1);
+  for(const work of [{model_data_approved:true,autonomy:'per_run'},{model_data_approved:true,autonomy:'delegated',delegation:{remember_public_sources:false}}]){
+    const kept=await read(work);assert.equal(kept.value.table,undefined);assert.equal(kept.config.packs,null);assert.equal(kept.activity.length,0);
+  }
+});
