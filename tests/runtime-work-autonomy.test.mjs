@@ -4,7 +4,7 @@ import {createServer} from 'node:http';
 import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {loadHostConfig,workAutonomy} from '../dist/interface/config.js';
+import {loadHostConfig,workAutonomy,workDelegation} from '../dist/interface/config.js';
 import {setWorkModelDataApproval} from '../dist/onboarding/connection.js';
 import {draftPublicForm} from '../dist/work/execution-tools.js';
 import {cadenceInterval,scheduleFromProposal} from '../dist/work/schedule.js';
@@ -20,6 +20,12 @@ test('B1: autonomy is read live from the host file; a new AI-data approval deleg
   assert.equal(loadHostConfig(path).fingerprint,config.fingerprint,'The policy is not part of the run binding.');
   await writeFile(path,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'per_run'}}));
   await setWorkModelDataApproval(path,true);assert.equal(JSON.parse(await readFile(path,'utf8')).work.autonomy,'per_run','An explicit owner choice is kept.');
+  // The budget of the delegation: host-started (scheduled) runs per day. Read live, kept across a new approval.
+  assert.deepEqual(workDelegation(config),{daily_scheduled_runs:50},'A delegation has a default daily limit.');
+  await writeFile(path,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'delegated',delegation:{daily_scheduled_runs:3}}}));
+  assert.equal(workDelegation(config).daily_scheduled_runs,3);await setWorkModelDataApproval(path,true);
+  assert.equal(JSON.parse(await readFile(path,'utf8')).work.delegation.daily_scheduled_runs,3,'An approval does not reset the owner limit.');
+  assert.equal(loadHostConfig(path).fingerprint,config.fingerprint);
 });
 
 // P6 (live): a public order form draft. The page may only GET; nothing is submitted.

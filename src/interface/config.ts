@@ -36,7 +36,8 @@ export type CodingConfig=z.infer<typeof CodingConfigSchema>;
 /** Human consent that one-line Work text and import evidence may be sent to the selected AI. Read live, never bound to run fingerprints. */
 /** `autonomy` is the owner's standing delegation (plan B1): `delegated` lets a Work the owner asked for run to
  * its result and keep its own recurring schedule without a click per run. External submissions keep their gates. */
-const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional(),autonomy:z.enum(['per_run','delegated']).optional()}).strict();
+const WorkDelegationSchema=z.object({daily_scheduled_runs:z.number().int().min(0).max(1000).default(50)}).strict();
+const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional(),autonomy:z.enum(['per_run','delegated']).optional(),delegation:WorkDelegationSchema.optional()}).strict();
 export type WorkConfig=z.infer<typeof WorkConfigSchema>;
 export const HostConfigSchema=z.object({
   schema_version:z.literal(1), project_id:identifier, caller_ref:identifier,
@@ -149,6 +150,11 @@ export function loadHostConfig(path:string):HostConfig {
 /** Read live like the consent: a policy change applies to the next admission without a restart. Absent means per-run. */
 export function workAutonomy(config:Pick<HostConfig,'path'>):'per_run'|'delegated'{
   try{return HostConfigSchema.parse(JSON.parse(readFileSync(config.path,'utf8'))).work?.autonomy==='delegated'?'delegated':'per_run';}catch{return 'per_run';}
+}
+/** The delegation's budget, read live. Runs the owner starts are never limited; runs the host starts from a
+ * schedule stop at this many per local day so a standing delegation cannot spend the AI allowance unattended. */
+export function workDelegation(config:Pick<HostConfig,'path'>):{daily_scheduled_runs:number}{
+  try{return WorkDelegationSchema.parse(HostConfigSchema.parse(JSON.parse(readFileSync(config.path,'utf8'))).work?.delegation??{});}catch{return WorkDelegationSchema.parse({});}
 }
 /** Work-definition consent is read from disk on each use so a running MCP server or Control Center sees a new approval without restart. */
 export function workModelDataApproved(config:Pick<HostConfig,'path'|'swarm'|'packs'|'coding'|'work'>):boolean{

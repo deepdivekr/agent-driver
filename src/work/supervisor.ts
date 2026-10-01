@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
-import {loadHostConfig,type HostConfig} from '../interface/config.js';
+import {workDelegation,loadHostConfig,type HostConfig} from '../interface/config.js';
 import {RuntimeApi} from '../interface/api.js';
 import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {allocateWorkModels} from './task-models.js';
@@ -225,6 +225,14 @@ export class WorkSupervisor {
         const custom=this.api.customPackSchedules.binding(due.work_id);
         requireCondition(!this.schedules.customPackRequired(due.work_id)||custom,'CUSTOM_PACK_SCHEDULE_BINDING_MISSING');
         if((custom&&latest&&!['succeeded','failed'].includes(latest.state))||(!custom&&(!latest||!['succeeded','failed','awaiting_review'].includes(latest.state))))continue;
+        // Delegation budget: host-started (scheduled) runs stop at the owner's daily limit. The slot stays due and
+        // runs once the day turns or the owner raises the limit; one note per Work per day says why.
+        const dayStart=new Date(at);dayStart.setHours(0,0,0,0);
+        const startedToday=Number((db.prepare("SELECT count(*) c FROM office_work_schedule_slot WHERE project_id=? AND run_id IS NOT NULL AND scheduled_ms>=?").get(project,dayStart.getTime()) as {c:number}).c),limit=workDelegation(this.config).daily_scheduled_runs;
+        if(startedToday>=limit){
+          if(!db.prepare("SELECT 1 FROM office_activity WHERE project_id=? AND work_id=? AND kind='schedule.budget_reached' AND created_at>=? LIMIT 1").get(project,due.work_id,dayStart.toISOString()))workActivity(this.store,project,due.work_id,'schedule.budget_reached',`The daily limit of ${limit} scheduled run${limit===1?'':'s'} is used. This run waits until tomorrow or a higher work.delegation.daily_scheduled_runs.`,{stage_id:'admission',status:'waiting',reason:'WORK_DAILY_SCHEDULED_RUN_LIMIT'});
+          continue;
+        }
         let executionWorkId=due.work_id,executionRevision=due.work_revision;
         if(custom){
           requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
