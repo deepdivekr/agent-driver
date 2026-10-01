@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {z} from 'zod';
-import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS,executorView} from '../dist/work/client-executor.js';
+import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS,executorView,runBudget} from '../dist/work/client-executor.js';
 import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
 import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
 import {saveModelSettings,scopedModelSettingsPath} from '../dist/onboarding/model-settings.js';
@@ -424,4 +424,14 @@ test('one decision can ask for several reads; the host runs them all before the 
   assert.deepEqual(host.executions.map(item=>[item.name,item.args.url]),[['browser_read','https://example.test/1'],['browser_read','https://example.test/2'],['browser_read','https://example.test/3']],'Three reads, in order; the write and the unparsable entry are not run.');
   assert.equal(provider.calls.length,2,'Three reads cost one model turn.');
   assert.equal(result.checkpoint.observations.filter(item=>item.invocation.dispatched).length,3);
+});
+
+// Live: a wide news task made ninety reads in twenty minutes and never saved a result.
+test('a run that has read much or long is told to save what is established; a run that already saved is not',()=>{
+  const observation=(i,tool='browser_read',effect='read_only')=>({invocation:{request_id:`r-${i}`,turn:i,stage_id:'s',tool_name:tool,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{},evidence_ids:[`e-${i}`],effect_state:'none',retry_safe:true},observed_at:'2026-10-01T00:00:00.000Z'});
+  const checkpoint=n=>({format:1,work_id:'w',run_id:'r',binding:'b',turn:n,pending:null,observations:Array.from({length:n},(_,i)=>observation(i)),summary:''}),at=Date.parse('2026-10-01T00:01:00.000Z');
+  assert.deepEqual(runBudget(checkpoint(5),at),{});
+  assert.equal(runBudget(checkpoint(24),at).run_budget.wrap_up,true);assert.equal(runBudget(checkpoint(24),at).run_budget.reads_done,24);
+  assert.equal(runBudget(checkpoint(5),Date.parse('2026-10-01T00:08:00.000Z')).run_budget.elapsed_seconds,480);
+  const saved=checkpoint(30);saved.observations.push(observation(30,'office_result_draft','local_write'));assert.deepEqual(runBudget(saved,at),{},'Once a result is saved the run is finishing, not exploring.');
 });
