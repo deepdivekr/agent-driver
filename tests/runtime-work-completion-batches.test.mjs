@@ -46,12 +46,13 @@ test('runtime contract oversized evidence inspects every whole receipt, then ver
   assert.deepEqual(items,before,'Inspection never changes a receipt or invokes a tool.');assert.ok(events.some(event=>/evidence batch/u.test(event.summary)));
 });
 
-test('runtime contract a pause during the first batch stops every remaining verifier model call',async()=>{
-  const items=observations(),provider=model(),base=provider.call.bind(provider),audits=[];let paused=false;
-  provider.call=async(...args)=>{const result=await base(...args);if(args[2].batch_index===1)paused=true;return result;};
+test('runtime contract a pause during the first batch starts no further verifier model call',async()=>{
+  const items=observations(),provider=model(),base=provider.call.bind(provider),audits=[];let paused=false,startedAfterPause=0;
+  provider.call=async(...args)=>{if(paused)startedAfterPause++;const result=await base(...args);if(args[2].batch_index===1)paused=true;return result;};
   const verify=createWorkCompletionVerifier(provider,{guard:()=>{if(paused)throw Error('WORK_PAUSED');},audit:event=>audits.push(event)});
   assert.equal(await verify(checks,items,claim(items.flatMap(item=>item.receipt.evidence_ids))),false);
-  assert.equal(provider.inputs.length,1);assert.equal(provider.inputs[0].batch_index,1);assert.equal(audits.length,0,'A lost guard is not misreported as a model outage or accepted verification.');
+  // Batch calls start up to three at a time, so calls already in flight finish; none starts after the pause.
+  assert.equal(startedAfterPause,0);assert.ok(provider.inputs.length<=3);assert.equal(provider.inputs[0].batch_index,1);assert.equal(audits.length,0,'A lost guard is not misreported as a model outage or accepted verification.');
 });
 
 test('runtime contract projected evidence keeps verified write state and observation time without treating metadata as proof',async()=>{

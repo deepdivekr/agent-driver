@@ -461,10 +461,29 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
           }
           if(!batches.length||batches.length>batchCountLimit)await batchUnavailable('WORK_COMPLETION_EVIDENCE_BATCH_LIMIT');
           const projected:Array<{record_id:string;tool_name:string;evidence_ids:string[];value_sha256:string;effect_state:ObservableEvidence['effect_state'];observed_at:string;host_superseded_by?:string;host_partial_page?:true;findings:Array<Pick<EvidenceFinding,'check_id'|'record_id'|'relation'|'quotes'>&{quote_refs:string[];quote_paths:string[];quote_parts:number[]}>}>=[];
-          for(const [index,batch] of batches.entries()){
+          // The batches are independent judgments of separate receipts. Their first calls start up to three at a time
+          // (live: six sequential batches took five to seven minutes); results are still validated and audited in order,
+          // and a correction call for one batch stays sequential.
+          const prepareBatch=(index:number,batch:(typeof batches)[number])=>{
             const eligible_pairs=batch.flatMap(entry=>inputs.filter(check=>check.allowed_evidence_ids.some(id=>entry.ids.includes(id))).map(check=>({check_id:check.id,record_id:entry.record_id})));
             const batchInput={stage_id,...(options.originalUserRequest?{original_user_request:options.originalUserRequest}:{}),batch_index:index+1,batch_count:batches.length,batch_scope:batchScope,checks:inputs,eligible_pairs,observations:batch.map(entry=>({record_id:entry.record_id,...entry.record.observable,evidence_ids:entry.ids})),...(options.literalRefMode?{literal_leaf_manifest:batch.map(literalBatchManifest)}:{})};
             const batchLimit=batch.length===1?singleRecordBatchLimit:callInputLimit;
+            return {eligible_pairs,batchInput,batchLimit};
+          };
+          const batchInstructions=(corrected:boolean)=>(options.literalRefMode?WORK_COMPLETION_BATCH_REF_INSTRUCTIONS:WORK_COMPLETION_BATCH_INSTRUCTIONS)+'\n'+WORK_COMPLETION_BATCH_SCOPE_INSTRUCTIONS+(corrected?options.literalRefMode?' Correct only the invalid quote_ref or part against the SAME original receipts and leaf path manifest; return every eligible pair again. No new actions.':' Correct the cited unmatched quote against the SAME original receipts. Return all eligible pairs again, with exact observed leaf substrings and no new actions.':'');
+          const batchSchema=z.toJSONSchema(options.literalRefMode?evidenceBatchRefSchema:evidenceBatchSchema);
+          const prepared=batches.map((batch,index)=>prepareBatch(index,batch)),first=new Map<number,Promise<unknown>>();
+          if(batches.length>1){
+            let next=0;const startNext=():void=>{
+              const index=next++;if(index>=prepared.length)return;const item=prepared[index]!;
+              if(Buffer.byteLength(JSON.stringify(item.batchInput))>item.batchLimit-batchCorrectionReserve){startNext();return;}
+              const call=(async()=>{await guarded();return model.call('verify',batchInstructions(false),item.batchInput,batchSchema);})();
+              call.then(startNext,startNext);first.set(index,call);
+            };
+            for(let lane=0;lane<3;lane++)startNext();
+          }
+          for(const [index,batch] of batches.entries()){
+            const {eligible_pairs,batchInput,batchLimit}=prepared[index]!;
             requireCondition(Buffer.byteLength(JSON.stringify(batchInput))<=batchLimit-batchCorrectionReserve,'WORK_COMPLETION_EVIDENCE_BUDGET_EXCEEDED');
             await emit('model.started',`Inspecting original evidence batch ${index+1}/${batches.length} for every completion check.`);
             // Only an unmatched excerpt gets one output-only correction for this
@@ -476,7 +495,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
               const attemptInput=correction?{...batchInput,correction:{issue:correction,authority:'Correct this batch output only. Re-read the same original receipt leaf values; do not use tools, fetch new evidence, change eligibility or invent excerpts.'}}:batchInput;
               requireCondition(Buffer.byteLength(JSON.stringify(attemptInput))<=batchLimit,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
               try{
-                await guarded();const raw=await model.call('verify',(options.literalRefMode?WORK_COMPLETION_BATCH_REF_INSTRUCTIONS:WORK_COMPLETION_BATCH_INSTRUCTIONS)+'\n'+WORK_COMPLETION_BATCH_SCOPE_INSTRUCTIONS+(correction?options.literalRefMode?' Correct only the invalid quote_ref or part against the SAME original receipts and leaf path manifest; return every eligible pair again. No new actions.':' Correct the cited unmatched quote against the SAME original receipts. Return all eligible pairs again, with exact observed leaf substrings and no new actions.':''),attemptInput,z.toJSONSchema(options.literalRefMode?evidenceBatchRefSchema:evidenceBatchSchema));await guarded();
+                await guarded();const started=correction?undefined:first.get(index);first.delete(index);const raw=await (started??model.call('verify',batchInstructions(Boolean(correction)),attemptInput,batchSchema));await guarded();
                 requireCondition(Buffer.byteLength(JSON.stringify(raw)??'null')<=maxBatchOutputBytes,'WORK_COMPLETION_BATCH_OUTPUT_BUDGET_EXCEEDED');
                 const parsed=options.literalRefMode?evidenceBatchRefSchema.parse(raw):evidenceBatchSchema.parse(raw),expected=new Set(eligible_pairs.map(pair=>`${pair.check_id}/${pair.record_id}`));
                 requireCondition(parsed.findings.length===expected.size,'WORK_COMPLETION_BATCH_COVERAGE_INVALID');
