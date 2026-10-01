@@ -16,6 +16,12 @@ import {BoundedWorkClientExecutor} from '../dist/work/client-executor.js';
 
 const rows=[{id:'A',score:'3'},{id:'B',score:'5'}];
 const action=(tool,args)=>({action:'tool',stage_id:'work',tool_name:tool,arguments_json:JSON.stringify(args),summary:'Follow the canonical procedure.',wait_reason:null,completed_checks:[]});
+const batchRef=(input,recordId,path)=>{
+  const manifest=input.literal_leaf_manifest.find(item=>item.record_id===recordId);
+  const leaf=manifest?.leaf_paths.find(([,base,segment])=>`${manifest.base_paths[base]}/${segment}`===path);
+  assert.ok(leaf,`The whole receipt must expose ${path}.`);
+  return {quote_ref:leaf[0],part:0};
+};
 async function until(read){for(let i=0;i<400;i++){const value=read();if(value)return value;await delay(10);}assert.fail('Fixture did not reach expected state.');}
 const terminal=(x,id)=>until(()=>{const status=supervisorStatus(x.api.store,x.config.project.id,id);return status&&!['queued','running','retry_wait'].includes(status.state)?status:null;});
 const checkpoint=(x,runId)=>JSON.parse(x.api.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(runId).checkpoint);
@@ -27,8 +33,31 @@ async function fixture(t,{watch=false}={}){
   const checks=watch?[{id:'baseline',result:'A local watch is started with both observed rows in its baseline.',evidence:'The same Work watch result has collected_rows=2 and a saved baseline.'}]:[nativeCompletionCheck('output',{version:1,kind:'native_pack_output',family:'file.pipeline',format:'json',columns:['id','score'],output_rows:2,numeric_columns:['score'],sort:null})];
   const model={calls:[],goals:[],resume:false,async call(purpose,instructions,input){
     this.calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture',elapsed_ms:0});
+    if(input.eligible_pairs){
+      assert.ok(instructions.startsWith('Inspect EVERY'));
+      return {findings:input.eligible_pairs.map(pair=>{
+        const observed=input.observations.find(item=>item.record_id===pair.record_id);assert.ok(observed);
+        if(observed.tool_name==='runtime_pack_status'){
+          assert.equal(watch?observed.value.result?.collected_rows:observed.value.result?.artifact?.rows,2);
+          const paths=watch?['$/result/collected_rows']:['$/saved_source_readback/sources/0/rows/0/id','$/saved_source_readback/sources/0/rows/1/id','$/result/artifact/rows'];
+          return {...pair,relation:'supports',quote_refs:paths.map(path=>batchRef(input,pair.record_id,path)),reason:'The saved status has the actual bound source rows and result count.'};
+        }
+        if(observed.tool_name==='office_result_read'){
+          assert.deepEqual(JSON.parse(observed.value.text).map(row=>row.id),['A','B']);
+          return {...pair,relation:'supports',quote_refs:[batchRef(input,pair.record_id,'$/text')],reason:'The complete file readback contains both current records.'};
+        }
+        return {...pair,relation:'irrelevant',quote_refs:[],reason:'This receipt does not establish the positive result.'};
+      })};
+    }
     if(instructions.startsWith('Independently verify')){
-      this.goals.push(structuredClone(input));const observed=input.observations.find(item=>watch?item.value.result?.collected_rows===2:item.value.result?.artifact?.rows===2),id=observed?.evidence_ids[0],path=watch?'$/result/collected_rows':'$/result/artifact/rows',ref=input.literal_leaf_manifest.find(item=>item.evidence_ids.includes(id))?.leaf_refs.find(([,value])=>value===path)?.[0];assert.ok(id&&ref);
+      this.goals.push(structuredClone(input));
+      if(input.projection==='host_validated_leaf_findings'){
+        const relevant=input.observations.filter(item=>['runtime_pack_status',...(watch?[]:['office_result_read'])].includes(item.tool_name)&&item.findings.some(finding=>finding.relation==='supports'));
+        assert.equal(relevant.length,watch?1:2,'Independent judgment needs source/result count and full readback.');
+        if(!watch){const read=relevant.find(item=>item.tool_name==='office_result_read');assert.deepEqual(JSON.parse(read.findings.flatMap(finding=>finding.quotes).find(text=>text.startsWith('['))).map(row=>row.id),['A','B']);}
+        return {checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:relevant.map(item=>item.evidence_ids[0]),evidence_quote_refs:relevant.map(item=>({evidence_id:item.evidence_ids[0],quote_ref:item.findings.find(finding=>finding.relation==='supports').quote_refs[0]})),reason:'The current saved source/result and complete readback satisfy the original request.'}))};
+      }
+      const observed=input.observations.find(item=>watch?item.value.result?.collected_rows===2:item.value.result?.artifact?.rows===2),id=observed?.evidence_ids[0],path=watch?'$/result/collected_rows':'$/result/artifact/rows',ref=input.literal_leaf_manifest.find(item=>item.evidence_ids.includes(id))?.leaf_refs.find(([,value])=>value===path)?.[0];assert.ok(id&&ref);
       return {checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:[id],evidence_quote_refs:[{evidence_id:id,quote_ref:ref}],reason:'The fixture independently accepts real current result evidence.'}))};
     }
     assert.ok(instructions.startsWith('Execute the registered Work'));const observations=input.checkpoint.observations,plan=observations.find(item=>item.invocation.tool_name==='runtime_pack_plan'),output=observations.find(item=>['runtime_pack_run','runtime_pack_status'].includes(item.invocation.tool_name)&&item.receipt.status==='succeeded');

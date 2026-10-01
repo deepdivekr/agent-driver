@@ -285,7 +285,8 @@ function localSchemaReference(root:Record<string,unknown>,reference:unknown){
   return value;
 }
 function sameJson(left:unknown,right:unknown):boolean{
-  if(Object.is(left,right))return true;
+  // JSON numbers do not distinguish -0 from 0 (both serialize as 0).
+  if(left===right)return true;
   if(Array.isArray(left))return Array.isArray(right)&&left.length===right.length&&left.every((value,index)=>sameJson(value,right[index]));
   const a=schemaObject(left),b=schemaObject(right);return a!==null&&b!==null&&Object.keys(a).length===Object.keys(b).length&&Object.keys(a).every(key=>Object.hasOwn(b,key)&&sameJson(a[key],b[key]));
 }
@@ -318,12 +319,33 @@ function schemaShapeMatches(value:unknown,schema:unknown,root:Record<string,unkn
   }
   return true;
 }
+/** Only a required discriminator with disjoint literal sets proves that oneOf
+ * and anyOf accept the same objects. Never broaden overlapping unions. */
+function disjointObjectBranches(branches:unknown[]):boolean{
+  if(branches.length<2)return false;
+  const objects=branches.map(schemaObject);
+  if(objects.some(node=>!node||node.type!=='object'))return false;
+  const literalSet=(node:Record<string,unknown>,key:string):unknown[]|null=>{
+    if(!Array.isArray(node.required)||!node.required.includes(key))return null;
+    const field=schemaObject(schemaObject(node.properties)?.[key]);if(!field)return null;
+    return Object.hasOwn(field,'const')?[field.const]:Array.isArray(field.enum)&&field.enum.length?field.enum:null;
+  };
+  const first=objects[0]!;
+  return Object.keys(schemaObject(first.properties)??{}).some(key=>{
+    const sets=objects.map(node=>literalSet(node!,key));
+    return sets.every(set=>set!==null)&&sets.every((set,index)=>sets.slice(index+1).every(other=>!set!.some(value=>other!.some(candidate=>sameJson(value,candidate)))));
+  });
+}
 /** Codex requires every property; optional absence is represented only in transport by null. */
 function codexTransportSchema(schema:Record<string,unknown>){
   const copy=structuredClone(schema);
   const visit=(value:unknown)=>{
     if(!value||typeof value!=='object'||Array.isArray(value))return;
     const node=value as Record<string,unknown>;
+    if(Array.isArray(node.oneOf)){
+      requireCondition(node.anyOf===undefined&&disjointObjectBranches(node.oneOf),'CLIENT_OUTPUT_SCHEMA_UNSUPPORTED');
+      node.anyOf=node.oneOf;delete node.oneOf;
+    }
     if(node.format==='uri'||node.format==='uri-reference')delete node.format;
     for(const key of ['$defs','definitions','properties','patternProperties','dependentSchemas','dependencies']){
       const map=node[key];if(map&&typeof map==='object'&&!Array.isArray(map))for(const child of Object.values(map))visit(child);
@@ -504,7 +526,7 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
             }else result=await invokeCli(client,environment,runner,instructions,input,schema,purpose);
             model=result.model;value=result.value;accepted=true;
           }
-          catch(error){this.statuses.delete(client);invalidateClient(client,runner);const timeout=error instanceof Error&&error.message==='CLIENT_TIMEOUT';invokedTimeout ||=timeout;invokedNonTimeout ||=!timeout;const reason=classifyClientFailure(error);failureKind=timeout?'timeout':reason==='invalid_output'?'invalid_output':reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='model_unsupported'?'model_unsupported':reason==='provider_unavailable'?'provider_unavailable':'incomplete';if(isNonRetryableClientFailure(error))throw error;failed??={client,model,reason};invokedFailure??={client,model,reason};if(reason!=='model_unsupported')otherInvokedFailure??={client,model,reason};continue;}
+          catch(error){const reason=classifyClientFailure(error);if(reason!=='schema_invalid'){this.statuses.delete(client);invalidateClient(client,runner);}const timeout=error instanceof Error&&error.message==='CLIENT_TIMEOUT';invokedTimeout ||=timeout;invokedNonTimeout ||=!timeout;failureKind=timeout?'timeout':reason==='schema_invalid'?'schema_invalid':reason==='invalid_output'?'invalid_output':reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='model_unsupported'?'model_unsupported':reason==='provider_unavailable'?'provider_unavailable':'incomplete';if(isNonRetryableClientFailure(error))throw error;failed??={client,model,reason};invokedFailure??={client,model,reason};if(reason!=='model_unsupported')otherInvokedFailure??={client,model,reason};continue;}
           finally{this.calls.push({purpose,provider:client,auth:state.auth==='subscription'?'subscription':'unknown',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?continuity:{failure_kind:failureKind})});}
           transferred(client,model);return value;
         }

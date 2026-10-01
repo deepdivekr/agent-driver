@@ -6,6 +6,7 @@ import {type PackStore} from '../packs/store.js';
 import {requireCondition} from '../core/contracts.js';
 import {nativeCompletionPredicateSchema,nativeCompletionTextIsCanonical} from './completion-checks.js';
 import {type NativeCompletionResolver,type NativeCompletionResolution} from './native-completion.js';
+import {type CollectionCompletionResolver} from './collection-contract.js';
 
 const identifier=z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u);
 const checkSchema=z.object({id:identifier,result:z.string().trim().min(1).max(4000),evidence:z.string().trim().min(1).max(4000),native_check:nativeCompletionPredicateSchema.optional()}).strict().refine(nativeCompletionTextIsCanonical,'NATIVE_COMPLETION_TEXT_NOT_CANONICAL');
@@ -27,7 +28,7 @@ export interface WorkCompletionAuditEvent {
   provider?:string;model?:string;
   verifier?:'native';certificate_sha256?:string;
 }
-export interface WorkCompletionVerifierOptions {progress?:WorkClientHooks['progress'];audit?:(event:WorkCompletionAuditEvent)=>void|Promise<void>;guard?:()=>void|Promise<void>;literalRefMode?:boolean;nativeResolver?:NativeCompletionResolver;originalUserRequest?:{prompt:string;completion_condition:string|null;delivery_target_ids:string[]|null;user_directions?:Array<{run_id:string;step_id:string;instruction:string;created_at:string}>};}
+export interface WorkCompletionVerifierOptions {progress?:WorkClientHooks['progress'];audit?:(event:WorkCompletionAuditEvent)=>void|Promise<void>;guard?:()=>void|Promise<void>;literalRefMode?:boolean;nativeResolver?:NativeCompletionResolver;collectionResolver?:CollectionCompletionResolver;originalUserRequest?:{prompt:string;completion_condition:string|null;delivery_target_ids:string[]|null;user_directions?:Array<{run_id:string;step_id:string;instruction:string;created_at:string}>};}
 
 const HOST_TRACE_VERIFICATION_GUIDANCE=`HOST TRACE PROVENANCE: The host supplies office_controlled_run_trace only after independently reading its owned persisted checkpoint, checking receipt hashes, and closing tool admission. Its recorded closure and dispatch history are host observations, not the executor's summary or a page/file's self-reported claim. They prove only the Office-controlled capability dispatches described in scope. lifetime_dispatch_counts includes earlier operations preserved across resumes. since_admission_counts covers only the suffix after the host-captured entry checkpoint; use that suffix for "no NEW read during this resume", not the lifetime read count. Require both closure=closed and admission_trace.closure=closed before relying on since_admission_counts. inherited_evidence_ids identifies successful receipt evidence actually retained at admission; match those IDs to the supplied ordinary source receipts rather than accepting an output's statement that it reused them. A mixed check such as "produce the same observed source values in a TXT without recollecting them in this resume" needs BOTH actual source/file leaf values establishing the positive result and the closed host admission trace establishing the controlled-process constraint. Cite and quote both ordinary evidence and the relevant trace statement, using evidence_use observed_result for that mixed result. A positive value cannot be proved by trace counts alone; a file's prose claiming reuse cannot prove the process. If the host admission trace is open/unknown, counts conflict with the requested process, IDs do not bind the alleged retained source, or ordinary content does not establish the positive result, return unsupported or unknown as appropriate. Do not expand this evidence to other applications, other runs, uninstrumented internals or future actions. These distinctions describe admissible evidence, not a requirement to return supported.
 PROCESS REQUIREMENT SCOPE: Unless a user explicitly asks for machine-wide or outside-harness absence, interpret process prohibitions such as "로그인, 폼 입력, 제출, 외부 전송이 전혀 없었음" as this specific Work's Office-controlled capability dispatches through the verification checkpoint. Do not invent a requirement to prove what all other apps or the entire PC did. In ordinary requested research, HTTP reads of the requested source are not message/result sending, publishing, submission or an external-write capability. An explicit prohibition on all network requests, including source reads, remains broader and must not be silently narrowed. Match login/form-input/submission restrictions to the actual controlled tools and action history; external_write=0 alone cannot prove every kind of absence. Closed trace counts and tool history can establish only that scoped process condition. Explicit machine-wide, other-application, uninstrumented-internal or all-network absence must remain unknown or unsupported when the supplied evidence cannot establish it. Open, absent, truncated or mismatched traces never establish zero, and scope clarification never requires a supported verdict.`;
@@ -493,10 +494,65 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       try{return await reject(codeOf(error));}catch{return false;}
     }
   };
-  if(!options.originalUserRequest)return verify;
+  if(!options.originalUserRequest)return options.collectionResolver?async()=>false:verify;
   return async(checks,observations,claim)=>{
     const original=z.object({prompt:z.string().min(1).max(8000),completion_condition:z.string().max(2000).nullable(),delivery_target_ids:z.array(identifier).max(10).nullable(),user_directions:z.array(z.object({run_id:identifier,step_id:identifier,instruction:z.string().min(1).max(4000),created_at:z.string().datetime({offset:true})}).strict()).max(20).optional()}).strict().safeParse(options.originalUserRequest);
     if(!original.success)return false;
+    if(options.collectionResolver){
+      // A first-interpretation collection contract is host-sealed, not a
+      // worker's assertion that its recipe happens to satisfy the goal. Keep
+      // dispatch/evidence gates even when no semantic judgment is needed.
+      try{
+        await options.guard?.();
+        const parsed=z.array(checkSchema).min(1).max(8).parse(checks),ids=new Set(parsed.map(check=>check.id));
+        requireCondition(ids.size===parsed.length,'WORK_COMPLETION_CHECKS_DUPLICATE');
+        requireCondition(claim.action==='complete'&&claim.completed_checks.length===parsed.length&&new Set(claim.completed_checks.map(check=>check.id)).size===parsed.length&&claim.completed_checks.every(check=>ids.has(check.id)),'WORK_COMPLETION_CLAIM_INVALID');
+        const traces=observations.filter(item=>item.invocation.tool_name===controlledTraceTool),ordinary=observations.filter(item=>item.invocation.tool_name!==controlledTraceTool);
+        requireCondition(traces.length<=1&&ordinary.length<=32,'WORK_COMPLETION_OBSERVATION_LIMIT');
+        requireCondition(!observations.some(item=>item.receipt.effect_state==='uncertain'||item.receipt.status==='reconciliation_required'),'WORK_COMPLETION_EFFECT_UNCERTAIN');
+        const evidence=new Map<string,string>();
+        for(const observation of observations){
+          if(observation.receipt.status!=='succeeded')continue;
+          requireCondition(observation.invocation.dispatched,'WORK_COMPLETION_DISPATCH_INCONSISTENT');
+          requireCondition(!['local_write','external_write'].includes(observation.invocation.effect)||observation.receipt.effect_state==='verified','WORK_COMPLETION_WRITE_UNVERIFIED');
+          for(const evidenceId of observation.receipt.evidence_ids){
+            identifier.parse(evidenceId);const digest=hashJson({value:observation.receipt.value,effect_state:observation.receipt.effect_state});
+            requireCondition(!evidence.has(evidenceId)||evidence.get(evidenceId)===digest,'WORK_COMPLETION_EVIDENCE_ID_CONFLICT');evidence.set(evidenceId,digest);
+          }
+        }
+        for(const selected of claim.completed_checks)requireCondition(selected.evidence_ids.length>0&&selected.evidence_ids.length<=33&&new Set(selected.evidence_ids).size===selected.evidence_ids.length&&selected.evidence_ids.every(id=>evidence.has(id)),'WORK_COMPLETION_EVIDENCE_MISSING');
+        const resolved=await options.collectionResolver(parsed,observations,claim);
+        await options.guard?.();
+        if(resolved){
+          // Only a sealed collection contract needs a closed process trace at
+          // this gate. Legacy Works continue through the original-goal verifier,
+          // which validates trace binding and checks closure if citing trace facts.
+          for(const trace of traces){
+            const traceSeal=traceSeals.get(trace.receipt.evidence_ids[0]??'');
+            requireCondition(traceSeal&&traceSeal.observation_sha256===hashJson(trace)&&traceSeal.source_observations_sha256===hashJson(ordinary),'WORK_COMPLETION_TRACE_NOT_HOST_BOUND');
+            requireCondition(traceSeal.closed,'WORK_COMPLETION_TRACE_NOT_CLOSED');
+          }
+          const covered=new Set(resolved.covered_check_ids);
+          requireCondition(covered.size>0&&covered.size===resolved.covered_check_ids.length&&[...covered].every(id=>ids.has(id)),'WORK_COLLECTION_CHECK_INVALID');
+          requireCondition(!resolved.verified||resolved.evidence_ids.length>0&&resolved.evidence_ids.every(id=>evidence.has(id)),'WORK_COLLECTION_EVIDENCE_INVALID');
+          await options.audit?.({attempt:1,status:resolved.verified?'accepted':'rejected',code:resolved.verified?'WORK_COLLECTION_CONTRACT_VERIFIED':'WORK_COLLECTION_CONTRACT_NOT_VERIFIED',input_sha256:hashJson({checks,claim,observations}),verifier:'native',...(resolved.certificate_sha256?{certificate_sha256:resolved.certificate_sha256}:{}),checks:[...covered].map(id=>({id,verdict:resolved.verified?'supported':'unknown',evidence_ids:resolved.evidence_ids,evidence_use:'observed_result',reason_sha256:hashJson(resolved.reason),quotes:[]}))});
+          await options.guard?.();
+          await options.progress?.({kind:'model.result',turn:Math.max(0,...observations.map(item=>item.invocation.turn+1)),stage_id:'completion.verify',summary:resolved.verified?'Collection verified in code against the sealed source, period, filters, complete observed row set and storage format.':'Collection is incomplete: '+safeControlText(resolved.reason,500)});
+          await options.guard?.();
+          if(!resolved.verified)return false;
+          // Only conditions outside the sealed deterministic contract need a
+          // separate judgment. Never re-ask a model to approve the whole CSV.
+          const remaining=parsed.filter(check=>!covered.has(check.id));
+          // Inspect an evidence batch once for all remaining conditions, not
+          // once per check. Covered rows never re-enter semantic verification.
+          if(remaining.length&&!await verify(remaining,observations,{...claim,completed_checks:claim.completed_checks.filter(item=>!covered.has(item.id))}))return false;
+          await options.guard?.();return true;
+        }
+      }catch(error){
+        try{await options.guard?.();await options.audit?.({attempt:1,status:'rejected',code:codeOf(error),input_sha256:hashJson({checks,claim}),checks:[]});}catch{/* A stale or missing authority never becomes a model fallback. */}
+        return false;
+      }
+    }
     const used=new Set(checks.map(check=>check.id));let id='original_user_request';for(let suffix=1;used.has(id);suffix++)id=`original_user_request_${suffix}`;
     const hostCheck={id,result:'The observed business result and Office output satisfy the FULL original_user_request.prompt and literal original_user_request.completion_condition, including all input rows, quantities, qualifiers and output restrictions. Final completion_verified is established by this host gate, not a preexisting receipt.',evidence:'Compare all original successful source and output receipts, independently saved/read-back content, and the closed controlled-run trace where a process restriction is requested.'};
     const hostIds=[...new Set(observations.filter(item=>item.receipt.status==='succeeded'&&item.receipt.effect_state!=='uncertain'&&observableLeaves(item.receipt.value).length>0).map(item=>item.receipt.evidence_ids[0]).filter((value):value is string=>typeof value==='string'))];

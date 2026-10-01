@@ -43,14 +43,25 @@ test('portal acceptance fails a partial Pack read or an omitted Critical row',as
   assert.equal(incomplete.status,'FAIL');assert.equal(incomplete.checks.find(row=>row.name==='independent_export_rows').pass,false);
 });
 
-test('portal acceptance ignores exact repeated pages but rejects contradictory repeats and missing pages',async t=>{
+test('portal acceptance reconciles rereads by actual byte ranges, not mutable title or page size',async t=>{
   const x=await fixture(t),repeated=structuredClone(x.audit);
   repeated.observations.push(structuredClone(repeated.observations[1]));
   assert.equal(validate(x.item,repeated,x.config,[]).status,'PASS');
-  const conflictingText=structuredClone(repeated);conflictingText.observations.at(-1).receipt.value.text='different bytes';
+  const retitled=structuredClone(repeated);retitled.observations[1].receipt.value.title='Earlier display title';retitled.observations.at(-1).receipt.value.title='Current display title';
+  assert.equal(validate(x.item,retitled,x.config,[]).status,'PASS','display-title changes do not change the saved Pack artifact');
+  const resized=structuredClone(repeated),smaller=resized.observations.at(-1).receipt.value,short=Buffer.from(smaller.text,'utf8').subarray(0,10).toString('utf8');
+  smaller.text=short;smaller.page.returned_bytes=Buffer.byteLength(short,'utf8');smaller.page.next_offset=smaller.page.returned_bytes;
+  assert.equal(validate(x.item,resized,x.config,[]).status,'PASS','two valid page lengths may cover the same artifact offset');
+  const conflictingText=structuredClone(repeated);conflictingText.observations.at(-1).receipt.value.text=conflictingText.observations.at(-1).receipt.value.text.replace('"id"','"xd"');
   assert.equal(validate(x.item,conflictingText,x.config,[]).checks.find(row=>row.name==='work_completed_and_office_readback').pass,false);
   const conflictingPage=structuredClone(repeated);conflictingPage.observations.at(-1).receipt.value.page.next_offset=24;
   assert.equal(validate(x.item,conflictingPage,x.config,[]).checks.find(row=>row.name==='work_completed_and_office_readback').pass,false);
+  const wrongRun=structuredClone(repeated);wrongRun.observations.at(-1).receipt.value.source_run_id='another-pack-run';
+  assert.equal(validate(x.item,wrongRun,x.config,[]).checks.find(row=>row.name==='work_completed_and_office_readback').pass,false);
+  const wrongRequest=structuredClone(repeated);wrongRequest.observations.at(-1).receipt.value.request_id='another-request';
+  assert.equal(validate(x.item,wrongRequest,x.config,[]).checks.find(row=>row.name==='work_completed_and_office_readback').pass,false);
+  const wrongArtifact=structuredClone(repeated);wrongArtifact.observations.at(-1).receipt.value.artifact.path=join(x.root,'another.csv');
+  assert.equal(validate(x.item,wrongArtifact,x.config,[]).checks.find(row=>row.name==='work_completed_and_office_readback').pass,false);
   const missingPage=structuredClone(repeated);missingPage.observations.splice(2,1);
   assert.equal(validate(x.item,missingPage,x.config,[]).checks.find(row=>row.name==='work_completed_and_office_readback').pass,false);
 });

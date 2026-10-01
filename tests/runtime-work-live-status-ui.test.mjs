@@ -16,6 +16,21 @@ function context(language='en'){
   vm.runInNewContext(i18nScript+taskModelUiScript+helpers,value);return value;
 }
 
+test('runtime unit unsupported app response schema is actionable in Korean and English without suggesting login or quota refresh',()=>{
+  const admission=script.slice(script.indexOf('function executionAdmissionMessage'),script.indexOf('async function readWorkStartResponse'));
+  assert.ok(admission.startsWith('function executionAdmissionMessage'));
+  for(const language of ['ko','en']){
+    const x=context(language);vm.runInNewContext(admission,x);
+    for(const code of ['CLIENT_SCHEMA_INVALID','CLIENT_OUTPUT_SCHEMA_UNSUPPORTED']){
+      x.reason=code;x.data={definition_status:'needs_model',reason:code};
+      const cause=vm.runInNewContext('executionReason(reason)',x),intake=vm.runInNewContext('admissionMessage(data)',x);
+      assert.equal(intake,cause);assert.match(cause,language==='ko'?/응답 형식.*앱 수정/u:/response schema.*app is fixed/u);
+      assert.doesNotMatch(cause,/CLIENT_|로그인 필요|login again|quota exhausted/u);
+      if(language==='en')assert.doesNotMatch(cause,/[가-힣]/u);
+    }
+  }
+});
+
 test('runtime unit allocation success is not an error reason and actual model names remain visible without native session metadata',()=>{
   for(const language of ['ko','en']){
     const x=context(language);

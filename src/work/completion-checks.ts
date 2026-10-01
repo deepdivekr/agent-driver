@@ -8,7 +8,7 @@ const columns=z.array(column).max(100).refine(values=>new Set(values).size===val
 const nativeOutputPredicateSchema=z.object({
   version:z.literal(1),kind:z.literal('native_pack_output'),
   family:z.enum(['portal.collect','file.pipeline']),format:z.enum(['csv','json']),
-  columns,output_rows:z.union([z.number().int().min(0).max(10000),z.literal('observed_source_rows')]),
+  columns,output_rows:z.union([z.number().int().min(0),z.literal('observed_source_rows')]),
   numeric_columns:columns,sort:z.object({field:column,direction:z.enum(['asc','desc'])}).strict().nullable(),
 }).strict().superRefine((value,context)=>{
   if(value.format==='csv'&&value.columns.length===0)context.addIssue({code:'custom',path:['columns'],message:'CSV native completion requires columns'});

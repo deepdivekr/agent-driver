@@ -196,25 +196,28 @@ export function validate(item,audit,config,provenance){
     if(exported){
       if(!run||!packInvocation)throw Error('verified Pack receipt absent');
       const artifact=run.result?.artifact,bytes=checkArtifact(artifact,join(dirname(config.dbPath),'pack-artifacts'));
-      const reads=(audit.observations??[]).filter(o=>o.invocation?.tool_name==='office_result_read'&&o.invocation?.dispatched===true&&o.receipt?.status==='succeeded'&&o.receipt?.value?.source_tool==='runtime_pack_run'&&o.receipt?.value?.source_run_id===run.id&&o.receipt?.value?.request_id===packInvocation.invocation.request_id&&o.receipt?.value?.verified_by==='independent_sha256_and_bytes_readback').sort((a,b)=>a.receipt.value.page?.offset-b.receipt.value.page?.offset);
+      const reads=(audit.observations??[]).filter(o=>o.invocation?.tool_name==='office_result_read'&&o.invocation?.dispatched===true&&o.receipt?.status==='succeeded'&&(o.receipt?.value?.source_run_id===run.id||o.receipt?.value?.request_id===packInvocation.invocation.request_id)).sort((a,b)=>a.receipt.value.page?.offset-b.receipt.value.page?.offset);
       if(!reads.length)throw Error('Pack artifact readback absent');
-      // A Work may reread the same verified page after a retry. Count an
-      // identical receipt once, but never choose between contradictory reads.
-      const unique=new Map();
+      // A retry can reread the same bytes with a different page size or after
+      // a display-title edit. Every page must independently equal the saved
+      // artifact at its own offset; only complete union coverage is accepted.
+      let stable=null;const ranges=[];
       for(const read of reads){
         const value=read.receipt.value,page=value.page,part=Buffer.from(value.text??'','utf8');
         if(item.work_id&&value.work_id!==item.work_id)throw Error('Pack readback Work identity mismatch');
-        if(!object(page)||!Number.isSafeInteger(page.offset)||page.offset<0||typeof page.has_more!=='boolean'||page.returned_bytes!==part.length||page.total_bytes!==bytes.length||value.artifact?.sha256!==artifact.sha256||value.artifact?.bytes!==artifact.bytes||page.has_more!==(page.offset+part.length<bytes.length)||page.next_offset!==(page.has_more?page.offset+part.length:null))throw Error('Pack artifact page mismatch');
-        const prior=unique.get(page.offset);
-        if(prior){if(!equal(prior.value,value))throw Error('Contradictory duplicate Pack readback');continue;}
-        unique.set(page.offset,{value,part});
+        if(value.source_tool!=='runtime_pack_run'||value.source_run_id!==run.id||value.request_id!==packInvocation.invocation.request_id||value.verified_by!=='independent_sha256_and_bytes_readback')throw Error('Pack readback identity mismatch');
+        if(!object(page)||!Number.isSafeInteger(page.offset)||page.offset<0||typeof page.has_more!=='boolean'||page.returned_bytes!==part.length||page.total_bytes!==bytes.length||value.artifact?.sha256!==artifact.sha256||value.artifact?.bytes!==artifact.bytes||value.artifact?.path!==artifact.path||value.artifact?.format!==artifact.format||value.artifact?.rows!==artifact.rows||page.offset+part.length>bytes.length||page.has_more!==(page.offset+part.length<bytes.length)||page.next_offset!==(page.has_more?page.offset+part.length:null))throw Error('Pack artifact page mismatch');
+        if(!part.equals(bytes.subarray(page.offset,page.offset+part.length)))throw Error('Contradictory Pack readback bytes');
+        const {title:_title,text:_text,page:_page,...identity}=value;
+        if(stable!==null&&!equal(stable,identity))throw Error('Contradictory Pack readback identity');
+        stable=identity;ranges.push([page.offset,page.offset+part.length]);
       }
-      let offset=0;const pages=[],ordered=[...unique].sort(([a],[b])=>a-b);
-      for(const [position,{part}] of ordered){
-        if(position!==offset)throw Error('Pack artifact page gap');
-        offset+=part.length;pages.push(part);
+      let covered=0;
+      for(const [start,end] of ranges.sort(([a],[b])=>a-b)){
+        if(start>covered)throw Error('Pack artifact page gap');
+        covered=Math.max(covered,end);
       }
-      if(offset!==bytes.length||!Buffer.concat(pages).equals(bytes)||ordered.at(-1)?.[1].value.page?.has_more!==false)throw Error('Pack artifact was not fully read');
+      if(covered!==bytes.length||!reads.some(read=>read.receipt.value.page?.has_more===false))throw Error('Pack artifact was not fully read');
       return `full Pack artifact readback: ${bytes.length} bytes`;
     }
     const drafts=(audit.observations??[]).filter(o=>o.invocation?.tool_name==='office_result_draft'&&o.invocation?.dispatched===true&&o.receipt?.status==='succeeded'&&o.receipt?.effect_state==='verified');

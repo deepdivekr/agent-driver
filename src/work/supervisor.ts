@@ -11,7 +11,7 @@ import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.
 import {requireCondition} from '../core/contracts.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {workProposalSchema,workControlSchema as supervisorActionSchema,type WorkProposal} from './contracts.js';
-import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS,WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS} from './runtime.js';
+import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS,WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS,WORK_COLLECTION_CONTRACT_INSTRUCTIONS} from './runtime.js';
 import {readWorkIntakeOptions} from './intake-options.js';
 import {BoundedWorkClientExecutor,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientResult} from './client-executor.js';
 import {packTools} from '../packs/contracts.js';
@@ -29,6 +29,7 @@ import {createNativeCompletionResolver} from './native-completion.js';
 import {assertCustomPackInvocation} from './custom-pack-repeat.js';
 import {assertCustomPackScheduledRun} from './custom-pack-schedule.js';
 import {PACK_ENGINE_VERSION} from '../packs/runtime.js';
+import {sealCollectionContract,readSealedCollectionContract,createCollectionCompletionResolver} from './collection-contract.js';
 
 const now=()=>new Date().toISOString();
 const activeStates=['queued','running','retry_wait'];
@@ -263,15 +264,22 @@ export class WorkSupervisor {
       if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
       if(row.replan_required){
         guard();workActivity(this.store,project,row.work_id,'supervisor.replanning','새 지침에 맞춰 완료조건과 다음 단계를 갱신합니다. 이전 실행 증거는 보존합니다.');
-        const instructions=WORK_REPLANNING_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS,input={work_id:row.work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:spec,user_directions:this.store.workDirections(project,row.work_id),user_intake:readWorkIntakeOptions(this.store,project,row.work_id),...(this.api.work?.planningContext()??workPlanningContext(this.store,this.config))};
+        const instructions=WORK_REPLANNING_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS,input={work_id:row.work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:spec,user_directions:this.store.workDirections(project,row.work_id),user_intake:readWorkIntakeOptions(this.store,project,row.work_id),...(this.api.work?.planningContext()??workPlanningContext(this.store,this.config))};
         const priorImport=workImportExecutionOwner(this.store,project,row.work_id)==='office'?spec.plan:null;
         const planningModel=modelForRole(model,'planner');
         spec=await validateOrCorrectWorkProposal(await planningModel.call('correct',instructions,input,z.toJSONSchema(workProposalSchema)),work.mode as 'quick'|'guided',true,{model:planningModel,instructions,input,onDiagnostic:event=>workActivity(this.store,project,row.work_id,'supervisor.replanning',`Work definition ${event.kind}: ${event.code}`)});guard();
         // Import provenance and runtime ownership are host-owned. A direction
         // change may revise steps/checks, not sever or recreate the source bond.
         if(priorImport){const {source:_source,source_id:_id,source_digest:_digest,provenance:_provenance,import_mode:_mode,import_scope:_scope,...steps}=spec.plan??priorImport;spec={...spec,plan:{...steps,source:priorImport.source,source_id:priorImport.source_id,source_digest:priorImport.source_digest,provenance:priorImport.provenance,...(priorImport.import_mode?{import_mode:priorImport.import_mode}:{}),...(priorImport.import_scope?{import_scope:priorImport.import_scope}:{})}};}
-        const at=now(),changed=db.prepare('UPDATE office_intake SET spec=?,updated_at=? WHERE project_id=? AND work_id=? AND revision=?').run(JSON.stringify(spec),at,project,row.work_id,row.work_revision);requireCondition(changed.changes===1,'WORK_REVISION_CONFLICT');db.prepare('UPDATE office_work SET title=?,goal=?,updated_at=? WHERE project_id=? AND id=?').run(spec.title,spec.desired_outcome,at,project,row.work_id);db.prepare('UPDATE office_supervisor SET replan_required=0 WHERE project_id=? AND run_id=? AND owner=?').run(project,row.run_id,row.owner);validatedReplan=true;
+        this.store.transaction(()=>{
+          const at=now(),changed=db.prepare('UPDATE office_intake SET spec=?,updated_at=? WHERE project_id=? AND work_id=? AND revision=?').run(JSON.stringify(spec),at,project,row.work_id,row.work_revision);
+          requireCondition(changed.changes===1,'WORK_REVISION_CONFLICT');
+          sealCollectionContract(this.store,this.config,row.work_id,spec);
+          db.prepare('UPDATE office_work SET title=?,goal=?,updated_at=? WHERE project_id=? AND id=?').run(spec.title,spec.desired_outcome,at,project,row.work_id);
+          db.prepare('UPDATE office_supervisor SET replan_required=0 WHERE project_id=? AND run_id=? AND owner=?').run(project,row.run_id,row.owner);
+        });validatedReplan=true;
       }
+      readSealedCollectionContract(this.store,this.config,row.work_id,spec);
       // The first interpretation uses the user's default model. Allocate only
       // after a valid task exists, before any tool or independently run worker.
       if(model instanceof ConfiguredStructuredModel)model=model.forScope(spec.route.pack_family==='coding.orchestrate'?'coding':'global');
@@ -290,7 +298,7 @@ export class WorkSupervisor {
       guard();let admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
       let completionDenial:{code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED'|'WORK_COMPLETION_BATCH_CONTRADICTS'|'WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL';check_id:string;verdict:'unsupported'|'unknown'}|null=null;
       let verificationTransportUnavailable:string|null=null;
-      const independentVerifier=createWorkCompletionVerifier(model,{guard,originalUserRequest,literalRefMode:true,nativeResolver:createNativeCompletionResolver(this.store,this.config,row.work_id),progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{
+      const independentVerifier=createWorkCompletionVerifier(model,{guard,originalUserRequest,literalRefMode:true,nativeResolver:createNativeCompletionResolver(this.store,this.config,row.work_id),collectionResolver:createCollectionCompletionResolver(this.store,this.config,row.work_id),progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{
         workActivity(this.store,project,row.work_id,'supervisor.verification.audit',JSON.stringify(event));
         if(event.status==='unavailable'&&['STRUCTURED_MODEL_TIMEOUT','STRUCTURED_MODEL_UNAVAILABLE','CLIENT_TIMEOUT','MCP_SAMPLING_UNAVAILABLE','MODEL_PROVIDER_UNAVAILABLE'].includes(event.code))verificationTransportUnavailable=event.code;
         else if(event.status==='accepted'||event.status==='rejected')verificationTransportUnavailable=null;
@@ -309,6 +317,7 @@ export class WorkSupervisor {
           if(failures.includes('quota_exhausted'))return 'CLIENT_QUOTA_EXHAUSTED';
           if(failures.includes('rate_limited'))return 'CLIENT_RATE_LIMITED';
           if(failures.includes('model_unsupported'))return 'STRUCTURED_MODEL_UNSUPPORTED';
+          if(failures.includes('schema_invalid'))return 'CLIENT_SCHEMA_INVALID';
           if(failures.some(kind=>kind==='invalid_output'||kind==='refusal'||kind==='json_decode'))return 'CLIENT_STRUCTURED_OUTPUT_INVALID';
           return null;
         };
@@ -409,7 +418,7 @@ export class WorkSupervisor {
       }
       // The executor binds immutable initial task/checks. New direction is live context.
       guard();admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
-      const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
+      const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason. If spec.collection_contract exists, use its exact recipe through runtime_pack_run without a new runtime_pack_plan. The host verifies every matching observed source row and actual output in code; do not read source pages just to obtain another model approval of covered checks. Reuse an unchanged same-Work receipt via runtime_pack_status for completion-only recovery; never rewrite a successful artifact just for verification. Remaining semantic checks still need their own evidence.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
         {tools:toolkit.catalog(),guard,signal:controller.signal,
           toolRequestId:(name,args,fallback)=>toolkit!.requestId(name,args,fallback),
           packRequestRecovery:(invocation,prior)=>toolkit!.packRequestRecovery(invocation,prior),

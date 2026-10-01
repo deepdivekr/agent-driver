@@ -4,6 +4,7 @@ import {FamilyRuntime,PACK_ENGINE_VERSION} from '../packs/runtime.js';
 import {CustomPackRegistry} from '../packs/custom-registry.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {CustomPackRepeats,assertCustomPackInvocation,customPackVersionsSchema,customPackWorkBinding} from '../work/custom-pack-repeat.js';
+import {sealCollectionContract,assertSealedCollectionRecipe} from '../work/collection-contract.js';
 import {workExecutionBinding} from '../work/contracts.js';
 import {CustomPackSchedules,assertCustomPackScheduledRun} from '../work/custom-pack-schedule.js';
 import {WorkSchedules} from '../work/schedule.js';
@@ -118,7 +119,10 @@ export class RuntimeApi{
     this.codingDialog=new CodingDialogRuntime(this.store,config,this.model,options.coding);
     this.packs=new FamilyRuntime(this.store,config,{approval:options.approval??new LocalApprovalDispatcher(this.store),llm:this.model});
     this.customPacks=new CustomPackRegistry(this.store);
-    this.customPackRepeats=new CustomPackRepeats(this.store,this.customPacks,(work,prepared)=>this.workResults.setSelection(config.project.id,work.id,{revision:0,target_ids:prepared.completion_contract.delivery_target_ids??this.workResults.settings!.publicState().default_target_ids}));
+    this.customPackRepeats=new CustomPackRepeats(this.store,this.customPacks,(work,prepared)=>{
+      sealCollectionContract(this.store,config,work.id,work.spec as import('../work/contracts.js').WorkProposal);
+      this.workResults.setSelection(config.project.id,work.id,{revision:0,target_ids:prepared.completion_contract.delivery_target_ids??this.workResults.settings!.publicState().default_target_ids});
+    });
     this.customPackSchedules=new CustomPackSchedules(this.store,config.project.id,this.customPacks,this.customPackRepeats,new WorkSchedules(this.store,config.project.id));
     let jev=options.swarmJev;if(!jev&&config.swarm?.enabled)jev=optionalTypeSafeTransportFromHostEnvironment(this.modelEnvironment()).transport??undefined;
     this.explicitProviders=options.swarmProviders!==undefined;
@@ -378,6 +382,9 @@ export class RuntimeApi{
       }
       const host=candidate&&!historicalOrPause?this.customPackHostBinding():undefined;
       const binding=owner?assertCustomPackInvocation(this.store,this.config.project.id,owner,name,input,host):null;
+      if(owner&&name==='runtime_pack_run'&&this.store.hermesState.prepare('SELECT 1 FROM office_intake WHERE project_id=? AND work_id=?').get(this.config.project.id,owner)){
+        assertSealedCollectionRecipe(this.store,this.config,owner,input.recipe as import('../packs/contracts.js').Recipe);
+      }
       if(binding&&owner&&host)assertCustomPackScheduledRun(this.store,this.config.project.id,owner,host);
       const ledger=this.store.storage(this.config),writes=['runtime_pack_run','runtime_pack_execute_approved','runtime_pack_watch_tick'].includes(name),reservation=writes?ledger.reserve('pack_execution',16_777_216):null;
       let failed=false;try{

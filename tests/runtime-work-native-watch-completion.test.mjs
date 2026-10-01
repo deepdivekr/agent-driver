@@ -35,9 +35,15 @@ async function setup(t){
   }
   async function tick(owner,rows=originalRows){
     await writeFile(source,JSON.stringify(rows));await delay(5);
-    // Accelerate only the fixture scheduler. Source reads use the actual clock;
-    // predicates requiring 60 elapsed seconds must still fail in this fixture.
-    api.store.hermesState.prepare('UPDATE family_watch SET next_ms=? WHERE run_id=?').run(Date.now()-1,owner.runId);
+    // Make only this fixture watch unambiguously due. A one-millisecond
+    // Date.now() offset can become future-dated if the wall clock adjusts
+    // between this write and the runtime's independent due-time read.
+    // Source observations still use the actual clock, so a predicate
+    // requiring 60 elapsed seconds must still fail in this fixture.
+    const scheduled=api.store.hermesState.prepare('UPDATE family_watch SET next_ms=0 WHERE run_id=?').run(owner.runId);
+    assert.equal(scheduled.changes,1);
+    assert.equal(api.store.watchState(config.project.id,owner.runId).next_ms,0);
+    assert.equal(api.store.dueWatches(config.project.id,Date.now(),owner.runId).length,1);
     const request=`tick-${randomUUID()}`,value=await owner.toolkit.execute('runtime_pack_watch_tick',{run_id:owner.runId},request);
     assert.equal(value.pending,false);
     const receipt=await owner.toolkit.receipt('runtime_pack_watch_tick',value,request);
