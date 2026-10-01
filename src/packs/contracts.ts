@@ -9,7 +9,7 @@ export const scalar=z.union([z.string().max(16000),z.number().finite(),z.boolean
 export const rowSchema=z.record(field,scalar);
 export type Row=z.infer<typeof rowSchema>;
 const selector=z.string().min(1).max(400);
-const fields=z.record(field,z.object({selector,kind:z.enum(['text','select','checkbox'])}).strict());
+const fields=z.record(field,z.object({selector,kind:z.enum(['text','select','checkbox','radio'])}).strict());
 const remote=z.object({url:z.string().url(),parameters:z.array(key).max(20).default([])});
 const numericColumns=z.array(field).max(100).refine(columns=>new Set(columns).size===columns.length,'duplicate numeric column').optional();
 export const sourceSchema=z.discriminatedUnion('kind',[

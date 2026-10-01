@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {DatabaseSync} from 'node:sqlite';
-import {BoundedWorkClientExecutor,appendWorkObservation} from '../dist/work/client-executor.js';
+import {BoundedWorkClientExecutor,WorkClientToolInputError,appendWorkObservation} from '../dist/work/client-executor.js';
 import {createWorkRunTraceEvidence} from '../dist/work/completion.js';
 
 // A3 regression: executor exits that ended a Work before completion. Fixture
@@ -104,4 +104,24 @@ test('A3: observations beyond the 32-entry window keep a ledger so the lifetime 
   db.prepare('UPDATE office_supervisor SET checkpoint=?').run(JSON.stringify(tampered));
   const unsafe=createWorkRunTraceEvidence({hermesState:db,intakeWork:()=>({revision:0})},'p',{work_id:request.work_id,run_id:request.run_id,owner:'owner',checkpoint:tampered,observations:tampered.observations,admission_closed:true});
   assert.equal(unsafe.receipt.value.closure,'unknown','An evicted uncertain effect still prevents a closed trace.');
+});
+
+// A7 regression (P5 live): a read-only capability that refused its input during
+// execution ended the Work after three identical resumes. A typed refusal is now an
+// observed read failure for the next decision; plain errors and writes keep their path.
+test('A7: a typed refusal from a read-only capability informs the next decision instead of ending the Work',async()=>{
+  let reads=0;const hooks=host();const execute=hooks.executeTool;
+  hooks.executeTool=async(name,args,context)=>{if(name==='read_value'&&++reads===1)throw new WorkClientToolInputError('BROWSER_URL_NOT_OBSERVED','Not opened.');return execute(name,args,context);};
+  const model=provider([tool('read_value',{url:'https://nodejs.org'}),tool('read_value',{url:'https://nodejs.org/en'}),tool('save_value'),complete([{id:'read',evidence_ids:['ev-read']},{id:'saved',evidence_ids:['ev-save']}])]);
+  const result=await new BoundedWorkClientExecutor(model).execute(request,hooks);
+  assert.equal(result.status,'succeeded',result.reason);
+  const first=result.checkpoint.observations[0];
+  assert.equal(first.receipt.status,'retryable_failure');assert.equal(first.receipt.value.status,'read_failed');assert.equal(first.receipt.value.error,'BROWSER_URL_NOT_OBSERVED');assert.equal(first.invocation.dispatched,true,'The dispatch is not hidden.');
+  const paused=host();paused.executeTool=async()=>{throw Error('WORK_PAUSED');};
+  assert.equal((await new BoundedWorkClientExecutor(provider([tool('read_value')])).execute(request,paused)).status,'paused','Control-flow codes keep their path.');
+  const unknown=host();unknown.executeTool=async()=>{throw Error('WORK_RESULT_RECEIPT_NOT_FOUND');};
+  const interrupted=await new BoundedWorkClientExecutor(provider([tool('read_value')])).execute(request,unknown);
+  assert.equal(interrupted.checkpoint.pending?.dispatched,true,'A plain error keeps the unknown-outcome read pending for restart.');
+  const write=host();write.executeTool=async()=>{throw new WorkClientToolInputError('PACK_FORM_CHANGED','Changed.');};
+  assert.equal((await new BoundedWorkClientExecutor(provider([tool('save_value')])).execute(request,write)).status,'reconciliation_required','A write that threw is still reconciled, never retried blindly.');
 });

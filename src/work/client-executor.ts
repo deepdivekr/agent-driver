@@ -166,6 +166,12 @@ Choose wait with a concrete reason when authentication, approval or configuratio
 export const WORK_CLIENT_COMPLETION_CUTPOINT_INSTRUCTIONS='Propose complete once the requested result receipts and readbacks exist. The host then verifies independently and sets completion itself; do not wait for a completion_verified flag or an execution trace, and neither substitutes for business evidence. During a completion repair, a new read-only observation may repeat earlier successful arguments only to obtain the missing verification fact; a new receipt alone does not establish it.';
 export const WORK_CLIENT_STAGE_INSTRUCTIONS='When plan is supplied, set stage_id to an exact plan step ID for every tool action. A stage is a user-meaningful result, not a visit, tool call, worker or model turn. Include completed_stages on every decision, empty unless a stage reached its observable_outcome; cite eligible_evidence_ids from stage_context (successful receipts under the current stage binding). An eligible ID alone does not establish the outcome, and a status or catalog read cannot replace missing business content. Claims in a decision apply before its tool action: after claiming the current stage, act under a newly ready dependent from if_reported_next_action_stage_ids, never the claimed stage; otherwise keep acting under a ready stage from allowed_action_stage_ids. A stale stage whose outcome lacks fresh evidence needs a new current-stage action. Do not report analysis or planning finished during intake as an execution stage.';
 const errorCode=(error:unknown)=>error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'WORK_CLIENT_EXECUTION_FAILED';
+/** A typed host refusal from a read-only capability (an unobserved URL, a
+ * stale run) is a returned result: information for the next decision, not an
+ * interrupted operation and not the end of the Work. Plain errors keep the
+ * unknown-outcome path. */
+const deterministicReadError=(error:unknown,effect:string)=>effect==='read_only'&&error instanceof WorkClientToolInputError;
+const readFailedReceipt=(error:WorkClientToolInputError):WorkClientToolReceipt=>({status:'retryable_failure',value:{status:'read_failed',error:error.code,prior_dispatched:true,result_observation:'error_returned',correction_required:true,issues:[{path:'',code:error.code,message:safeControlText(error.detail,400)}]},evidence_ids:[],effect_state:'none',retry_safe:false});
 const valueByteLimit=16000;
 const contentContainers=new Set(['tree','dom','nodes','elements','children','content','body','html','rows','records','items','entries','data','output']);
 const provenanceKey=(key:string)=>/^(?:(?:work|run|request|artifact|evidence|receipt|source|parent|checkpoint|stage)_(?:id|ids|ref|refs)|(?:sha256|sha|hash|digest|path|url|source_url|href|ref|uri|status|effect_state|retry_safe|format|bytes|mime|title|model|provider|executor|observed_at|captured_at|created_at|updated_at))$/u.test(key);
@@ -370,7 +376,10 @@ export class BoundedWorkClientExecutor {
             observe(invocation,{status:'retryable_failure',value:{status:'read_retry_rejected',error:retryError.code,input_fingerprint:hashJson({tool_name:invocation.tool_name,arguments:invocation.arguments}),issues:[{path:'',code:retryError.code,message:safeControlText(retryError.detail,400)}],correction_required:true,prior_dispatched:true},evidence_ids:[],effect_state:'none',retry_safe:false});
             await save();await progress({kind:'tool.result',turn:invocation.turn,stage_id:invocation.stage_id,tool_name:invocation.tool_name,status:'retryable_failure',summary:`${invocation.tool_name}: saved read not retried — ${retryError.detail}`});
           }else{
-            await guard();const receipt=normalizeReceipt(await hooks.executeTool(invocation.tool_name,invocation.arguments,{request_id:invocation.request_id,work_id:request.work_id,run_id:request.run_id,stage_id:invocation.stage_id,...(hooks.signal?{signal:hooks.signal}:{})}),invocation);
+            await guard();let returned:unknown,refused:WorkClientToolInputError|null=null;
+            try{returned=await hooks.executeTool(invocation.tool_name,invocation.arguments,{request_id:invocation.request_id,work_id:request.work_id,run_id:request.run_id,stage_id:invocation.stage_id,...(hooks.signal?{signal:hooks.signal}:{})});}
+            catch(error){if(!deterministicReadError(error,invocation.effect))throw error;refused=error as WorkClientToolInputError;}
+            const receipt=refused?readFailedReceipt(refused):normalizeReceipt(returned,invocation);
             observe(invocation,receipt);await save();
             await progress({kind:'tool.result',turn:invocation.turn,stage_id:invocation.stage_id,tool_name:invocation.tool_name,status:receipt.status,summary:`${invocation.tool_name}: ${receipt.status}`,...receiptFailureMetadata(receipt)});
           }
@@ -584,7 +593,10 @@ export class BoundedWorkClientExecutor {
         await progress({kind:'tool.started',turn:checkpoint.turn,stage_id:invocation.stage_id,tool_name:tool.name,summary:`Running ${tool.name}.`});
         if(resultReadback)savedResultRechecks++;
         await guard();invocation.dispatched=true;checkpoint={...checkpoint,pending:invocation};await save();
-        const receipt=normalizeReceipt(await hooks.executeTool(tool.name,invocation.arguments,{request_id:invocation.request_id,work_id:request.work_id,run_id:request.run_id,stage_id:invocation.stage_id,...(hooks.signal?{signal:hooks.signal}:{})}),invocation);
+        let returned:unknown,refused:WorkClientToolInputError|null=null;
+        try{returned=await hooks.executeTool(tool.name,invocation.arguments,{request_id:invocation.request_id,work_id:request.work_id,run_id:request.run_id,stage_id:invocation.stage_id,...(hooks.signal?{signal:hooks.signal}:{})});}
+        catch(error){if(!deterministicReadError(error,tool.effect))throw error;refused=error as WorkClientToolInputError;}
+        const receipt=refused?readFailedReceipt(refused):normalizeReceipt(returned,invocation);
         observe(invocation,receipt);await save();
         await progress({kind:'tool.result',turn:invocation.turn,stage_id:invocation.stage_id,tool_name:tool.name,status:receipt.status,summary:`${tool.name}: ${receipt.status}`,...receiptFailureMetadata(receipt)});
         if(tool.name==='runtime_pack_watch_tick'&&receipt.status==='retryable_failure'&&receipt.effect_state==='none'&&receipt.value!==null&&typeof receipt.value==='object'&&!Array.isArray(receipt.value)&&(receipt.value as Record<string,unknown>).status==='not_due'&&(receipt.value as Record<string,unknown>).pending===true)return result('retryable_failure','WORK_CLIENT_WATCH_NOT_DUE');

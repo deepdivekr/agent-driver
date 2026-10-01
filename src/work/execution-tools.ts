@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {type RuntimeApi} from '../interface/api.js';
 import {tools} from '../interface/catalog.js';
 import {type HostConfig} from '../interface/config.js';
-import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
+import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,defaultPublicPlacement,publicForegroundFallback,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
 import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
 import {type Recipe} from '../packs/contracts.js';
@@ -57,8 +57,25 @@ function executedPackContract(recipe:Recipe){
     ...('comparison_fields' in recipe?{comparison_fields:recipe.comparison_fields,mode:recipe.mode,interval_seconds:recipe.interval_seconds,value_field:recipe.value_field}:{}),
   };
 }
-const browserInput=z.object({url:z.string().url().max(4096)}).strict();
+const browserInput=z.object({url:z.string().url().max(4096),offset:z.number().int().min(0).max(8_000_000).default(0),max_bytes:z.number().int().min(1000).max(60000).default(12000)}).strict();
+const textResourcePath=/\.(?:csv|tsv|json|geojson|txt|xml|atom|rss)$/iu,textResourceType=/^(?:text\/|application\/(?:json|geo\+json|xml|csv|rss\+xml|atom\+xml))/iu;
+const TEXT_RESOURCE_LIMIT=8_000_000;
+/** A public text resource (a CSV/JSON feed) is read by the host over HTTPS,
+ * page by page, instead of a browser that would only start a download. */
+export async function readTextResource(url:string,page:{offset:number;max_bytes:number},fetcher:typeof fetch=fetch){
+  const requested=new URL(url);requireCondition(requested.protocol==='https:','BROWSER_RESOURCE_HTTPS_REQUIRED');
+  const response=await fetcher(requested.href,{redirect:'follow',signal:AbortSignal.timeout(20_000),headers:{accept:'text/csv, application/json, text/plain, application/xml, text/*;q=0.9, */*;q=0.1'}});
+  const type=response.headers.get('content-type')??'';
+  requireCondition(response.ok,'BROWSER_RESOURCE_HTTP_ERROR');requireCondition(textResourceType.test(type),'BROWSER_RESOURCE_NOT_TEXT');
+  const bytes=Buffer.from(await response.arrayBuffer());requireCondition(bytes.length<=TEXT_RESOURCE_LIMIT,'BROWSER_RESOURCE_TOO_LARGE');
+  const observedAt=new Date().toISOString(),final=new URL(response.url||requested.href);requireCondition(final.origin===requested.origin,'BROWSER_RESOURCE_REDIRECT_ORIGIN');
+  const offset=Math.min(page.offset,bytes.length),end=Math.min(bytes.length,offset+page.max_bytes),text=bytes.subarray(offset,end).toString('utf8');
+  return {url:final.href,title:decodeURIComponent(final.pathname.split('/').pop()||final.hostname),text,links:[] as Array<{text:string;url:string}>,observed_at:observedAt,requested_url:url,provenance:'http_text_resource' as const,executor:'host_http',effect:'read_only' as const,
+    content_type:type.split(';')[0]!.trim(),bytes_total:bytes.length,sha256:sha(bytes),offset,next_offset:end<bytes.length?end:null,has_more:end<bytes.length};
+}
 const browserLinksInput=z.object({offset:z.number().int().min(0).max(100000).default(0),limit:z.number().int().min(1).max(40).default(20),snapshot_id:z.string().regex(/^[a-f0-9]{64}$/u).optional()}).strict();
+const downloadStarted=(error:unknown)=>error instanceof Error&&/Download is starting/u.test(error.message);
+const genericPublicPlacement=(preference:BrowserPreference|undefined)=>!preference||preference.environment==='owned_headless'&&!preference.preferred_engine;
 const privateHostname=(value:string)=>/^(?:localhost$|.*\.localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.|\[)|\.(?:local|lan|internal)$/iu.test(value);
 function safeSearchQuery(value:string){
   if(/(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\bapikey_[A-Za-z0-9_-]{16,}|\bBearer\s+[A-Za-z0-9._-]{16,}|\b[A-Za-z0-9_]*(?:token|password|secret|api.?key|auth|session|cookie)[A-Za-z0-9_]*\s*[=:]\s*\S+)/iu.test(value))return false;
@@ -229,7 +246,7 @@ export class WorkExecutionTools {
     const packStatus=descriptors.find(item=>item.name==='runtime_pack_status');
     if(packStatus)packStatus.description+=' Local-record draft status includes a fresh local_record_draft_certificate only when current whole originals and retained draft bytes match the exact bound recipe. Large verification metadata is a paged reference, never discarded: read office_pack_receipt_read with its run_id and result_sha256 until next_offset is null. A reference/summary is not the full verification record.';
     if(packStatus)packStatus.description+=' For a successful task-free portal.collect or file.pipeline run, native_output_certificate independently rechecks saved observed rows through the native transform against exact local artifact bytes and fresh file-source hashes. saved_source_readback is only a bounded preview; use office_pack_source_read with this run_id and an exact recipe source_id, following next_offset until the full saved original observation is read. Neither proves that recipe filters match the user goal or that remote sources remain current.';
-    descriptors.push({name:'office_browser_read',description:'Open and read a URL explicitly supplied by the user, or a link in an already observed page. Returns live text, links, timestamp and executor. Read-only; never submits or signs in. Independent same-environment executor fallback is automatic.',input_schema:z.toJSONSchema(z.object({url:z.string().url().max(4096)}).strict()),effect:'read_only'});
+    descriptors.push({name:'office_browser_read',description:'Open and read a URL explicitly supplied by the user, or a link in an already observed page. Returns live text, links, timestamp and executor. A public CSV/JSON/TXT/XML resource is read over HTTPS in pages: text is bytes offset..offset+max_bytes (default 12000); follow next_offset until has_more is false before claiming the whole resource. Read-only; never submits or signs in. Independent same-environment executor fallback is automatic.',input_schema:z.toJSONSchema(browserInput,{io:'input'}),effect:'read_only'});
     descriptors.push({name:'office_web_search',description:'Search the public web when the user supplied a topic but no source URL. Choose google (default), bing or duckduckgo; the host constructs its fixed public search URL from query text (maximum 512 characters). Returns actual DOM text and observed links only, with timestamps and executor; no generated search results. For observed Google unusual traffic in headless or the managed Playwright guest, the host hands the identical Google query directly to registered Aside once, skipping the guest retry. Never replace that query with Bing or DuckDuckGo. If environment_block=true is returned, follow next_action for Aside connection or user confirmation; no repeat or profile cycling. For another public-provider challenge, an independent source within scope may be used. Never solve CAPTCHA, sign in or bypass access controls. Credentials and private-host query URLs are rejected. Follow only actually observed links. Pack models=off does not disable this tool or the configured Work LLM.',input_schema:z.toJSONSchema(z.object(searchArguments).strict(),{io:'input'}),effect:'read_only'});
     const socialSites=this.socialSites();
     if(socialSites.length)descriptors.push({name:'office_social_search',description:`Read current ticker/social discussion from one historically ready, registered browser profile only. Offered sites: ${socialSites.join(', ')}. The host constructs a bounded search entry URL, reobserves the live page and checks the signed-in marker. A prior ready observation is not proof of current access or of source quality. No cross-profile fallback, login, challenge bypass, post or message. Use actual DOM URLs/timestamps as unverified source observations, not as verified news claims.`,input_schema:z.toJSONSchema(socialSearchInput,{io:'input'}),effect:'read_only'});
@@ -446,6 +463,19 @@ export class WorkExecutionTools {
   /** Pre-dispatch schema checking: no API, grants, model calls or filesystem effects. */
   private searchRequest(raw:unknown){const input=searchInput.parse(raw);if(this.environmentBlockedQueries.has(input.query)&&input.provider!=='google')throw new WorkClientToolInputError('WORK_SEARCH_ENVIRONMENT_BLOCKED','Unusual traffic is an environment block. Keep the same provider and use the registered Aside recovery, or request Aside connection/user confirmation. Do not substitute Bing or DuckDuckGo.');if(this.blockedSearches.has(searchKey(input)))throw new WorkClientToolInputError('WORK_SEARCH_PROVIDER_BLOCKED','This provider returned an observed access challenge for the same query. If environment_block is true, request the indicated Aside connection or user confirmation; do not substitute the provider. Otherwise another independent source within the user scope may be used. Never repeat or bypass a challenge.');return input;}
   private socialSites(){return socialIntent(this.prompt,this.spec)?(Object.keys(knownLoginSites) as SocialSearchRequest['site'][]).filter(site=>this.socialTarget(site)!==null):[];}
+  /** No explicit placement: a new read prefers the registered Aside; a read
+   * already bound by a saved checkpoint for this origin keeps its placement. */
+  private publicPlacement(keys:string[]){
+    const journal=this.store.browserExecutors(),prior=keys.map(key=>journal.checkpoint(this.config.project.id,key)).find(Boolean);
+    return defaultPublicPlacement(this.config,prior,this.prompt);
+  }
+  private async textResource(input:z.infer<typeof browserInput>){
+    workActivity(this.store,this.config.project.id,this.workId,'source.started','Reading a public text resource over HTTPS.',{tool_name:'office_browser_read',status:'running',target_url:input.url});
+    const value=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
+    this.allowedUrls.add(value.url);
+    workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${value.title} · ${value.url}`,{tool_name:'office_browser_read',status:'succeeded',executor:'host_http',source:{url:safeControlText(value.url,2048),title:safeControlText(value.title,200),observed_at:value.observed_at}});
+    return value;
+  }
   private socialTarget(site:SocialSearchRequest['site']):BrowserTarget|null{
     if(this.blockedSocial.has(site))return null;
     const preference=this.spec.browser;
@@ -621,16 +651,23 @@ export class WorkExecutionTools {
       const explicit=name==='office_browser_read'?this.browserRequest(args):null,social=name==='office_social_search'?this.socialRequest(args):null,search=name==='office_web_search'?this.searchRequest(args):explicit?searchFromUrl(explicit.url):null,url=explicit?explicit.url:social?socialSearchEntry(social):searchEntry(search!);
       if(search)workActivity(this.store,this.config.project.id,this.workId,'search.started','Searching the public web through the configured browser executor.',{tool_name:name,status:'running'});
       const parsed=new URL(url);
-      requireCondition(name==='office_web_search'||name==='office_social_search'||this.allowedUrls.has(parsed.href),'BROWSER_URL_NOT_OBSERVED');
+      if(!(name==='office_web_search'||name==='office_social_search'||this.allowedUrls.has(parsed.href)))throw new WorkClientToolInputError('BROWSER_URL_NOT_OBSERVED','Not opened. Open only a URL the user wrote or a link already observed in this run; list them with office_browser_links, or find the page with office_web_search.');
       assertBrowserUrl(url,[parsed.origin],this.config.environment==='fixture');
       workActivity(this.store,this.config.project.id,this.workId,'source.started','Opening a source through the configured browser executor.',{tool_name:name,status:'running',target_url:url});
       const origin=parsed.origin,journal=this.store.browserExecutors();
+      if(explicit&&textResourcePath.test(parsed.pathname))return this.textResource(explicit);
       const socialSite=(social?.site??(Object.hasOwn(knownLoginSites,parsed.hostname.toLowerCase().replace(/^www\./u,''))?parsed.hostname.toLowerCase().replace(/^www\./u,'') as SocialSearchRequest['site']:null));
       const authTarget=socialSite?this.socialTarget(socialSite):null;
       if(socialSite)requireCondition(authTarget,'WORK_SOCIAL_PROFILE_NOT_READY');
-      const preference=authTarget?{environment:authTarget.environment,preferred_engine:authTarget.engine}:this.spec.browser??{environment:'owned_headless' as const};
+      // The planner's generic public placement (headless, no engine) is not a
+      // user pin; the registered primary browser decides where a public read
+      // starts. A search already blocked in headless this run keeps its
+      // recorded recovery path.
+      const legacyKey=`work:${this.runId}:${origin}`,originalCheckpointKey=`${legacyKey}:${hashJson({entry_url:url})}`,defaultPlacement=!authTarget&&genericPublicPlacement(this.spec.browser)&&!(search&&this.recoverableSearches.has(searchKey(search)));
+      const placement=defaultPlacement?this.publicPlacement([originalCheckpointKey,legacyKey]):null;
+      const preference:BrowserPreference=authTarget?{environment:authTarget.environment,preferred_engine:authTarget.engine}:placement?placement.preference:this.spec.browser!;
       const recoveryKey=search?searchKey(search):null,explicitAside=!authTarget&&preference.environment==='host_foreground'&&preference.preferred_engine==='aside',explicitAsideRecovery=explicitAside&&Boolean(recoveryKey&&this.recoverableSearches.has(recoveryKey));
-      const key=authTarget?`${origin}:${authTarget.id}`:origin,legacyKey=`work:${this.runId}:${origin}`,originalCheckpointKey=`${legacyKey}:${hashJson({entry_url:url})}`,checkpointKey=`${legacyKey}:${hashJson(authTarget?{entry_url:url,profile:authTarget.id}:explicitAside?{entry_url:url,recovery:preference}:{entry_url:url})}`;
+      const key=authTarget?`${origin}:${authTarget.id}`:origin,checkpointKey=`${legacyKey}:${hashJson(authTarget?{entry_url:url,profile:authTarget.id}:explicitAside?{entry_url:url,recovery:preference}:{entry_url:url})}`;
       // A broken read-only browser transport may move to another registered
       // environment. Login/challenge pages never take this route: each profile
       // has independent authentication and a site's access decision is final.
@@ -638,10 +675,10 @@ export class WorkExecutionTools {
       // These three capabilities only read. A Work that also saves its report
       // locally still gets the same safe read recovery; its write capabilities
       // retain their independent delegation, approval and uncertainty fences.
-      const fallback_preferences=!socialLogin?publicBrowserRecovery(preference):[];
+      const fallback_preferences=!socialLogin?(defaultPlacement&&preference.environment==='host_foreground'?publicForegroundFallback:publicBrowserRecovery(preference)):[];
       let browser=this.browsers.get(key);
       if(!browser){
-        const routeConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:this.config;
+        const routeConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:placement?.config??this.config;
         browser=new RoutedBrowser(routeConfig,{profile_key:`work-${this.workId}`,context_id:this.runId,request:this.prompt,preference,fallback_preferences,...(!explicitAsideRecovery&&search&&this.recoverableSearches.has(searchKey(search))?{recover_from_unusual_traffic:this.recoverableSearches.get(searchKey(search))}:{}),ephemeral:true,restore_navigation:'entry_url',guard:this.guard,providers:{llm:this.model},...(this.options.browserFactory?{factory:this.options.browserFactory}:{}),checkpoint:{load:()=>{
           // A user revision may explicitly select the one permitted recovery
           // destination. Keep the old read-only checkpoint intact and validate
@@ -676,8 +713,8 @@ export class WorkExecutionTools {
           // read; matching entries restore bindings without opening saved.url.
           return legacy.entry_url===url?legacy:null;
         },save:cp=>journal.saveCheckpoint(this.config.project.id,checkpointKey,cp)},event:event=>{journal.append(this.config.project.id,this.runId,event);workActivity(this.store,this.config.project.id,this.workId,`browser.${event.kind}`,`${event.engine} / ${event.environment}${event.from?' ← '+event.from:''}${event.reason?' · '+event.reason:''}`,{status:event.kind,executor:event.target_id,engine:event.engine,environment:event.environment,...(event.reason?{reason:event.reason}:{})});}},[origin]);
-        try{await browser.open(url);this.browsers.set(key,browser);}catch(error){await browser.close();throw error;}
-      }else await browser.navigate(url);
+        try{await browser.open(url);this.browsers.set(key,browser);}catch(error){await browser.close();if(explicit&&downloadStarted(error))return this.textResource(explicit);throw error;}
+      }else try{await browser.navigate(url);}catch(error){if(explicit&&downloadStarted(error))return this.textResource(explicit);throw error;}
       const observed=browserObservationSchema.parse(await browser.observe());this.guard();assertBrowserUrl(observed.url,[origin],this.config.environment==='fixture');
       if(socialSite){
         const known=knownLoginSites[socialSite],gate=detectAuthGate(observed.url,observed.title,observed.text);

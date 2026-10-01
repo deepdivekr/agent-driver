@@ -9,7 +9,7 @@ import {createWorkCompletionVerifier,createWorkRunTraceEvidence,completionRiskTi
 const work_id='tier-work',run_id='tier-run';
 const at=turn=>`2026-10-01T00:00:${String(turn).padStart(2,'0')}.000Z`;
 const right='Summary: Node.js 24 is the latest release.';
-const source=turn=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url:'https://nodejs.org/en/blog',title:'Node.js blog',text:'Node.js 24 is the current release.'},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
+const source=turn=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url:'https://nodejs.org/en/blog',title:'Node.js blog',text:'Node.js 24 is the current release.\nMore'},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
 const draft=turn=>({invocation:{request_id:'draft-1',turn,stage_id:'write',tool_name:'office_result_draft',arguments:{},effect:'local_write',dispatched:true},receipt:{status:'succeeded',value:{status:'succeeded',work_id,run_id,request_id:'draft-1',title:'Node release summary',text:right,artifact:{path:'/work-artifacts/draft-1.txt',sha256:'a'.repeat(64),bytes:right.length,format:'txt'},deduplicated:false,external_delivery:false},evidence_ids:['ev-draft-1'],effect_state:'verified',retry_safe:false},observed_at:at(turn)});
 const write=(turn,tool_name,effect)=>({invocation:{request_id:`${tool_name}-${turn}`,turn,stage_id:'write',tool_name,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{status:'sent',summary:right},evidence_ids:[`ev-${tool_name}-${turn}`],effect_state:'verified',retry_safe:false},observed_at:at(turn)});
 const checks=[{id:'summary_saved',result:'A summary naming the latest Node.js release is saved.',evidence:'The saved summary.'}];
@@ -71,9 +71,12 @@ test('A5: a read-and-draft Work is verified with exactly one compact model call'
 // and asked for the saved file's identity; both sent every Office-output Work to strict.
 test('A7: a light quote of a shown key and value or of the saved file identity is grounded; keys alone are not',async t=>{
   const cases={key_value:['ev-source-0','"title":"Node.js blog"',['light']],saved_identity:['ev-draft-1',`"bytes":${right.length}`,['light']],
-    key_only:['ev-source-0','"title":"',['light','strict']],run_metadata_only:['ev-draft-1','"request_id":"draft-1"',['light','strict']]};
+    escaped_newline:['ev-source-0','release.\\nMore',['light']],
+    key_only:['ev-source-0','"title":"',['light','strict']],run_metadata_only:['ev-draft-1','"request_id":"draft-1"',['light','strict']],
+    metadata_beside_value:['ev-draft-1',['"request_id":"draft-1"','Node.js 24 is the latest release'],['light']]};
   for(const [name,[id,quote,kinds]] of Object.entries(cases)){
-    const model=fixture(supported(id,quote)),audits=[];
+    const quotes=Array.isArray(quote)?quote:[quote];
+    const model=fixture(input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:[id],quotes:quotes.map(text=>({evidence_id:id,quote:text})),reason:'Shown content.'}))})),audits=[];
     const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event)});
     assert.equal(await verify(checks,sealed(t,[source(0),draft(1)]),claimFor(['ev-source-0','ev-draft-1'])),true,`${name}: ${JSON.stringify(audits.map(event=>event.code))}`);
     assert.deepEqual(model.kinds,kinds,name);

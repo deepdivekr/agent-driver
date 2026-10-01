@@ -40,6 +40,23 @@ export function browserTargets(config:HostConfig):BrowserTarget[]{
   if(vm&&!targets.some(t=>t.environment==='ubuntu_vm'&&t.engine==='playwright')&&!targets.some(t=>t.id==='login-owned-ubuntu-vm'))targets.push(browserTargetSchema.parse({id:'login-owned-ubuntu-vm',engine:'playwright',environment:'ubuntu_vm',platform:'linux',profile_ref:vm.id}));
   return targets;
 }
+/** Default placement for public reads with no explicit preference. A
+ * user-registered, host-compatible Aside is the primary browser (headless
+ * public search is challenged by unusual-traffic checks); otherwise the
+ * runtime-owned headless browser. */
+export function defaultPublicPlacement(config:HostConfig,saved?:BrowserCheckpoint|null,request?:string):{preference:BrowserPreference;config:HostConfig}{
+  const headless={preference:{environment:'owned_headless'} as BrowserPreference,config};
+  const targets=browserTargets(config);
+  if(!targets.some(t=>t.engine==='aside'&&t.environment==='host_foreground'&&browserHostCompatible(t)))return headless;
+  const preference:BrowserPreference={environment:'host_foreground'};
+  // A read already bound by a saved checkpoint keeps its placement.
+  if(saved&&saved.binding!==browserCheckpointBinding(config,{preference,request}))return headless;
+  // Aside is the registered primary; other foreground browsers are not implied.
+  return {preference,config:{...config,browserExecutors:{targets:targets.filter(t=>t.environment!=='host_foreground'||t.engine==='aside')}}};
+}
+/** A foreground default that cannot connect falls back to the owned headless
+ * browser for the same read-only operation. */
+export const publicForegroundFallback:BrowserPreference[]=[{environment:'owned_headless'}];
 /** Public, read-only transport recovery moves forward once; private/account
  * work and explicit engine pins never acquire another profile this way. */
 export function publicBrowserRecovery(preference:BrowserPreference={environment:'owned_headless'}):BrowserPreference[]{

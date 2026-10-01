@@ -79,11 +79,16 @@ function swarmStore(t,f,{url='https://example.test/',browser,workBrowser}={}){
   const pool=new RoutedSwarmBrowser(f.store,f.config);f.cleanups.push(()=>pool.close());return pool;
 }
 
-test('runtime contract public Swarm keeps headless first even with a configured guest',async t=>{
+test('runtime contract public Swarm starts in the registered Aside with headless fallback, and stays headless first without one',async t=>{
   const fake=fakeBrowser(t),f=await fixture(t),pool=swarmStore(t,f);
   await pool.assign('run','worker','lease');
-  assert.deepEqual(fake.opened[0].options.preference,{environment:'owned_headless'});
-  assert.deepEqual(fake.opened[0].options.fallback_preferences,publicRecovery);
+  assert.deepEqual(fake.opened[0].options.preference,{environment:'host_foreground'});
+  assert.deepEqual(fake.opened[0].options.fallback_preferences,[{environment:'owned_headless'}]);
+  assert.deepEqual(fake.opened[0].config.browserExecutors.targets.map(target=>target.id),['headless','guest','aside'],'Other foreground browsers are not implied by the Aside registration.');
+  const plain=fakeBrowser(t),g=await fixture(t,{registered:false}),unregistered=swarmStore(t,g);
+  await unregistered.assign('run','worker','lease');
+  assert.deepEqual(plain.opened[0].options.preference,{environment:'owned_headless'});
+  assert.deepEqual(plain.opened[0].options.fallback_preferences,publicRecovery);
 });
 
 test('runtime contract social Swarm binds ready Aside despite a generic headless Work default and records new auth gates',async t=>{

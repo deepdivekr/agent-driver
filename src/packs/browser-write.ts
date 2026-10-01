@@ -59,9 +59,14 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
     }else requireCondition(input.expected_before_sha256===null,'DRAFT_ONLY_RECORD_STATE_UNVERIFIED');
     const actual:Row={};
     for(const [key,value]of Object.entries(input.values)){
-      const spec=this.target.fields[key]!,control=this.owned.page.locator(spec.selector);requireCondition(await control.count()===1,'PACK_FIELD_AMBIGUOUS');
-      requireCondition(!['password','file'].includes((await control.getAttribute('type'))??''),'PACK_SECRET_FIELD_FORBIDDEN');
-      if(spec.kind==='checkbox'){requireCondition(typeof value==='boolean','PACK_CHECKBOX_VALUE_REQUIRED');await control.setChecked(value);actual[key]=await control.isChecked();}
+      const spec=this.target.fields[key]!,control=this.owned.page.locator(spec.selector);requireCondition(spec.kind==='radio'?await control.count()>=1:await control.count()===1,'PACK_FIELD_AMBIGUOUS');
+      requireCondition(!['password','file'].includes((await control.first().getAttribute('type'))??''),'PACK_SECRET_FIELD_FORBIDDEN');
+      if(spec.kind==='radio'){
+        // The selector names the group; the value selects exactly one option.
+        requireCondition(typeof value==='string','PACK_TEXT_VALUE_REQUIRED');const option=control.and(this.owned.page.locator(`[value=${JSON.stringify(value)}]`));
+        requireCondition(await option.count()===1,'PACK_RADIO_OPTION_NOT_FOUND');await option.check();actual[key]=await this.radioValue(spec.selector);
+      }
+      else if(spec.kind==='checkbox'){requireCondition(typeof value==='boolean','PACK_CHECKBOX_VALUE_REQUIRED');await control.setChecked(value);actual[key]=await control.isChecked();}
       else {requireCondition(typeof value==='string','PACK_TEXT_VALUE_REQUIRED');if(spec.kind==='select')await control.selectOption(value);else await control.fill(value);actual[key]=await control.inputValue();}
       requireCondition(actual[key]===value,'PACK_FORM_VALUE_MISMATCH');
     }
@@ -72,13 +77,17 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
     const after:Row={};
     for(const [key,value]of Object.entries(actual)){
       const spec=this.target.fields[key]!,control=this.owned.page.locator(spec.selector);
-      const observed=spec.kind==='checkbox'?await control.isChecked():await control.inputValue();
+      const observed=spec.kind==='checkbox'?await control.isChecked():spec.kind==='radio'?await this.radioValue(spec.selector):await control.inputValue();
       requireCondition(observed===value,'PACK_FORM_VALUE_CHANGED_AFTER_CAPTURE');
       after[key]=observed;
     }
     return {gate:'ready',snapshot:{target:this.target.id,family:input.family,values:actual,before:this.before,config:this.config.fingerprint},capture_ref:captured.capture_ref,
       ...(this.target.draft_only?{verified_values:after,verified_values_before_capture:actual,verified_values_after_capture:after,capture_sha256:captured.capture_sha256}:{}),
       detail:{fields:Object.keys(actual),draft_only:this.target.draft_only,authentication_verified:this.target.auth_required,submission_enabled:!this.target.draft_only,before_sha256:this.before===null?null:snapshotHash(this.before),record_unchanged:this.target.draft_only&&input.family==='record.update'?true:null,capture_sha256:captured.capture_sha256}};
+  }
+  private async radioValue(selector:string){
+    const checked=this.owned!.page.locator(selector).and(this.owned!.page.locator(':checked'));
+    return await checked.count()===1?await checked.inputValue():'';
   }
   async execute(){
     requireCondition(!this.target.draft_only,'PACK_DRAFT_ONLY');
@@ -87,7 +96,7 @@ export class FamilyBrowserWrite implements ApprovedBrowserAdapter<MutationRecipe
     requireCondition(snapshotHash(await this.readback())===snapshotHash(this.before),'PACK_RECORD_STALE');
     for(const [key,value]of Object.entries(this.input.values)){
       const spec=this.target.fields[key]!,control=this.owned.page.locator(spec.selector);
-      requireCondition((spec.kind==='checkbox'?await control.isChecked():await control.inputValue())===value,'PACK_FORM_CHANGED');
+      requireCondition((spec.kind==='checkbox'?await control.isChecked():spec.kind==='radio'?await this.radioValue(spec.selector):await control.inputValue())===value,'PACK_FORM_CHANGED');
     }
     const button=this.owned.page.locator(this.target.submit);requireCondition(await button.count()===1,'PACK_SUBMIT_AMBIGUOUS');
     await button.click({timeout:5000});
