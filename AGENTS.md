@@ -2,9 +2,13 @@
 
 ## Product source of truth
 
-Read docs/custom-pack-refactoring-plan.md before planning or changing this repository.
-It is the authoritative scope for the custom Pack reliability refactor requested by
-the user. Read docs/custom-pack-refactoring-progress.md for the current checkpoint.
+Read docs/work-completion-and-autonomy-plan.md before planning or changing this
+repository. Its Part A (restore a path for Work to reach completion) is the current
+authorized scope requested by the user; Part B (autonomy) starts only after Part A.
+docs/custom-pack-refactoring-plan.md remains the background for custom Pack
+contracts; where the two conflict, section 3.4 of the newer plan decides.
+Read docs/work-completion-progress.md for the current checkpoint;
+docs/custom-pack-refactoring-progress.md keeps the earlier history.
 
 After EVERY context compaction or session resumption:
 1. Read this file, the complete plan, and the latest progress checkpoint.
@@ -31,8 +35,20 @@ particular Pack. They are not a new product workstream.
   sources/results to that contract in code. Use model verification for remaining
   semantic conditions or legacy Works without a sealed contract, not a mandatory
   second model approval of every deterministic collection result.
-- Verification retries must not repeat completed effects. Unknown writes require
-  reconciliation. Known safe reads can refresh missing evidence within bounds.
+- Recovery is conditional, not forbidden. Reads may always be refreshed.
+  Office-owned local outputs may be rewritten under a new request ID or treated as
+  idempotent when target and content match; user-folder writes are retried only
+  after rereading the target state. External writes are retried only after
+  confirming whether the earlier attempt took effect; when that cannot be
+  confirmed, reconciliation is required. Never repeat a completed external effect.
+- A false rejection of a correct result is a defect, just like a false success.
+  Do not add a gate that stops Work without a reproducible test showing the
+  failure it prevents, and prefer code checks over model approval.
+- Verify in proportion to risk, decided from the host-closed execution trace:
+  read/draft/Office-output Work gets code checks plus one semantic check;
+  external writes keep the strict path.
+- Enforce prohibitions in host code, not by repeating them in model instructions.
+  Remove an instruction sentence only when a test proves the host rejects it.
 - Reuse verification procedures and valid bound results; inspect each new run's
   actual outputs. Historical observations are not fresh remote observations.
 - Preserve legacy saved Works, Pack recipes, MCP names, and checkpoint readers.

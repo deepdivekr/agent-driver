@@ -1,8 +1,10 @@
 # Work 완료 경로 복구 및 자율 운영 계획 (초안)
 
-Status: **초안 — 사용자 검토 대기.** 승인 전까지는 [커스텀 Pack 리팩토링 계획](custom-pack-refactoring-plan.md)이
-기준이다. 이 문서는 그 계획과 충돌하는 조항을 따로 표시한다.
-Baseline: main f077e04 (PR #36 머지 포함).
+Status: **Part A 진행 중.** 2026-10-01 사용자가 리팩토링 시작을 승인했다.
+현재 작업 기준 문서이며, [커스텀 Pack 리팩토링 계획](custom-pack-refactoring-plan.md)은
+배경으로 남는다. 충돌 시 3.4의 조항 표가 우선한다. 진행 기록:
+[work-completion-progress.md](work-completion-progress.md).
+Baseline: main f077e04 (PR #36 머지 포함). Branch: claude/workflow-validation-issues-u9mild.
 
 ## 1. 문제와 우선순위
 
