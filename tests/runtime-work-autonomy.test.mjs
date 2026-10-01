@@ -138,3 +138,43 @@ test('B1: under delegation an unverified read-only run gets exactly one fresh at
   assert.deepEqual(await scenario({model_data_approved:true,autonomy:'delegated'},99),{states:['awaiting_review','awaiting_review'],attempts:1},'A fresh attempt that also fails stops for the owner.');
   assert.deepEqual(await scenario({model_data_approved:true,autonomy:'per_run'},99),{states:['awaiting_review'],attempts:0},'Without delegation nothing is started on the owner\'s behalf.');
 });
+
+// B1 budget: host-started (scheduled) runs stop at the owner's daily limit and continue when it is raised.
+test('B1: a due scheduled run waits at the daily limit with one note, and starts once the owner raises it',async t=>{
+  const {PackStore}=await import('../dist/packs/store.js'),{WorkRuntime}=await import('../dist/work/runtime.js'),{WorkSupervisor}=await import('../dist/work/supervisor.js');
+  const proposal={title:'자료 확인',desired_outcome:'원본의 값을 결과에 남긴다',completion_checks:[{id:'records',result:'원본 제목과 값 23 확인',evidence:'실제 파일 조회 결과'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'recurring',rule:'Every day at 20:00 UTC'},questions:[]};
+  const recipe={version:1,family:'research.search',request:'매일 자료를 확인해줘',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],query:'',search_fields:['title'],sort:null,limit:10};
+  const root=await mkdtemp(join(tmpdir(),'work-budget-')),host=join(root,'host.json');await writeFile(join(root,'source.json'),JSON.stringify([{id:'one',title:'Observed source',value:23}]));
+  const base={schema_version:1,project_id:'budget',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[{id:'records',kind:'file',path:'source.json',format:'json'}],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}};
+  await writeFile(host,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'delegated',delegation:{daily_scheduled_runs:0}}}));
+  const calls=[],model={calls,async call(purpose,instructions,input){
+    calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture',duration_ms:0});
+    if(instructions.startsWith('Define one durable'))return proposal;
+    if(instructions.startsWith('Normalize the user'))return {kind:'daily',timezone:'UTC',hour:20,minute:0};
+    if(instructions.startsWith('Execute the registered Work')){
+      const result=input.checkpoint.observations.find(o=>o.invocation.tool_name==='runtime_pack_run');
+      return result?{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Observed source: 23',completed_checks:input.completion_checks.map(c=>({id:c.id,evidence_ids:result.receipt.evidence_ids})),wait_reason:null}
+        :{action:'tool',stage_id:'collect',tool_name:'runtime_pack_run',arguments_json:JSON.stringify({work_id:input.work_id,request_id:'placeholder',recipe}),summary:'Read the source.',completed_checks:[],wait_reason:null};
+    }
+    return {checks:input.checks.map(check=>{
+      const ids=check.allowed_evidence_ids.filter(id=>input.observations.some(o=>o.tool_name!=='office_controlled_run_trace'&&o.evidence_ids.includes(id)&&JSON.stringify(o.value).includes('Observed source')));
+      const refs=ids.map(id=>({evidence_id:id,quote_ref:input.literal_leaf_manifest?.find(record=>record.evidence_ids.includes(id))?.leaf_refs.find(([,path])=>path.endsWith('/title'))?.[0]}));
+      return {id:check.id,verdict:'supported',evidence_ids:ids,evidence_quote_refs:refs,reason:'The receipt contains the title and value.'};
+    })};
+  }};
+  const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
+  const started=await new WorkRuntime(store,config,model).start({request_id:'budget',prompt:'매일 자료를 확인해줘'}),supervisor=new WorkSupervisor(store,config,model,{tick_ms:25});
+  t.after(async()=>{await supervisor.close();store.close();await rm(root,{recursive:true,force:true});});
+  const db=store.hermesState,runs=()=>db.prepare('SELECT state FROM office_supervisor WHERE work_id=? ORDER BY created_at,rowid').all(started.work_id).map(row=>row.state);
+  const until=async(check,label)=>{for(let i=0;i<300;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,50));}assert.fail(`${label}: ${JSON.stringify(runs())}`);};
+  const work=store.intakeWork(config.project.id,started.work_id);
+  supervisor.start(started.work_id,work.revision,true,'UTC',false);await until(()=>runs()[0]==='succeeded','first run');
+  const schedule=db.prepare('SELECT state,next_run_ms FROM office_work_schedule WHERE work_id=?').get(started.work_id);
+  assert.equal(schedule?.state,'enabled','The delegated recurring Work keeps its own schedule.');
+  db.prepare('UPDATE office_work_schedule SET next_run_ms=?,anchor_ms=? WHERE work_id=?').run(Date.now()-48*3600_000,Date.now()-48*3600_000,started.work_id);
+  const notes=()=>db.prepare("SELECT count(*) c FROM office_activity WHERE work_id=? AND kind='schedule.budget_reached'").get(started.work_id).c;
+  await until(()=>notes()===1,'budget note');await new Promise(resolve=>setTimeout(resolve,200));
+  assert.equal(notes(),1,'One note per Work per day, not one per tick.');assert.equal(runs().length,1,'No run starts beyond the daily limit.');
+  await writeFile(host,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'delegated',delegation:{daily_scheduled_runs:5}}}));
+  await until(()=>runs().length===2&&runs()[1]==='succeeded','raised limit');
+});

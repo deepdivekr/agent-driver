@@ -96,7 +96,7 @@ test('Jev point and its reason use readable, escaped text in both import preview
   assert.match(preview.innerHTML,/근거: agent\.py:5/u);
   assert.match(preview.innerHTML,/실제 개선 폭은 측정하지 않았습니다/u);
   assert.match(preview.innerHTML,/원본 코드는 바뀌지 않습니다/u);
-  assert.match(preview.innerHTML,/API 비용이 발생할 수 있습니다/u);
+  assert.match(preview.innerHTML,/API 비용이 들 수 있습니다/u);
   assert.match(preview.innerHTML,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
   assert.doesNotMatch(preview.innerHTML,/<script>alert\(1\)<\/script>/u);
   const helper=script.slice(script.indexOf('function renderJevRecommendations'),script.indexOf('function setImportRoute'));

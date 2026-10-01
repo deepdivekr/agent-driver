@@ -24,7 +24,7 @@ test('runtime unit unsupported app response schema is actionable in Korean and E
     for(const code of ['CLIENT_SCHEMA_INVALID','CLIENT_OUTPUT_SCHEMA_UNSUPPORTED']){
       x.reason=code;x.data={definition_status:'needs_model',reason:code};
       const cause=vm.runInNewContext('executionReason(reason)',x),intake=vm.runInNewContext('admissionMessage(data)',x);
-      assert.equal(intake,cause);assert.match(cause,language==='ko'?/응답 형식.*앱 수정/u:/response schema.*app is fixed/u);
+      assert.equal(intake,cause);assert.match(cause,language==='ko'?/요청 형식.*앱을 업데이트/u:/unsupported format.*update the app/u);
       assert.doesNotMatch(cause,/CLIENT_|로그인 필요|login again|quota exhausted/u);
       if(language==='en')assert.doesNotMatch(cause,/[가-힣]/u);
     }
