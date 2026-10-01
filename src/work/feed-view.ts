@@ -9,7 +9,7 @@ export function feedEntries(xml:string,limit=40):FeedEntry[]|null{
   const blocks=[...xml.matchAll(/<(item|entry)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/giu)].map(match=>match[2]!);if(!blocks.length)return null;
   return blocks.slice(0,limit).map(block=>{
     const href=/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\/?>(?![\s\S]*?<link\b[^>]*\brel=["']alternate)/iu.exec(block)?.[1]??/<link\b[^>]*\brel=["']alternate["'][^>]*\bhref=["']([^"']+)["']/iu.exec(block)?.[1]??/<link\b[^>]*\bhref=["']([^"']+)["']/iu.exec(block)?.[1];
-    return {title:tag(block,['title']).slice(0,300),link:(href??tag(block,['link','guid','id'])).slice(0,500),author:(tag(block,['dc:creator','name','author'])).slice(0,120),published:tag(block,['pubDate','published','updated','dc:date']).slice(0,60),summary:tag(block,['description','summary','content:encoded','content']).slice(0,280)};
+    return {title:tag(block,['title']).slice(0,300),link:(href??tag(block,['link','guid','id'])).slice(0,500),author:(tag(block,['dc:creator','name','author'])).slice(0,120),published:tag(block,['pubDate','published','updated','dc:date']).slice(0,60),summary:tag(block,['description','summary','content:encoded','content']).slice(0,200)};
   });
 }
 /** The largest array of objects inside a JSON document, as rows of their short scalar fields. */

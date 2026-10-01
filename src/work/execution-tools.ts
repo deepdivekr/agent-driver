@@ -544,7 +544,11 @@ export class WorkExecutionTools {
     const {body,...read}=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
     // A feed or JSON list that does not fit one page is shown as its entries instead of byte ranges of markup.
     const listed=input.offset===0&&read.has_more?listView(Buffer.from(body()).toString('utf8'),read.content_type):null;
-    const value=listed?{...read,text:listed.text.slice(0,input.max_bytes),has_more:false,next_offset:null,rendered:{from:listed.kind,entries:listed.entries,note:'Entries parsed by the host from the complete response, one JSON object per line.'}}:read;
+    // Whole entries only, within what a receipt keeps without compaction (live: a cut-off entry list was treated
+    // as incomplete evidence by verification).
+    let shownText='',shown=0;
+    if(listed)for(const line of listed.text.split('\n')){if(Buffer.byteLength(shownText)+Buffer.byteLength(line)+1>Math.min(input.max_bytes,9000))break;shownText+=(shown?'\n':'')+line;shown++;}
+    const value=listed?{...read,text:shownText,has_more:false,next_offset:null,rendered:{from:listed.kind,entries:listed.entries,entries_shown:shown,note:`The host parsed the complete response into entries, one JSON object per line, in the order of the response. ${shown===listed.entries?'All entries are shown.':`The first ${shown} of ${listed.entries} are shown, each complete.`}`}}:read;
     this.allowedUrls.add(value.url);
     // The complete body of a table read stays with this run so a saved result can be compared with all of it.
     const table=input.offset===0?await detectTable(body(),value.content_type,value.url):null;
