@@ -9,7 +9,7 @@ import {judgeRow} from '../packs/judgment.js';
  * save the result without a model turn. Anything it cannot place or confirm goes back to the model, and the new
  * result is verified on its own like any other. */
 type Observation=WorkClientCheckpoint['observations'][number];
-export type TemplateSlot={start:number;end:number;value:string}&({kind:'page';read:number;left:string}|{kind:'observed_at';read:number}|{kind:'read_url';read:number}|{kind:'now'});
+export type TemplateSlot={start:number;end:number;value:string}&({kind:'page';read:number;left:string;right?:string}|{kind:'observed_at';read:number}|{kind:'read_url';read:number}|{kind:'now'});
 export interface ProcedureTemplate {version:1;format:'txt'|'json';label:string|null;text:string;reads:Array<{tool:string;url:string}>;slots:TemplateSlot[];}
 
 const READ='office_browser_read',DRAFT='office_result_draft';
@@ -19,8 +19,12 @@ const escape=(value:string)=>value.replace(/[.*+?^${}()|[\]\\]/gu,'\\$&');
 /** The shape of a value: runs of digits and of letters may change length, everything else is literal. */
 export function valueShape(value:string):RegExp{
   let pattern='';
-  for(const run of value.match(/\d+|[A-Za-z]+|[^\dA-Za-z]+/gu)??[])pattern+=/^\d/u.test(run)?'\\d+':/^[A-Za-z]/u.test(run)?'[A-Za-z]+':escape(run);
-  return new RegExp(pattern,'uy');
+  // A digit run may grow or shrink a little (9 -> 10), not become another kind of number (live: "1" matched a
+  // ten-digit timestamp). The value must also end where it ends: no further letters or digits follow.
+  // Digits after a point (a fraction, a version part) vary freely.
+  let previous='';
+  for(const run of value.match(/\d+|[A-Za-z]+|[^\dA-Za-z]+/gu)??[]){pattern+=/^\d/u.test(run)?(previous.endsWith('.')?'\\d+':`\\d{${Math.max(1,run.length-1)},${run.length+2}}`):/^[A-Za-z]/u.test(run)?'[A-Za-z]+':escape(run);previous=run;}
+  return new RegExp(`${pattern}(?![A-Za-z0-9])`,'uy');
 }
 
 /** Builds the template of a verified run, or null when its result cannot be reproduced from the pages alone. */
@@ -35,17 +39,31 @@ export function buildProcedureTemplate(request:string,observations:readonly Obse
   });
   if(!pages.length||pages.length>8)return null;
   const text=args.text,slots:TemplateSlot[]=[];
+  // A value stands in a page as a whole token, not inside a longer number or word.
+  const whole=(page:string,value:string,from=0)=>{for(let at=page.indexOf(value,from);at>=0;at=page.indexOf(value,at+1)){if(!/[A-Za-z0-9.]/u.test(page[at-1]??'')&&!/[A-Za-z0-9]/u.test(page[at+value.length]??''))return at;}return -1;};
+  // Text the result copied from a page (a title, a name): a JSON string value found verbatim in a page is bound to the
+  // text around it, so a repeat takes what stands between the same neighbours.
+  if(format==='json')for(const match of text.matchAll(/:\s*"((?:[^"\\\n]){8,300})"/gu)){
+    const value=match[1]!,start=match.index+match[0].length-1-value.length;if(request.includes(value)||isoTime.test(value)||/^https?:\/\//u.test(value))continue;
+    const read=pages.findIndex(page=>page.text.includes(value));if(read<0)continue;
+    const at=pages[read]!.text.indexOf(value),right=pages[read]!.text.slice(at+value.length,at+value.length+12);
+    if(right.trim().length<3)continue;
+    slots.push({start,end:start+value.length,value,kind:'page',read,left:pages[read]!.text.slice(Math.max(0,at-40),at),right});
+  }
+  const covered=(start:number,end:number)=>slots.some(slot=>start<slot.end&&end>slot.start);
   for(const match of text.matchAll(/[A-Za-z0-9][A-Za-z0-9.:+\-_/%?=&#@~]*/gu)){
     const value=match[0].replace(/[.:,;]+$/u,''),start=match.index;
-    if(!/\d/u.test(value)||request.includes(value))continue;
+    if(!/\d/u.test(value)||request.includes(value)||covered(start,start+value.length))continue;
+    // A lone digit is wording ("1 USD", "2 items"), not a reading.
+    if(/^\d$/u.test(value))continue;
     const base={start,end:start+value.length,value};
     // A time the page itself shows is a page value; otherwise it is when a read happened, or when the result was written.
     if(isoTime.test(value)&&!pages.some(page=>page.text.includes(value))){const read=pages.findIndex(page=>page.observed_at===value);slots.push(read>=0?{...base,kind:'observed_at',read}:{...base,kind:'now'});continue;}
     const sameUrl=pages.findIndex(page=>page.url===value);if(sameUrl>=0){slots.push({...base,kind:'read_url',read:sameUrl});continue;}
-    const read=pages.findIndex(page=>page.text.includes(value));
+    const read=pages.findIndex(page=>whole(page.text,value)>=0);
     // A number the pages do not show was computed or invented by the model: no template.
     if(read<0)return null;
-    const at=pages[read]!.text.indexOf(value);slots.push({...base,kind:'page',read,left:pages[read]!.text.slice(Math.max(0,at-40),at)});
+    const at=whole(pages[read]!.text,value);slots.push({...base,kind:'page',read,left:pages[read]!.text.slice(Math.max(0,at-40),at)});
   }
   if(!slots.some(slot=>slot.kind==='page')||slots.length>60)return null;
   return {version:1,format,label:typeof args.label==='string'?args.label:null,text,reads:pages.map(page=>({tool:READ,url:page.url})),slots};
@@ -54,10 +72,19 @@ export function buildProcedureTemplate(request:string,observations:readonly Obse
 /** The value now standing where the saved one stood: after the longest part of the saved lead-in the page still has. */
 export function extractSlot(slot:Extract<TemplateSlot,{kind:'page'}>,page:string):{value:string;context:string}|null{
   const shape=valueShape(slot.value);
-  for(let length=slot.left.length;length>=6;length-=2){
-    const anchor=slot.left.slice(-length);let from=0;
-    for(let found=page.indexOf(anchor,from),tries=0;found>=0&&tries<20;found=page.indexOf(anchor,from),tries++){
-      shape.lastIndex=found+anchor.length;const match=shape.exec(page);
+  // A value near the start of the page has a short lead-in; it is then used whole and must stand at the start too.
+  const least=Math.min(6,slot.left.length);
+  for(let length=slot.left.length;length>=least;length-=2){
+    const anchor=slot.left.slice(length?-length:slot.left.length);let from=0;
+    for(let found=page.indexOf(anchor,from),tries=0;found>=0&&tries<(slot.left.length<6?1:20);found=page.indexOf(anchor,from),tries++){
+      const begin=found+anchor.length;
+      if(slot.right!==undefined){
+        // Free text: what now stands between the saved neighbours, on one line.
+        const stop=page.indexOf(slot.right.slice(0,8),begin),value=stop>begin?page.slice(begin,stop):'';
+        if(value&&value.length<=300&&!value.includes('\n'))return {value,context:page.slice(Math.max(0,begin-60),stop+40)};
+        from=found+1;continue;
+      }
+      shape.lastIndex=begin;const match=shape.exec(page);
       if(match)return {value:match[0],context:page.slice(Math.max(0,found+anchor.length-60),found+anchor.length+match[0].length+40)};
       from=found+1;
     }
@@ -74,7 +101,8 @@ export function fillTemplate(template:ProcedureTemplate,values:ReadonlyMap<strin
   let out='',cursor=0;
   for(const slot of [...template.slots].sort((a,b)=>a.start-b.start)){
     out+=template.text.slice(cursor,slot.start);cursor=slot.end;
-    out+=slot.kind==='page'?values.get(slot.value)??slot.value:slot.kind==='observed_at'?observedAt[slot.read]||now:slot.kind==='read_url'?readUrls[slot.read]??slot.value:now;
+    const pageValue=slot.kind==='page'?values.get(slot.value)??slot.value:'';
+    out+=slot.kind==='page'?(slot.right!==undefined&&template.format==='json'?JSON.stringify(pageValue).slice(1,-1):pageValue):slot.kind==='observed_at'?observedAt[slot.read]||now:slot.kind==='read_url'?readUrls[slot.read]??slot.value:now;
   }
   return out+template.text.slice(cursor);
 }

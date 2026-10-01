@@ -55,3 +55,20 @@ test('the script reads, lets Jev confirm changed values and saves; without confi
     const handed=await run(options);assert.equal(handed.steps.some(step=>step.tool==='office_result_draft'),false,name);assert.match(handed.notes[0],note,name);
   }
 });
+
+// Live: "1 USD = 1355.838011 KRW" was rebuilt as "1790812951 USD" because the 1 was found inside a timestamp and the
+// shape allowed any length; verification caught it, but the template must not produce it.
+test('wording digits are not readings, values match whole tokens only, and a copied title follows its neighbours',async()=>{
+  const rate=unix=>`{"result":"success","time_last_update_unix":${unix},"time_last_update_utc":"Thu, 01 Oct 2026 00:02:31 +0000","rates":{"USD":1,"KRW":1355.838011,"JPY":151.2}}`;
+  const run=[read(0,'https://open.er-api.com/v6/latest/USD',rate(1790812951),'2026-10-01T18:00:00.000Z'),draft(1,'1 USD = 1355.838011 KRW | 환율 기준 시각: Thu, 01 Oct 2026 00:02:31 +0000')];
+  const template=buildProcedureTemplate('open.er-api.com 에서 원화 환율과 기준 시각을 확인해 저장해줘',run);
+  assert.ok(!template.slots.some(slot=>slot.value==='1'),'The 1 of "1 USD" is wording.');
+  const krw=template.slots.find(slot=>slot.value==='1355.838011');assert.equal(extractSlot(krw,rate(1790899351).replace('1355.838011','1361.2')).value,'1361.2');
+  assert.equal(valueShape('1').test('1790812951'),false);assert.equal(valueShape('24').test('2499999'),false);assert.ok(valueShape('9').test('10'));
+  assert.equal(buildProcedureTemplate('합을 계산해줘',[read(0,'https://example.org/v','Latest release 3.14.8 and build 261000',''),draft(1,'버전 3.14.8, 합계 29')]),null,'29 inside 261000 is not a reading of 29.');
+  const front=(title,points)=>`1. ${title} (example.com) ${points} points by someone 3 hours ago | hide | 81 comments 2. Another story (other.org) 150 points`;
+  const hn=buildProcedureTemplate('news.ycombinator.com 1위 글의 제목과 점수를 JSON으로 저장해줘',[read(0,'https://news.ycombinator.com/',front('Clef: Open-source decision models',203),''),{...draft(1,''),invocation:{...draft(1,'').invocation,arguments:{format:'json',text:'{\n  "title": "Clef: Open-source decision models",\n  "score": 203\n}'}}}]);
+  const title=hn.slots.find(slot=>slot.right!==undefined);assert.equal(title.value,'Clef: Open-source decision models');
+  const page=front('A "new" top story',512),values=new Map([[title.value,extractSlot(title,page).value],['203',extractSlot(hn.slots.find(slot=>slot.value==='203'),page).value]]);
+  assert.deepEqual(JSON.parse(fillTemplate(hn,values,['https://news.ycombinator.com/'],[''],'2026-10-02T00:00:00.000Z')),{title:'A "new" top story',score:512},'The copied title is replaced, and stays valid JSON.');
+});
