@@ -2,6 +2,28 @@
 
 This is an **in-progress checkpoint**, not a completion or release report.
 
+### Current: common-fix main merge authorized (October 1)
+
+User authorized committing and merging completed common fixes into main.
+Source ab960f700a98b88be1b7d839120962c152ff118c includes sealed collection
+completion, uncapped file/HTTP collection, Codex schema compatibility, shared
+bounded semantic verification, checkpoint-only verifier calls, same-Work saved
+readback, lossless large receipt pages, and fresh complete local-record draft
+comparison. Build/focused checks and final frozen quick1932/1932 PASS;1931 test
+cases plus one integrity check. Receipt04-30-17-014Z ended naturally at04:40:47Z;
+all1045 input hashes independently remain unchanged. Ledger196/public boundary/
+diff/production npm audit pass. Public summary:
+docs/verification/main-e0a8e07-continuation-validation.json.
+
+Latest original24 independent audit at04:59:53Z is1PASS/9FAIL/14NOT_RUN;
+paused/review means incomplete acceptance, not an established crash. The separate
+new successful collection Work remains outside this matrix. Retain original IDs,
+files, conditions and historical failures. Continue the existing isolated server
+using tests/evidence/owned-serve-job.json and phase112-matrix-session.json;
+do not launch a duplicate. Whole quick is finished, not still running. Actual
+Claude auth/schema remains unconfirmed. No new release/personal install change
+is authorized by the merge. Older no-merge notes below are historical.
+
 ### Latest: October 1 sealed collection committed (98768b9)
 
 The user approved the request-bound code completion policy; the older pause below

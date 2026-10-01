@@ -1,0 +1,46 @@
+{
+  "verified_at": "2026-10-01T05:00:08Z",
+  "baseline_revision": "e0a8e0790b64ff663fa87f5d894b415a1d6f1843",
+  "implementation_revision": "ab960f700a98b88be1b7d839120962c152ff118c",
+  "branch": "fix/main-work-reliability",
+  "delivery": "User authorized commit and main merge; no release or personal installation replacement.",
+  "environment": {"os": "WSL Ubuntu-24.04", "node": "22.22.0", "npm": "11.11.0", "actual_claude_subscription": "not_confirmed"},
+  "build": "PASS",
+  "frozen_quick": {
+    "receipt": "runtime-tests-2026-10-01T04-30-17-014Z.json",
+    "status": "PASS",
+    "natural_exit_code": 0,
+    "finished_at": "2026-10-01T04:40:47.086Z",
+    "counts": {"PASS": 1932, "FAIL": 0, "BLOCKED_ENV": 0, "NOT_RUN": 0},
+    "actual_test_cases": 1931,
+    "input_integrity_checks": 1,
+    "input_count": 1045,
+    "input_manifest_sha256": "f0b8117f8a21286a5746955ad965bdfe193d1d57fd9df35ae790183c7427e7b1",
+    "changed_inputs": [],
+    "evidence_levels": {"unit": 662, "contract_fake": 680, "fixture_integration": 392, "native_integration": 198}
+  },
+  "ledger": {"status": "PASS", "requirements": 196},
+  "publication_boundary": {"status": "PASS", "files_checked_before_documentation": 770, "findings": []},
+  "production_dependency_audit": {"status": "PASS", "vulnerabilities": 0},
+  "diff_check": "PASS",
+  "actual_acceptance": {
+    "at": "2026-10-01T04:59:53.078Z",
+    "evidence_level": "user_environment",
+    "original_matrix_total": 24,
+    "registered": 24,
+    "counts": {"PASS": 1, "FAIL": 9, "NOT_RUN": 14},
+    "all_pass": false,
+    "failure_meaning": "Paused or unresolved goals fail acceptance; this does not mean nine program crashes.",
+    "pending_meaning": "Queued/running or stale-audit acceptance remains NOT_RUN.",
+    "separate_successful_collection_probe_counted_in_original_matrix": false,
+    "existing_owned_queue": "continues without duplicate Works"
+  },
+  "limits": [
+    "The original 24 real-use goals are not all complete; this is not all-family release certification.",
+    "Actual Claude subscription authentication and live schema response are unconfirmed.",
+    "Legacy semantic verification still inspects retained history and can remain slow or unresolved.",
+    "Lossless model readback is paged; one page does not represent the complete original.",
+    "Collection has no arbitrary byte/row ceilings, but memory usage still grows with in-memory rows/checkpoints.",
+    "No external message, form submission, purchase or personal installation replacement is part of this merge."
+  ]
+}

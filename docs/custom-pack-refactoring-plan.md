@@ -1,6 +1,10 @@
 # 커스텀 Pack 신뢰성 리팩토링 — Source of Truth
 
 Status: R0–R5 merged in main e0a8e07; October 1 post-main collection/reliability fixes implemented and locally verified. Original 24-case acceptance remains partial (1/24).
+Delivery update (October 1): the user explicitly authorized committing and merging
+the completed common fixes into main. This supersedes the earlier branch-only
+delivery restriction, not the live acceptance criteria. No new release or personal
+installation replacement is included. The latest full-suite source is ab960f7.
 Current baseline: e0a8e0790b64ff663fa87f5d894b415a1d6f1843.
 Current branch: fix/main-work-reliability.
 Original refactor baseline: 0b11f1850a2afa846f191ce356aa4f486284b41f (refactor/custom-pack-reliability).

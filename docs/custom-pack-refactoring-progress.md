@@ -10,6 +10,34 @@ Delivery branch: refactor/custom-pack-reliability.
 
 ### Current continuation: remaining 23 original Works
 
+### Main delivery authorization and final local regression (October 1)
+
+The user explicitly requested committing and merging the completed changes into
+main. Production/test source is ab960f700a98b88be1b7d839120962c152ff118c,
+containing 98768b9 (sealed collection/schema/capacity), 2dbedfc (shared bounded
+verification and saved readback), and ab960f7 (lossless receipt pages and fresh
+local-draft comparisons). Historical branch-only delivery notes below no longer
+restrict this authorized merge; release and personal installation replacement
+remain separate operations. This documentation does not relax recovery gates.
+
+The detached frozen quick ended naturally at 2026-10-01T04:40:47.086Z, exit0.
+Its final receipt is runtime-tests-2026-10-01T04-30-17-014Z.json:1932/1932 PASS,
+1931 test cases and one input-integrity check; zero FAIL/BLOCKED_ENV/NOT_RUN.
+All1045 input digests still match after completion. Manifest SHA256:
+f0b8117f8a21286a5746955ad965bdfe193d1d57fd9df35ae790183c7427e7b1.
+Ledger196, publication boundary770 files, diff check and production dependency
+audit (zero vulnerabilities) pass. See
+verification/main-e0a8e07-continuation-validation.json for the source-bound record.
+
+The fresh original24 independent audit at 2026-10-01T04:59:53.078Z records
+1 PASS /9 FAIL /14 NOT_RUN. FAIL includes paused/unresolved goals, not nine
+program crashes; NOT_RUN includes queued/running acceptance. One separate
+successful new collection probe is excluded from the original24 numerator.
+The same isolated server continues its existing queue; no duplicate Works,
+external sends/submissions, private receipts or credentials are included in git.
+Remaining original cases are not certified complete. Actual Claude subscription
+authentication and live-schema certification have not been confirmed.
+
 Next completed unit (04:28Z): fresh local-record status now recomputes the full
 registered original plus exact recipe, compares the complete retained JSON draft
 bytes and verifies originals unchanged, without replay/backfilling old receipts.
