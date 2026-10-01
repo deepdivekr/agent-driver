@@ -6,6 +6,7 @@ import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,asser
 import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
 import {type Recipe,type Row} from '../packs/contracts.js';
+import {warmBrowserConnection} from '../browser/mcp-executor.js';
 import {workActivity} from './activity.js';
 import {compareSavedRows,detectTable,registerAutoSource,tableRows} from '../packs/auto-sources.js';
 import {workReferenceMap} from './context.js';
@@ -525,6 +526,9 @@ export class WorkExecutionTools {
   /** Pre-dispatch schema checking: no API, grants, model calls or filesystem effects. */
   /** A foreground browser the owner registered (Aside/Neo) can take a search a background browser is refused. */
   private foregroundBrowser(){return browserTargets(this.config).some(target=>target.environment==='host_foreground'&&browserHostCompatible(target));}
+  /** The first web tool of a run warms the registered foreground browser's connection in the background. */
+  private warmedForeground=false;
+  private warmForeground(){if(this.warmedForeground)return;this.warmedForeground=true;for(const target of browserTargets(this.config))if(target.environment==='host_foreground'&&browserHostCompatible(target))warmBrowserConnection(target);}
   private searchRequest(raw:unknown){
     // Without a foreground browser Google challenges a background browser on most networks while Bing answers
     // (measured 2026-10-01), so Bing is the default there and a Google block does not strand the Work.
@@ -600,6 +604,7 @@ export class WorkExecutionTools {
   }
   validate(name:string,args:Record<string,unknown>,requestId:string){
     requireCondition(this.catalog().some(t=>t.name===name),'WORK_TOOL_NOT_AVAILABLE');
+    if(name==='office_browser_read'||name==='office_web_search')this.warmForeground();
     if(name==='office_browser_read')return this.browserRequest(args);
     if(name==='office_web_search')return this.searchRequest(args);
     if(name==='office_social_search')return this.socialRequest(args);

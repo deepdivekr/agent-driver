@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {Server} from '@modelcontextprotocol/sdk/server/index.js';
 import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {CallToolRequestSchema,ListToolsRequestSchema} from '@modelcontextprotocol/sdk/types.js';
-import {McpBrowserExecutor,closeSharedBrowserConnections} from '../dist/browser/mcp-executor.js';
+import {McpBrowserExecutor,closeSharedBrowserConnections,warmBrowserConnection} from '../dist/browser/mcp-executor.js';
 import {browserTargetSchema} from '../dist/browser/executor-contracts.js';
 
 async function fixture(t,{limits,hangFirst=0}={}){
@@ -59,4 +59,16 @@ test('runtime contract tabs on the same browser endpoint share one lingering MCP
   const third=new McpBrowserExecutor(target);t.after(()=>third.close().catch(()=>{}));
   await third.open('https://example.test/c');
   assert.equal(calls.filter(c=>c.name==='name_session').length,1,'A connection released moments ago is reused, not restarted.');
+});
+
+// Live: the first operation on a cold foreground browser timed out. The connection is started before it is needed.
+test('runtime contract a warmed connection is ready for the first tab, opens nothing by itself and is started once',async t=>{
+  const {adapter,calls,target}=await fixture(t);
+  warmBrowserConnection(target);warmBrowserConnection(target);
+  await adapter.open('https://example.test/a');
+  assert.equal(calls.filter(c=>c.name==='name_session').length,1,'Warming twice and opening while it warms still makes one connection.');
+  assert.equal(calls.findIndex(c=>c.name==='name_session'),0);assert.equal(calls.filter(c=>c.arguments?.code?.includes('newPage')).length,1,'Warming opened no page; the tab did.');
+  await adapter.close();await closeSharedBrowserConnections();
+  const before=calls.length;warmBrowserConnection({...target,environment:'owned_headless'});await new Promise(resolve=>setTimeout(resolve,100));
+  assert.equal(calls.length,before,'Only a registered foreground browser is warmed.');
 });

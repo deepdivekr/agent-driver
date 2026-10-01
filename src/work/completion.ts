@@ -733,13 +733,21 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       // content that lies within an observed value (as shown, so a JSON-escaped
       // "\n" counts) or carries a whole one ("full_source_read":true); keys or
       // punctuation alone are not evidence. The original request needs a business receipt.
-      // Every quote must be shown content; at least one per check must be an
-      // observed value, so a status or ID line beside real evidence is tolerated
-      // but a check resting on such lines alone is not.
-      lightNote=`${check.id}: a quote is not an observed value of its cited receipt`;
+      // At least one quote per check must be shown content that is an observed
+      // value, so a status or ID line beside real evidence is tolerated but a
+      // check resting on such lines alone is not.
+      lightNote=`${check.id}: no quote is an observed value of a shown receipt`;
       const grounded=(quote:string,leaves:string[])=>leaves.some(leaf=>{const escaped=JSON.stringify(leaf).slice(1,-1);return leaf.includes(quote)||escaped.includes(quote)||quote.includes(leaf)||quote.includes(escaped);});
-      if(!check.quotes.length||check.quotes.some(quote=>!check.evidence_ids.includes(quote.evidence_id)||!shown.get(quote.evidence_id)?.content.includes(quote.quote))||!check.quotes.some(quote=>grounded(quote.quote,shown.get(quote.evidence_id)!.leaves)))return null;
-      if(check.id.startsWith('original_user_request')&&check.quotes.every(quote=>traceIds.has(quote.evidence_id)))return null;
+      // A quote cited to the wrong receipt is moved to the receipt that shows it; a quote shown nowhere (a
+      // paraphrase) is not relied on. The verdict stands only on what remains (live: one such quote sent a correct
+      // result to four more verification calls).
+      const usable=check.quotes.flatMap(quote=>{
+        if(check.evidence_ids.includes(quote.evidence_id)&&shown.get(quote.evidence_id)?.content.includes(quote.quote))return [quote];
+        const elsewhere=quote.quote.trim().length>=4?[...shown].find(([,item])=>item.content.includes(quote.quote)):undefined;
+        return elsewhere?[{...quote,evidence_id:elsewhere[0]}]:[];
+      });
+      if(!usable.length||!usable.some(quote=>grounded(quote.quote,shown.get(quote.evidence_id)!.leaves)))return null;
+      if(check.id.startsWith('original_user_request')&&usable.every(quote=>traceIds.has(quote.evidence_id)))return null;
     }
     await audit('accepted','WORK_COMPLETION_LIGHT_VERIFIED');
     await options.progress?.({kind:'model.result',turn,stage_id,summary:'Completion verified by light verification against observed receipts and Office outputs.'});

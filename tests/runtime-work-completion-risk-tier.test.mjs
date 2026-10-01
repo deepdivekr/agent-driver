@@ -100,7 +100,6 @@ test('A5: an undecided or ungrounded light answer falls back to the strict path'
   const variants={
     unknown:input=>({checks:input.checks.map(check=>({id:check.id,verdict:'unknown',evidence_ids:[],quotes:[],reason:'Not enough content shown.'}))}),
     invented_quote:supported('ev-draft-1','Node.js 25 is the latest release'),
-    unknown_evidence:supported('ev-invented','Node.js 24'),
     trace_only_original:input=>({checks:input.checks.map(check=>{const id=check.id==='original_user_request'?input.evidence.find(item=>item.tool_name==='office_controlled_run_trace').evidence_id:'ev-draft-1';return {id:check.id,verdict:'supported',evidence_ids:[id],quotes:[{evidence_id:id,quote:check.id==='original_user_request'?'host-closed Office-controlled run':'Node.js 24'}],reason:'Observed.'};})}),
     bad_shape:()=>({verdict:'ok'}),
   };
@@ -111,6 +110,19 @@ test('A5: an undecided or ungrounded light answer falls back to the strict path'
     assert.deepEqual(model.kinds,['light','strict'],name);
     assert.equal(audits.some(event=>event.code==='WORK_COMPLETION_LIGHT_VERIFIED'),false,name);
     assert.equal(audits.at(-1).code,'WORK_COMPLETION_VERIFIED',name);
+  }
+});
+
+// Live: one quote cited to the wrong receipt sent a correct result to four more verification calls.
+test('A5: a real quote cited to the wrong receipt is moved to the receipt that shows it; a paraphrase beside it is not relied on',async t=>{
+  for(const [name,light] of Object.entries({
+    wrong_receipt:supported('ev-invented','Node.js 24'),
+    paraphrase_beside_real:input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:['ev-draft-1'],quotes:[{evidence_id:'ev-draft-1',quote:'Node.js 24'},{evidence_id:'ev-draft-1',quote:'the newest long-term release, roughly speaking'}],reason:'Observed.'}))}),
+  })){
+    const model=fixture(light),audits=[];
+    const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event)});
+    assert.equal(await verify(checks,sealed(t,[source(0),draft(1)]),claimFor(['ev-source-0','ev-draft-1'])),true,name);
+    assert.deepEqual(model.kinds,['light'],name);assert.equal(audits.at(-1).code,'WORK_COMPLETION_LIGHT_VERIFIED',name);
   }
 });
 

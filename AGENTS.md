@@ -4,7 +4,8 @@
 
 Read docs/work-completion-and-autonomy-plan.md before planning or changing this
 repository. Part A (restore a path for Work to reach completion) and Part B
-(autonomy) are both authorized by the owner (2026-10-01); B1 and B5 are in progress.
+(autonomy) are both authorized by the owner (2026-10-01); B1–B6 have first implementations and B7 is partial
+(see the progress checkpoint for what was deliberately not built and why).
 docs/custom-pack-refactoring-plan.md remains the background for custom Pack
 contracts; where the two conflict, section 3.4 of the newer plan decides.
 Read docs/work-completion-progress.md for the current checkpoint;
@@ -55,6 +56,9 @@ particular Pack. They are not a new product workstream.
   no further approval. Submissions, payments and messages to third parties keep
   their gates. Questions the plan needs answered go to the owner (ask-first is
   the default intake); the host never answers them on the owner's behalf.
+- What the host learns is state, not authority. A saved procedure guides or replays reads; a remembered public
+  source is a public GET the host already made. Neither is evidence for a new Work, neither changes the run
+  fingerprint or the owner's host file, and only the owner switches one off.
 - When a means is blocked, switch to the next one the delegation allows before
   asking a person: another search provider, a directly opened official page, the
   registered foreground browser, an HTTPS text read. A stop that needs a person

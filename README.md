@@ -126,6 +126,13 @@ How it behaves by default:
   directly; public search uses the provider that answers a background browser. If a site refuses it and you
   connected Aside, the same read moves there once.
 - **Nothing is submitted by a draft.** A form draft is filled in a private page that can only read; it is closed afterwards.
+- **Gets faster with use.** A Work that passed verification leaves its procedure behind; a similar request reuses
+  it and repeats its reads without model turns. A public table that was read (CSV, JSON, GeoJSON) is remembered as a
+  source, so the next collection is checked row by row in code. Both are listed on the first screen, where you can
+  turn a procedure off or forget a source. Each new Work is still verified on its own.
+- **What the delegation covers.** `work.delegation` in the host file: `daily_scheduled_runs` (50),
+  `registered_folder_moves` (on: a reversible move plan inside a folder you granted for moving is applied without
+  a click) and `remember_public_sources` (on).
 
 ### From request to result
 

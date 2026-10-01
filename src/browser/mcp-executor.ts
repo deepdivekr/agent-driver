@@ -17,6 +17,15 @@ const connections=new Map<string,SharedConnection>();
 const connectionKey=(target:BrowserTarget)=>`${target.engine}:${target.engine==='neo'?target.endpoint:target.executable}`;
 async function closeConnection(shared:SharedConnection){if(connections.get(shared.key)===shared)connections.delete(shared.key);if(shared.linger)clearTimeout(shared.linger);await shared.client.close().catch(()=>{});await shared.transport.close().catch(()=>{});}
 export async function closeSharedBrowserConnections(){await Promise.all([...connections.values()].map(closeConnection));}
+const warming=new Map<string,Promise<void>>();
+/** Starts the shared connection of a registered foreground browser before it is needed, so the first read that
+ * falls back to it does not wait for the process to start (live: the first Aside operation timed out cold).
+ * Nothing is opened in the browser; an unused connection closes after the linger time. */
+export function warmBrowserConnection(target:BrowserTarget,lingerMs=120_000):void{
+  if(target.environment!=='host_foreground'||!browserHostCompatible(target))return;
+  const key=connectionKey(target);if(connections.has(key)&&!connections.get(key)!.broken||warming.has(key))return;
+  warming.set(key,new McpBrowserExecutor(target).warm(lingerMs).catch(()=>{}).finally(()=>{warming.delete(key);}));
+}
 export class McpBrowserExecutor implements BrowserPort {
   private shared:SharedConnection|null=null;
   private page:number|string|null=null;private closed=false;
@@ -49,11 +58,12 @@ export class McpBrowserExecutor implements BrowserPort {
     }catch(error){await closeConnection(shared);throw error;}
     connections.set(key,shared);return shared;
   }
+  async warm(lingerMs:number){const shared=await this.connect();if(shared.users===0&&!shared.linger){shared.linger=setTimeout(()=>{if(shared.users===0)void closeConnection(shared);},lingerMs);shared.linger.unref();}}
   async probe(){
     requireCondition(!this.closed,'BROWSER_CONNECTION_CLOSED');if(this.shared)return;
     requireCondition(browserHostCompatible(this.target),'BROWSER_HOST_PLATFORM_MISMATCH');
     requireCondition(this.target.environment==='host_foreground','BROWSER_GUEST_TRANSPORT_UNVERIFIED');
-    const key=connectionKey(this.target);let reused=connections.get(key);if(reused?.broken)reused=undefined;
+    const key=connectionKey(this.target);await warming.get(key);let reused=connections.get(key);if(reused?.broken)reused=undefined;
     this.shared=reused??await this.connect();this.shared.users++;if(this.shared.linger){clearTimeout(this.shared.linger);this.shared.linger=null;}
     try{
       // A responding MCP server is not evidence of an attached browser. Listing is read-only.
