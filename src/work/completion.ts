@@ -710,14 +710,17 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):result?`${JSON.stringify({...value,text:undefined})}\n${value!.text as string}`:pageRead?`${JSON.stringify({url:value!.url,title:value!.title,requested_url:value!.requested_url,observed_at:value!.observed_at,links:(value!.links as unknown[]).slice(0,25)})}\n${JSON.stringify({...value,links:undefined,url:undefined,title:undefined,requested_url:undefined,observed_at:undefined})}`:JSON.stringify(item.receipt.value);
       // A text resource read (a CSV/JSON feed) is the source data itself; truncating it at 3000 characters left
       // the judgment unable to compare rows (live), so it gets the same room as a result file.
-      const limit=trace?4000:result||value?.provenance==='http_text_resource'?12000:pageRead?6000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
-      return {evidence_id:id,tool_name:item.invocation.tool_name,observed_at:item.observed_at,truncated:content.length<full.length,content,full_length:full.length,keep:result||trace,leaves:observableLeaves(item.receipt.value)};
+      // In a wide run the pages the result names are its sources (an article a summary rests on): they are shown
+      // nearly whole, and lists and feeds give way first (live: "the original is cut before its body and author").
+      const listing=value?.provenance==='http_text_resource';
+      const limit=trace?4000:result||listing?12000:pageRead?(wide?10000:6000):3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
+      return {evidence_id:id,tool_name:item.invocation.tool_name,observed_at:item.observed_at,truncated:content.length<full.length,content,full_length:full.length,keep:result||trace,listing,leaves:observableLeaves(item.receipt.value)};
     });
     // Fit the 40KB call budget by shortening the largest source receipts instead of giving up (live: five pages of
     // one CSV feed exceeded it and the Work went straight to twelve minutes of strict batches). Result files and
     // the trace keep their room; a shortened receipt is marked truncated so the judgment can say unknown.
     const request={stage_id,original_user_request:options.originalUserRequest,checks:checks.map(({id,result,evidence:needed})=>({id,result,evidence:needed})),...(otherReads.length?{other_reads_not_shown:otherReads,other_reads_note:'These succeeded too and are listed without content. The saved result does not name them.'}:{})};
-    const sized=()=>Buffer.byteLength(JSON.stringify({...request,evidence:assembled.map(({full_length:_full,keep:_keep,leaves:_leaves,...item})=>item)}));
+    const sized=()=>Buffer.byteLength(JSON.stringify({...request,evidence:assembled.map(({full_length:_full,keep:_keep,leaves:_leaves,listing:_listing,...item})=>item)}));
     for(let pass=0;pass<40&&sized()>38000;pass++){
       const largest=assembled.filter(item=>!item.keep&&item.content.length>1500).sort((a,b)=>b.content.length-a.content.length)[0];if(!largest)break;
       largest.content=largest.content.slice(0,Math.max(1500,Math.floor(largest.content.length/2)));largest.truncated=true;
@@ -731,13 +734,15 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const body=item.content.slice(at+1),first=texts.get(body);
       if(first&&body.length>400)item.content=`${item.content.slice(0,at)}\n[The text read back is identical to the saved result shown in ${first}.]`;else texts.set(body,item.evidence_id);
     }
-    for(let pass=0;pass<40&&sized()>(wide?54000:38000);pass++){
-      const largest=assembled.filter(item=>!item.keep&&item.content.length>1500).sort((a,b)=>b.content.length-a.content.length)[0];if(!largest)break;
-      largest.content=largest.content.slice(0,Math.max(1500,Math.floor(largest.content.length/2)));largest.truncated=true;
+    const room=wide?86000:38000;
+    for(let pass=0;pass<60&&sized()>room;pass++){
+      const shrinkable=assembled.filter(item=>!item.keep&&item.content.length>1500),lists=shrinkable.filter(item=>item.listing&&item.content.length>3000);
+      const largest=(wide&&lists.length?lists:shrinkable).sort((a,b)=>b.content.length-a.content.length)[0];if(!largest)break;
+      largest.content=largest.content.slice(0,Math.max(wide&&largest.listing?3000:1500,Math.floor(largest.content.length/2)));largest.truncated=true;
     }
-    const evidence=assembled.map(({full_length:_full,keep:_keep,leaves,...item})=>{shown.set(item.evidence_id,{content:item.content,leaves});return item;});
+    const evidence=assembled.map(({full_length:_full,keep:_keep,listing:_listing,leaves,...item})=>{shown.set(item.evidence_id,{content:item.content,leaves});return item;});
     const input={...request,evidence};
-    if(!evidence.length||Buffer.byteLength(JSON.stringify(input))>(wide?56000:40000)){lightNote=`the evidence does not fit one call (${Buffer.byteLength(JSON.stringify(input))} bytes)`;return null;}
+    if(!evidence.length||Buffer.byteLength(JSON.stringify(input))>(wide?90000:40000)){lightNote=`the evidence does not fit one call (${Buffer.byteLength(JSON.stringify(input))} bytes)`;return null;}
     await guarded();await options.progress?.({kind:'model.started',turn,stage_id,summary:'Light verification: reads, drafts and Office-owned outputs only; one compact semantic check.'});await guarded();
     let answer:z.infer<typeof lightVerificationSchema>;
     try{await guarded();answer=lightVerificationSchema.parse(await model.call('verify',WORK_COMPLETION_LIGHT_INSTRUCTIONS,input,z.toJSONSchema(lightVerificationSchema)));await guarded();}

@@ -198,7 +198,7 @@ test('A7: an oversized light input is fitted by shortening the largest source re
   const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event)});
   assert.equal(await verify(checks,sealed(t,[page(0),page(1),page(2),page(3),page(4),source(5),draft(6)]),claimFor(['ev-source-5','ev-draft-1'])),true,JSON.stringify(audits.map(event=>event.code)));
   assert.deepEqual(model.kinds,['light'],'The judgment is asked once instead of being skipped.');
-  const input=model.inputs[0];assert.ok(Buffer.byteLength(JSON.stringify(input))<=40000);
+  const input=model.inputs[0];assert.ok(Buffer.byteLength(JSON.stringify(input))<=90000);
   assert.ok(input.evidence.filter(item=>item.evidence_id.startsWith('ev-page-')).some(item=>item.truncated),'Large source pages are shortened and marked.');
   assert.ok(input.evidence.find(item=>item.evidence_id==='ev-draft-1').content.endsWith(right),'The result file is never shortened.');
 });
@@ -231,5 +231,5 @@ test('A5: a wide run shows the verifier the reads its saved result rests on and 
   assert.ok(shownIds.includes('ev-source-3')&&shownIds.includes('ev-source-17')&&shownIds.includes('ev-draft-1'));assert.ok(!shownIds.includes('ev-source-5'),'A read the result does not name is not shown in full.');
   assert.ok(input.other_reads_not_shown.length>=14&&input.other_reads_not_shown.some(item=>item.url==='https://example.org/post-5'));
   assert.ok(digest.length>9000);assert.match(input.evidence.find(item=>item.evidence_id==='ev-read-1').content,/identical to the saved result shown in ev-draft-1/u,'The readback does not repeat the 9 KB text.');
-  assert.ok(Buffer.byteLength(JSON.stringify(input))<=40000);
+  assert.ok(Buffer.byteLength(JSON.stringify(input))<=90000);
 });
