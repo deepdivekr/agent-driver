@@ -8,6 +8,7 @@ import {type PackStore} from '../packs/store.js';
 import {type Recipe,type Row} from '../packs/contracts.js';
 import {warmBrowserConnection} from '../browser/mcp-executor.js';
 import {workActivity} from './activity.js';
+import '../core/network.js';
 import {compareSavedRows,detectTable,registerAutoSource,tableRows} from '../packs/auto-sources.js';
 import {workReferenceMap} from './context.js';
 import {type WorkProposal} from './contracts.js';

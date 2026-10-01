@@ -384,3 +384,23 @@ test('B4: verified read steps are replayed without a model turn; writes, unknown
   const recovered=await new BoundedWorkClientExecutor(failing).execute(request,hooks({replay:[replay[0]],async executeTool(){return n++===0?{status:'retryable_failure',value:{error:'TIMEOUT'},evidence_ids:[],effect_state:'none',retry_safe:true}:receipt;}}));
   assert.equal(recovered.status,'succeeded');assert.equal(failing.calls.length,2);
 });
+
+// Recorded runs: a saved result was read back next almost every time. The host does it without a model turn.
+test('B4: a saved result is read back by the host without a model turn; a failed readback goes to the model',async()=>{
+  const draftTool={name:'office_result_draft',description:'Save a result.',input_schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},effect:'local_write'};
+  const readTool2={name:'office_result_read',description:'Read a saved result.',input_schema:{type:'object',properties:{request_id:{type:'string'}},required:['request_id'],additionalProperties:false},effect:'read_only'};
+  const save={action:'tool',stage_id:'report',tool_name:'office_result_draft',arguments_json:JSON.stringify({text:'Physical AI'}),summary:'Save the result.',completed_checks:[],wait_reason:null};
+  const run=async readStatus=>{
+    const provider=model([choose(),save,done(),done()]),executed=[];
+    const host=hooks({tools:[readTool,draftTool,readTool2],async executeTool(name,args,context){executed.push([name,args]);
+      if(name==='office_result_read')return {status:readStatus,value:{title:'Physical AI'},evidence_ids:readStatus==='succeeded'?['readback-1']:[],effect_state:'none',retry_safe:true};
+      return name==='office_result_draft'?{status:'succeeded',value:{title:'Physical AI'},evidence_ids:['draft-1'],effect_state:'verified',retry_safe:false}:receipt;}});
+    const result=await new BoundedWorkClientExecutor(provider).execute(request,host);return {result,provider,executed,host};
+  };
+  const ok=await run('succeeded');
+  assert.equal(ok.result.status,'succeeded');assert.deepEqual(ok.executed.map(item=>item[0]),['browser_read','office_result_draft','office_result_read']);
+  assert.equal(ok.executed[2][1].request_id,ok.result.checkpoint.observations.find(item=>item.invocation.tool_name==='office_result_draft').invocation.request_id,'The readback names the draft it follows.');
+  assert.equal(ok.provider.calls.length,3,'Read, save, complete: the readback took no model turn.');
+  const failed=await run('retryable_failure');
+  assert.equal(failed.executed.filter(item=>item[0]==='office_result_read').length,1,'A failed readback is not repeated by the host.');
+});

@@ -1,10 +1,17 @@
 import {createHash} from 'node:crypto';
+import {neverConnected} from '../core/network.js';
 import {type ResultDeliveryConnector,type WorkResult} from './results.js';
 import {type DeliveryTarget,validateDeliveryTarget} from './delivery-settings.js';
 
 const receipt=(value:string)=>value.slice(0,500);
 const hash=(value:string)=>createHash('sha256').update(value).digest('hex').slice(0,24);
-function content(result:WorkResult){return `Work result ${result.id}\n${result.summary}${result.text?`\n\n${result.text}`:''}${result.artifacts.length?'\n\nOriginal files: download in the app.':''}`;}
+const ownerNeeded:Record<string,string>={waiting_auth:'로그인이 필요합니다.',waiting_approval:'승인이 필요합니다.',awaiting_review:'결과를 검증하지 못했습니다. 확인이 필요합니다.',reconciliation_required:'이전 작업이 반영됐는지 확인이 필요합니다.',failed:'실패했습니다.',waiting_connection:'연결 설정을 확인해야 합니다.',needs_review:'검토가 필요합니다.',paused:'업무가 멈춰 있습니다. 필요한 연결이나 설정을 확인해 주세요.'};
+/** The first lines say which Work this is and whether it is done or needs the owner; the body follows. */
+export function deliveryContent(result:WorkResult){
+  const head=result.work_completion_verified?'[완료] 검증을 통과했습니다.':ownerNeeded[result.source_status]?`[확인 필요] ${ownerNeeded[result.source_status]}`:`[진행 상황] ${result.source_status}`;
+  return `${result.work_title||'Agent Office 업무'}\n${head}\n\n${result.summary}${result.text&&result.text!==result.summary?`\n\n${result.text}`:''}${result.artifacts.length?'\n\n원본 파일은 앱에서 내려받을 수 있습니다.':''}\n\nWork result ${result.id}`;
+}
+const content=deliveryContent;
 const length=(value:string)=>[...value].length;
 async function boundedBody(response:Response,limit=8192){
   const reader=response.body?.getReader();if(!reader)return '';
@@ -21,7 +28,7 @@ export function createDeliveryConnector(target:DeliveryTarget,transport:typeof f
     if(validated.platform==='telegram'){
       const base=`https://api.telegram.org/bot${validated.telegram_bot_token}/`;
       if(length(full)<=4096){url=base+'sendMessage';body=JSON.stringify({chat_id:validated.telegram_chat_id,text:full,disable_web_page_preview:true});headers={'content-type':'application/json'};}
-      else{url=base+'sendDocument';const form=new FormData();form.append('chat_id',validated.telegram_chat_id!);form.append('document',new Blob([full],{type:'text/plain;charset=utf-8'}),'result.txt');form.append('caption',`Work result ${result.id}: full text attached as result.txt. Original files remain in the app.`);body=form;}
+      else{url=base+'sendDocument';const form=new FormData();form.append('chat_id',validated.telegram_chat_id!);form.append('document',new Blob([full],{type:'text/plain;charset=utf-8'}),'result.txt');form.append('caption',`${result.work_title||'Agent Office'}: 본문이 길어 result.txt로 첨부했습니다. (Work result ${result.id})`.slice(0,1000));body=form;}
     }else if(validated.platform==='slack'){
       if(length(full)>40_000)return {status:'failed',effect_state:'not_dispatched',reason:'DELIVERY_BODY_TOO_LARGE'};
       url=validated.webhook_url!;body=JSON.stringify({text:full,mrkdwn:false,unfurl_links:false,unfurl_media:false});headers={'content-type':'application/json'};
@@ -31,7 +38,8 @@ export function createDeliveryConnector(target:DeliveryTarget,transport:typeof f
       else{const form=new FormData();form.append('payload_json',JSON.stringify({content:`Work result ${result.id}: full text attached as result.txt. Original files remain in the app.`,allowed_mentions:{parse:[]}}));form.append('files[0]',new Blob([full],{type:'text/plain;charset=utf-8'}),'result.txt');body=form;}
     }
     let response:Response;
-    try{response=await transport(url,{method:'POST',...(headers?{headers}:{}),body,redirect:'error',signal:AbortSignal.timeout(15_000)});}catch{return {status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'};}
+    // A connection that was never established sent nothing: that is retryable, not uncertain.
+    try{response=await transport(url,{method:'POST',...(headers?{headers}:{}),body,redirect:'error',signal:AbortSignal.timeout(15_000)});}catch(error){return neverConnected(error)?{status:'failed',effect_state:'not_dispatched',reason:'DELIVERY_PROVIDER_UNREACHABLE'}:{status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'};}
     if(!response.ok)return failed(response.status);
     let raw:string;try{raw=await boundedBody(response);}catch{return {status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'};}
     if(validated.platform==='slack')return raw.trim()==='ok'?{status:'delivered',receipt_id:receipt(`slack:webhook:ok:${hash(idempotency_key)}`)}:{status:'failed',effect_state:'uncertain',reason:'DELIVERY_RECEIPT_INVALID'};

@@ -1,6 +1,7 @@
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {requireCondition} from '../core/contracts.js';
+import '../core/network.js';
 import {OwnedPersistentPage} from '../taskpack/owned-playwright.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {type HostConfig} from '../interface/config.js';

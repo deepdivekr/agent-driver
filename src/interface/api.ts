@@ -18,7 +18,7 @@ import {ScopedFiles} from '../terminal/scoped-files.js';
 import {liveness,type ProcessIdentity} from '../supervisor/identity.js';
 import {ensureSupervisor} from '../supervisor/manager.js';
 import {requireCondition} from '../core/contracts.js';
-import {workAutonomy,loadHostConfig,type HostConfig} from './config.js';
+import {workAutonomy,workDelegation,loadHostConfig,type HostConfig} from './config.js';
 import {codingManifest,draftManifest,terminalManifest,startRequest,tools} from './catalog.js';
 import {intake} from './intake.js';
 import {resourceHealth} from '../resources/configured.js';
@@ -105,7 +105,7 @@ export class RuntimeApi{
   constructor(readonly config:HostConfig,readonly options:RuntimeApiOptions={}){
     this.workflowCompatibility=new WorkflowCompatibility(config);
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
-    this.workResults=new WorkResults(this.store,[],WorkDeliverySettings.fromConfig(config));
+    this.workResults=new WorkResults(this.store,[],WorkDeliverySettings.fromConfig(config),()=>workDelegation(config).notify);
     this.files=this.store.localFileExplorer(config.project.id,dirname(config.dbPath));
     this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
     const windowsDriver=options.windows?.driver??(config.windowsExecutor?(config.windowsExecutor.kind==='cua-desktop'?new CuaDesktopDriver(config.windowsExecutor,this.store.desktopState):new CuaFieldDriver(config.windowsExecutor,this.store.desktopState)):undefined);

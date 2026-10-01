@@ -4,7 +4,7 @@ import {dirname} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {PackStore,type RuntimeActivity} from '../packs/store.js';
-import {workAutonomy,type HostConfig} from '../interface/config.js';
+import {workAutonomy,workDelegation,type HostConfig} from '../interface/config.js';
 import {listProcedures,setProcedureDisabled} from '../work/procedures.js';
 import {applyAutoSources,readAutoSources,forgetAutoSource} from '../packs/auto-sources.js';
 import {readSwarmDashboard} from '../swarm/dashboard.js';
@@ -129,7 +129,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const migrations=new HermesMigrationRuntime(store,config);
   const remoteOffice=new RemoteOffice(store,config,options.remote);
   const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>store.recordClientHandoff(config.project.id,event));
-  const deliverySettings=WorkDeliverySettings.fromConfig(config),results=new WorkResults(store,[],deliverySettings);
+  const deliverySettings=WorkDeliverySettings.fromConfig(config),results=new WorkResults(store,[],deliverySettings,()=>workDelegation(config).notify);
   const deliveryJobs=new Map<string,Promise<void>>();
   const deliverOutput=(id:string)=>{if(stopped||reloading||deliveryJobs.has(id))return;const job=results.dispatchPending(config.project.id,id,()=>runtimeReady()).then(()=>undefined).catch(()=>{if(!stopped)workActivity(store,config.project.id,id,'delivery.blocked','Result delivery requires checking its stored connection or receipt.',{stage_id:'delivery',status:'blocked',reason:'RESULT_DELIVERY_UNAVAILABLE'});}).finally(()=>deliveryJobs.delete(id));deliveryJobs.set(id,job);};
   const workRuntime=new WorkRuntime(store,config,workModel,undefined,(id,input,created)=>{if(created)results.setSelection(config.project.id,id,{revision:0,target_ids:input.delivery_target_ids??deliverySettings.publicState().default_target_ids});}),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);

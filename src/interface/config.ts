@@ -40,7 +40,12 @@ export type CodingConfig=z.infer<typeof CodingConfigSchema>;
 /** The delegation policy (plan B1). `registered_folder_moves`: a reviewed-by-code, reversible move plan inside a folder
  * the owner granted with move permission is applied without a click. Submissions, payments, messages to third
  * parties and paid APIs are not part of any delegation and keep their own gates. */
-const WorkDelegationSchema=z.object({daily_scheduled_runs:z.number().int().min(0).max(1000).default(50),registered_folder_moves:z.boolean().default(true),remember_public_sources:z.boolean().default(true)}).strict();
+const WorkDelegationSchema=z.object({daily_scheduled_runs:z.number().int().min(0).max(1000).default(50),registered_folder_moves:z.boolean().default(true),remember_public_sources:z.boolean().default(true),
+  // Jev is a paid API the owner switches on in the model settings. This is its budget: judgments per local day;
+  // beyond it the configured AI decides instead (or the judgment waits when no AI fallback is configured).
+  paid_judgment_daily_calls:z.number().int().min(0).max(100000).default(1000),
+  // What reaches the owner's own messenger: verified results only, also stops only the owner can resolve, or everything.
+  notify:z.enum(['results','results_and_owner','all']).default('results_and_owner')}).strict();
 const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional(),autonomy:z.enum(['per_run','delegated']).optional(),delegation:WorkDelegationSchema.optional()}).strict();
 export type WorkConfig=z.infer<typeof WorkConfigSchema>;
 export const HostConfigSchema=z.object({
@@ -161,7 +166,7 @@ export function workAutonomy(config:Pick<HostConfig,'path'>):'per_run'|'delegate
 }
 /** The delegation's budget, read live. Runs the owner starts are never limited; runs the host starts from a
  * schedule stop at this many per local day so a standing delegation cannot spend the AI allowance unattended. */
-export function workDelegation(config:Pick<HostConfig,'path'>):{daily_scheduled_runs:number;registered_folder_moves:boolean;remember_public_sources:boolean}{
+export function workDelegation(config:Pick<HostConfig,'path'>):{daily_scheduled_runs:number;registered_folder_moves:boolean;remember_public_sources:boolean;paid_judgment_daily_calls:number;notify:'results'|'results_and_owner'|'all'}{
   try{return WorkDelegationSchema.parse(HostConfigSchema.parse(JSON.parse(readFileSync(config.path,'utf8'))).work?.delegation??{});}catch{return WorkDelegationSchema.parse({});}
 }
 /** The policy version recorded with what the host did on the owner's behalf: changes when the delegation changes. */

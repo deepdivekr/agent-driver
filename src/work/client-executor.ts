@@ -144,6 +144,9 @@ export interface WorkClientHooks {
   /** Plan B4: read steps of a verified procedure for a near-identical request. The host proposes each once, in
    * order, in place of a model turn; validation, dispatch and receipts are the normal path. */
   replay?:ReadonlyArray<{tool:string;arguments:Record<string,unknown>}>;
+  /** Plan B4: a saved, verified template drives the repeat. Each step is proposed once in place of a model turn and
+   * goes through the normal validation, dispatch and receipts. `advance` moves a save into the plan's next stage. */
+  script?:(checkpoint:WorkClientCheckpoint)=>Promise<{tool:string;arguments:Record<string,unknown>;summary:string;advance?:boolean}|null>;
   guard?:()=>void|Promise<void>;signal?:AbortSignal;
   /** Reconcile the saved invocation against the original runtime; never repeat an unknown write. */
   reconcileTool?:(invocation:WorkClientInvocation)=>Promise<WorkClientToolReceipt|null>;
@@ -406,7 +409,21 @@ export class BoundedWorkClientExecutor {
           else return result(terminal.status as 'waiting_auth'|'waiting_approval'|'reconciliation_required',`WORK_CLIENT_${terminal.status.toUpperCase()}`);
         }
         const stage=currentStage();
-        const replayed=replayStep();
+        // A saved result is read back next in practically every recorded run. The host does that read itself
+        // instead of spending a model turn on choosing it; a failed readback is an ordinary observation.
+        const lastObserved=checkpoint.observations.at(-1);
+        const readback=!checkpoint.completion_repair&&!checkpoint.verification_pending&&lastObserved?.invocation.tool_name==='office_result_draft'&&lastObserved.invocation.dispatched&&lastObserved.receipt.status==='succeeded'&&tools.some(item=>item.name==='office_result_read'&&item.effect==='read_only')&&!excludedTools.has('office_result_read')
+          ?{tool:'office_result_read',arguments:{request_id:lastObserved.invocation.request_id}}:null;
+        const scripted=readback?null:await hooks.script?.(structuredClone(checkpoint))??null;
+        const replayed=readback??scripted??replayStep();
+        // A scripted save belongs to the stage after the reads: the read stage is reported with its own receipts.
+        let scriptedStage=stage,scriptedClaims:Array<{stage_id:string;evidence_ids:string[]}>=[];
+        if(scripted?.advance&&semantic&&plan){
+          const steps=businessSteps(plan),done=new Set(currentStageReports(plan,checkpoint.stage_reports).map(report=>report.stage_id)),current=steps.find(step=>step.id===stage);
+          const evidence=current?[...new Set(checkpoint.observations.filter(item=>item.invocation.stage_id===current.id&&item.invocation.stage_binding===stageBinding(current)&&item.receipt.status==='succeeded').flatMap(item=>item.receipt.evidence_ids))].slice(0,32):[];
+          const following=current&&evidence.length?steps.find(step=>step.id!==current.id&&!done.has(step.id)&&step.depends_on.every(id=>done.has(id)||id===current.id)):undefined;
+          if(current&&following){scriptedStage=following.id;scriptedClaims=[{stage_id:current.id,evidence_ids:evidence}];}
+        }
         if(!replayed)await progress({kind:'model.started',turn:checkpoint.turn,stage_id:stage,summary:'Selecting the next Work action.'});
         const stageContext=semantic&&plan?(()=>{
           const steps=businessSteps(plan),reported=new Set(currentStageReports(plan,checkpoint.stage_reports).map(report=>report.stage_id));
@@ -423,7 +440,7 @@ export class BoundedWorkClientExecutor {
         const input={work_id:request.work_id,run_id:request.run_id,stage_id:stage,prompt:request.prompt,completion_checks:checks,context:request.context??null,tools:excludedTools.size?tools.filter(item=>!excludedTools.has(item.name)):tools,checkpoint,completion_gate:{phase:'pre_verification',complete_action:'proposal_for_independent_host_verification',final_flag:'set_by_host_after_verification',closed_trace:'generated_by_host_at_complete_cutpoint',evidence_role:'control_metadata_not_result_evidence',business_receipts:'required_before_complete_proposal'},...(semantic&&plan?{plan:{revision:plan.revision,steps:businessSteps(plan)},stage_context:stageContext}:{})};
         // Provider/auth/quota exceptions occur outside output validation. They
         // keep the normal continuity/wait path and never trigger this repair.
-        const raw=replayed?{action:'tool',stage_id:stage,tool_name:replayed.tool,arguments_json:JSON.stringify(replayed.arguments),summary:'Repeating a read from the verified procedure of a similar request.',completed_checks:[],...(semantic&&plan?{completed_stages:[]}:{}),wait_reason:null}
+        const raw=replayed?{action:'tool',stage_id:scriptedStage,tool_name:replayed.tool,arguments_json:JSON.stringify(replayed.arguments),summary:readback?'Reading back the saved result.':scripted?scripted.summary:'Repeating a read from the verified procedure of a similar request.',completed_checks:[],...(semantic&&plan?{completed_stages:scriptedClaims}:{}),wait_reason:null}
           :await model.call('correct',instructions,input,z.toJSONSchema(decisionSchema));
         let decision:z.infer<typeof workClientDecisionSchema>;
         const output=semantic&&plan?semanticDecisionOutput(plan,checkpoint):validatedDecisionOutput;

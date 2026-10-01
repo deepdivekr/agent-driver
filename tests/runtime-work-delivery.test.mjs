@@ -117,3 +117,25 @@ test('provider adapters use bounded POSTs and require provider acknowledgements'
     assert.equal((await rejected.send({result,target_alias:'slack',idempotency_key:'unique'})).effect_state,effect);
   }
 });
+
+// Plan B1 notification level: what reaches the owner's own messenger.
+test('B1: the notification level decides which outcomes are sent, and the message says whether the Work is done or needs the owner',async()=>{
+  const {notifies}=await import('../dist/work/results.js'),{deliveryContent}=await import('../dist/work/delivery-connectors.js');
+  assert.equal(notifies('results','succeeded',true),true);assert.equal(notifies('results','waiting_auth',false),false);
+  assert.equal(notifies('results_and_owner','waiting_auth',false),true);assert.equal(notifies('results_and_owner','awaiting_review',false),true);
+  assert.equal(notifies('results_and_owner','retry_wait',false),false,'A transient wait is not a reason to message the owner.');assert.equal(notifies('all','retry_wait',false),true);
+  const result={id:'r-1',work_title:'지진 수집',source_status:'succeeded',work_completion_verified:true,summary:'14건을 저장했다.',text:'14건을 저장했다.',artifacts:[{id:'a'}]};
+  assert.equal(deliveryContent(result),'지진 수집\n[완료] 검증을 통과했습니다.\n\n14건을 저장했다.\n\n원본 파일은 앱에서 내려받을 수 있습니다.\n\nWork result r-1');
+  assert.match(deliveryContent({...result,source_status:'waiting_auth',work_completion_verified:false,artifacts:[]}),/^지진 수집\n\[확인 필요\] 로그인이 필요합니다\./u);
+});
+
+// Live: Telegram was reachable over IPv4 but Node gave up after 250 ms per address family and reported ETIMEDOUT.
+test('a provider that was never reached is retryable, not an uncertain delivery; an unobserved response stays uncertain',async()=>{
+  const {createDeliveryConnector}=await import('../dist/work/delivery-connectors.js'),{neverConnected}=await import('../dist/core/network.js'),net=await import('node:net');
+  assert.ok(net.getDefaultAutoSelectFamilyAttemptTimeout()>=2500,'Each address family gets a realistic connection time.');
+  const target={id:'tg',platform:'telegram',label:'t',telegram_bot_token:'123456:'+'a'.repeat(30),telegram_chat_id:'42'},result={id:'r-1',work_title:'t',source_status:'succeeded',work_completion_verified:true,summary:'s',text:'s',artifacts:[]};
+  const unreachable=Object.assign(new TypeError('fetch failed'),{cause:Object.assign(new AggregateError([Object.assign(new Error('a'),{code:'ETIMEDOUT'}),Object.assign(new Error('b'),{code:'ENETUNREACH'})]),{code:'ETIMEDOUT'})});
+  assert.equal(neverConnected(unreachable),true);assert.equal(neverConnected(new DOMException('timed out','TimeoutError')),false);
+  assert.deepEqual(await createDeliveryConnector(target,async()=>{throw unreachable;}).send({result,target_alias:'tg',idempotency_key:'k'}),{status:'failed',effect_state:'not_dispatched',reason:'DELIVERY_PROVIDER_UNREACHABLE'});
+  assert.deepEqual(await createDeliveryConnector(target,async()=>{throw new DOMException('timed out','TimeoutError');}).send({result,target_alias:'tg',idempotency_key:'k'}),{status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'});
+});

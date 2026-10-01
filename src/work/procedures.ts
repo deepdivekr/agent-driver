@@ -2,11 +2,12 @@ import {type PackStore} from '../packs/store.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {type WorkClientCheckpoint} from './client-executor.js';
+import {buildProcedureTemplate,type ProcedureTemplate} from './procedure-template.js';
 
 /** Plan B2–B4, first slice: a Work whose completion was verified leaves its procedure behind, and a later
  * similar request gets it as guidance. This is not a Pack and not evidence: it carries no authority, the new run
  * needs its own receipts and its own verification, and a procedure that keeps failing stops being offered. */
-export interface SavedProcedure {id:string;request:string;steps:Array<{tool:string;arguments:Record<string,unknown>}>;successes:number;failures:number;}
+export interface SavedProcedure {id:string;request:string;steps:Array<{tool:string;arguments:Record<string,unknown>}>;successes:number;failures:number;template?:ProcedureTemplate|null;}
 type Observation=WorkClientCheckpoint['observations'][number];
 const trace='office_controlled_run_trace';
 /** Arguments that only made sense in the run that produced them. */
@@ -16,6 +17,7 @@ const init=(store:PackStore)=>{
   const db=store.hermesState;db.exec(table);const columns=new Set(db.prepare('PRAGMA table_info(office_procedure)').all().map(column=>String(column.name)));
   if(!columns.has('consecutive_failures'))db.exec('ALTER TABLE office_procedure ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0');
   if(!columns.has('disabled'))db.exec('ALTER TABLE office_procedure ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0');
+  if(!columns.has('template'))db.exec('ALTER TABLE office_procedure ADD COLUMN template TEXT');
 };
 /** Plan B2 life cycle. A procedure starts as a candidate, becomes regular at its second verified run, is demoted
  * (no longer offered) after two failures in a row, and returns with its next verified run. Only the owner switches it off. */
@@ -42,13 +44,15 @@ export function procedureSteps(observations:readonly Observation[]):SavedProcedu
     .slice(0,16).map(item=>({tool:item.invocation.tool_name,arguments:cleanArguments(item.invocation.arguments) as Record<string,unknown>}));
 }
 /** Called once for a Work whose completion the host verified. One procedure per request text or offered procedure. */
-export function recordVerifiedProcedure(store:PackStore,project:string,workId:string,request:string,observations:readonly Observation[],offeredId?:string):SavedProcedure|null{
+export function recordVerifiedProcedure(store:PackStore,project:string,workId:string,request:string,observations:readonly Observation[],offeredId?:string,options:{keepTemplate?:boolean}={}):SavedProcedure|null{
   const steps=procedureSteps(observations),terms=requestTerms(request);if(!steps.length||terms.length<2)return null;
   // A run that was guided by a saved procedure and passed verification is that procedure's next success.
   init(store);const id=offeredId??hashJson({request:request.trim()}).slice(0,32),at=new Date().toISOString(),db=store.hermesState;
   const existing=db.prepare('SELECT successes,failures FROM office_procedure WHERE project_id=? AND id=?').get(project,id) as {successes:number;failures:number}|undefined;
-  if(existing)db.prepare('UPDATE office_procedure SET steps=?,source_work_id=?,successes=successes+1,consecutive_failures=0,updated_at=? WHERE project_id=? AND id=?').run(JSON.stringify(steps),workId,at,project,id);
-  else db.prepare('INSERT INTO office_procedure(project_id,id,request,terms,steps,source_work_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(project,id,safeControlText(request,2000),JSON.stringify(terms),JSON.stringify(steps),workId,at,at);
+  // The template comes from a run the model set up itself. A run the host produced from a template keeps the one it used.
+  const template=options.keepTemplate?undefined:buildProcedureTemplate(request,observations),templateJson=template?JSON.stringify(template):null;
+  if(existing)db.prepare(`UPDATE office_procedure SET steps=?,source_work_id=?,successes=successes+1,consecutive_failures=0,updated_at=?${options.keepTemplate?'':',template=?'} WHERE project_id=? AND id=?`).run(...[JSON.stringify(steps),workId,at,...(options.keepTemplate?[]:[templateJson]),project,id]);
+  else db.prepare('INSERT INTO office_procedure(project_id,id,request,terms,steps,source_work_id,template,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').run(project,id,safeControlText(request,2000),JSON.stringify(terms),JSON.stringify(steps),workId,templateJson,at,at);
   return {id,request,steps,successes:(existing?.successes??0)+1,failures:existing?.failures??0};
 }
 /** A run that was offered this procedure and still did not complete counts against it. */
@@ -60,9 +64,9 @@ export function recordProcedureFailure(store:PackStore,project:string,id:string)
 export function similarProcedure(store:PackStore,project:string,request:string,threshold=0.5):(SavedProcedure&{similarity:number})|null{
   init(store);const terms=requestTerms(request);if(terms.length<2)return null;
   let best:(SavedProcedure&{similarity:number})|null=null;
-  for(const row of store.hermesState.prepare('SELECT id,request,terms,steps,successes,failures FROM office_procedure WHERE project_id=? AND disabled=0 AND consecutive_failures<2 ORDER BY updated_at DESC LIMIT 200').all(project) as Array<{id:string;request:string;terms:string;steps:string;successes:number;failures:number}>){
+  for(const row of store.hermesState.prepare('SELECT id,request,terms,steps,successes,failures,template FROM office_procedure WHERE project_id=? AND disabled=0 AND consecutive_failures<2 ORDER BY updated_at DESC LIMIT 200').all(project) as Array<{id:string;request:string;terms:string;steps:string;successes:number;failures:number;template:string|null}>){
     const similarity=overlap(terms,JSON.parse(row.terms) as string[]);
-    if(similarity>=threshold&&(!best||similarity>best.similarity))best={id:row.id,request:row.request,steps:JSON.parse(row.steps) as SavedProcedure['steps'],successes:row.successes,failures:row.failures,similarity};
+    if(similarity>=threshold&&(!best||similarity>best.similarity))best={id:row.id,request:row.request,steps:JSON.parse(row.steps) as SavedProcedure['steps'],successes:row.successes,failures:row.failures,similarity,template:row.template?JSON.parse(row.template) as ProcedureTemplate:null};
   }
   return best;
 }
@@ -70,7 +74,7 @@ export function similarProcedure(store:PackStore,project:string,request:string,t
 export const REPLAY_SIMILARITY=0.75;
 export const procedureGuidance=(procedure:SavedProcedure)=>({from_request:procedure.request,verified_runs:procedure.successes,steps:procedure.steps,
   meaning:'A procedure that completed a similar request and passed verification. Reuse its sources and order when they fit this request; adapt arguments to the current request. It is guidance, not evidence or permission: this run needs its own receipts and is verified on its own.'});
-type ProcedureRow={id:string;request:string;terms:string;steps:string;successes:number;failures:number;consecutive_failures:number;disabled:number};
+type ProcedureRow={id:string;request:string;terms:string;steps:string;successes:number;failures:number;consecutive_failures:number;disabled:number;template?:string|null};
 const offerable='disabled=0 AND consecutive_failures<2';
 /** Plan B3: the few verified procedures closest to this request, for the planner to choose from. Names of tools
  * only: no arguments, values or results enter the planning input. */
@@ -82,8 +86,8 @@ export function procedureCandidates(store:PackStore,project:string,request:strin
 }
 /** The procedure the planner selected, if it is still offerable. */
 export function selectedProcedure(store:PackStore,project:string,id:string,request:string):(SavedProcedure&{similarity:number;grade:ProcedureGrade})|null{
-  init(store);const row=store.hermesState.prepare(`SELECT id,request,terms,steps,successes,failures,consecutive_failures,disabled FROM office_procedure WHERE project_id=? AND id=? AND ${offerable}`).get(project,id) as ProcedureRow|undefined;
-  return row?{id:row.id,request:row.request,steps:JSON.parse(row.steps) as SavedProcedure['steps'],successes:row.successes,failures:row.failures,similarity:overlap(requestTerms(request),JSON.parse(row.terms) as string[]),grade:grade(row)}:null;
+  init(store);const row=store.hermesState.prepare(`SELECT id,request,terms,steps,successes,failures,consecutive_failures,disabled,template FROM office_procedure WHERE project_id=? AND id=? AND ${offerable}`).get(project,id) as ProcedureRow|undefined;
+  return row?{id:row.id,request:row.request,steps:JSON.parse(row.steps) as SavedProcedure['steps'],successes:row.successes,failures:row.failures,similarity:overlap(requestTerms(request),JSON.parse(row.terms) as string[]),grade:grade(row),template:row.template?JSON.parse(row.template) as ProcedureTemplate:null}:null;
 }
 /** For the Control Center: what was learned, how it has done, and whether the owner switched it off. */
 export function listProcedures(store:PackStore,project:string){

@@ -178,3 +178,19 @@ test('runtime fixture three write families draft first, expose no approval secre
   }
   assert.equal(delivered,3);
 });
+
+// Plan B1/B4: the paid judgment API has a daily budget; past it the configured AI decides the remaining rows.
+test('B4: paid judgments stop at the daily budget and the configured AI decides the rest',async t=>{
+  const rows=[{id:'m1',subject:'server down',body:'Production is unavailable'},{id:'m2',subject:'server down again',body:'Production is unavailable'},{id:'m3',subject:'lunch menu',body:'Friday lunch menu attached'}];
+  const x=await base(t,{rows,models:'jev_llm'}),raw=JSON.parse(await readFile(x.configPath,'utf8'));raw.work={model_data_approved:true,autonomy:'delegated',delegation:{paid_judgment_daily_calls:2}};await writeFile(x.configPath,JSON.stringify(raw));
+  const config=loadHostConfig(x.configPath),store=new PackStore(config.dbPath);store.registerProject(config.project);x.cleanups.push(()=>store.close());
+  let paid=0,asked=0;
+  const jev={async systemOne(){paid++;return {answers:{label:{type:'choice',choice:'urgent',confidence:.97,probabilities:{urgent:.97,normal:.01,unknown:.02}}}};}};
+  const llm={calls:[],async call(){asked++;return {label:'normal',evidence_quote:'lunch menu'};}};
+  const runtime=new FamilyRuntime(store,config,{jev,llm});x.cleanups.push(async()=>{runtime.close();await runtime.drain();});
+  const triage={...recipe('inbox.triage'),...collection,judgment:{question:'Does this require urgent attention?',labels:{urgent:'An outage or safety issue',normal:'Routine request'}},draft_by_label:{urgent:'확인 중입니다.'}};
+  const result=await runtime.call('runtime_pack_run',{request_id:'budget-1',recipe:triage});
+  assert.equal(result.status,'succeeded',JSON.stringify(result.result).slice(0,300));
+  assert.deepEqual(result.result.items.map(item=>item.decider),['jev','jev','llm']);assert.equal(paid,2);assert.equal(asked,1);
+  assert.equal(store.hermesState.prepare('SELECT calls FROM office_paid_judgment').get().calls,2);
+});

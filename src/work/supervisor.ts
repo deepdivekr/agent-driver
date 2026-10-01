@@ -6,10 +6,13 @@ import {workAutonomy,workDelegation,workPolicyVersion,loadHostConfig,type HostCo
 import {RuntimeApi} from '../interface/api.js';
 import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {applyAutoSources} from '../packs/auto-sources.js';
+import {paidJudgmentsToday,countPaidJudgment} from '../packs/paid-judgments.js';
+import {ProcedureScript} from './procedure-template.js';
+import {optionalTypeSafeTransportFromHostEnvironment} from '../taskpack/typesafe-jev.js';
 import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,selectedProcedure,similarProcedure,REPLAY_SIMILARITY} from './procedures.js';
 import {allocateWorkModels} from './task-models.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
-import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
+import {modelSettingsPath,readModelSettings,effectiveModelEnvironment} from '../onboarding/model-settings.js';
 import {requireCondition} from '../core/contracts.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {workProposalSchema,workControlSchema as supervisorActionSchema,type WorkProposal} from './contracts.js';
@@ -492,9 +495,15 @@ export class WorkSupervisor {
       // The planner's selection (B3) wins when it is still offerable; otherwise the closest similar procedure.
       const chosen=spec.procedure_selection?selectedProcedure(this.store,project,spec.procedure_selection.id,work.prompt):null;
       const offered=chosen??similarProcedure(this.store,project,work.prompt);
-      if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
+      // A near-identical request (or one the planner matched to a regular procedure) reuses it. With a saved
+      // template the host reads, extracts and saves by itself, Jev confirming changed values; without one it replays the reads.
+      const reusable=Boolean(offered&&(offered.similarity>=REPLAY_SIMILARITY||chosen?.grade==='regular'));
+      const paidOpen=paidJudgmentsToday(this.store,project)<workDelegation(this.config).paid_judgment_daily_calls;
+      const fastJudgment=paidOpen?optionalTypeSafeTransportFromHostEnvironment(effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)))).transport??undefined:undefined;
+      const script=offered?.template&&reusable&&!checkpoint?new ProcedureScript(offered.template,fastJudgment,calls=>countPaidJudgment(this.store,project,calls),summary=>workActivity(this.store,project,row.work_id,'procedure.handed_over',summary,{run_id:row.run_id,stage_id:'execution',status:'running'})):null;
+            if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
       const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,...(hostSchedule?{host_schedule:hostSchedule}:{}),...(offered?{verified_procedure:procedureGuidance(offered)}:{}),connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason. If spec.collection_contract exists, use its exact recipe through runtime_pack_run without a new runtime_pack_plan. The host verifies every matching observed source row and actual output in code; do not read source pages just to obtain another model approval of covered checks. Reuse an unchanged same-Work receipt via runtime_pack_status for completion-only recovery; never rewrite a successful artifact just for verification. Remaining semantic checks still need their own evidence.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
-        {tools:toolkit.catalog(),guard,signal:controller.signal,...(offered&&(offered.similarity>=REPLAY_SIMILARITY||chosen?.grade==='regular')?{replay:offered.steps.filter(step=>!momentBound(step.arguments))}:{}),
+        {tools:toolkit.catalog(),guard,signal:controller.signal,...(script?{script:state=>script.next(state)}:offered&&reusable?{replay:offered.steps.filter(step=>!momentBound(step.arguments))}:{}),
           toolRequestId:(name,args,fallback)=>toolkit!.requestId(name,args,fallback),
           packRequestRecovery:(invocation,prior)=>toolkit!.packRequestRecovery(invocation,prior),
           checkpoint:saveCheckpoint,
@@ -517,7 +526,7 @@ export class WorkSupervisor {
       if(settingsChangeReasons.has(result.reason??'')&&['retryable_failure','paused'].includes(result.status)&&!customPackWorkBinding(this.store,project,row.work_id))state='queued';
       if(this.stopped&&result.status==='paused')state='queued';
       if(state==='succeeded'&&result.completion_verified){
-        const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations,offered?.id);
+        const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations,offered?.id,{keepTemplate:Boolean(script)&&result.model_calls.length<=2});
         if(saved)workActivity(this.store,project,row.work_id,'procedure.saved',`The verified procedure of this Work was saved for similar requests (${saved.steps.length} step${saved.steps.length===1?'':'s'}, verified ${saved.successes} time${saved.successes===1?'':'s'}).`,{run_id:row.run_id,stage_id:'execution',status:'saved'});
       }else if(offered&&['failed','awaiting_review'].includes(state))recordProcedureFailure(this.store,project,offered.id);
       this.finish(row,state,result.reason,{summary:result.summary,text:result.summary,completion_verified:result.completion_verified,checks:spec.completion_checks,model_calls:result.model_calls.length,observations:result.checkpoint.observations.length,...(workAutonomy(this.config)==='delegated'?{policy_version:workPolicyVersion(this.config)}:{})},watchReadyAt,{progressed,...(modelWait?{retryDelayMs:modelRetryDelay(row.attempts)}:{})});
