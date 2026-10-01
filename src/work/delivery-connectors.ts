@@ -21,7 +21,9 @@ export function deliveryContent(result:WorkResult,limit=4000){
 }
 const content=deliveryContent;
 const length=(value:string)=>[...value].length;
-async function boundedBody(response:Response,limit=8192){
+// Telegram echoes the sent message with non-ASCII characters escaped (six bytes each), so the acknowledgement of a
+// 4,000-character Korean message is about 25 KB (live: it was sent, and recorded as unobserved at 8 KB).
+async function boundedBody(response:Response,limit=96_000){
   const reader=response.body?.getReader();if(!reader)return '';
   const chunks:Uint8Array[]=[];let size=0;
   try{while(true){const next=await reader.read();if(next.done)break;size+=next.value.byteLength;if(size>limit)throw Error('DELIVERY_RESPONSE_TOO_LARGE');chunks.push(next.value);}}finally{await reader.cancel().catch(()=>undefined);}

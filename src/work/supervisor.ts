@@ -544,7 +544,8 @@ export class WorkSupervisor {
       // verified completion gets one fresh attempt of the same Work. The unverified run and its receipts stay in
       // history; a run that was itself the fresh attempt stops for the owner.
       const runs=this.store.hermesState,repeatable=(['read_only','draft_only'].includes(spec.requested_effect)||result.checkpoint.observations.every(item=>['read_only','draft_only'].includes(item.invocation.effect)||item.invocation.tool_name.startsWith('office_')||item.receipt.effect_state==='none'))&&result.checkpoint.observations.every(item=>item.receipt.effect_state!=='uncertain');
-      if(state==='awaiting_review'&&repeatable&&workAutonomy(this.config)==='delegated'&&!customPackWorkBinding(this.store,project,row.work_id)
+      // A wide run that could not be verified is not repeated: the same reading would meet the same limit.
+      if(state==='awaiting_review'&&repeatable&&result.checkpoint.observations.length<=24&&workAutonomy(this.config)==='delegated'&&!customPackWorkBinding(this.store,project,row.work_id)
         &&runs.prepare('SELECT state FROM office_supervisor WHERE run_id=?').get(row.run_id)?.state==='awaiting_review'
         &&!runs.prepare("SELECT 1 FROM office_activity WHERE project_id=? AND work_id=? AND kind='supervisor.fresh_attempt' AND metadata LIKE ? LIMIT 1").get(project,row.work_id,`%"run_id":"${row.run_id}"%`)){
         const id=randomUUID(),stamp=now();

@@ -293,7 +293,7 @@ export function executorView(checkpoint:WorkClientCheckpoint):WorkClientCheckpoi
 }
 /** The executor is told how far the run has gone. A wide task has no natural end to exploring (live: ninety reads in
  * twenty minutes and no saved result); past the mark it is asked to save what is established and name what is not. */
-const WRAP_UP_READS=24,WRAP_UP_SECONDS=420;
+const WRAP_UP_READS=24,WRAP_UP_SECONDS=420,READ_LIMIT_BEFORE_RESULT=30,READBACK_TOOLS=new Set(['office_result_read','runtime_pack_status','office_schedule_status','office_pack_source_read']);
 export function runBudget(checkpoint:WorkClientCheckpoint,nowMs=Date.now()):{run_budget?:{reads_done:number;elapsed_seconds:number;wrap_up:true;instruction:string}}{
   const dispatched=checkpoint.observations.filter(item=>item.invocation.dispatched&&item.invocation.tool_name!=='office_controlled_run_trace');
   if(!dispatched.length||dispatched.some(item=>item.receipt.status==='succeeded'&&item.invocation.effect!=='read_only'))return {};
@@ -671,6 +671,14 @@ export class BoundedWorkClientExecutor {
           if(checkpoint.observations.some(item=>item.invocation.dispatched&&item.invocation.request_id===invocation.request_id)){await refuse('WORK_CLIENT_COMPLETION_REPAIR_REPLAY_FORBIDDEN','This exact request already ran and is not replayed. Choose a new safe read or output.');continue;}
           const after=checkpoint.observations.filter(item=>item.invocation.dispatched&&!checkpoint.completion_repair!.prior_dispatched_request_ids.includes(item.invocation.request_id));
           if(after.length>=3){await refuse('WORK_CLIENT_COMPLETION_REPAIR_TOOL_BUDGET','This correction attempt has used its three tool dispatches. Propose complete with the evidence now available, or wait with a concrete reason.');continue;}
+        }
+        // The checkpoint keeps the latest 32 receipts, and verification can only judge what is kept. A run that has
+        // not saved a result yet stops reading at 30, so the result it then saves rests on receipts that still exist
+        // (live: sixty reads, and the digest's sources had already left the window).
+        if(tool.effect==='read_only'&&!READBACK_TOOLS.has(tool.name)&&!checkpoint.observations.some(item=>item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.invocation.effect!=='read_only')
+          &&(checkpoint.evicted_observations?.count??0)+checkpoint.observations.filter(item=>item.invocation.dispatched).length>=READ_LIMIT_BEFORE_RESULT){
+          queuedReads.length=0;
+          await refuse('WORK_CLIENT_READ_BUDGET_REACHED',`This run has made ${READ_LIMIT_BEFORE_RESULT} reads without saving a result. Save the result now from the receipts in hand and state in it what could not be confirmed; further reads are possible after a result exists.`);continue;
         }
         checkpoint={...checkpoint,pending:invocation};await save();await guard();
         await progress({kind:'tool.started',turn:checkpoint.turn,stage_id:invocation.stage_id,tool_name:tool.name,summary:`Running ${tool.name}.`});

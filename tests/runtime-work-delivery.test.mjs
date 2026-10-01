@@ -147,3 +147,14 @@ test('a provider that was never reached is retryable, not an uncertain delivery;
   assert.deepEqual(await createDeliveryConnector(target,async()=>{throw unreachable;}).send({result,target_alias:'tg',idempotency_key:'k'}),{status:'failed',effect_state:'not_dispatched',reason:'DELIVERY_PROVIDER_UNREACHABLE'});
   assert.deepEqual(await createDeliveryConnector(target,async()=>{throw new DOMException('timed out','TimeoutError');}).send({result,target_alias:'tg',idempotency_key:'k'}),{status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'});
 });
+
+// Live: a 3,600-character Korean message was delivered, but its 25 KB acknowledgement exceeded the read limit and the
+// delivery was recorded as uncertain.
+test('a long non-ASCII message is acknowledged: the provider echo fits the response limit',async()=>{
+  const {createDeliveryConnector}=await import('../dist/work/delivery-connectors.js');
+  const target={id:'tg',platform:'telegram',label:'t',telegram_bot_token:'123456:'+'a'.repeat(30),telegram_chat_id:'42'},text='가'.repeat(3900);
+  const echo=JSON.stringify({ok:true,result:{message_id:7,chat:{id:42},text}}).replace(/[\u0080-\uffff]/gu,character=>'\\u'+character.charCodeAt(0).toString(16).padStart(4,'0'));
+  assert.ok(Buffer.byteLength(echo)>20000);
+  const ack=await createDeliveryConnector(target,async()=>new Response(echo,{status:200})).send({result:{id:'r-1',work_title:'t',source_status:'succeeded',work_completion_verified:true,summary:'s',text,artifacts:[]},target_alias:'tg',idempotency_key:'k'});
+  assert.equal(ack.status,'delivered');
+});
