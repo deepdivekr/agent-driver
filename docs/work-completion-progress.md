@@ -144,8 +144,57 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
 - Work 관련 테스트 전체: 723 PASS / 0 FAIL, 새 `runtime-work-completion-risk-tier` 7 PASS.
   기존 fixture는 가벼움 지시문을 모르므로 형식 오류로 엄격 경로로 넘어가 같은 결과를 낸다.
 
+### A7. 실제 구독 모델 측정 — 1차(2026-10-01, 측정만, 코드 변경 없음)
+- 소스: 461e885(이 브랜치). 비교: main f077e04. 각각 별도 worktree·새 data_dir·별도 포트의
+  Control Center와 supervisor로 실행했고, 같은 시간대에 병렬로 돌렸다(외부 데이터 조건을 맞추기 위해).
+- 모델: Control Center에서 Codex `gpt-6.1-sol`, reasoning low, 실행·검증 역할을 같은 모델로 지정
+  (이전 24건 감사와 같은 모델). 설정은 `tests/runtime-work-supervisor-continuity.test.mjs`의 setup 형식에
+  `records` file 소스(공개 세트의 예시 JSON 6행)만 등록했다. 브라우저는 기본값(owned headless Playwright), Aside 미등록.
+- 등록은 UI 등록 버튼과 같은 요청(`execute:true`, 실행 동의 포함)으로 했고, 그 밖의 사람 개입은 하지 않았다.
+  승인 요청(`waiting_approval`)은 한 건도 나오지 않았다.
+
+| ID | 상태 · 이유 | 검증 방식 | 검증 호출(관측) | 수정 | 시간 | 확인 | 원인 분류 |
+|---|---|---|---|---|---|---|---|
+| P1 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 57초 | 산출물 없음 | 환경(Google 비정상 트래픽 → Aside 연결 요구) |
+| P2 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 57초 | 산출물 없음 | 환경(같음) |
+| P3 | succeeded | 코드(봉인된 수집 계약, native) | 0 | 0 | 248초 | 정답 a1·a3·a4·a6, `id,name`만 — 일치 | — |
+| P4 | succeeded | 엄격(가벼움 판단 불가 후 전환) | 5 | 0 | 419초 | report 2·memo 2·invoice 2 — 일치 | — |
+| P5 | failed · `BROWSER_URL_NOT_OBSERVED` | — | 0 | 0 | 56초 | 산출물 없음 | 실행기 종료 |
+| P6 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 74초 | 입력·제출 0건 | 환경(양식 `draft_only` 대상 미등록) |
+| P7 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 78초 | 산출물 없음 | 환경(Bing 빈 결과, DuckDuckGo·Google 챌린지) |
+
+- 요약: 완료율 2/7(29%, 목표 70% 미달). 거짓 성공 0/2. 거짓 거부 0/5(보류·실패 건에는 맞는 산출물이 없었다).
+  검증 호출은 Work당 평균 0.71회(성공 건 기준 2.5회).
+- f077e04 비교(같은 7건·같은 모델): P1·P2·P6·P7 같은 이유로 보류, P5 같은 이유로 실패, P3 성공(96초, 호출 0),
+  P4 성공(295초, 엄격 호출 4). 완료율 2/7로 같다. 이 세트에서 Part A의 개선은 아직 완료율로 드러나지 않았고,
+  P4는 가벼움 호출 1회가 더해져 호출 4→5, 시간 295→419초로 늘었다.
+- 발견 1 — 검증 호출 카운터가 실제 모델에서 항상 0이다. `modelForRole()`(`src/taskpack/adaptive-spec.ts:28`)이
+  `ConfiguredStructuredModel.forRole()`로 새 인스턴스를 만들고, 그 `calls`는 supervisor가 세는
+  `model.calls`(`src/work/supervisor.ts:350`, `:376`)와 분리돼 있다. fixture 모델은 `forRole`이 없어 테스트에서만 맞다.
+  같은 배열로 검증기 실패 종류(인증 만료·쿼터·속도 제한)를 판정하는 `verifierBoundary`(`:351-358`)도 실제 모델에서는 비어 있다.
+  위 표의 호출 수는 활동 기록(가벼움 시작 + 엄격 감사 기록)으로 직접 센 값이다.
+- 발견 2 — 가벼움 검증이 Office 결과 파일이 있는 Work에서 판단하지 못한다. 저장된 checkpoint를 데이터 사본에서
+  재현해 같은 모델로 3회 다시 물었고 3회 모두 엄격 경로로 넘어갔다. 두 원인이 각각 단독으로 충분하다.
+  (1) 가벼움 입력은 `office_result_draft`/`office_result_read`의 파일 본문만 보여 주고 식별자·SHA-256·바이트·전체 읽기
+  여부를 뺀다(`src/work/completion.ts:666`). 검증 모델은 3회 모두 `saved_result` 검사를 "저장 영수증·파일 식별자가 없다"는
+  이유로 `unknown`이라 했다. (2) 일반 receipt는 키가 포함된 JSON 문자열로 보여 주면서 인용문은 스칼라 leaf 안에 있어야
+  통과한다(`:690`). 모델은 3회 모두 `"full_source_read":true` 같은 보여 준 그대로의 문자열을 인용했고 leaf 검사에서 떨어진다.
+- 발견 3 — P5: 사용자가 쓴 `nodejs.org`는 scheme이 없어 허용 URL로 등록되지 않는다(`src/work/execution-tools.ts:164`).
+  거부는 발송 전 검사가 아니라 실행 중 일반 예외(`:616`)라서 A3의 교정 가능한 거부를 타지 못하고, 재개할 때마다 같은
+  pending 읽기를 다시 실행해 진행 없는 3회 뒤 `failed`가 된다.
+- 발견 4 — 이 호스트의 headless 검색은 Google(비정상 트래픽)·DuckDuckGo(결과 없는 셸)·Bing(빈 결과) 모두 막힌다.
+  Google 차단 뒤 호스트는 `provider_change_allowed:false`, `next_action:connect_aside`를 돌려주고(`:444`, `:690`), Aside가 없으면
+  사람이 설정할 때까지 멈춘다. P6은 이 제품에서 양식 입력 수단이 호스트 등록 `draft_only` 대상뿐이라, 공개 세트의 준비
+  단계에 그 대상 등록이 빠져 있다.
+- 발견 5 — 정의 호출(design, 180초)이 Codex에서 시간 초과되면(P3) Claude로 넘어간다(`client_handoff`
+  `provider_unavailable`). 이때 `node` 래퍼만 SIGKILL되고 네이티브 `codex` 프로세스는 고아로 남는다
+  (`src/integrations/subscription-auth.ts:61`).
+- 비공개 Phase112 원본 세트: `NOT_RUN`. 이 환경에는 재준비에 필요한 연결 입력 파일이 없고, 그 세트는 Aside(사용자
+  Windows 브라우저 프로필)를 쓰며, 다른 worktree에서 이미 serve 중이다. 이전 기준(1 PASS / 9 FAIL / 14 NOT_RUN)을 갱신하지 않는다.
+
 ## 다음 행동
 
-A6(지시문 축소: 금지 문장 목록 → 코드 거부 테스트 → 문장 제거 → 크기 테스트),
-A7(frozen quick suite와 진행 기록)을 진행한다.
-Swarm 결과 경로의 수정 루프(A2 잔여)와 중간 등급(A5 잔여)은 A6 이후 다시 판단한다.
+A7 1차 측정의 발견 1–3(검증 호출 카운터, 가벼움 검증 입력, scheme 없는 사용자 URL과 실행 중 거부)을 고치고 같은 세트로 다시 잰다.
+발견 4의 브라우저 경로(Aside 우선 또는 VM)는 사용자 결정에 따라 별도로 진행한다.
+frozen quick suite는 보완 후 최종 소스로 실행한다.
+Swarm 결과 경로의 수정 루프(A2 잔여)와 중간 등급(A5 잔여)은 그 뒤 다시 판단한다.
