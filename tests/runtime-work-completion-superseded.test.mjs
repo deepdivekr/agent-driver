@@ -23,8 +23,8 @@ function batchFixture(){
     inputs.push(structuredClone(input));this.calls.push({purpose,provider:'fixture',model:'fixture',status:'accepted'});
     if(input.eligible_pairs)return {findings:input.eligible_pairs.map(pair=>{
       const record=input.observations.find(item=>item.record_id===pair.record_id),manifest=input.literal_leaf_manifest.find(item=>item.record_id===pair.record_id);
-      const conflict=JSON.stringify(record.value).includes('Node.js 23');
-      return {...pair,relation:conflict?'contradicts':'supports',quote_refs:[leafRef(manifest,'text')],reason:conflict?'Names an older release.':'Names the latest release.'};
+      const conflict=JSON.stringify(record.value).includes('Node.js 23'),partial=JSON.stringify(record.value).includes('TRUNCATED');
+      return {...pair,relation:conflict?'contradicts':partial?'unresolved_material':'supports',quote_refs:partial?[]:[leafRef(manifest,'text')],reason:conflict?'Names an older release.':partial?'The response is truncated and has more content.':'Names the latest release.'};
     })};
     assert.equal(input.projection,'host_validated_leaf_findings');
     return {checks:input.checks.map(check=>{
@@ -96,4 +96,18 @@ test('A1: a 180-row, 15KB table receipt is judged instead of failing on the cita
   const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest:{...originalUserRequest,prompt:'Collect today\'s USGS earthquakes.'},audit:event=>audits.push(event)});
   assert.equal(await verify(tableChecks,[item],{...claimFor(['ev-quakes']),completed_checks:[{id:'rows_saved',evidence_ids:['ev-quakes']}]}),true,JSON.stringify(audits.map(event=>event.code)));
   assert.equal(audits.some(event=>event.code==='WORK_COMPLETION_EVIDENCE_BUDGET_EXCEEDED'),false);
+});
+
+// A7 live false rejection: the executor read part of one feed, abandoned it, read another feed to the end and
+// saved a correct CSV. Strict verification stopped twice on the abandoned partial page ("unresolved material").
+test('A1: an unresolved partial page of a paged text resource does not block a correct result; a complete receipt still does',async()=>{
+  const page=(turn,more)=>({invocation:{request_id:`page-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url:'https://example.org/feed.geojson',title:'feed.geojson',text:'TRUNCATED weekly feed '.repeat(300),provenance:'http_text_resource',has_more:more,next_offset:more?12000:null},evidence_ids:[`ev-page-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
+  const rest=[source(1,'Node.js 24 is the current release. '.repeat(400)),draft(2,'draft-1',right),readback(3,'draft-1',right)],current=['ev-source-1','ev-draft-1','ev-read-draft-1'];
+  const model=batchFixture(),audits=[],verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event)});
+  assert.equal(await verify(checks,[page(0,true),...rest],claimFor(current)),true,JSON.stringify(audits.map(event=>event.code)));
+  assert.ok(audits.some(event=>event.batch_findings?.some(finding=>finding.relation==='unresolved_material')),'The partial page finding stays in the record.');
+  assert.ok(model.inputs.at(-1).observations.some(record=>record.host_partial_page===true),'The final judgment sees the host label.');
+  const strict=batchFixture(),rejected=[],verifyComplete=createWorkCompletionVerifier(strict,{literalRefMode:true,originalUserRequest,audit:event=>rejected.push(event)});
+  assert.equal(await verifyComplete(checks,[page(0,false),...rest],claimFor(current)),false,'A receipt the host does not know to be a partial page keeps blocking.');
+  assert.ok(rejected.some(event=>event.code==='WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL'));
 });
