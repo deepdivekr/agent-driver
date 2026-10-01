@@ -7,6 +7,7 @@ import {join} from 'node:path';
 import {loadHostConfig,workAutonomy} from '../dist/interface/config.js';
 import {setWorkModelDataApproval} from '../dist/onboarding/connection.js';
 import {draftPublicForm} from '../dist/work/execution-tools.js';
+import {cadenceInterval,scheduleFromProposal} from '../dist/work/schedule.js';
 
 // Part B1: the owner's standing delegation. A Work the owner asked for runs to its
 // result and keeps its own schedule without a click per run; absent means per-run.
@@ -43,4 +44,16 @@ test('B5: a public form draft fills text, radio, select and checkbox fields, rea
   await assert.rejects(draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{name:'secret',value:'x'}]}),/FORM_FIELD_NOT_ALLOWED/u);
   await assert.rejects(draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{name:'size',value:'Gigantic'}]}),/FORM_OPTION_NOT_FOUND/u);
   assert.equal(posts,0);
+});
+
+// Live: a recurring Work never got a schedule from a real subscription CLI (union schema rejected), and
+// "once a day" without a clock time came back unsupported. The model fills a flat object; code decides cadence.
+test('B1: a flat model proposal becomes a schedule and a stated cadence without a clock time is an interval',()=>{
+  assert.deepEqual(scheduleFromProposal({kind:'daily',timezone:null,hour:9,minute:null,weekdays:null,seconds:null,reason:null},'Asia/Seoul'),{kind:'daily',timezone:'Asia/Seoul',hour:9,minute:0});
+  assert.deepEqual(scheduleFromProposal({kind:'interval',timezone:'UTC',hour:null,minute:null,weekdays:null,seconds:3600,reason:null},'Asia/Seoul'),{kind:'interval',timezone:'UTC',seconds:3600});
+  assert.equal(scheduleFromProposal({kind:'unsupported',timezone:null,hour:null,minute:null,weekdays:null,seconds:null,reason:null},'UTC').kind,'unsupported');
+  assert.throws(()=>scheduleFromProposal({kind:'daily',timezone:null,hour:99,minute:0,weekdays:null,seconds:null,reason:null},'UTC'));
+  for(const [rule,seconds] of [['하루에 한 번 nodejs.org 공식 블로그의 새 글 확인',86400],['매일 확인',86400],['every 30 minutes',1800],['2시간마다 확인',7200],['hourly',3600],['매주 점검',604800],['새 글 감시를 설정해줘',86400],['check once a day',86400]])assert.equal(cadenceInterval(rule),seconds,rule);
+  assert.equal(cadenceInterval('다음 달 첫 영업일에 한 번'),null);
+  for(const rule of ['Every day at 20:00 in Asia/Seoul','매일 오전 9시에 확인','daily at 9 am'])assert.equal(cadenceInterval(rule),null,'A rule with a clock time is left to the normalizer: '+rule);
 });
