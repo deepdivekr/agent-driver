@@ -1,7 +1,7 @@
 import {z} from 'zod';
 import {type RuntimeApi} from '../interface/api.js';
 import {tools} from '../interface/catalog.js';
-import {type HostConfig} from '../interface/config.js';
+import {workAutonomy,workDelegation,workPolicyVersion,type HostConfig} from '../interface/config.js';
 import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
 import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
@@ -287,6 +287,7 @@ export class WorkExecutionTools {
       add(parsed.data.url);for(const link of parsed.data.links)add(link.url);
     }
   }
+  private folderMovesDelegated(){return workAutonomy(this.config)==='delegated'&&workDelegation(this.config).registered_folder_moves;}
   catalog():WorkClientTool[]{
     const coding=this.spec.route.kind==='pack'&&this.spec.route.pack_family==='coding.orchestrate';
     const watch=this.spec.route.kind==='pack'&&this.spec.route.pack_family==='monitor.watch';
@@ -311,7 +312,8 @@ export class WorkExecutionTools {
     descriptors.push({name:'office_result_read',description:'Read an Office-owned TXT/JSON/CSV output using its exact successful host invocation request_id, never an arbitrary path. Streams a check of the entire file SHA-256, byte count and UTF-8 validity; returns only a bounded page preserving the original BOM and final newline. offset defaults to 0, max_bytes to 12000. For has_more, use the returned next_offset with the same request_id. Page text is not the entire file: do not claim full inspection or parse a partial JSON page as complete JSON. Remove an initial BOM only after assembling a complete JSON document. Full artifact metadata remains verified on every page. Pack outputs require a bound task-free successful or local-record draft-only run. Failed-quality output, foreign Work files and binary formats remain unavailable. Existing verified receipts survive resume.',input_schema:z.toJSONSchema(resultReadInput),effect:'read_only'});
     if(this.spec.route.kind==='pack'&&['portal.collect','file.pipeline'].includes(this.spec.route.pack_family??''))descriptors.push({name:'office_pack_source_read',description:'Read one bounded page of original saved source observations from a successful native portal.collect or file.pipeline Pack run of this Work. Supply its exact run_id and one source_id from that run recipe; offset defaults to 0, max_bytes to 8192. Follow next_offset and assemble every page before claiming a full source read. This rechecks the saved native certificate and source binding, but does not fetch fresh remote data, prove the user goal, grant a new source, or read an arbitrary path.',input_schema:z.toJSONSchema(packSourceReadInput),effect:'read_only'});
     if(this.spec.route.kind==='pack')descriptors.push({name:'office_pack_receipt_read',description:'Read bounded UTF-8 pages of the unchanged durable result of an exact same-Work Pack run. Use result_sha256 from the status reference, and follow every next_offset before claiming whole inspection. This does not rerun a Pack, modify evidence, verify business completion, fetch sources or allow paths. Changed results reject the old hash.',input_schema:z.toJSONSchema(packReceiptReadInput),effect:'read_only'});
-    return descriptors;
+    // Under the folder-move policy a proposal is a real local write, and is verified as one.
+    return this.folderMovesDelegated()?descriptors.map(item=>item.name==='runtime_files_propose'?{...item,effect:'local_write' as const}:item):descriptors;
   }
   private table(name:string){return Boolean(this.store.desktopState.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(name));}
   private fileRecord(kind:string,id:string){
@@ -881,6 +883,16 @@ export class WorkExecutionTools {
     // changes during the effect. The bounded executor checkpoints it first and
     // applies the live guard before admitting its next operation.
     const rawValue=await this.api.call(name,input),value=name==='runtime_pack_run'?{...object(rawValue),request_id:requestId}:rawValue;
+    if(name==='runtime_files_propose'&&this.folderMovesDelegated()){
+      // Delegation policy: the owner granted this folder with move permission. The plan the host just validated
+      // (hashes, protected files, in-folder targets) is applied as is; it stays reversible from the Control Center.
+      const plan=object(value);
+      if(plan?.state==='preview'&&typeof plan.id==='string'&&this.api.files.status({plan_id:plan.id}).permission_active){
+        const applied=this.api.files.apply({plan_id:plan.id});
+        workActivity(this.store,this.config.project.id,this.workId,'files.plan_applied',`The move plan was applied under delegation policy ${workPolicyVersion(this.config)}. It can be undone from the Work detail.`,{run_id:this.runId,stage_id:'execution',status:'succeeded'});
+        return {...object(applied),applied_by:'delegation_policy',policy_version:workPolicyVersion(this.config),undo_available:true};
+      }
+    }
     if(name==='runtime_pack_plan')return this.packPlanView(value);
     if(name==='runtime_pack_run'&&typeof object(value)?.run_id==='string'){
       const data=object(value)!,run=this.ownPack(String(data.run_id));
@@ -912,6 +924,7 @@ export class WorkExecutionTools {
     if(!readOnly){
       if(name==='runtime_files_request'&&!data?.root_id)state='waiting_approval';
       if(name==='runtime_files_propose'&&data?.state==='preview')state='waiting_approval';
+      if(name==='runtime_files_propose'&&data?.applied_by==='delegation_policy')state=data.state==='done'?'succeeded':'reconciliation_required';
       if(['waiting_auth','waiting_approval','retryable_failure','failed','reconciliation_required'].includes(state))status=state as WorkClientToolReceipt['status'];
       else if(['needs_human','approval_required','needs_approval','needs_review','needs_replan','paused_work','paused_config','cancelled'].includes(state))status='waiting_approval';
       else if(['waiting_connection','waiting_observation','running'].includes(state))status='retryable_failure';

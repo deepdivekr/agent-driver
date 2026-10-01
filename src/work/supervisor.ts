@@ -2,7 +2,7 @@ import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
-import {workAutonomy,workDelegation,loadHostConfig,type HostConfig} from '../interface/config.js';
+import {workAutonomy,workDelegation,workPolicyVersion,loadHostConfig,type HostConfig} from '../interface/config.js';
 import {RuntimeApi} from '../interface/api.js';
 import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,similarProcedure,REPLAY_SIMILARITY} from './procedures.js';
@@ -502,7 +502,7 @@ export class WorkSupervisor {
         const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations,offered?.id);
         if(saved)workActivity(this.store,project,row.work_id,'procedure.saved',`The verified procedure of this Work was saved for similar requests (${saved.steps.length} step${saved.steps.length===1?'':'s'}, verified ${saved.successes} time${saved.successes===1?'':'s'}).`,{run_id:row.run_id,stage_id:'execution',status:'saved'});
       }else if(offered&&['failed','awaiting_review'].includes(state))recordProcedureFailure(this.store,project,offered.id);
-      this.finish(row,state,result.reason,{summary:result.summary,text:result.summary,completion_verified:result.completion_verified,checks:spec.completion_checks,model_calls:result.model_calls.length,observations:result.checkpoint.observations.length},watchReadyAt,{progressed,...(modelWait?{retryDelayMs:modelRetryDelay(row.attempts)}:{})});
+      this.finish(row,state,result.reason,{summary:result.summary,text:result.summary,completion_verified:result.completion_verified,checks:spec.completion_checks,model_calls:result.model_calls.length,observations:result.checkpoint.observations.length,...(workAutonomy(this.config)==='delegated'?{policy_version:workPolicyVersion(this.config)}:{})},watchReadyAt,{progressed,...(modelWait?{retryDelayMs:modelRetryDelay(row.attempts)}:{})});
       // B1: under delegation a run of a read/draft Work, or one that only wrote Office outputs, that ended without a
       // verified completion gets one fresh attempt of the same Work. The unverified run and its receipts stay in
       // history; a run that was itself the fresh attempt stops for the owner.

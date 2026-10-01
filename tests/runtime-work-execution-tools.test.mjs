@@ -508,3 +508,31 @@ test('runtime contract Work field preflight reports declared schema before dispa
  assert.equal(x.calls.length,0);assert.equal(x.store.officeRuns(x.config.project.id,x.work.id).length,0);
  assert.equal(x.toolkit.validate('runtime_pack_run',{recipe:{...watch,comparison_fields:['first_released']}},'corrected').recipe.comparison_fields[0],'first_released');
 });
+
+// Plan B1, effect type "registered folder write". The owner granted this folder with move permission; under
+// delegation the host-validated, reversible plan is applied without a click and is verified as a local write.
+test('B1: a move plan in a folder granted with move permission is applied under delegation, recorded with the policy version, and undoable',async t=>{
+  const {utimes}=await import('node:fs/promises'),{existsSync}=await import('node:fs');
+  const run=async(work,grantMove)=>{
+    const x=await fixture(t),raw=JSON.parse(await readFile(x.config.path,'utf8'));raw.work=work;await writeFile(x.config.path,JSON.stringify(raw));
+    const folder=join(dirname(dirname(x.config.path)),`Inbox-${randomUUID().slice(0,8)}`);await mkdir(folder);await writeFile(join(folder,'memo.txt'),'memo');await utimes(join(folder,'memo.txt'),new Date('2024-01-01'),new Date('2024-01-01'));
+    const files=x.store.localFileExplorer(x.config.project.id,dirname(x.config.dbPath)),access=files.request({work_id:x.work.id,purpose:'Sort the inbox',allow_move:true});
+    files.grantRequest({work_id:x.work.id,request_id:access.id,path:folder,allow_move:grantMove});
+    const root=files.roots()[0],scan=files.scan({root_id:root.id,work_id:x.work.id});
+    const api={files,async call(name,args){return files.call(name,args);}},toolkit=new WorkExecutionTools(x.store,x.config,api,x.work.id,randomUUID(),x.toolkit.spec,'Sort the inbox',()=>{},{async call(){throw Error('unused');}});
+    t.after(()=>toolkit.close());
+    const args={scan_id:scan.id,moves:[{file_id:scan.files.find(file=>file.path==='memo.txt').id,to:'sorted/memo.txt',reason:'Sort by type',evidence_ids:['path']}]};
+    const value=await toolkit.execute('runtime_files_propose',args,'move-1'),receipt=await toolkit.receipt('runtime_files_propose',value,'move-1');
+    return {x,files,folder,value,receipt,effect:toolkit.catalog().find(item=>item.name==='runtime_files_propose').effect};
+  };
+  const delegated=await run({model_data_approved:true,autonomy:'delegated'},true);
+  assert.equal(delegated.value.state,'done');assert.equal(delegated.value.applied_by,'delegation_policy');assert.match(delegated.value.policy_version,/^[a-f0-9]{12}$/u);
+  assert.equal(delegated.receipt.status,'succeeded');assert.equal(delegated.effect,'local_write','The applied plan is verified as a local write, not as a draft.');
+  assert.ok(existsSync(join(delegated.folder,'sorted','memo.txt'))&&!existsSync(join(delegated.folder,'memo.txt')));
+  delegated.files.apply({plan_id:delegated.value.id},true);assert.ok(existsSync(join(delegated.folder,'memo.txt')),'The owner can undo it.');
+  for(const [label,work,grantMove] of [['per-run install',{model_data_approved:true,autonomy:'per_run'},true],['policy switched off',{model_data_approved:true,autonomy:'delegated',delegation:{registered_folder_moves:false}},true],['folder granted read-only',{model_data_approved:true,autonomy:'delegated'},false]]){
+    const kept=await run(work,grantMove).catch(error=>({error}));
+    if(kept.error){assert.equal(grantMove,false,label);continue;}
+    assert.equal(kept.value.state,'preview',label);assert.equal(kept.receipt.status,'waiting_approval',label);assert.ok(existsSync(join(kept.folder,'memo.txt')),label);
+  }
+});

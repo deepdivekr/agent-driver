@@ -36,7 +36,10 @@ export type CodingConfig=z.infer<typeof CodingConfigSchema>;
 /** Human consent that one-line Work text and import evidence may be sent to the selected AI. Read live, never bound to run fingerprints. */
 /** `autonomy` is the owner's standing delegation (plan B1): `delegated` lets a Work the owner asked for run to
  * its result and keep its own recurring schedule without a click per run. External submissions keep their gates. */
-const WorkDelegationSchema=z.object({daily_scheduled_runs:z.number().int().min(0).max(1000).default(50)}).strict();
+/** The delegation policy (plan B1). `registered_folder_moves`: a reviewed-by-code, reversible move plan inside a folder
+ * the owner granted with move permission is applied without a click. Submissions, payments, messages to third
+ * parties and paid APIs are not part of any delegation and keep their own gates. */
+const WorkDelegationSchema=z.object({daily_scheduled_runs:z.number().int().min(0).max(1000).default(50),registered_folder_moves:z.boolean().default(true)}).strict();
 const WorkConfigSchema=z.object({model_data_approved:z.boolean().default(false),approved_at:z.string().datetime().optional(),autonomy:z.enum(['per_run','delegated']).optional(),delegation:WorkDelegationSchema.optional()}).strict();
 export type WorkConfig=z.infer<typeof WorkConfigSchema>;
 export const HostConfigSchema=z.object({
@@ -153,8 +156,12 @@ export function workAutonomy(config:Pick<HostConfig,'path'>):'per_run'|'delegate
 }
 /** The delegation's budget, read live. Runs the owner starts are never limited; runs the host starts from a
  * schedule stop at this many per local day so a standing delegation cannot spend the AI allowance unattended. */
-export function workDelegation(config:Pick<HostConfig,'path'>):{daily_scheduled_runs:number}{
+export function workDelegation(config:Pick<HostConfig,'path'>):{daily_scheduled_runs:number;registered_folder_moves:boolean}{
   try{return WorkDelegationSchema.parse(HostConfigSchema.parse(JSON.parse(readFileSync(config.path,'utf8'))).work?.delegation??{});}catch{return WorkDelegationSchema.parse({});}
+}
+/** The policy version recorded with what the host did on the owner's behalf: changes when the delegation changes. */
+export function workPolicyVersion(config:Pick<HostConfig,'path'>):string{
+  return createHash('sha256').update(JSON.stringify({autonomy:workAutonomy(config),delegation:workDelegation(config)})).digest('hex').slice(0,12);
 }
 /** Work-definition consent is read from disk on each use so a running MCP server or Control Center sees a new approval without restart. */
 export function workModelDataApproved(config:Pick<HostConfig,'path'|'swarm'|'packs'|'coding'|'work'>):boolean{
