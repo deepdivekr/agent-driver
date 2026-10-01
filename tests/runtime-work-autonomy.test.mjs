@@ -177,4 +177,9 @@ test('B1: a due scheduled run waits at the daily limit with one note, and starts
   assert.equal(notes(),1,'One note per Work per day, not one per tick.');assert.equal(runs().length,1,'No run starts beyond the daily limit.');
   await writeFile(host,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'delegated',delegation:{daily_scheduled_runs:5}}}));
   await until(()=>runs().length===2&&runs()[1]==='succeeded','raised limit');
+  // The limit counts runs started today, whatever day their slot belonged to (the slot above was a past one).
+  await writeFile(host,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'delegated',delegation:{daily_scheduled_runs:1}}}));
+  db.prepare('UPDATE office_work_schedule SET next_run_ms=?,last_slot=NULL WHERE work_id=?').run(Date.now()-72*3600_000,started.work_id);
+  db.prepare('UPDATE office_work_schedule SET anchor_ms=? WHERE work_id=?').run(Date.now()-96*3600_000,started.work_id);
+  await new Promise(resolve=>setTimeout(resolve,500));assert.equal(runs().length,2,'A caught-up past slot started today is counted against today.');
 });
