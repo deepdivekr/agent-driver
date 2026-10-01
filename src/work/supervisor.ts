@@ -24,7 +24,7 @@ import {WorkSchedules} from './schedule.js';
 import {captureWorkRunAdmissionCheckpoint,createWorkCompletionVerifier,createWorkRunTraceEvidence,hasObservableCompletionLeaves} from './completion.js';
 import {workImportExecutionOwner} from './import-authority.js';
 import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
-import {connectedSourceCatalog} from '../packs/source-catalog.js';
+import {connectedSourceCatalog,observedWorkSourceSchemas} from '../packs/source-catalog.js';
 import {createNativeCompletionResolver} from './native-completion.js';
 import {assertCustomPackInvocation} from './custom-pack-repeat.js';
 import {assertCustomPackScheduledRun} from './custom-pack-schedule.js';
@@ -264,7 +264,7 @@ export class WorkSupervisor {
       if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
       if(row.replan_required){
         guard();workActivity(this.store,project,row.work_id,'supervisor.replanning','새 지침에 맞춰 완료조건과 다음 단계를 갱신합니다. 이전 실행 증거는 보존합니다.');
-        const instructions=WORK_REPLANNING_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS,input={work_id:row.work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:spec,user_directions:this.store.workDirections(project,row.work_id),user_intake:readWorkIntakeOptions(this.store,project,row.work_id),...(this.api.work?.planningContext()??workPlanningContext(this.store,this.config))};
+        const instructions=WORK_REPLANNING_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS+'\nobserved_source_schemas contains host-validated field names from this Work\'s retained successful Pack responses. Use their exact names when interpreting the collection contract; no configured declaration is required when a field was actually observed. The saved_response_rows scope is one explicit source response, not unobserved upstream pages or current freshness. Preserve every original requirement and previous receipt. These descriptors are context, not evidence of completion or permission to replay effects.',input={work_id:row.work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:spec,user_directions:this.store.workDirections(project,row.work_id),user_intake:readWorkIntakeOptions(this.store,project,row.work_id),...(this.api.work?.planningContext(row.work_id)??{...workPlanningContext(this.store,this.config),observed_source_schemas:observedWorkSourceSchemas(this.store,this.config,row.work_id)})};
         const priorImport=workImportExecutionOwner(this.store,project,row.work_id)==='office'?spec.plan:null;
         const planningModel=modelForRole(model,'planner');
         spec=await validateOrCorrectWorkProposal(await planningModel.call('correct',instructions,input,z.toJSONSchema(workProposalSchema)),work.mode as 'quick'|'guided',true,{model:planningModel,instructions,input,onDiagnostic:event=>workActivity(this.store,project,row.work_id,'supervisor.replanning',`Work definition ${event.kind}: ${event.code}`)});guard();

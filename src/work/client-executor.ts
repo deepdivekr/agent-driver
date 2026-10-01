@@ -55,6 +55,19 @@ const decisionFields=(value:z.infer<typeof workClientDecisionSchema>,context:z.R
   }
 };
 const validatedDecisionOutput=workClientDecisionSchema.superRefine(decisionFields);
+/** After all business stages are reported, only reread a saved result belonging
+ * to this checkpoint. Host preflight still verifies current scope and bytes. */
+function savedResultReadback(plan:WorkPlan,reports:ReturnType<typeof currentStageReports>,checkpoint:WorkClientCheckpoint,decision:{tool_name:string|null;arguments_json:string|null}):boolean{
+  if(reports.length!==businessSteps(plan).length||!['runtime_pack_status','office_result_read'].includes(decision.tool_name??''))return false;
+  let args:Record<string,unknown>;try{args=JSON.parse(decision.arguments_json??'null');}catch{return false;}
+  if(!args||typeof args!=='object'||Array.isArray(args)||args.work_id!==undefined&&args.work_id!==checkpoint.work_id)return false;
+  return checkpoint.observations.some(item=>{
+    if(!item.invocation.dispatched||item.receipt.status!=='succeeded'||item.receipt.effect_state!=='verified')return false;
+    const value=item.receipt.value as Record<string,unknown>|null;
+    if(decision.tool_name==='runtime_pack_status')return item.invocation.tool_name==='runtime_pack_run'&&typeof args.run_id==='string'&&value?.run_id===args.run_id;
+    return ['runtime_pack_run','office_result_draft'].includes(item.invocation.tool_name)&&typeof args.request_id==='string'&&item.invocation.request_id===args.request_id;
+  });
+}
 function semanticDecisionOutput(plan:WorkPlan,checkpoint:WorkClientCheckpoint){
   return workClientBusinessDecisionSchema.superRefine(decisionFields).superRefine((value,context)=>{
     const issue=(path:string,error:unknown)=>context.addIssue({code:'custom',path:[path],message:error instanceof Error?error.message:'WORK_CLIENT_STAGE_INVALID'});
@@ -63,7 +76,7 @@ function semanticDecisionOutput(plan:WorkPlan,checkpoint:WorkClientCheckpoint){
     if(value.action==='tool'){
       if(value.stage_id===null)issue('stage_id',Error('WORK_CLIENT_STAGE_REQUIRED'));
       else try{
-        if(checkpoint.completion_repair){
+        if(checkpoint.completion_repair||savedResultReadback(plan,reports,checkpoint,value)){
           const step=businessSteps(plan).find(item=>item.id===value.stage_id);requireCondition(step,'WORK_CLIENT_STAGE_UNKNOWN');
           requireCondition(step.depends_on.every(id=>reports.some(report=>report.stage_id===id)),'WORK_CLIENT_STAGE_DEPENDENCY_PENDING');
         }else assertStageDispatch(plan,value.stage_id,reports);
@@ -225,6 +238,7 @@ export class BoundedWorkClientExecutor {
     if(semantic&&plan)checkpoint={...checkpoint,stage_reports:currentStageReports(plan,checkpoint.stage_reports)};
     const model=this.model instanceof ConfiguredStructuredModel?this.model.forWork({work_id:request.work_id,run_id:request.run_id},request.model_scope??'global'):this.model;
     const initialCalls=model.calls.length;
+    let savedResultRechecks=0;
     const progress=async(event:WorkClientProgress)=>{await hooks.progress?.({...event,summary:safeControlText(event.summary,800)});};
     const guard=async()=>{if(hooks.signal?.aborted)throw Error('WORK_CLIENT_PAUSED');await hooks.guard?.();};
     const save=async()=>{await hooks.checkpoint(structuredClone(checkpoint));};
@@ -326,7 +340,8 @@ export class BoundedWorkClientExecutor {
             const afterClaim=new Set([...reported,step.id]);
             return {stage_id:step.id,current_binding:currentBinding,state:reported.has(step.id)?'reported':dependenciesReady?'ready':'blocked',eligible_evidence_ids:[...new Set(eligible.flatMap(item=>item.receipt.evidence_ids))],if_reported_next_action_stage_ids:!reported.has(step.id)&&dependenciesReady&&eligible.length?steps.filter(candidate=>!afterClaim.has(candidate.id)&&candidate.depends_on.every(id=>afterClaim.has(id))).map(candidate=>candidate.id):[],stale_same_id_receipt_count:stale.length};
           });
-          return {plan_revision:plan.revision,stages,allowed_action_stage_ids:stages.filter(item=>item.state==='ready'||checkpoint.completion_repair&&item.state==='reported').map(item=>item.stage_id),warning:'Historical receipts remain in checkpoint for final Work verification. A same-ID receipt with a different current stage binding cannot support a current-stage claim. Only a newly authorized action under a ready current stage may refresh missing evidence; these candidates do not grant tools, permissions, or semantic completion.'};
+          const savedResults=checkpoint.observations.filter(item=>item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.receipt.effect_state==='verified'&&['runtime_pack_run','office_result_draft'].includes(item.invocation.tool_name)).map(item=>({request_id:item.invocation.request_id,...(item.invocation.tool_name==='runtime_pack_run'&&item.receipt.value&&typeof item.receipt.value==='object'&&'run_id' in item.receipt.value?{run_id:item.receipt.value.run_id}:{})}));
+          return {plan_revision:plan.revision,stages,allowed_action_stage_ids:stages.filter(item=>item.state==='ready'||checkpoint.completion_repair&&item.state==='reported').map(item=>item.stage_id),saved_result_readback:reported.size===steps.length?{stage_ids:steps.map(step=>step.id),tools:['runtime_pack_status','office_result_read'],remaining_reads:Math.max(0,3-savedResultRechecks),saved_results:savedResults,instruction:'All business stages are reported. Propose complete for independent host verification. If a saved result needs current status or full file readback first, use one of these read-only tools with its saved run_id/request_id under a listed existing stage. Do not run the Pack again, recollect a source, rewrite an artifact or add invented confirmation requirements.'}:null,warning:'Historical receipts remain in checkpoint for final Work verification. A same-ID receipt with a different current stage binding cannot support a current-stage claim. These candidates do not grant tools, permissions, or semantic completion.'};
         })():null;
         const input={work_id:request.work_id,run_id:request.run_id,stage_id:stage,prompt:request.prompt,completion_checks:checks,context:request.context??null,tools,checkpoint,completion_gate:{phase:'pre_verification',complete_action:'proposal_for_independent_host_verification',final_flag:'set_by_host_after_verification',closed_trace:'generated_by_host_at_complete_cutpoint',evidence_role:'control_metadata_not_result_evidence',business_receipts:'required_before_complete_proposal'},...(semantic&&plan?{plan:{revision:plan.revision,steps:businessSteps(plan)},stage_context:stageContext}:{})};
         // Provider/auth/quota exceptions occur outside output validation. They
@@ -401,7 +416,12 @@ export class BoundedWorkClientExecutor {
           decoded=rawArguments as Record<string,unknown>;
           if(!tool)throw new WorkClientToolInputError('WORK_CLIENT_TOOL_NOT_AVAILABLE','Choose a capability from the supplied host catalog.');
         }catch(error){inputError=error;}
-        const stageStep=semantic&&plan?(checkpoint.completion_repair?businessSteps(plan).find(value=>value.id===decision.stage_id)??null:assertStageDispatch(plan,decision.stage_id,checkpoint.stage_reports??[])):null;
+        const resultReadback=Boolean(semantic&&plan&&savedResultReadback(plan,currentStageReports(plan,checkpoint.stage_reports),checkpoint,decision));
+        if(resultReadback){
+          requireCondition(tool?.effect==='read_only','WORK_CLIENT_RESULT_READBACK_EFFECT_INVALID');
+          if(savedResultRechecks>=3)return result('awaiting_review','WORK_CLIENT_RESULT_READBACK_BUDGET');
+        }
+        const stageStep=semantic&&plan?(checkpoint.completion_repair||resultReadback?businessSteps(plan).find(value=>value.id===decision.stage_id)??null:assertStageDispatch(plan,decision.stage_id,checkpoint.stage_reports??[])):null;
         if(semantic&&plan)requireCondition(stageStep,'WORK_CLIENT_STAGE_UNKNOWN');
         const stageHash=stageStep?stageBinding(stageStep):null;
         const fallbackRequestId=`work-tool-${hashJson({run_id:request.run_id,turn:checkpoint.turn,tool:decision.tool_name,args:decoded,...(stageHash?{stage_id:stageStep?.id,stage_binding:stageHash}:{})}).slice(0,48)}`;
@@ -474,6 +494,7 @@ export class BoundedWorkClientExecutor {
         }
         checkpoint={...checkpoint,pending:invocation};await save();await guard();
         await progress({kind:'tool.started',turn:checkpoint.turn,stage_id:invocation.stage_id,tool_name:tool.name,summary:`Running ${tool.name}.`});
+        if(resultReadback)savedResultRechecks++;
         await guard();invocation.dispatched=true;checkpoint={...checkpoint,pending:invocation};await save();
         const receipt=normalizeReceipt(await hooks.executeTool(tool.name,invocation.arguments,{request_id:invocation.request_id,work_id:request.work_id,run_id:request.run_id,stage_id:invocation.stage_id,...(hooks.signal?{signal:hooks.signal}:{})}),invocation);
         observe(invocation,receipt);await save();

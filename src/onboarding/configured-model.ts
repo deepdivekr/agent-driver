@@ -43,6 +43,11 @@ export class ConfiguredStructuredModel implements StructuredModel{
     return this.factories.subscription?.(options)??subscriptionAwareModelFromHostEnvironment(options,environment);
   }
   private sessionOptions(role:ModelRole){
+    // Verification inputs contain the complete bound evidence for that call.
+    // Reusing a native conversation accumulates prior batches/judgments without
+    // adding authority or evidence. Keep assignee continuity for actual work,
+    // but make the independent verifier checkpoint-only on every provider.
+    if(role==='verifier')return {};
     const p=this.provenance;
     return p?.work_id&&p.run_id?{session:{root:join(dirname(this.path),'decision-sessions'),work_id:p.work_id,run_id:p.run_id,actor_id:this.actorId??p.stage_id??'supervisor',role}}:{};
   }

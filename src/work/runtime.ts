@@ -12,7 +12,7 @@ import {initWorkExecution,workActivity} from './activity.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {browserCatalog} from '../browser/executor-routing.js';
 import {bindWorkIntakeOptions,readWorkIntakeOptions} from './intake-options.js';
-import {connectedSourceCatalog} from '../packs/source-catalog.js';
+import {connectedSourceCatalog,observedWorkSourceSchemas} from '../packs/source-catalog.js';
 import {sealCollectionContract} from './collection-contract.js';
 import {NATIVE_COMPLETION_RESULT,NATIVE_COMPLETION_EVIDENCE,NATIVE_SOURCE_ROWS_COMPLETION_RESULT,NATIVE_WATCH_COMPLETION_RESULT,NATIVE_WATCH_COMPLETION_EVIDENCE} from './completion-checks.js';
 
@@ -78,7 +78,7 @@ export async function validateOrCorrectWorkProposal(rawProposal:unknown,mode:Wor
 
 export class WorkRuntime {
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,private readonly capabilities:()=>unknown=()=>({browser_executors:browserCatalog(config)}),private readonly onIntake?:(workId:string,input:z.infer<typeof workStartSchema>,created:boolean)=>void){}
-  planningContext(){return workPlanningContext(this.store,this.config,this.capabilities());}
+  planningContext(workId?:string){return {...workPlanningContext(this.store,this.config,this.capabilities()),...(workId?{observed_source_schemas:observedWorkSourceSchemas(this.store,this.config,workId)}:{})};}
   private definitionDiagnostic(workId:string,event:WorkDefinitionDiagnostic){
     if(this.store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_activity'").get())workActivity(this.store,this.config.project.id,workId,`definition.${event.kind}`,`Work definition ${event.kind}: ${event.code}`);
   }

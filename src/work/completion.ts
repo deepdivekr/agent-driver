@@ -315,11 +315,10 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       // whole receipt under a separate strict ceiling; never truncate, omit
       // contradictory leaves or silently replace the actual row set.
       const singleRecordBatchLimit=options.literalRefMode?40000:callInputLimit;
-      // Production's original-request literal path verifies one generated
-      // check at a time below. Inspect at most two eligible pairs per batch;
-      // each retains its whole receipt. This bounds each judgment while
-      // retaining every leaf and every eligible check/receipt pair.
-      const pairLimit=options.literalRefMode?2:128;
+      // Share each complete receipt across the requested conditions instead
+      // of sending it in a separate pass for every condition. Byte ceilings
+      // still bound the input; every eligible check/receipt pair is inspected.
+      const pairLimit=options.literalRefMode?2*requested.length:128;
       // A literal original-request gate can cite all 32 ordinary receipts plus
       // the host trace. Large receipts may each need their own batch.
       const batchCountLimit=options.literalRefMode?33:maxEvidenceBatches;
@@ -331,6 +330,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const task=(async()=>{
         await emit('model.started','Verifying completion checks against observed tool evidence.');
         let input:Record<string,unknown>=directInput;
+        let verdictGroups:Array<Record<string,unknown>>|null=null;
         const projectedQuotes=new Map<string,string[]>();
         const projectedQuoteRefs=new Map<string,string>();
         const batchUnavailable=async(code:string,batchIndex?:number,batchCount?:number)=>{await auditEvent({attempt:1,status:'unavailable',code,input_sha256:binding,evidence_manifest_sha256:manifestHash,...(batchIndex?{batch_index:batchIndex}:{}),...(batchCount?{batch_count:batchCount}:{}),checks:[]});throw Error(code);};
@@ -426,16 +426,48 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
           }
           requireCondition(projected.length===records.length&&projected.every((item,index)=>item.record_id===manifest[index]!.record_id&&item.value_sha256===manifest[index]!.value_sha256),'WORK_COMPLETION_BATCH_COVERAGE_INVALID');
           input={stage_id,...(options.originalUserRequest?{original_user_request:options.originalUserRequest}:{}),checks:inputs,projection:'host_validated_leaf_findings',source_input_sha256:binding,evidence_manifest_sha256:manifestHash,manifest,observations:projected};
-          if(Buffer.byteLength(JSON.stringify(input))>evidenceBatchLimit)await batchUnavailable('WORK_COMPLETION_BATCH_SUMMARY_BUDGET_EXCEEDED');
+          if(Buffer.byteLength(JSON.stringify(input))>evidenceBatchLimit){
+            // All originals have already been inspected for every eligible
+            // pair. Split only the final judgments, not the inspection pass.
+            // Retain every record and every contribution for the relevant
+            // condition (including context/negative classifications). Never
+            // truncate quotations or discard a contradictory original.
+            const groupInput=(group:typeof inputs)=>({...input,checks:group,observations:projected.map(record=>({...record,findings:record.findings.filter(finding=>group.some(check=>check.id===finding.check_id))}))});
+            verdictGroups=[];let group:typeof inputs=[];
+            for(const check of inputs){
+              const next=[...group,check];
+              if(group.length&&Buffer.byteLength(JSON.stringify(groupInput(next)))>evidenceBatchLimit-batchCorrectionReserve){verdictGroups.push(groupInput(group));group=[];}
+              group.push(check);
+              if(Buffer.byteLength(JSON.stringify(groupInput(group)))>evidenceBatchLimit-batchCorrectionReserve)await batchUnavailable('WORK_COMPLETION_BATCH_SUMMARY_BUDGET_EXCEEDED');
+            }
+            if(group.length)verdictGroups.push(groupInput(group));
+            requireCondition(verdictGroups.length<=8,'WORK_COMPLETION_VERDICT_GROUP_LIMIT');
+          }
           await emit('model.started','Comparing host-validated excerpts across all original receipts and completion checks.');
         }
         let correction:Record<string,unknown>|null=null,firstIssue:WorkCompletionAuditIssue|null=null;
         // One output-only correction; no tool authority and no effect replay are introduced.
         for(const attempt of [1,2] as const){
           const attemptInput=correction?{...input,correction}:input,initialCalls=model.calls.length;
-          requireCondition(Buffer.byteLength(JSON.stringify(attemptInput))<=80000,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
+          requireCondition(verdictGroups!==null||Buffer.byteLength(JSON.stringify(attemptInput))<=80000,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
           let raw:unknown;
-          try{await guarded();raw=await model.call('verify',WORK_COMPLETION_VERIFICATION_INSTRUCTIONS+(oversized?'\n'+WORK_COMPLETION_PROJECTED_INSTRUCTIONS+(options.literalRefMode?'\n'+WORK_COMPLETION_PROJECTED_PATH_INSTRUCTIONS:''):options.literalRefMode?'\n'+WORK_COMPLETION_LITERAL_REF_INSTRUCTIONS:'')+(correction?(oversized?' This is the only correction attempt. Re-evaluate ALL checks and EVERY cited evidence ID against the same projected supports findings; select only their exact quote_ref values. Fix all invalid references in one response. Never upgrade unsupported or unknown just to pass. No tools, replay or invented evidence.':options.literalRefMode?' This is the only correction attempt. Re-evaluate all checks against the SAME full original observations and select only valid literal_leaf_manifest quote_ref values for each cited evidence ID. Do not upgrade unsupported or unknown just to pass. No tools or invented evidence.':' The previous verifier output violated the host constraint described in correction. This is the only correction attempt. Re-evaluate all checks, fix the typed verdict/IDs/quoted leaf values against the SAME observations, and never upgrade unsupported or unknown just to pass. Do not call tools, repeat an operation or invent missing evidence.'):'') ,attemptInput,z.toJSONSchema(oversized||options.literalRefMode?projectedCompletionVerificationSchema:workCompletionVerificationSchema));await guarded();}
+          try{const instructions=WORK_COMPLETION_VERIFICATION_INSTRUCTIONS+(oversized?'\n'+WORK_COMPLETION_PROJECTED_INSTRUCTIONS+(options.literalRefMode?'\n'+WORK_COMPLETION_PROJECTED_PATH_INSTRUCTIONS:''):options.literalRefMode?'\n'+WORK_COMPLETION_LITERAL_REF_INSTRUCTIONS:'')+(correction?(oversized?' This is the only correction attempt. Re-evaluate ALL checks and EVERY cited evidence ID against the same projected supports findings; select only their exact quote_ref values. Fix all invalid references in one response. Never upgrade unsupported or unknown just to pass. No tools, replay or invented evidence.':options.literalRefMode?' This is the only correction attempt. Re-evaluate all checks against the SAME full original observations and select only valid literal_leaf_manifest quote_ref values for each cited evidence ID. Do not upgrade unsupported or unknown just to pass. No tools or invented evidence.':' The previous verifier output violated the host constraint described in correction. This is the only correction attempt. Re-evaluate all checks, fix the typed verdict/IDs/quoted leaf values against the SAME observations, and never upgrade unsupported or unknown just to pass. Do not call tools, repeat an operation or invent missing evidence.'):'');
+            if(verdictGroups){
+              const answers:z.infer<typeof projectedCompletionVerificationSchema>['checks']=[];
+              for(const [index,group] of verdictGroups.entries()){
+                const groupChecks=group.checks as typeof inputs;
+                const groupInput=correction?{...group,correction:{...correction,required_check_ids:groupChecks.map(check=>check.id),allowed_evidence_ids:Object.fromEntries(groupChecks.map(check=>[check.id,check.allowed_evidence_ids]))}}:group;
+                requireCondition(Buffer.byteLength(JSON.stringify(groupInput))<=80000,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
+                await emit('model.started',`Comparing retained evidence for final condition group ${index+1}/${verdictGroups.length}; no original inspection is repeated.`);
+                await guarded();const value=await model.call('verify',instructions,groupInput,z.toJSONSchema(projectedCompletionVerificationSchema));await guarded();
+                const parsed=projectedCompletionVerificationSchema.parse(value),expected=(group.checks as typeof inputs).map(check=>check.id);
+                requireCondition(parsed.checks.length===expected.length&&new Set(parsed.checks.map(check=>check.id)).size===expected.length&&parsed.checks.every(check=>expected.includes(check.id)),'WORK_COMPLETION_VERIFIER_CHECKS_MISMATCH');
+                await auditEvent({attempt,status:'accepted',code:'WORK_COMPLETION_VERDICT_GROUP_OBSERVED',input_sha256:hashJson(groupInput),evidence_manifest_sha256:manifestHash,batch_index:index+1,batch_count:verdictGroups.length,checks:[]});
+                answers.push(...parsed.checks);
+              }
+              raw={checks:answers};
+            }else{await guarded();raw=await model.call('verify',instructions,attemptInput,z.toJSONSchema(oversized||options.literalRefMode?projectedCompletionVerificationSchema:workCompletionVerificationSchema));await guarded();}
+          }
           catch(error){if(error instanceof CompletionGuardError)throw error;await auditEvent({attempt,status:'unavailable',code:codeOf(error),input_sha256:hashJson(attemptInput),evidence_manifest_sha256:manifestHash,checks:[]});return reject(codeOf(error));}
           const accepted=model.calls.slice(initialCalls).at(-1);let answer:WorkCompletionVerification|null=null;
           const audit=async(status:WorkCompletionAuditEvent['status'],code:string,issue?:WorkCompletionAuditIssue)=>{
@@ -559,16 +591,28 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
     if(hostIds.length===0)return false;
     const hostClaim={...claim,completed_checks:[...claim.completed_checks,{id,evidence_ids:hostIds}]};
     if(options.literalRefMode||checks.some(check=>Object.hasOwn(check,'native_check'))){
-      // Every generated check is still mandatory, but each high-reasoning call
-      // emits a verdict and citations for only one check. The final
-      // immutable request check separately receives EVERY observable receipt,
-      // including older contradictory attempts and the host-closed trace.
+      // Native predicates remain code checks. Semantic conditions and the full
+      // original request share one evidence pass when they fit the schema.
+      // The full-request condition still receives every observable receipt,
+      // including historical failures and the host-closed trace.
       if(checks.length<1||checks.length>8||claim.completed_checks.length!==checks.length||new Set(claim.completed_checks.map(check=>check.id)).size!==checks.length||claim.completed_checks.some(check=>!used.has(check.id)))return false;
-      for(let start=0;start<checks.length;start++){
-        const part=checks.slice(start,start+1),partIds=new Set(part.map(check=>check.id));
-        if(!await verify(part,observations,{...claim,completed_checks:claim.completed_checks.filter(check=>partIds.has(check.id))}))return false;
+      for(const check of checks.filter(check=>Object.hasOwn(check,'native_check'))){
+        if(!await verify([check],observations,{...claim,completed_checks:claim.completed_checks.filter(item=>item.id===check.id)}))return false;
       }
-      return verify([hostCheck],observations,{...claim,completed_checks:[{id,evidence_ids:hostIds}]});
+      const semantic=checks.filter(check=>!Object.hasOwn(check,'native_check'));
+      // Very verbose conditions must not consume the whole evidence budget.
+      // Partition conditions, never the contents of an indivisible receipt.
+      const groups:Array<Array<typeof hostCheck>>=[];
+      for(const check of [...semantic,hostCheck]){
+        const previous=groups.at(-1);
+        if(!previous||previous.length>=8||Buffer.byteLength(JSON.stringify([...previous,check]))>4000)groups.push([check]);
+        else previous.push(check);
+      }
+      for(const group of groups){
+        const ids=new Set(group.map(check=>check.id));
+        if(!await verify(group,observations,{...claim,completed_checks:hostClaim.completed_checks.filter(check=>ids.has(check.id))}))return false;
+      }
+      return true;
     }
     if(checks.length<8)return verify([...checks,hostCheck],observations,hostClaim);
     if(!await verify(checks,observations,claim))return false;

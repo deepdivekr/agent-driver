@@ -49,9 +49,8 @@ test('runtime fixture: production literal mode bounds generated verdict groups w
   const fourClaim={...claim,completed_checks:four.map(check=>({id:check.id,evidence_ids:['output-rows']}))},calls=[];
   const model={calls:[],async call(purpose,instructions,input){calls.push({ids:input.checks.map(check=>check.id),evidence_ids:input.literal_leaf_manifest.flatMap(record=>record.evidence_ids)});this.calls.push({purpose,provider:'fixture',model:'fixture',status:'accepted'});return {checks:input.checks.map(check=>check.id==='original_user_request'?{id:check.id,verdict:'unknown',evidence_ids:[],evidence_quote_refs:[],reason:'The original source has nine rows but only four were saved.'}:{id:check.id,verdict:'supported',evidence_ids:['output-rows'],evidence_quote_refs:[{evidence_id:'output-rows',quote_ref:input.literal_leaf_manifest.find(record=>record.evidence_ids.includes('output-rows')).leaf_refs[0][0]}],reason:'The selected restaurant rows were saved.'})};}};
   assert.equal(await createWorkCompletionVerifier(model,{originalUserRequest:original,literalRefMode:true})(four,[source,output(critical.slice(0,4))],fourClaim),false);
-  const generatedGroups=calls.slice(0,-1);
-  assert.deepEqual(generatedGroups.flatMap(call=>call.ids),four.map(check=>check.id),'Every generated verdict is evaluated once in order, regardless of byte-bounded partition shape.');
-  assert.ok(generatedGroups.every(call=>call.ids.length>=1&&call.ids.length<=3),'Each generated group remains bounded.');
-  assert.deepEqual(calls.at(-1).ids,['original_user_request'],'The original user requirement retains its separate final gate.');
+  assert.deepEqual(calls.flatMap(call=>call.ids),[...four.map(check=>check.id),'original_user_request'],'Every requested verdict and original-user gate is evaluated exactly once.');
+  assert.ok(calls.every(call=>call.ids.length>=1&&call.ids.length<=8),'Every shared group remains schema bounded.');
+  assert.equal(calls.length,1,'These bounded checks share one evidence pass without dropping the original gate.');
   assert.deepEqual(new Set(calls.at(-1).evidence_ids),new Set(['source-nine','output-rows']),'The original gate still sees both complete source and output receipts.');
 });

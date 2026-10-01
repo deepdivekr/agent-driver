@@ -8,6 +8,53 @@ Delivery branch: refactor/custom-pack-reliability.
 
 ## October 1 real-user main retest checkpoint
 
+### Current continuation: remaining 23 original Works
+
+Latest implementation unit (October1, before final frozen regression): retained
+source field names are now supplied for explicit same-Work replanning, with
+binding/hash checks and no raw values or freshness assertion. Focused46/46 passed.
+The first resumed portal CSV passed sealed native transformation, then 17
+original-evidence batches reached the final projection-size ceiling. Final
+verdicts now partition by condition using those already inspected contributions;
+no receipt is discarded or inspected again for that partition. Stateless native
+verifier calls retain selected models/Work/checkpoint context while worker and
+planner assignees still reuse their sessions. Oversized status responses move
+only optional inline source rows to the existing lossless paged readback, marking
+the preview incomplete and retaining immutable verification/result metadata.
+Focused119/119 and58/58 passed (overlapping suites, not additive); latest receipt
+runtime-tests-2026-10-01T04-08-19-726Z. The initial full quick1923/1924 retained
+one old fixture expectation about separate original-goal calls; the fixture now
+still asserts all verdicts and full source/output but allows their shared pass.
+It is not a production acceptance failure or an excuse to remove the original
+request gate. Original matrix remains1/24; all remaining23 were resumed through
+normal controls. Owned prior service2679286 stopped before rebuilding; current
+service2714971/session50808 is active with retained queue/checkpoints/artifacts.
+Private receipt is authoritative. Native inbox-USGS still lacks original remote
+provenance in verifier-visible receipts; do not fabricate it from a plan. A legacy
+311 test direction accidentally included food-only critical_flag requirements;
+an explicit scoped correction removed that unrelated direction while keeping
+original311 constraints. Record that human correction, not an autonomous pass.
+
+The user explicitly requested resuming the other23 retained Works and improving
+common execution/completion bottlenecks, especially redundant verification.
+Continue from ce3db07 on fix/main-work-reliability; keep the original24 IDs,
+requirements, outputs and earlier failures. Exclude the already verified
+file-USGS and both separate successful probes from replay.
+Owned matrix service2666553/session17292 was paused and stopped before rebuilding.
+The first real resume exposed repeated whole-evidence passes per condition and
+completed-stage admission blocking readback of an already saved result. Legacy
+semantic conditions now share one pass within schema/byte budgets; unusually
+verbose conditions partition without truncating source receipts. Completed stages
+may reread only their own verified saved run/artifact (three reads per admission),
+never replay a Pack or write. Focused119/119 PASS, including input integrity;
+receipt runtime-tests-2026-10-01T03-39-56-736Z. Earlier117/119 and118/119 receipts
+remain. Build passed. A short idle restart2675402/session6191 was stopped again
+before the final fixture check. The private receipt remains authoritative.
+RQ-895: remaining research/data acceptance; RQ-896: drafts/records/choices;
+RQ-897: watch completion; RQ-898: timing diagnosis, fixes, regression and final
+truthful acceptance/report. First unit: resume existing failed/paused cases via
+normal controls, inspect actual phase timings and retain every new receipt.
+
 ### Current: sealed collection committed and final local validation complete
 
 Source branch: `fix/main-work-reliability`, based on merged main `e0a8e07`.

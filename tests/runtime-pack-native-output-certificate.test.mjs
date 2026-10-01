@@ -12,6 +12,7 @@ import {initWorkExecution} from '../dist/work/activity.js';
 import {nativeOutputCertificate} from '../dist/packs/native-output-certificate.js';
 import {encodeCsv} from '../dist/packs/data.js';
 import {snapshotHash} from '../dist/taskpack/contracts.js';
+import {boundWorkToolValue} from '../dist/work/client-executor.js';
 
 const observed=[{id:'A',status:'Open',score:'4'},{id:'B',status:'Closed',score:'8'},{id:'C',status:'Open',score:'6'}];
 const model={async call(){assert.fail('No model call is permitted.');}};
@@ -93,6 +94,26 @@ test('native source preview is bounded and complete originals remain available b
   assert.equal(sampled.sources[0].complete,false);assert.equal(sampled.sources[0].rows.length,sampled.sources[0].rows_returned);
   assert.equal(Buffer.byteLength(JSON.stringify(sampled),'utf8')<=4096,true);
   assert.equal(sampled.user_goal_verified,'not_asserted');
+});
+
+test('native status retains immutable verification metadata and pages source rows when their combined view exceeds the handoff budget',async t=>{
+  const x=await fixture(t),own=x.work('file.pipeline','retained verification'),rows=Array.from({length:36},(_,i)=>({id:`row-${i}`,status:'Open',score:String(i),note:'x'.repeat(310)}));
+  await writeFile(x.sourcePath,JSON.stringify(rows));
+  const run=await own.toolkit.execute('runtime_pack_run',{recipe:file},'metadata-native-request');
+  const verification=Array.from({length:100},(_,index)=>({evidence_ids:[`observed-proof-${index}`],source_id:'rows',observed_at:'2026-10-01T00:00:00.000Z',status:'supported'}));
+  x.api.store.finishPack(x.config.project.id,run.run_id,'succeeded',{...run.result,verification});
+  const checked=await status(own.toolkit,run.run_id,'metadata-native-status'),value=checked.receipt.value;
+  assert.ok(value.native_output_certificate?.exact_native_bytes_match);
+  assert.deepEqual(value.result.verification,verification,'Immutable verification metadata is not discarded.');
+  assert.equal(value.saved_source_readback.source_rows_complete,false);assert.equal(value.saved_source_readback.truncated,true);
+  assert.equal(value.saved_source_readback.sources[0].rows_returned,0);assert.deepEqual(value.saved_source_readback.sources[0].rows,[]);
+  assert.equal(value.saved_source_readback.sources[0].rows_total,rows.length);
+  assert.ok(Buffer.byteLength(JSON.stringify(boundWorkToolValue(value)))<=16000);
+  const page=await own.toolkit.execute('office_pack_source_read',{run_id:run.run_id,source_id:'rows',offset:0,max_bytes:4096},'metadata-native-source-page');
+  assert.equal(page.total_bytes,Buffer.byteLength(JSON.stringify(rows,null,2)+'\n'));
+  assert.equal(page.artifact_sha256,value.native_output_certificate.artifact_sha256);
+  assert.equal(page.full_source_read,false);
+  assert.equal(Number(x.api.store.hermesState.prepare('SELECT COUNT(*) AS n FROM family_run').get().n),1,'Status and source pages never execute a second Pack.');
 });
 
 test('foreign, changed status, failed/review run, changed source/checkpoint or same-length artifact bytes never get a certificate',async t=>{

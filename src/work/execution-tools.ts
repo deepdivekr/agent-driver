@@ -863,7 +863,16 @@ export class WorkExecutionTools {
     }
     // Only this host's scoped durable-run comparison produces this observation.
     // Its state proves an execution phase, never the business outcome by itself.
-    const scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null,executed_contract:executedContract,host_run_observation:hostRunObservation}:name==='runtime_pack_status'&&data?{...data,executed_contract:executedContract,host_run_observation:hostRunObservation,native_output_certificate:outputCertificate,saved_source_readback:sourceReadback}:value;
+    let scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null,executed_contract:executedContract,host_run_observation:hostRunObservation}:name==='runtime_pack_status'&&data?{...data,executed_contract:executedContract,host_run_observation:hostRunObservation,native_output_certificate:outputCertificate,saved_source_readback:sourceReadback}:value;
+    if(name==='runtime_pack_status'&&sourceReadback?.scope==='saved_source_observations_before_filtering'&&Buffer.byteLength(JSON.stringify(scopedValue))>16000){
+      // This optional inline source preview must not crowd out the immutable
+      // result/contract/certificate. Originals remain available losslessly via
+      // office_pack_source_read. Explicitly mark this view incomplete; never
+      // turn a metadata-only preview into whole-source completion evidence.
+      const preview=sourceReadback as Awaited<ReturnType<typeof savedNativeSourceReadback>>;
+      sourceReadback=preview?{...preview,source_rows_complete:preview.observed_source_rows===0,truncated:preview.observed_source_rows!==0,sources:preview.sources.map(source=>({...source,rows:[],rows_returned:0,complete:source.rows_total===0}))}:null;
+      scopedValue={...object(scopedValue),saved_source_readback:sourceReadback};
+    }
     const receiptValue=correctableQuality&&status==='retryable_failure'?{...object(scopedValue),correction:{kind:'data_quality',reason:'PACK_SOURCE_EVIDENCE_VERIFICATION_FAILED',automatic_correction_allowed:true,user_confirmation_required:false,quality_checks_passed:false,next_action:'Inspect preserved source records and verification receipts; correct only grounded recipe fields or collect missing evidence, then retry a validated recipe. Do not invent evidence, weaken requested checks or mark unverified data complete.'}}:watchFieldCorrection?{...object(scopedValue),correction:{kind:'source_contract',reason:'WATCH_COMPARISON_FIELD_MISSING',...watchFieldCorrection,automatic_field_substitution:false,new_pack_request_required:true,user_confirmation_required:false,next_action:'The prior watch baseline did not start. Use only these actually observed source field names to choose comparison_fields in a new monitor.watch recipe with a distinct request ID. Do not replay the failed request, infer a missing field, weaken the requested comparison, or claim a baseline/tick already exists.'}}:scopedValue;
     return {status,value:receiptValue,evidence_ids:status==='succeeded'&&id?[id]:[],effect_state:effectState,retry_safe:!challengedSearch&&!socialBlocked&&!watchFieldCorrection&&effectState==='none'&&(readOnly||status!=='succeeded')};
   }
