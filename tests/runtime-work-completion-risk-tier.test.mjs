@@ -178,3 +178,15 @@ async function supervisedLightRun(t,wrap){
   const activity=store.hermesState.prepare("SELECT summary FROM office_activity WHERE work_id=? AND kind='supervisor.verification.calls'").all(work.work_id).map(item=>item.summary);
   assert.ok(activity.some(summary=>new RegExp(`used ${kinds.length} model call`).test(summary)),JSON.stringify(activity));
 }
+
+// A7 live: five pages of one CSV feed pushed the light input over 40KB and the Work went straight to strict batches.
+test('A7: an oversized light input is fitted by shortening the largest source receipts, never the result file',async t=>{
+  const page=turn=>({invocation:{request_id:`page-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url:'https://example.org/feed.csv',title:'feed.csv',text:`row-${turn},`.repeat(1800),provenance:'http_text_resource',has_more:false},evidence_ids:[`ev-page-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
+  const model=fixture(supported()),audits=[];
+  const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event)});
+  assert.equal(await verify(checks,sealed(t,[page(0),page(1),page(2),page(3),page(4),source(5),draft(6)]),claimFor(['ev-source-5','ev-draft-1'])),true,JSON.stringify(audits.map(event=>event.code)));
+  assert.deepEqual(model.kinds,['light'],'The judgment is asked once instead of being skipped.');
+  const input=model.inputs[0];assert.ok(Buffer.byteLength(JSON.stringify(input))<=40000);
+  assert.ok(input.evidence.filter(item=>item.evidence_id.startsWith('ev-page-')).some(item=>item.truncated),'Large source pages are shortened and marked.');
+  assert.ok(input.evidence.find(item=>item.evidence_id==='ev-draft-1').content.endsWith(right),'The result file is never shortened.');
+});

@@ -667,7 +667,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
     if(claim.completed_checks.some(check=>check.evidence_ids.length===0||check.evidence_ids.some(id=>!evidenceIds.has(id))))return null;
     const turn=Math.max(0,...observations.map(item=>item.invocation.turn+1)),stage_id='completion.verify';
     const superseded=supersededOutputEvidence(observations),shown=new Map<string,{content:string;leaves:string[]}>();
-    const evidence=observations.filter(item=>item.receipt.status==='succeeded'&&item.receipt.evidence_ids.length>0&&!superseded.has(item.receipt.evidence_ids[0]!)&&observableLeaves(item.receipt.value).length>0).map(item=>{
+    const assembled=observations.filter(item=>item.receipt.status==='succeeded'&&item.receipt.evidence_ids.length>0&&!superseded.has(item.receipt.evidence_ids[0]!)&&observableLeaves(item.receipt.value).length>0).map(item=>{
       const value=object(item.receipt.value),trace=item.invocation.tool_name===controlledTraceTool;
       const result=['office_result_draft','office_result_read'].includes(item.invocation.tool_name)&&typeof value?.text==='string';
       // The saved file's identity (request ID, hash, bytes, read cursor) precedes its text so a save check can be decided.
@@ -675,10 +675,19 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       // A text resource read (a CSV/JSON feed) is the source data itself; truncating it at 3000 characters left
       // the judgment unable to compare rows (live), so it gets the same room as a result file.
       const limit=trace?4000:result||value?.provenance==='http_text_resource'?12000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
-      shown.set(id,{content,leaves:observableLeaves(item.receipt.value)});
-      return {evidence_id:id,tool_name:item.invocation.tool_name,observed_at:item.observed_at,truncated:content.length<full.length,content};
+      return {evidence_id:id,tool_name:item.invocation.tool_name,observed_at:item.observed_at,truncated:content.length<full.length,content,full_length:full.length,keep:result||trace,leaves:observableLeaves(item.receipt.value)};
     });
-    const input={stage_id,original_user_request:options.originalUserRequest,checks:checks.map(({id,result,evidence:needed})=>({id,result,evidence:needed})),evidence};
+    // Fit the 40KB call budget by shortening the largest source receipts instead of giving up (live: five pages of
+    // one CSV feed exceeded it and the Work went straight to twelve minutes of strict batches). Result files and
+    // the trace keep their room; a shortened receipt is marked truncated so the judgment can say unknown.
+    const request={stage_id,original_user_request:options.originalUserRequest,checks:checks.map(({id,result,evidence:needed})=>({id,result,evidence:needed}))};
+    const sized=()=>Buffer.byteLength(JSON.stringify({...request,evidence:assembled.map(({full_length:_full,keep:_keep,leaves:_leaves,...item})=>item)}));
+    for(let pass=0;pass<8&&sized()>38000;pass++){
+      const largest=assembled.filter(item=>!item.keep&&item.content.length>1500).sort((a,b)=>b.content.length-a.content.length)[0];if(!largest)break;
+      largest.content=largest.content.slice(0,Math.max(1500,Math.floor(largest.content.length/2)));largest.truncated=true;
+    }
+    const evidence=assembled.map(({full_length:_full,keep:_keep,leaves,...item})=>{shown.set(item.evidence_id,{content:item.content,leaves});return item;});
+    const input={...request,evidence};
     if(!evidence.length||Buffer.byteLength(JSON.stringify(input))>40000)return null;
     await guarded();await options.progress?.({kind:'model.started',turn,stage_id,summary:'Light verification: reads, drafts and Office-owned outputs only; one compact semantic check.'});await guarded();
     let answer:z.infer<typeof lightVerificationSchema>;
