@@ -69,8 +69,15 @@ export async function draftPublicForm(input:z.infer<typeof formDraftInput>){
     await page.goto(input.url,{waitUntil:'domcontentloaded',timeout:20000});
     const entryUrl=page.url(),fields:Array<Record<string,unknown>>=[];
     for(const field of input.fields){
-      const byName=field.name?page.locator(`[name=${JSON.stringify(field.name)}]`):null,group=byName&&await byName.count()>0?byName:field.label?page.getByLabel(field.label,{exact:false}):byName;
-      requireCondition(group&&await group.count()>0,'FORM_FIELD_NOT_FOUND');
+      // A field is named by its name attribute, its visible label, or the legend of its group (radio/checkbox sets).
+      const byName=field.name?page.locator(`[name=${JSON.stringify(field.name)}]`):null;
+      let group=byName&&await byName.count()>0?byName:null;
+      if(!group&&field.label){const labelled=page.getByLabel(field.label,{exact:false});if(await labelled.count()>0)group=labelled;}
+      if(!group){const legend=field.label??field.name!,grouped=page.locator('fieldset').filter({has:page.locator('legend',{hasText:legend})}).locator('input, select, textarea');if(await grouped.count()>0)group=grouped;}
+      if(!group){
+        const available=await page.evaluate(()=>Array.from(document.querySelectorAll('input, select, textarea')).filter(element=>!['hidden','password','file','submit','button','image','reset'].includes((element as HTMLInputElement).type)).slice(0,40).map(element=>{const input=element as HTMLInputElement;return `${input.name||'(no name)'} [${input.type||element.tagName.toLowerCase()}] ${(input.labels?.[0]?.textContent??input.closest('fieldset')?.querySelector('legend')?.textContent??'').trim().replace(/\s+/gu,' ').slice(0,40)}`;}));
+        throw Object.assign(Error('FORM_FIELD_NOT_FOUND'),{available});
+      }
       const first=group.first(),tag=(await first.evaluate(element=>element.tagName)).toLowerCase(),type=((await first.getAttribute('type'))??'').toLowerCase();
       requireCondition(!['password','file','hidden','submit','button','image','reset'].includes(type),'FORM_FIELD_NOT_ALLOWED');
       let kind='text',observed:unknown;
@@ -653,7 +660,7 @@ export class WorkExecutionTools {
       const input=this.validate(name,args,requestId) as z.infer<typeof formDraftInput>;
       workActivity(this.store,this.config.project.id,this.workId,'draft.started','Filling a public form draft in a runtime-owned page. Nothing can be submitted from it.',{tool_name:name,status:'running',target_url:input.url});
       try{const value=await draftPublicForm(input);this.guard();workActivity(this.store,this.config.project.id,this.workId,'draft.observed',`${value.filled} field(s) filled and read back · submitted: no`,{tool_name:name,status:'succeeded',target_url:value.url});return value;}
-      catch(error){if(error instanceof Error&&/^FORM_[A-Z_]+$/u.test(error.message))throw new WorkClientToolInputError(error.message,'The draft was not completed and nothing was submitted. Read the form with office_browser_read and use its exact field names or visible labels.');throw error;}
+      catch(error){if(error instanceof Error&&/^FORM_[A-Z_]+$/u.test(error.message)){const available=(error as Error&{available?:string[]}).available;throw new WorkClientToolInputError(error.message,`The draft was not completed and nothing was submitted. Use an exact field name, visible label or group legend.${available?.length?` Fields on this form (name [type] label): ${available.join('; ')}`:''}`);}throw error;}
     }
     if(name==='office_pack_receipt_read'){
       const input=this.validate(name,args,requestId) as z.infer<typeof packReceiptReadInput>,run=this.ownPack(input.run_id),bytes=Buffer.from(JSON.stringify(run.result),'utf8');

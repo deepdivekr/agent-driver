@@ -27,7 +27,7 @@ test('B5: a public form draft fills text, radio, select and checkbox fields, rea
   let posts=0;
   const html=`<!doctype html><title>Order</title><form method="post" action="/post" id="f">
     <label>Customer name: <input name="custname"></label>
-    <label><input type="radio" name="size" value="small"> Small</label><label><input type="radio" name="size" value="medium"> Medium</label>
+    <fieldset><legend> Pizza Size </legend><label><input type="radio" name="size" value="small"> Small</label><label><input type="radio" name="size" value="medium"> Medium</label></fieldset>
     <label>Crust <select name="crust"><option value="thin">Thin</option><option value="deep">Deep dish</option></select></label>
     <label><input type="checkbox" name="topping" value="bacon"> Bacon</label><input type="password" name="secret">
     <button>Submit order</button></form><script>document.querySelector('[name=custname]').addEventListener('input',()=>fetch('/post',{method:'POST',body:'x'}).catch(()=>{}));</script>`;
@@ -43,6 +43,9 @@ test('B5: a public form draft fills text, radio, select and checkbox fields, rea
   assert.deepEqual(draft.fields.map(field=>[field.kind,field.observed]),[['text','Kim'],['radio','medium'],['select','deep'],['checkbox',true]]);
   await assert.rejects(draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{name:'secret',value:'x'}]}),/FORM_FIELD_NOT_ALLOWED/u);
   await assert.rejects(draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{name:'size',value:'Gigantic'}]}),/FORM_OPTION_NOT_FOUND/u);
+  const legend=await draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{label:'Pizza Size',value:'Medium'}]});
+  assert.deepEqual(legend.fields.map(field=>[field.kind,field.observed]),[['radio','medium']],'A radio group is found by its legend (live: the model named the group, not an option).');
+  await assert.rejects(draftPublicForm({url:`http://127.0.0.1:${quiet.address().port}/form`,fields:[{label:'Delivery date',value:'x'}]}),error=>error.message==='FORM_FIELD_NOT_FOUND'&&error.available.some(line=>line.startsWith('custname [text]')),'An unknown field reports the fields that exist.');
   assert.equal(posts,0);
 });
 

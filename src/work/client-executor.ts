@@ -170,7 +170,7 @@ const errorCode=(error:unknown)=>error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}
  * stale run) is a returned result: information for the next decision, not an
  * interrupted operation and not the end of the Work. Plain errors keep the
  * unknown-outcome path. */
-const deterministicReadError=(error:unknown,effect:string)=>effect==='read_only'&&error instanceof WorkClientToolInputError;
+const deterministicReadError=(error:unknown,effect:string)=>(effect==='read_only'||effect==='draft_only')&&error instanceof WorkClientToolInputError;
 const readFailedReceipt=(error:WorkClientToolInputError):WorkClientToolReceipt=>({status:'retryable_failure',value:{status:'read_failed',error:error.code,prior_dispatched:true,result_observation:'error_returned',correction_required:true,issues:[{path:'',code:error.code,message:safeControlText(error.detail,400)}]},evidence_ids:[],effect_state:'none',retry_safe:false});
 const valueByteLimit=16000;
 const contentContainers=new Set(['tree','dom','nodes','elements','children','content','body','html','rows','records','items','entries','data','output']);
