@@ -192,9 +192,65 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
 - 비공개 Phase112 원본 세트: `NOT_RUN`. 이 환경에는 재준비에 필요한 연결 입력 파일이 없고, 그 세트는 Aside(사용자
   Windows 브라우저 프로필)를 쓰며, 다른 worktree에서 이미 serve 중이다. 이전 기준(1 PASS / 9 FAIL / 14 NOT_RUN)을 갱신하지 않는다.
 
+### A7 보완 — 1차 측정 발견 1·2·3·5 (2026-10-01, 25a56a5)
+- 발견 1(카운터): `ConfiguredStructuredModel`의 호출 기록을 private 필드로 두고 `forRole()`이 같은 기록을 공유한다.
+  실행별 `forWork()` 기록은 그대로 분리된다. 공유로 중복이 되는 `task-models.ts`의 수동 복사를 뺐다.
+  `verifierBoundary`의 실패 종류 판정도 이제 실제 검증기 호출을 본다.
+  테스트: `runtime-work-completion-risk-tier` "A7: verification calls through a configured model are counted"
+  (수정 전 빌드에서 "used 0 model calls"로 실패).
+- 발견 2(가벼움 검증): 결과 파일 receipt는 식별 정보(해시·바이트·형식·읽기 위치, 본문 제외 JSON) 다음에 본문을 보여 준다.
+  인용 근거는 "보여 준 내용의 정확한 부분 문자열이면서, 관측값 하나 안에 있거나 관측값 하나를 통째로 담을 것"이다.
+  키·구두점만, 또는 실행 메타데이터(`request_id` 등, 원래 leaf에서 제외됨)만 인용하면 계속 엄격 경로로 간다.
+  테스트: "A7: a light quote of a shown key and value or of the saved file identity is grounded; keys alone are not".
+  기존 A5 테스트의 "본문만 그대로 보여 준다" 단언은 새 계약(식별 정보 뒤 본문)으로 바꿨다.
+  실제 모델 재현(P4 checkpoint 사본, Codex gpt-6.1-sol): 수정 전 0/3 → 수정 후 3/3 가벼움 1회로 검증.
+  결과 파일을 틀린 값(report 3, 합계 7)으로 바꾼 사본은 2/2 `unsupported`로 거부(거짓 성공 없음).
+- 발견 3(P5): 요청에 scheme 없이 쓴 사이트(흔한 TLD만: `nodejs.org`, `httpbin.org/forms/post`)를 https 출처로 인정한다.
+  `Node.js`, `sample.json` 같은 이름은 URL이 되지 않는다. 허용 목록 밖 URL은 `browserRequest`에서 발송 전
+  `WorkClientToolInputError('BROWSER_URL_NOT_OBSERVED')`로 거부되어 모델이 다른 수단을 고른다.
+  테스트: `runtime-work-unusual-traffic` "a scheme-less site in the request is readable and an unlisted URL is refused before dispatch"
+  (수정 전 빌드에서 실패).
+- 발견 5(고아 프로세스): POSIX에서 클라이언트 CLI를 별도 프로세스 그룹으로 띄우고, 시간 초과·출력 초과·중단 때 그룹 전체를 종료한다.
+  테스트: `runtime-subscription-auth` "a client timeout stops the wrapper and the binary it started"(수정 전 빌드에서 실패).
+  1차 측정이 남긴 고아 `codex` 1개(36분 실행)는 측정 뒤 정리했다.
+- 검증: build PASS. Work 관련 테스트(`runtime-work-*` 전체 + subscription-auth, task-auto-models, client-handoff,
+  supervised-swarm) 721 PASS / 0 FAIL. ledger 196 RQ, public boundary PASS, diff check PASS.
+  frozen quick suite(최종 소스): 1978/1978 PASS, BLOCKED_ENV 0, NOT_RUN 0.
+
+### A7. 실제 구독 모델 측정 — 2차(25a56a5, 1차와 같은 조건)
+
+| ID | 상태 · 이유 | 검증 방식 | 검증 호출 | 수정 | 시간 | 확인 | 원인 분류 |
+|---|---|---|---|---|---|---|---|
+| P1 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 57초 | 산출물 없음 | 환경(Google → Aside 요구) |
+| P2 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 94초 | 산출물 없음 | 환경(Bing 빈 결과, DuckDuckGo·Google 챌린지) |
+| P3 | succeeded | 코드(봉인된 수집 계약) | 0 | 0 | 109초 | 정답 일치 | — |
+| P4 | succeeded | 가벼움 | 1 | 0 | 152초 | 정답 일치 | — |
+| P5 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 136초 | 첫 확인 기록 저장·재확인(블로그 첫 글과 일치), 감시 미설정 | 환경(감시할 블로그 소스 미등록) |
+| P6 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 63초 | 입력·제출 0건 | 업무 불가능(양식 대상 미등록, 양식 필드에 radio 종류 없음) |
+| P7 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 81초 | 산출물 없음 | 환경(같음) |
+
+- 요약: 완료 2/7(29%, 목표 미달). 거짓 성공 0/2, 거짓 거부 0/5. 실행기 종료 1 → 0. 검증 호출 Work당 0.14회
+  (성공 건 0·1, 카운터 기록과 관측이 일치). P4 419초 → 152초(f077e04 295초).
+- 이 세트에서 Part A가 다루는 지점(검증 거부, 실행기 종료, 진행 정지)으로 멈춘 건은 이제 없다. 수정 루프(`Correction n/3`)는
+  두 측정 모두 한 번도 열리지 않았다. 남은 정지는 모두 실행 환경이나 세트의 준비 단계다.
+- P6은 1차 기록의 "양식 대상 미등록"만으로는 풀리지 않는다. httpbin 양식의 크기는 radio인데 양식 대상 필드 종류는
+  `text/select/checkbox`뿐이다(`src/packs/contracts.ts:12`).
+
+### Part A 완성도 평가 (A7 기준)
+- 실제 모델로 확인된 것: 봉인된 수집 계약의 코드 검증(호출 0), 읽기·결과 파일 Work의 가벼움 검증 1회(보완 후),
+  사용자 사이트의 읽기와 잘못된 URL의 교정 가능한 거부, 검증 호출 수 기록, 거짓 성공 0.
+- 실제 모델로는 아직 확인되지 않은 것(fixture로만): 고쳐진 옛 초안(A1), 180행 표(A1), 수정 루프·재검증(A2),
+  완료 제안 형식 교정(A3), 커스텀 Pack 회차 trace(A3), 진행 중 재시도·설정 변경 재결속(A4), 엄격 경로를 타는 외부 쓰기(A5).
+  공개 세트에서 이 경로를 여는 업무는 검색 차단·대상 미등록으로 그 단계까지 가지 못했다.
+- 남은 Part A 항목: Swarm 결과 경로의 수정 루프(A2), 중간 등급(A5), 검증·재계획 지시문 축소 목표(A6).
+- 완료율 목표(70%)를 막는 것은 Part A 밖의 세 가지다.
+  1. 공개 웹 검색 경로: 이 호스트에서 headless 검색이 모두 막힌다(P1·P2·P7). 사용자가 Aside 우선 라우팅을 지시했으나,
+     로그인된 개인 브라우저를 Work의 기본 경로로 만드는 변경은 이 세션의 자동 권한 검사에서 거부되어 진행하지 않았다.
+  2. 감시 소스 등록(P5): 반복 감시는 호스트 등록 소스로만 돈다. 세트 준비 단계에 블로그 소스 등록이 필요하다.
+  3. 양식 초안(P6): radio 필드 지원과 `draft_only` 대상 등록이 필요하다.
+
 ## 다음 행동
 
-A7 1차 측정의 발견 1–3(검증 호출 카운터, 가벼움 검증 입력, scheme 없는 사용자 URL과 실행 중 거부)을 고치고 같은 세트로 다시 잰다.
-발견 4의 브라우저 경로(Aside 우선 또는 VM)는 사용자 결정에 따라 별도로 진행한다.
-frozen quick suite는 보완 후 최종 소스로 실행한다.
+브라우저 경로(Aside 우선 또는 VM)는 사용자 결정에 따라 진행하고, 그 뒤 같은 세트로 3차 측정한다.
+공개 세트 준비 단계에 P5 감시 소스와 P6 양식 대상(radio 지원 포함)을 넣을지 사용자 확인이 필요하다.
 Swarm 결과 경로의 수정 루프(A2 잔여)와 중간 등급(A5 잔여)은 그 뒤 다시 판단한다.
