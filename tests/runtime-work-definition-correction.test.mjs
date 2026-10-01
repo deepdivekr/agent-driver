@@ -77,8 +77,11 @@ test('runtime contract failed correction provider call stops immediately and kee
 });
 test('runtime contract output correction cannot silently change the route kind, intended outcome or effect authorization',async t=>{
  const bad=proposal({kind:'swarm',pack_family:'research.search'});
- for(const [id,corrected]of [['route',proposal({kind:'pack',pack_family:'research.search'})],['outcome',{...proposal(),desired_outcome:'전혀 다른 자료를 조사한다'}],['effect',{...proposal(),requested_effect:'external_effect_requested'}]]){
-  const model=scripted(bad,corrected),x=await fixture(t,model),work=await x.api.call('runtime_work_start',{request_id:`scope-${id}`,prompt:'요청한 출처를 병렬 조사해줘'});assert.equal(work.status,'needs_model');assert.equal(work.reason,'WORK_DEFINITION_INVALID_AFTER_CORRECTION');assert.equal(model.calls.length,2);assert.equal(work.spec,null);assert.deepEqual(work.runs,[]);
+ {const model=scripted(bad,proposal({kind:'pack',pack_family:'research.search'})),x=await fixture(t,model),work=await x.api.call('runtime_work_start',{request_id:'scope-route',prompt:'요청한 출처를 병렬 조사해줘'});assert.equal(work.status,'needs_model');assert.equal(work.reason,'WORK_DEFINITION_INVALID_AFTER_CORRECTION');assert.equal(model.calls.length,2);assert.equal(work.spec,null);assert.deepEqual(work.runs,[]);}
+ // The host keeps the first answer's outcome and effect itself: a reworded correction neither widens scope nor stops the Work.
+ for(const [id,corrected]of [['outcome',{...proposal(),desired_outcome:'전혀 다른 자료를 조사한다'}],['effect',{...proposal(),requested_effect:'external_effect_requested'}]]){
+  const model=scripted(bad,corrected),x=await fixture(t,model),work=await x.api.call('runtime_work_start',{request_id:`scope-${id}`,prompt:'요청한 출처를 병렬 조사해줘'});
+  assert.equal(model.calls.length,2);assert.equal(work.spec.desired_outcome,bad.desired_outcome,id);assert.equal(work.spec.requested_effect,bad.requested_effect,id);assert.deepEqual(work.runs,[]);
  }
 });
 test('runtime contract exported proposal validator is reusable by replanning and valid outputs make no extra call',async()=>{

@@ -48,7 +48,7 @@ test('runtime contract missing Pack policy and unregistered sources are rejected
  const empty=await fixture(t,{packs:{sources:[],targets:[],models:'off'}});
  assert.throws(()=>empty.toolkit.validate('runtime_pack_run',{recipe},'no-source'),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_PACK_SOURCE_NOT_CONNECTED');
  assert.deepEqual(empty.calls,[]);assert.deepEqual(empty.store.officeRuns(empty.config.project.id,empty.work.id),[]);
- assert.match(absent.toolkit.catalog().find(tool=>tool.name==='office_web_search').description,/Never replace that query with Bing or DuckDuckGo/u);
+ assert.match(absent.toolkit.catalog().find(tool=>tool.name==='office_web_search').description,/provider_change_allowed=true search with bing or open a known official page/u);
 });
 test('runtime contract registered Pack file source is not treated as an ungranted user folder',async t=>{
  const source={id:'nyc311_file',kind:'file',path:join(tmpdir(),'registered-pack-source.json'),format:'json'};
