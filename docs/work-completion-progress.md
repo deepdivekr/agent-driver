@@ -122,6 +122,23 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
   실패 1건은 `runtime-work-stage-history-ui`(페이지 자체 새로고침이 테스트가 넣은 카드를 지우는
   시간 경쟁, UI 코드는 이번 변경과 무관)다. 새 테스트 `runtime-work-prompt-prohibitions` 12 PASS.
 
+### A7. 최종 검증과 실제 모델 확인 — fixture 완료, 실제 모델 미실행
+- frozen quick suite(`npm test`, 소스 0d475bf, browser shim 사용):
+  1952 PASS / 10 FAIL / 11 BLOCKED_ENV / 1 NOT_RUN (전체 1974).
+  - BLOCKED_ENV 11건: systemd user bus 없음(리소스 한도 테스트). NOT_RUN 1건: 화면(headed) 없음.
+  - FAIL 10건은 모두 기준 main f077e04에서도 같은 방식으로 실패한다(별도 worktree에서 확인).
+    - `runtime-files` 4건: 검증 샌드박스(bwrap) 없음 → `SANDBOX_UNAVAILABLE`.
+    - `runtime-storage` 1건: `/usr/bin/bwrap` 없음.
+    - `runtime-interface` 4건: 분리된 브라우저 작업자가 `paused_dependency` 또는 60초 시간 초과.
+    - `runtime-work-stage-history-ui` 1건: 화면 새로고침 시간 경쟁(A6 기록 참고).
+  - 이 브랜치 변경으로 생긴 실패는 없다.
+- ledger 196 RQ, public boundary PASS, diff check PASS.
+- 공개 수용 세트 7건을 `docs/work-completion-acceptance-set.md`에 정의했다.
+  이 컨테이너에서는 실제 모델 호출이 불가능해 `NOT_RUN`이다. 비공개 원본 24건도 실행하지 않았다.
+- Part A 완료 기준 중 fixture로 확인한 것: 최초 진단 6개 항목 재현 테스트 통과, 실행기 종료 지점·멈춤
+  지점 재현 테스트 통과, 읽기 위주 Work 검증 1회(A5), 실행 지시문 절반 이하(A6).
+  확인하지 못한 것: 실제 모델 완료율 70%, 거짓 거부·거짓 성공 비율, 검증·재계획 지시문 절반.
+
 ### 테스트 환경 메모
 - 이 컨테이너의 Playwright 1.63은 Chromium 1243을 기대하지만 설치본은 1194다.
   테스트 실행 때만 스크래치 경로에 1194를 1243 이름으로 연결한 shim을 쓴다(커밋하지 않음).
@@ -146,6 +163,8 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
 
 ## 다음 행동
 
-A6(지시문 축소: 금지 문장 목록 → 코드 거부 테스트 → 문장 제거 → 크기 테스트),
-A7(frozen quick suite와 진행 기록)을 진행한다.
-Swarm 결과 경로의 수정 루프(A2 잔여)와 중간 등급(A5 잔여)은 A6 이후 다시 판단한다.
+1. 사용자 구독 모델 환경에서 공개 수용 세트 7건(가능하면 기준 main과 나란히)과 비공개 원본 24건을
+   실행하고 수치를 기록한다. 실패는 업무 불가능 / 검증 오판 / 실행기 종료 / 환경으로 분류한다.
+2. 측정 결과에 따라: Swarm 결과 경로의 수정 루프(A2 잔여), 중간 검증 등급(A5 잔여),
+   검증·재계획 지시문 추가 축소(A6 잔여)를 판단한다.
+3. Part A 수용 판정 뒤 Part B(자율 운영)를 시작한다.

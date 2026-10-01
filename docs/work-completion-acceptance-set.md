@@ -35,6 +35,23 @@ fixture 테스트 결과는 이 세트의 결과가 아니다. 이 세트는 실
 | P6 | 폼 초안 | httpbin.org/forms/post 양식에 이름 Kim, 크기 Medium으로 주문 초안을 채우되 제출하지 마 | 채워진 초안, 제출 0건 | 엄격(초안 + 닫힌 trace의 제출 0) |
 | P7 | 비교 | Python과 Node.js 최신 안정 버전을 각 공식 사이트에서 확인해 JSON으로 저장해줘 | 두 버전이 담긴 JSON, 형식 검증 | 가벼움, 수정 시 +1 |
 
+### P3·P4 예시 파일
+
+별도 폴더에 `sample.json`을 아래 내용으로 만들고 host 설정의 `packs.sources`에
+`{"id":"records","kind":"file","path":"sample.json","format":"json"}`로 등록한다.
+
+```json
+[{"id":"a1","name":"Alpha","status":"active","type":"report"},
+ {"id":"a2","name":"Beta","status":"inactive","type":"memo"},
+ {"id":"a3","name":"Gamma","status":"active","type":"memo"},
+ {"id":"a4","name":"Delta","status":"active","type":"report"},
+ {"id":"a5","name":"Epsilon","status":"inactive","type":"invoice"},
+ {"id":"a6","name":"Zeta","status":"active","type":"invoice"}]
+```
+
+- P3 정답: a1, a3, a4, a6 네 행, 열은 id와 name만.
+- P4 정답: report 2, memo 2, invoice 2 (합계 6).
+
 ## 지표
 
 - 완료율: `succeeded` 건수 / 7. 목표 70% 이상(사용자 확인 필요).
