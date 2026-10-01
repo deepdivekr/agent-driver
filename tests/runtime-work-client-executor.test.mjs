@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {z} from 'zod';
-import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS} from '../dist/work/client-executor.js';
+import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS,executorView} from '../dist/work/client-executor.js';
 import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
 import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
 import {saveModelSettings,scopedModelSettingsPath} from '../dist/onboarding/model-settings.js';
@@ -403,4 +403,15 @@ test('B4: a saved result is read back by the host without a model turn; a failed
   assert.equal(ok.provider.calls.length,3,'Read, save, complete: the readback took no model turn.');
   const failed=await run('retryable_failure');
   assert.equal(failed.executed.filter(item=>item[0]==='office_result_read').length,1,'A failed readback is not repeated by the host.');
+});
+
+// Live: after thirty page reads every executor turn carried all thirty pages again and took two minutes.
+test('the executor sees recent receipts in full and only the opening of long text in older ones; the checkpoint keeps everything',()=>{
+  const observation=i=>({invocation:{request_id:`r-${i}`,turn:i,stage_id:'s',tool_name:'browser_read',arguments:{url:`https://example.test/${i}`},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{title:`Page ${i}`,text:'x'.repeat(12000),links:[{url:'https://example.test/a',text:'a'}]},evidence_ids:[`e-${i}`],effect_state:'none',retry_safe:true},observed_at:'2026-10-01T00:00:00.000Z'});
+  const checkpoint={format:1,work_id:'w',run_id:'r',binding:'b',turn:10,pending:null,observations:Array.from({length:20},(_,i)=>observation(i)),summary:''},view=executorView(checkpoint);
+  assert.equal(checkpoint.observations[0].receipt.value.text.length,12000,'The saved checkpoint is untouched.');
+  assert.ok(view.observations[0].receipt.value.text.length<2600);assert.match(view.observations[0].receipt.value.text,/9600 more characters were read/u);assert.equal(view.observations[0].receipt.value.title,'Page 0');
+  assert.deepEqual(view.observations[0].receipt.evidence_ids,['e-0']);assert.equal(view.observations.at(-1).receipt.value.text.length,12000,'The latest receipts are complete.');
+  assert.ok(JSON.stringify(view).length<JSON.stringify(checkpoint).length/2);
+  assert.equal(executorView({...checkpoint,observations:checkpoint.observations.slice(0,3)}).observations[0].receipt.value.text.length,12000);
 });

@@ -783,6 +783,11 @@ export class WorkExecutionTools {
       workActivity(this.store,this.config.project.id,this.workId,'source.started','Opening a source through the configured browser executor.',{tool_name:name,status:'running',target_url:url});
       const origin=parsed.origin,journal=this.store.browserExecutors();
       if(explicit&&textResourcePath.test(parsed.pathname))return this.textResource(explicit);
+      // A feed address without a file extension (/feed/, /atom/entries/) is read as text first; a browser shows
+      // such a response partially or not at all (live). Anything that is not text falls through to the browser.
+      if(explicit&&!explicit.offset&&/(?:^|\/)(?:feed|feeds|atom|rss)(?:\/[A-Za-z0-9_-]*)?\/?$/iu.test(parsed.pathname)){
+        try{return await this.textResource(explicit);}catch(error){if(!(error instanceof Error)||!/^BROWSER_RESOURCE_/u.test(error.message))throw error;}
+      }
       const socialSite=(social?.site??(Object.hasOwn(knownLoginSites,parsed.hostname.toLowerCase().replace(/^www\./u,''))?parsed.hostname.toLowerCase().replace(/^www\./u,'') as SocialSearchRequest['site']:null));
       const authTarget=socialSite?this.socialTarget(socialSite):null;
       // One page on a sign-in site without a connected profile is a read the run cannot make, not the end of the

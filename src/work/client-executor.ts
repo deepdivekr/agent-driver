@@ -273,6 +273,21 @@ const receiptFailureMetadata=(receipt:WorkClientToolReceipt)=>{
 };
 
 /** Official CLI/API clients decide bounded next actions; only the host executes capabilities. */
+/** What the executor is shown each turn. The saved checkpoint keeps every receipt in full and verification reads
+ * those; the executor gets the latest receipts in full and only the opening of long text in older ones (live: after
+ * thirty page reads every turn carried all thirty pages again and took two minutes). A page can be read again. */
+const EXECUTOR_RECENT=4,EXECUTOR_OLD_TEXT=2400;
+export function executorView(checkpoint:WorkClientCheckpoint):WorkClientCheckpoint{
+  if(checkpoint.observations.length<=EXECUTOR_RECENT)return checkpoint;
+  const shorten=(value:unknown,depth=0):unknown=>{
+    if(typeof value==='string')return value.length>EXECUTOR_OLD_TEXT?`${value.slice(0,EXECUTOR_OLD_TEXT)}… [${value.length-EXECUTOR_OLD_TEXT} more characters were read; read the source again if they are needed]`:value;
+    if(value===null||typeof value!=='object'||depth>5)return value;
+    if(Array.isArray(value))return value.slice(0,40).map(item=>shorten(item,depth+1));
+    return Object.fromEntries(Object.entries(value).map(([key,item])=>[key,shorten(item,depth+1)]));
+  };
+  const cut=checkpoint.observations.length-EXECUTOR_RECENT;
+  return {...checkpoint,observations:checkpoint.observations.map((item,index)=>index>=cut||item.invocation.tool_name==='office_controlled_run_trace'?item:{...item,receipt:{...item.receipt,value:shorten(item.receipt.value)}})};
+}
 export class BoundedWorkClientExecutor {
   constructor(readonly model:StructuredModel){}
   async execute(request:WorkClientRequest,hooks:WorkClientHooks):Promise<WorkClientResult>{
@@ -437,7 +452,7 @@ export class BoundedWorkClientExecutor {
           const savedResults=checkpoint.observations.filter(item=>item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.receipt.effect_state==='verified'&&['runtime_pack_run','office_result_draft'].includes(item.invocation.tool_name)).map(item=>({request_id:item.invocation.request_id,...(item.invocation.tool_name==='runtime_pack_run'&&item.receipt.value&&typeof item.receipt.value==='object'&&'run_id' in item.receipt.value?{run_id:item.receipt.value.run_id}:{})}));
           return {plan_revision:plan.revision,stages,allowed_action_stage_ids:stages.filter(item=>item.state==='ready'||checkpoint.completion_repair&&item.state==='reported').map(item=>item.stage_id),saved_result_readback:reported.size===steps.length?{stage_ids:steps.map(step=>step.id),tools:['runtime_pack_status','office_result_read'],remaining_reads:Math.max(0,3-savedResultRechecks),saved_results:savedResults,instruction:'All business stages are reported. Propose complete for independent host verification. If a saved result needs current status or full file readback first, use one of these read-only tools with its saved run_id/request_id under a listed existing stage. Do not run the Pack again, recollect a source, rewrite an artifact or add invented confirmation requirements.'}:null,warning:'Historical receipts remain in checkpoint for final Work verification. A same-ID receipt with a different current stage binding cannot support a current-stage claim. These candidates do not grant tools, permissions, or semantic completion.'};
         })():null;
-        const input={work_id:request.work_id,run_id:request.run_id,stage_id:stage,prompt:request.prompt,completion_checks:checks,context:request.context??null,tools:excludedTools.size?tools.filter(item=>!excludedTools.has(item.name)):tools,checkpoint,completion_gate:{phase:'pre_verification',complete_action:'proposal_for_independent_host_verification',final_flag:'set_by_host_after_verification',closed_trace:'generated_by_host_at_complete_cutpoint',evidence_role:'control_metadata_not_result_evidence',business_receipts:'required_before_complete_proposal'},...(semantic&&plan?{plan:{revision:plan.revision,steps:businessSteps(plan)},stage_context:stageContext}:{})};
+        const input={work_id:request.work_id,run_id:request.run_id,stage_id:stage,prompt:request.prompt,completion_checks:checks,context:request.context??null,tools:excludedTools.size?tools.filter(item=>!excludedTools.has(item.name)):tools,checkpoint:executorView(checkpoint),completion_gate:{phase:'pre_verification',complete_action:'proposal_for_independent_host_verification',final_flag:'set_by_host_after_verification',closed_trace:'generated_by_host_at_complete_cutpoint',evidence_role:'control_metadata_not_result_evidence',business_receipts:'required_before_complete_proposal'},...(semantic&&plan?{plan:{revision:plan.revision,steps:businessSteps(plan)},stage_context:stageContext}:{})};
         // Provider/auth/quota exceptions occur outside output validation. They
         // keep the normal continuity/wait path and never trigger this repair.
         const raw=replayed?{action:'tool',stage_id:scriptedStage,tool_name:replayed.tool,arguments_json:JSON.stringify(replayed.arguments),summary:readback?'Reading back the saved result.':scripted?scripted.summary:'Repeating a read from the verified procedure of a similar request.',completed_checks:[],...(semantic&&plan?{completed_stages:scriptedClaims}:{}),wait_reason:null}
