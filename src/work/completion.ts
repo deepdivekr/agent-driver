@@ -663,8 +663,10 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
     const superseded=supersededOutputEvidence(observations),shown=new Map<string,{content:string;leaves:string[]}>();
     const evidence=observations.filter(item=>item.receipt.status==='succeeded'&&item.receipt.evidence_ids.length>0&&!superseded.has(item.receipt.evidence_ids[0]!)&&observableLeaves(item.receipt.value).length>0).map(item=>{
       const value=object(item.receipt.value),trace=item.invocation.tool_name===controlledTraceTool;
-      const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):['office_result_draft','office_result_read'].includes(item.invocation.tool_name)&&typeof value?.text==='string'?value.text as string:JSON.stringify(item.receipt.value);
-      const limit=trace?4000:['office_result_draft','office_result_read'].includes(item.invocation.tool_name)?12000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
+      const result=['office_result_draft','office_result_read'].includes(item.invocation.tool_name)&&typeof value?.text==='string';
+      // The saved file's identity (request ID, hash, bytes, read cursor) precedes its text so a save check can be decided.
+      const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):result?`${JSON.stringify({...value,text:undefined})}\n${value!.text as string}`:JSON.stringify(item.receipt.value);
+      const limit=trace?4000:result?12000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
       shown.set(id,{content,leaves:observableLeaves(item.receipt.value)});
       return {evidence_id:id,tool_name:item.invocation.tool_name,observed_at:item.observed_at,truncated:content.length<full.length,content};
     });
@@ -687,8 +689,11 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
     const traceIds=new Set(evidence.filter(item=>item.tool_name===controlledTraceTool).map(item=>item.evidence_id));
     for(const check of answer.checks){
       // Grounded and positive: every quote is an exact substring of the shown
-      // content and of a real leaf, and the original request needs a business receipt.
-      if(!check.quotes.length||check.quotes.some(quote=>!check.evidence_ids.includes(quote.evidence_id)||!shown.get(quote.evidence_id)?.content.includes(quote.quote)||!shown.get(quote.evidence_id)!.leaves.some(leaf=>leaf.includes(quote.quote))))return null;
+      // content that lies within an observed value or carries a whole one
+      // ("full_source_read":true); keys or punctuation alone are not evidence.
+      // The original request needs a business receipt.
+      const grounded=(quote:string,leaves:string[])=>leaves.some(leaf=>leaf.includes(quote)||quote.includes(leaf)||quote.includes(JSON.stringify(leaf).slice(1,-1)));
+      if(!check.quotes.length||check.quotes.some(quote=>!check.evidence_ids.includes(quote.evidence_id)||!shown.get(quote.evidence_id)?.content.includes(quote.quote)||!grounded(quote.quote,shown.get(quote.evidence_id)!.leaves)))return null;
       if(check.id.startsWith('original_user_request')&&check.quotes.every(quote=>traceIds.has(quote.evidence_id)))return null;
     }
     await audit('accepted','WORK_COMPLETION_LIGHT_VERIFIED');

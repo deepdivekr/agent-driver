@@ -162,6 +162,9 @@ export class WorkExecutionTools {
   private dispatched=new Map<string,{name:string;input:Record<string,unknown>;coding_stage?:{id:string;attempts:number};reused_coding_run?:string}>();
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly api:RuntimeApi,readonly workId:string,readonly runId:string,readonly spec:WorkProposal,readonly prompt:string,readonly guard:()=>void,readonly model:StructuredModel,readonly options:{browserFactory?:BrowserRouteOptions['factory']}={}){
     for(const raw of prompt.match(/https?:\/\/[^\s<>"'`]+/gu)??[]){try{this.allowedUrls.add(new URL(raw.replace(/[),.;]+$/u,'')).href);}catch{}}
+    // A site written without a scheme ("nodejs.org", "httpbin.org/forms/post") is the same explicit https source.
+    // Common TLDs only, so names such as "Node.js" or "sample.json" never become URLs.
+    for(const raw of prompt.match(/(?<![\w@./:-])(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+(?:com|org|net|io|dev|gov|edu|app|ai|co|kr|jp|uk|de|info)(?![a-z0-9-])(?:\/[^\s<>"'`]*)?/giu)??[]){try{this.allowedUrls.add(new URL(`https://${raw.replace(/[),.;]+$/u,'')}`).href);}catch{}}
     this.restoreObservedUrls();
   }
   /** The host binds a repeated Pack effect to its immutable cycle before the
@@ -453,7 +456,12 @@ export class WorkExecutionTools {
     return readyAuthTargets(this.store,this.config,site).filter(target=>browserHostCompatible(target)&&(!preference||publicDefault||target.environment===preference.environment)&&(!preference?.preferred_engine||target.engine===preference.preferred_engine)).sort((a,b)=>Number(b.engine==='aside'&&b.environment==='host_foreground')-Number(a.engine==='aside'&&a.environment==='host_foreground')||b.priority-a.priority||a.id.localeCompare(b.id))[0]??null;
   }
   private socialRequest(raw:unknown){const input=socialSearchInput.parse(raw);requireCondition(socialIntent(this.prompt,this.spec)&&this.socialTarget(input.site),'WORK_SOCIAL_PROFILE_NOT_READY');return input;}
-  private browserRequest(raw:unknown){const input=browserInput.parse(raw),search=searchFromUrl(input.url);if(search)this.searchRequest(search);return input;}
+  private browserRequest(raw:unknown){
+    const input=browserInput.parse(raw),search=searchFromUrl(input.url);if(search)this.searchRequest(search);
+    // Refused before dispatch so the executor can choose another source instead of ending the Work.
+    if(!this.allowedUrls.has(new URL(input.url).href))throw new WorkClientToolInputError('BROWSER_URL_NOT_OBSERVED','Not opened. Open only a URL the user wrote or a link already observed in this run; list them with office_browser_links, or find the page with office_web_search.');
+    return input;
+  }
   private browserLinksPage(raw:unknown){
     const input=browserLinksInput.parse(raw),urls=[...this.allowedUrls].filter(url=>{const search=searchFromUrl(url);return !search||!this.blockedSearches.has(searchKey(search));}),executors=browserCatalog(this.config),snapshot_id=hashJson({urls,executors});
     if(input.snapshot_id&&input.snapshot_id!==snapshot_id)throw new WorkClientToolInputError('WORK_BROWSER_LINKS_SNAPSHOT_CHANGED','The observed URL list changed. Restart at offset=0, then use the returned snapshot_id with next_offset. No page was opened.');

@@ -75,7 +75,6 @@ export async function allocateWorkModels(store:PackStore,project:string,workId:s
       if(isNonRetryableClientFailure(error)&&!isInvalidClientOutput(error))throw error;
       reason='allocation_unavailable';
     }
-    finally{model.calls.push(...planner.calls.slice(callStart));}
   }
   await guard();
   if(model.taskModelContext()?.settings_binding!==context.settings_binding)throw Error('MODEL_SETTINGS_CHANGED');

@@ -61,10 +61,24 @@ test('A5: a read-and-draft Work is verified with exactly one compact model call'
   assert.deepEqual(model.kinds,['light']);
   const input=model.inputs[0];
   assert.deepEqual(input.checks.map(check=>check.id),['summary_saved','original_user_request'],'The original request is judged in the same call.');
-  assert.ok(input.evidence.some(item=>item.evidence_id==='ev-draft-1'&&item.content===right),'Office output text is shown directly.');
+  assert.ok(input.evidence.some(item=>item.evidence_id==='ev-draft-1'&&item.content.endsWith(`\n${right}`)&&item.content.includes(`"sha256":"${'a'.repeat(64)}"`)&&item.content.includes('"request_id":"draft-1"')),'Office output text is shown directly after its saved-file identity.');
   assert.equal(Object.hasOwn(input,'literal_leaf_manifest'),false);
   assert.equal(audits.at(-1).code,'WORK_COMPLETION_LIGHT_VERIFIED');assert.equal(audits.at(-1).verifier,'light');
   assert.ok(progress.some(summary=>/light verification/iu.test(summary)));
+});
+
+// A7 regression: live answers quoted the receipt exactly as shown ("full_source_read":true)
+// and asked for the saved file's identity; both sent every Office-output Work to strict.
+test('A7: a light quote of a shown key and value or of the saved file identity is grounded; keys alone are not',async t=>{
+  const cases={key_value:['ev-source-0','"title":"Node.js blog"',['light']],saved_identity:['ev-draft-1',`"bytes":${right.length}`,['light']],
+    key_only:['ev-source-0','"title":"',['light','strict']],run_metadata_only:['ev-draft-1','"request_id":"draft-1"',['light','strict']]};
+  for(const [name,[id,quote,kinds]] of Object.entries(cases)){
+    const model=fixture(supported(id,quote)),audits=[];
+    const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,audit:event=>audits.push(event)});
+    assert.equal(await verify(checks,sealed(t,[source(0),draft(1)]),claimFor(['ev-source-0','ev-draft-1'])),true,`${name}: ${JSON.stringify(audits.map(event=>event.code))}`);
+    assert.deepEqual(model.kinds,kinds,name);
+    assert.equal(audits.some(event=>event.code==='WORK_COMPLETION_LIGHT_VERIFIED'),kinds.length===1,name);
+  }
 });
 
 test('A5: a clear light denial is a denial, with its reason sent to the repair step',async t=>{
@@ -125,12 +139,21 @@ test('A5: structural gates stay in code on the light tier',async t=>{
   assert.equal(completionRiskTier(sealed(t,[source(0),pending])),'strict','An uncertain write cannot be in a closed trace.');
 });
 
-test('A5: a supervised read-only Pack Work finishes with one light verification call',async t=>{
+test('A5: a supervised read-only Pack Work finishes with one light verification call',t=>supervisedLightRun(t,model=>model));
+
+// A7 regression: the real configured model gives each role its own view. The
+// verifier's calls must still reach the run's count (0 was reported live).
+test('A7: verification calls through a configured model are counted for the run',async t=>{
+  const {ConfiguredStructuredModel}=await import('../dist/onboarding/configured-model.js'),{join}=await import('node:path'),{tmpdir}=await import('node:os');
+  await supervisedLightRun(t,fixture=>new ConfiguredStructuredModel(join(tmpdir(),'absent-models.json'),{},{subscription:()=>fixture,api:()=>{throw Error('PAID_API_MUST_NOT_RUN');}}));
+});
+
+async function supervisedLightRun(t,wrap){
   const {mkdtemp,writeFile,rm}=await import('node:fs/promises'),{tmpdir}=await import('node:os'),{join}=await import('node:path'),{setTimeout:delay}=await import('node:timers/promises');
   const {PackStore}=await import('../dist/packs/store.js'),{loadHostConfig}=await import('../dist/interface/config.js'),{WorkRuntime}=await import('../dist/work/runtime.js'),{WorkSupervisor}=await import('../dist/work/supervisor.js');
   const proposal={title:'자료 수집',desired_outcome:'원본 값을 확인한다',completion_checks:[{id:'records',result:'원본 제목 Observed source 확인',evidence:'실제 파일 조회 결과'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};
   const recipe={version:1,family:'research.search',request:'자료를 확인해줘',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],query:'',search_fields:['title'],sort:null,limit:10};
-  const kinds=[],model={calls:[],async call(purpose,instructions,input){
+  const kinds=[],fixtureModel={calls:[],async call(purpose,instructions,input){
     this.calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture',duration_ms:0});
     if(instructions.startsWith('Define one durable'))return proposal;
     if(isLight(instructions)){kinds.push('light');return {checks:input.checks.map(check=>{const item=input.evidence.find(row=>row.tool_name==='runtime_pack_run'&&row.content.includes('Observed source'));return {id:check.id,verdict:'supported',evidence_ids:[item.evidence_id],quotes:[{evidence_id:item.evidence_id,quote:'Observed source'}],reason:'The observed title is present.'};})};}
@@ -141,7 +164,7 @@ test('A5: a supervised read-only Pack Work finishes with one light verification 
   }};
   const root=await mkdtemp(join(tmpdir(),'work-tier-')),host=join(root,'host.json');await writeFile(join(root,'source.json'),JSON.stringify([{id:'one',title:'Observed source',value:23}]));
   await writeFile(host,JSON.stringify({schema_version:1,project_id:'tier-test',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[{id:'records',kind:'file',path:'source.json',format:'json'}],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}}));
-  const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
+  const config=loadHostConfig(host),store=new PackStore(config.dbPath),model=wrap(fixtureModel);store.registerProject(config.project);
   const work=await new WorkRuntime(store,config,model).start({request_id:'tier',prompt:'자료를 확인해줘'});
   const supervisor=new WorkSupervisor(store,config,model,{auto_start:false,tick_ms:25});
   t.after(async()=>{await supervisor.close();store.close();await rm(root,{recursive:true,force:true});});
@@ -151,4 +174,4 @@ test('A5: a supervised read-only Pack Work finishes with one light verification 
   assert.deepEqual(kinds,['light'],'One compact judgment; no strict second approval of a read-only collection.');
   const activity=store.hermesState.prepare("SELECT summary FROM office_activity WHERE work_id=? AND kind='supervisor.verification.calls'").all(work.work_id).map(item=>item.summary);
   assert.ok(activity.some(summary=>new RegExp(`used ${kinds.length} model call`).test(summary)),JSON.stringify(activity));
-});
+}

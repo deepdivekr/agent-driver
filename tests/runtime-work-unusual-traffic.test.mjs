@@ -123,3 +123,18 @@ test('runtime fixture the default public headless placement keeps authenticated 
   assert.equal(value.executor,aside.id);assert.equal(value.social_access,'signed_in_marker_observed');assert.equal(receipt.status,'succeeded');assert.ok(x.events.some(event=>event.kind==='extract'&&event.id===aside.id));
   assert.deepEqual(authSites(x.store,x.config,aside),beforeAside);assert.deepEqual(authSites(x.store,x.config,neo),beforeNeo);assert.deepEqual(authSites(x.store,x.config),[]);
 });
+
+// A7 regression (P5 "nodejs.org 블로그"): a site the user wrote without a scheme is
+// an explicit source, and an unlisted URL is a correctable refusal before dispatch
+// instead of an execution error that ended the Work after three resumes.
+test('runtime fixture a scheme-less site in the request is readable and an unlisted URL is refused before dispatch',async t=>{
+  const x=await setup(t,{prompt:'nodejs.org 블로그 최신 글 제목과 httpbin.org/forms/post 양식을 확인하고 Node.js와 sample.json은 이름일 뿐이다',observe:(target,url)=>observation(url)}),tools=x.create();
+  for(const url of ['https://nodejs.org','https://nodejs.org/','https://httpbin.org/forms/post'])assert.doesNotThrow(()=>tools.validate('office_browser_read',{url},'user-site'),url);
+  for(const url of ['https://node.js/','https://sample.json/','https://example.net/unlisted']){
+    assert.throws(()=>tools.validate('office_browser_read',{url},'unlisted'),error=>error.name==='WorkClientToolInputError'&&error.code==='BROWSER_URL_NOT_OBSERVED'&&/office_web_search/u.test(error.detail),url);
+  }
+  assert.equal(opens(x).length,0,'Nothing is opened by validation.');
+  const value=await tools.execute('office_browser_read',{url:'https://nodejs.org'},'user-site');
+  assert.equal(value.url,'https://nodejs.org');assert.deepEqual(opens(x).map(event=>event.url),['https://nodejs.org']);
+  assert.doesNotThrow(()=>tools.validate('office_browser_read',{url:article},'observed-link'),'A link observed on the user site becomes readable.');
+});

@@ -414,3 +414,15 @@ test('runtime subscription model fails typed when no subscription or configured 
   await assert.rejects(model.call('correct','Choose one.',{},schema),/STRUCTURED_MODEL_UNAVAILABLE/);
   const status=await model.status();assert.equal(status.credentials_exposed,false);assert.equal(status.fallback,'not_configured');
 });
+
+// A7 regression: npm `codex` is a wrapper that starts the real binary as its child.
+// A timeout that stopped only the wrapper left the binary running for 36 minutes live.
+test('runtime contract a client timeout stops the wrapper and the binary it started',{skip:process.platform==='win32'},async t=>{
+  const root=await mkdtemp(join(tmpdir(),'client-group-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const pidFile=join(root,'binary.pid'),wrapper=`const {spawn}=require('node:child_process');const binary=spawn(process.execPath,['-e','setTimeout(()=>{},60000)'],{stdio:'ignore'});require('node:fs').writeFileSync(${JSON.stringify(pidFile)},String(binary.pid));setTimeout(()=>{},60000);`;
+  await assert.rejects(nativeProcessRunner.run({executable:process.execPath,args:['-e',wrapper],timeout_ms:1_000}),/CLIENT_TIMEOUT/u);
+  const pid=Number(await readFile(pidFile,'utf8'));let alive=true;
+  for(let i=0;i<40&&alive;i++){try{process.kill(pid,0);await new Promise(resolve=>setTimeout(resolve,50));}catch{alive=false;}}
+  if(alive)process.kill(pid,'SIGKILL');
+  assert.equal(alive,false,'The binary started by the wrapper must not outlive the timeout.');
+});
