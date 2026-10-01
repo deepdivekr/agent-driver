@@ -494,7 +494,7 @@ const EN:Record<string,string>={
 '전체':'All','확인 필요':'Needs you','진행 중':'Running','대기':'Queued','완료':'Done','검증 완료':'Verified','종료된 업무':'Closed work','가져오기':'Import','사이트 로그인':'Site login','연결 및 설정':'Connections & settings','메뉴':'Menu',
 '닫기':'Close','설명':'About','설명 보기':'Show explanation','저장':'Save','다음':'Next','다시 확인':'Check again','다시 시도':'Retry','보드':'Board','목록':'List','보기 방식':'View','업무 검색':'Search work',
 '전체 업무':'All work','업무 상세':'Work detail','업무 현황':'Work','새 업무 맡기기':'Assign new work','한 줄로 어떤 업무를 맡길까요?':'What should the agent do? One line is enough.','업무 접수':'Submit',
-'심화 · 결과에 중요한 조건을 먼저 선택':'Guided · choose the conditions that matter first','기존 업무 가져오기':'Import existing work','업무 불러오는 중…':'Loading work…',
+'되묻기 · 결과에 중요한 조건을 먼저 질문':'Ask first · confirm the conditions that matter before starting','기존 업무 가져오기':'Import existing work','업무 불러오는 중…':'Loading work…',
 '아직 맡긴 업무가 없습니다. 연결된 에이전트에게 한 줄로 요청하세요.':'No work yet. Ask a connected agent in one line.','조건에 맞는 업무가 없습니다.':'No work matches.',
 '방금':'just now','접수됨':'Received','Task Pack':'Task Pack','Swarm':'Swarm','코딩 업무':'Coding',
 '업무 정의 중':'Defining','AI 연결 필요':'AI connection needed','선택 필요':'Needs choice','실행 대기':'Ready','전달 대기':'Queued','답변 검토 중':'Reviewing answer','사용자 지시 대기':'Waiting for your instruction','종료':'Stopped','결과 확인 필요':'Check result','일시정지':'Pause','일시정지됨':'Paused','사용자 확인 필요':'User confirmation needed','로그인 필요':'Login needed','실행 완료':'Run complete','실패':'Failed','중단 지점 확인 필요':'Check interruption point','근거 부족':'Evidence missing','재시도 대기':'Retry pending','작업 중':'Working','초안 준비':'Draft ready','승인 대기':'Awaiting approval',

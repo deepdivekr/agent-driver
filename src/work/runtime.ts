@@ -50,6 +50,13 @@ export type WorkDefinitionDiagnostic={kind:'invalid_output'|'correction_started'
 /** Repair only a received invalid proposal, once. Provider/auth failures are not
  * output validation errors and never enter or repeat this correction path.
  */
+/** What the host itself can do, given as planning data so a definition does not demand connections or
+ * evidence that cannot exist in the first run (live: a watch Work required a later scheduled run as a check). */
+const HOST_EXECUTION_FACTS={
+  recurring_and_watch:'The host schedules recurring and watch Works itself (daily, weekly or interval; a watch with no stated cadence runs daily). Completion checks and plan steps cover only this first run: the current observation saved, and the schedule set as shown by office_schedule_status. Never require a later scheduled run, a registered watch source or a watch registration receipt.',
+  public_pages:'A public https page of the named official source is opened directly with office_browser_read; a search is only needed when the page is unknown.',
+  public_forms:'A public https form is filled without submission with office_form_draft; its receipt (values read back, submitted:false, no non-GET request) is the draft evidence. No registered form target is required.',
+} as const;
 export async function validateOrCorrectWorkProposal(rawProposal:unknown,mode:WorkMode,answered:boolean,options:{model:StructuredModel;instructions:string;input:unknown;onDiagnostic?:(event:WorkDefinitionDiagnostic)=>void}):Promise<WorkProposal>{
   const diagnose=(event:WorkDefinitionDiagnostic)=>{try{options.onDiagnostic?.(event);}catch{/* Telemetry cannot grant authority or fail a valid definition. */}};
   const previousRaw=options.input&&typeof options.input==='object'&&!Array.isArray(options.input)?(options.input as {previous_spec?:unknown}).previous_spec:null;
@@ -141,7 +148,7 @@ export class WorkRuntime {
       workActivity(this.store,project,work_id,'definition.started','Analyzing the Work instructions, completion conditions and available capabilities.',{stage_id:'definition',status:'running'});
       const previous=work.spec as WorkProposal|null;
       const input={work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:previous,user_directions:this.store.workDirections(project,work_id),user_intake:readWorkIntakeOptions(this.store,project,work_id)};
-      const instructions=WORK_DEFINITION_INSTRUCTIONS+'\n'+WORK_PLANNING_CONTEXT_INSTRUCTIONS+'\n'+WORK_CONNECTED_SOURCE_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS,modelInput={...input,...this.planningContext()};
+      const instructions=WORK_DEFINITION_INSTRUCTIONS+'\n'+WORK_PLANNING_CONTEXT_INSTRUCTIONS+'\n'+WORK_CONNECTED_SOURCE_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS,modelInput={...input,...this.planningContext(),host_execution_facts:HOST_EXECUTION_FACTS};
       const schema=z.toJSONSchema(workProposalSchema);
       definitionBinding=hashJson({instructions,input:modelInput,schema});
       const rawProposal=await this.model.call('design',instructions,modelInput,schema);

@@ -666,7 +666,9 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const result=['office_result_draft','office_result_read'].includes(item.invocation.tool_name)&&typeof value?.text==='string';
       // The saved file's identity (request ID, hash, bytes, read cursor) precedes its text so a save check can be decided.
       const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):result?`${JSON.stringify({...value,text:undefined})}\n${value!.text as string}`:JSON.stringify(item.receipt.value);
-      const limit=trace?4000:result?12000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
+      // A text resource read (a CSV/JSON feed) is the source data itself; truncating it at 3000 characters left
+      // the judgment unable to compare rows (live), so it gets the same room as a result file.
+      const limit=trace?4000:result||value?.provenance==='http_text_resource'?12000:3000,content=full.slice(0,limit),id=item.receipt.evidence_ids[0]!;
       shown.set(id,{content,leaves:observableLeaves(item.receipt.value)});
       return {evidence_id:id,tool_name:item.invocation.tool_name,observed_at:item.observed_at,truncated:content.length<full.length,content};
     });
