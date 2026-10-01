@@ -5,7 +5,7 @@ import {randomUUID} from 'node:crypto';
 import {Server} from '@modelcontextprotocol/sdk/server/index.js';
 import {StreamableHTTPServerTransport} from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {CallToolRequestSchema,ListToolsRequestSchema} from '@modelcontextprotocol/sdk/types.js';
-import {McpBrowserExecutor} from '../dist/browser/mcp-executor.js';
+import {McpBrowserExecutor,closeSharedBrowserConnections} from '../dist/browser/mcp-executor.js';
 import {browserTargetSchema} from '../dist/browser/executor-contracts.js';
 
 async function fixture(t,{limits,hangFirst=0}={}){
@@ -27,7 +27,7 @@ async function fixture(t,{limits,hangFirst=0}={}){
   const http=createServer(async(req,res)=>{try{let body;if(req.method==='POST'){let raw='';for await(const chunk of req)raw+=chunk;body=JSON.parse(raw);}await transport.handleRequest(req,res,body);}catch(error){res.writeHead(500);res.end('contract server error');}});
   await new Promise(resolve=>http.listen(0,'127.0.0.1',resolve));
   const target=browserTargetSchema.parse({id:'neo',engine:'neo',environment:'host_foreground',profile_ref:'fixture',platform:process.platform,endpoint:`http://127.0.0.1:${http.address().port}/mcp`}),adapter=new McpBrowserExecutor(target,limits);
-  t.after(async()=>{await adapter.close().catch(()=>{});await mcp.close();await new Promise(resolve=>{http.close(resolve);http.closeAllConnections();});});return {adapter,state,calls};
+  t.after(async()=>{await adapter.close().catch(()=>{});await closeSharedBrowserConnections();await mcp.close();await new Promise(resolve=>{http.close(resolve);http.closeAllConnections();});});return {adapter,state,calls,target};
 }
 test('runtime contract Neo adapter preserves server session and confines operations to its owned page',async t=>{
   const {adapter,calls,state}=await fixture(t);await adapter.probe();await adapter.open('https://example.test/');const observation=await adapter.observe();assert.equal(observation.text,'Observed');await adapter.scroll('down');await adapter.close();
@@ -45,4 +45,18 @@ test('runtime contract a timed-out first page operation is retried once, a secon
   assert.equal(calls.filter(c=>c.arguments?.code?.includes('newPage')).length,2,'The late first answer is followed by exactly one retry.');
   const twice=await fixture(t,{limits:{operation_ms:400},hangFirst:2});
   await assert.rejects(twice.adapter.open('https://example.test/'),/timed out/iu);
+});
+
+// B5: starting the foreground browser CLI cost ~28s per origin live. One
+// connection per CLI/endpoint is shared by the runtime's tabs and lingers briefly.
+test('runtime contract tabs on the same browser endpoint share one lingering MCP connection and each keeps its own page',async t=>{
+  const {adapter,calls,target,state}=await fixture(t);
+  const second=new McpBrowserExecutor(target);t.after(()=>second.close().catch(()=>{}));
+  await adapter.open('https://example.test/a');await second.open('https://example.test/b');
+  assert.equal(calls.filter(c=>c.name==='name_session').length,1,'One session for one endpoint.');
+  assert.equal(calls.filter(c=>c.arguments?.code?.includes('newPage')).length,2,'Each executor owns its own page.');
+  await adapter.close();await second.close();assert.equal(state.closed,2);
+  const third=new McpBrowserExecutor(target);t.after(()=>third.close().catch(()=>{}));
+  await third.open('https://example.test/c');
+  assert.equal(calls.filter(c=>c.name==='name_session').length,1,'A connection released moments ago is reused, not restarted.');
 });
