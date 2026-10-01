@@ -10,24 +10,26 @@ const observation=(index,value)=>({
 const claim=checks=>({action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Only an unverified claim.',wait_reason:null,completed_checks:checks.map((check,index)=>({id:check.id,evidence_ids:[`evidence_${index}`]}))});
 const userRequest={prompt:'Preserve every source item and the complete saved result.',completion_condition:'All original source items must be present; a selected subset is insufficient.',delivery_target_ids:['app'],user_directions:[]};
 
-test('runtime fixture: literal completion verifies each generated check separately, then still rejects an unproved original request',async()=>{
+test('runtime fixture: semantic conditions share one evidence pass and still reject an unproved original request',async()=>{
   const checks=Array.from({length:3},(_,index)=>({id:`check_${index}`,result:`Report source item ${index}.`,evidence:'The exact source fact.'}));
   const items=checks.map((_,index)=>observation(index,{fact:`Observed source item ${index}.`})),before=structuredClone(items),inputs=[],audits=[];
   const model={calls:[],async call(purpose,_instructions,input){
     inputs.push(structuredClone(input));this.calls.push({purpose,provider:'fixture',model:'fixture',status:'accepted'});
-    assert.equal(input.checks.length,1,'One model judgment has exactly one check.');
-    const check=input.checks[0];
-    if(check.id==='original_user_request')return {checks:[{id:check.id,verdict:'unknown',evidence_ids:[],evidence_quote_refs:[],reason:'The required saved result was not observed.'}]};
+    assert.equal(input.checks.length,4,'Generated conditions and the original request are judged together.');
+    return {checks:input.checks.map(check=>{
+    if(check.id==='original_user_request')return {id:check.id,verdict:'unknown',evidence_ids:[],evidence_quote_refs:[],reason:'The required saved result was not observed.'};
     const id=check.allowed_evidence_ids[0],record=input.observations.find(item=>item.evidence_ids.includes(id));
     assert.ok(record);const manifest=input.literal_leaf_manifest.find(item=>item.evidence_ids.includes(id));assert.ok(manifest);
     const ref=manifest.leaf_refs.find(([,path])=>path==='$/fact')[0];
-    return {checks:[{id:check.id,verdict:'supported',evidence_ids:[id],evidence_quote_refs:[{evidence_id:id,quote_ref:ref}],reason:'The cited source fact was observed.'}]};
+    return {id:check.id,verdict:'supported',evidence_ids:[id],evidence_quote_refs:[{evidence_id:id,quote_ref:ref}],reason:'The cited source fact was observed.'};
+    })};
   }};
   const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest:userRequest,audit:event=>audits.push(event)});
   assert.equal(await verify(checks,items,claim(checks)),false);
-  assert.deepEqual(inputs.map(input=>input.checks[0].id),['check_0','check_1','check_2','original_user_request'],`Audit codes: ${audits.map(event=>event.code).join(', ')}`);
-  assert.deepEqual(inputs.at(-1).checks[0].allowed_evidence_ids,['evidence_0','evidence_1','evidence_2']);
-  assert.deepEqual(items,before,'One-check partitioning must not mutate or discard source receipts.');
+  assert.equal(inputs.length,1,'The same receipts are not sent in four separate calls.');
+  assert.deepEqual(inputs[0].checks.map(check=>check.id),['check_0','check_1','check_2','original_user_request']);
+  assert.deepEqual(inputs[0].checks.at(-1).allowed_evidence_ids,['evidence_0','evidence_1','evidence_2']);
+  assert.deepEqual(items,before,'Consolidation must not mutate or discard source receipts.');
 });
 
 for(const contradiction of [false,true])test(`runtime fixture: every large literal check/receipt pair is inspected once in order${contradiction?' and a contradiction blocks synthesis':''}`,async()=>{

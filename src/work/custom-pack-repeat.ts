@@ -62,10 +62,9 @@ export class CustomPackRepeats {
     store.hermesState.exec('CREATE TABLE IF NOT EXISTS office_custom_pack_repeat_work(project_id TEXT NOT NULL,work_id TEXT NOT NULL REFERENCES office_work(id),request_id TEXT NOT NULL,body TEXT NOT NULL,PRIMARY KEY(project_id,work_id),UNIQUE(project_id,request_id));');
   }
   prepare(project:string,raw:unknown,host:CustomPackHostBinding,validate?:(prepared:CustomPackRepeat)=>void){
-    const prepared=this.registry.prepareRepeat(project,raw,host);
-    validate?.(prepared);
     initWorkExecution(this.store);
-    return this.store.transaction(()=>{
+    return this.registry.prepareRepeatWithWork(project,raw,host,prepared=>{
+      validate?.(prepared);
       const db=this.store.hermesState,prior=db.prepare('SELECT work_id FROM office_intake WHERE project_id=? AND request_id=?').get(project,prepared.request_id);
       if(prior){
         const work=this.store.intakeWork(project,String(prior.work_id)),binding=assertCustomPackInvocation(this.store,project,work.id,'prepare',{},host);
@@ -73,6 +72,13 @@ export class CustomPackRepeats {
         return {prepared,work,created:false};
       }
       const contract=prepared.completion_contract,spec:WorkProposal=structuredClone(contract.spec);
+      if(spec.collection_contract){
+        requireCondition(prepared.recipe.family==='portal.collect'||prepared.recipe.family==='file.pipeline','WORK_COLLECTION_FAMILY_UNSUPPORTED');
+        // A new period parameter is not necessarily a templated user request:
+        // preserve the original goal until explicitly redefined. A generic
+        // repeat substitution must not quietly broaden native completion.
+        requireCondition(snapshotHash(spec.collection_contract.recipe)===snapshotHash(prepared.recipe),'CUSTOM_PACK_COLLECTION_SCOPE_REDEFINITION_REQUIRED');
+      }
       spec.plan.steps=spec.plan.steps.map(step=>({...step,evidence_ids:[]}));
       // Questions were resolved in the original verified Work. Their answers
       // stay input context; no old source observation becomes new evidence.

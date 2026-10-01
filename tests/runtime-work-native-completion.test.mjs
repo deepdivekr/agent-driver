@@ -68,6 +68,24 @@ test('native completion uses actual artifact verification and still makes an ind
   assert.deepEqual(run.observation,before);
 });
 
+test('native output verification checks every row above former file byte and row ceilings; a partial preview never completes the user goal',async t=>{
+  const x=await setup(t),rows=Array.from({length:12001},(_,i)=>({id:`row-${i}`,score:String(i),note:'가'.repeat(250)}));
+  await writeFile(x.sourcePath,JSON.stringify(rows));
+  const predicate={...filePredicate,columns:['id','score','note'],output_rows:rows.length};
+  const owner=x.work(predicate,'Preserve every large-file row'),recipe={...fileRecipe,columns:predicate.columns},run=await x.execute(owner,recipe);
+  assert.equal(run.value.result.artifact.rows,rows.length);assert.ok(run.value.result.artifact.bytes>8*1024*1024);
+  const result=await owner.resolver(predicate,[run.observation],run.ids);assert.equal(result.verdict,'supported');
+  assert.equal((await owner.resolver({...predicate,output_rows:10000},[run.observation],run.ids)).verdict,'unsupported');
+  const requestId='large-source-status',status=await owner.toolkit.execute('runtime_pack_status',{run_id:run.value.run_id},requestId),receipt=await owner.toolkit.receipt('runtime_pack_status',status,requestId);
+  assert.equal(receipt.value.saved_source_readback.truncated,true);assert.equal(receipt.value.saved_source_readback.source_rows_complete,false);
+  assert.equal(receipt.value.native_output_certificate.output_rows,rows.length);
+  const noSemantic={calls:[],async call(){assert.fail('No original-goal evidence was provided.');}};
+  assert.equal(await createWorkCompletionVerifier(noSemantic,{nativeResolver:owner.resolver})(owner.spec.completion_checks,[run.observation],claim(owner.spec.completion_checks,run.ids)),false);
+  const output=JSON.parse(await readFile(run.value.result.artifact.path,'utf8'));
+  assert.equal(output.length,rows.length);assert.equal(output[0].id,'row-12000');assert.equal(output.at(-1).id,'row-0');
+  assert.deepEqual(new Set(output.map(row=>row.id)),new Set(rows.map(row=>row.id)));
+});
+
 test('the default supervisor executes a saved native contract and still verifies the original goal with its closed trace',async t=>{
   const x=await setup(t),owner=x.work(),verifyInputs=[],model={calls:[],async call(purpose,instructions,input){
     this.calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture'});

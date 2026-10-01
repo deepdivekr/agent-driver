@@ -127,9 +127,16 @@ export class CustomPackRegistry {
     });
   }
   prepareRepeat(project:string,raw:unknown,host:CustomPackHostBinding):CustomPackRepeat {
+    return this.store.transaction(()=>this.prepareRepeatBody(project,raw,host));
+  }
+  /** Atomically reserve a cycle and let the Work layer persist its fresh
+   * execution binding. A callback failure rolls back the cycle too. */
+  prepareRepeatWithWork<T>(project:string,raw:unknown,host:CustomPackHostBinding,register:(prepared:CustomPackRepeat)=>T):T {
+    return this.store.transaction(()=>register(this.prepareRepeatBody(project,raw,host)));
+  }
+  private prepareRepeatBody(project:string,raw:unknown,host:CustomPackHostBinding):CustomPackRepeat {
     const input=customPackRepeatSchema.parse(raw),db=this.store.hermesState;
     requireCondition(!credentialLike.test(JSON.stringify(input.parameters)),'CREDENTIAL_LIKE_INPUT');
-    return this.store.transaction(()=>{
       // Existing cycle IDs remain bound to their original version even if a
       // newer procedure is published between a retry and a process restart.
       const prior=db.prepare('SELECT * FROM office_custom_pack_cycle WHERE project_id=? AND pack_key=? AND cycle_id=?').get(project,input.key,input.cycle_id);
@@ -152,6 +159,5 @@ export class CustomPackRegistry {
       const requestId=prior?String(prior.request_id):`custom-${snapshotHash({project,key:input.key,version:pack.version,cycle_id:input.cycle_id}).slice(0,48)}`;
       if(!prior)db.prepare('INSERT INTO office_custom_pack_cycle VALUES(?,?,?,?,?,?,?,?)').run(project,input.key,pack.version,input.cycle_id,requestId,JSON.stringify(input.parameters),parametersHash,new Date().toISOString());
       return {key:input.key,version:pack.version,cycle_id:input.cycle_id,request_id:requestId,recipe:parsed,completion_contract:structuredClone(pack.completion_contract),parameters:structuredClone(input.parameters),dispatch_allowed:false,completion_verified:false,created:!prior};
-    });
   }
 }

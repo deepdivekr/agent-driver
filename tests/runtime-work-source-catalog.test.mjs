@@ -1,6 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {connectedSourceCatalog} from '../dist/packs/source-catalog.js';
+import {connectedSourceCatalog,observedWorkSourceSchemas} from '../dist/packs/source-catalog.js';
+import {snapshotHash} from '../dist/taskpack/contracts.js';
+import {PACK_ENGINE_VERSION} from '../dist/packs/engine-version.js';
 import {WORK_CONNECTED_SOURCE_INSTRUCTIONS} from '../dist/work/runtime.js';
 
 test('configured source inventory gives exact declared names without credentials, selectors or filesystem paths',()=>{
@@ -26,4 +28,27 @@ test('source selection guidance never converts registration into observation or 
  assert.match(WORK_CONNECTED_SOURCE_INSTRUCTIONS,/configured names, not guesses or observed result data/u);
  assert.match(WORK_CONNECTED_SOURCE_INSTRUCTIONS,/registration never bypasses login, challenge, scope or effect boundaries/u);
  assert.deepEqual(connectedSourceCatalog({}),[]);
+});
+
+function retained(){
+ const config={project:{id:'project'},fingerprint:'current',packs:{sources:[{id:'rows',kind:'file',format:'json',path:'/private/path'}]}};
+ const requested={id:'rows',parameters:{}},recipe={sources:[requested]},result={rows:[{id:'private-value',score:1,session_cookie:'secret',only_first:true},{id:'second',score:2,session_cookie:'secret'}],evidence:{source_id:'rows',request_sha256:snapshotHash(requested),rows:2,observed_at:'2026-10-01T00:00:00.000Z'}};
+ const run={id:'owned-run',project_id:'project',status:'succeeded',recipe,binding:snapshotHash({recipe,fingerprint:snapshotHash({config:config.fingerprint,engine:PACK_ENGINE_VERSION})})};
+ const saved={digest:snapshotHash(result),result};
+ const store={officeRuns:()=>[{source_kind:'pack',source_id:run.id}],packRun:()=>run,officeWork:()=>({id:'owned-work'}),packExecution:()=>({checkpoint:{sources:{0:saved}}})};
+ return {config,run,saved,store};
+}
+test('retained same-Work schema context exposes common observed names, not values, paths or current freshness',()=>{
+ const x=retained(),schemas=observedWorkSourceSchemas(x.store,x.config,'owned-work');
+ assert.deepEqual(schemas,[{source_id:'rows',run_id:'owned-run',observed_at:'2026-10-01T00:00:00.000Z',fields:['id','score'],scope:'saved_response_rows',freshness:'historical_only'}]);
+ for(const privateText of ['private-value','private/path','session_cookie','secret','only_first'])assert.equal(JSON.stringify(schemas).includes(privateText),false);
+});
+for(const mode of ['foreign_work','stale_binding','tampered_snapshot','wrong_source','empty_rows'])test('retained source schema context rejects '+mode,()=>{
+ const x=retained();
+ if(mode==='foreign_work')x.store.officeWork=()=>({id:'foreign-work'});
+ if(mode==='stale_binding')x.run.binding='stale';
+ if(mode==='tampered_snapshot')x.saved.result.rows[0].score=99;
+ if(mode==='wrong_source'){x.saved.result.evidence.source_id='foreign';x.saved.digest=snapshotHash(x.saved.result);}
+ if(mode==='empty_rows'){x.saved.result.rows=[];x.saved.result.evidence.rows=0;x.saved.digest=snapshotHash(x.saved.result);}
+ assert.deepEqual(observedWorkSourceSchemas(x.store,x.config,'owned-work'),[]);
 });

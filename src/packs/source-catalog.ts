@@ -1,6 +1,9 @@
 import {type HostConfig} from '../interface/config.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {type Recipe,type Source} from './contracts.js';
+import {type PackStore} from './store.js';
+import {snapshotHash} from '../taskpack/contracts.js';
+import {PACK_ENGINE_VERSION} from './engine-version.js';
 
 export interface DeclaredSourceContractIssue {
   source_id:string;missing_fields:string[];declared_fields:string[];registration_not_observation:true;
@@ -67,4 +70,37 @@ export function connectedSourceCatalog(config:HostConfig){
       ...(source.kind==='browser'?{auth_required:source.auth_required}:{}),
     };
   });
+}
+
+/** Retained same-Work source schemas for an explicit replan. Names only: no
+ * source values, paths or claim of current upstream freshness/whole-site scope.
+ * This is context, never a seal or a replacement for actual completion proof. */
+export function observedWorkSourceSchemas(store:PackStore,config:HostConfig,workId:string){
+  const schemas:Array<{source_id:string;run_id:string;observed_at:string;fields:string[];scope:'saved_response_rows';freshness:'historical_only'}>=[];
+  const seen=new Set<string>(),project=config.project.id;
+  for(const owned of store.officeRuns(project,workId).slice(0,32)){
+    if(owned.source_kind!=='pack')continue;
+    try{
+      const run=store.packRun(project,owned.source_id);
+      if(run.project_id!==project||!['succeeded','draft_ready','watching'].includes(run.status)||!('sources' in run.recipe)||
+        (store.officeWork(project,'pack',run.id) as {id:string}|null)?.id!==workId||
+        run.binding!==snapshotHash({recipe:run.recipe,fingerprint:snapshotHash({config:config.fingerprint,engine:PACK_ENGINE_VERSION})}))continue;
+      const snapshots=store.packExecution(project,run.id)?.checkpoint.sources;
+      if(!snapshots||typeof snapshots!=='object'||Array.isArray(snapshots))continue;
+      for(const [index,requested] of run.recipe.sources.entries()){
+        if(seen.has(requested.id)||!config.packs?.sources.some(source=>source.id===requested.id))continue;
+        const saved=(snapshots as Record<string,unknown>)[String(index)] as {digest?:string;result?:{rows?:unknown[];evidence?:{source_id?:string;request_sha256?:string;rows?:number;observed_at?:string}}}|undefined;
+        const result=saved?.result,evidence=result?.evidence,rows=result?.rows;
+        if(!result||!Array.isArray(rows)||!rows.length||!evidence||saved?.digest!==snapshotHash(result)||evidence.source_id!==requested.id||
+          evidence.request_sha256!==snapshotHash(requested)||evidence.rows!==rows.length||!evidence.observed_at||!Number.isFinite(Date.parse(evidence.observed_at))||
+          rows.some(row=>row===null||typeof row!=='object'||Array.isArray(row)))continue;
+        const fields=Object.keys(rows[0] as object).filter(field=>rows.every(row=>Object.hasOwn(row as object,field))&&
+          field.length<=120&&!/(?:password|token|secret|api.?key|auth|session|cookie)/iu.test(field)).slice(0,128);
+        if(!fields.length)continue;
+        schemas.push({source_id:requested.id,run_id:run.id,observed_at:evidence.observed_at,fields,scope:'saved_response_rows',freshness:'historical_only'});
+        seen.add(requested.id);if(schemas.length>=8)return schemas;
+      }
+    }catch{/* Missing/stale/corrupt retained context is not execution authority. */}
+  }
+  return schemas;
 }

@@ -80,6 +80,9 @@ Only source parameters already present in the demonstrated recipe may change.
 An override never changes the original user goal or completion condition.
 Ambiguous repeated source IDs are rejected. If a goal, fixed date, recipe, target
 or host configuration changes, demonstrate and publish a new version.
+For a sealed collection contract, changed parameters require an explicitly
+redefined Work and newly verified version. An unchanged period may be repeated
+with a fresh observation; an old fixed-date goal cannot silently become a new date.
 
 Each prepared custom cycle requires `current_run_only: true`. To orchestrate a
 schedule, prepare a new cycle for each occurrence or use the explicit schedule
@@ -144,8 +147,25 @@ ahead of healthy work.
 - Optional typed native checks verify technical artifact or watch contracts.
   Use `output_rows: "observed_source_rows"` when every original observed row is
   required and the number varies between cycles. Literal row counts remain
-  available for exact cardinality requirements. Original user-goal verification
-  remains independent and mandatory.
+  available for exact cardinality requirements. Without a sealed collection
+  contract, independent original user-goal verification remains mandatory.
+- For `portal.collect` or `file.pipeline` against one registered file/HTTP source,
+  the first model can provide a `collection_contract`. The host seals source,
+  parameters, date/value filters, deduplication, columns, numeric conversion,
+  sorting and storage format together with the original Work instructions.
+  Code derives all matching rows from the complete saved input and compares the
+  actual complete output. It does not guess a fixed correct row count or ask a
+  second model to approve covered collection conditions. Remaining semantic or
+  process conditions still require their own verification.
+- The initial interpretation is still a model decision. Hashing that decision
+  prevents later drift; it does not prove that arbitrary natural-language meaning
+  was interpreted correctly. Remote coverage means the complete observed
+  response, not unseen pages or all data on a website. Browser/multi-source or
+  semantic extraction contracts are not supported by this code-only path.
+- File/HTTP JSON/CSV collection and native exports have no arbitrary byte/row
+  ceiling. Streaming preserves the entire response/output; model evidence pages
+  remain bounded and marked incomplete until read in full. Existing row arrays
+  and database checkpoints still need memory/storage proportional to the data.
 - Watch checks verify actual baseline/current observations, declared elapsed
   time, comparison and a matching local event. Saved remote observations are
   never described as current remote freshness.

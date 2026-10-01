@@ -13,6 +13,7 @@ import {PackStore} from '../dist/packs/store.js';
 import {FamilyRuntime} from '../dist/packs/runtime.js';
 import {LocalApprovalDispatcher} from '../dist/packs/local-approval.js';
 import {snapshotHash} from '../dist/taskpack/contracts.js';
+import {BROWSER_DRAFT_READBACK_CONTRACT} from '../dist/packs/browser-write.js';
 
 const familyIds=['research.search','portal.collect','form.draft-submit','record.update','inbox.triage','monitor.watch','file.pipeline','choose.stage'];
 async function base(t,options={}){
@@ -67,6 +68,14 @@ test('runtime contract nine Pack families share one MCP surface and natural-lang
   const client=new Client({name:'pack-test',version:'1'}),transport=new StdioClientTransport({command:process.execPath,args:['dist/cli.js','mcp','--config',x.configPath],stderr:'pipe'});
   x.cleanups.push(()=>client.close());await client.connect(transport);const listed=await client.listTools();
   for(const name of ['runtime_pack_catalog','runtime_pack_plan','runtime_pack_run','runtime_pack_status','runtime_pack_execute_approved','runtime_pack_watch_tick','runtime_windows_catalog','runtime_windows_plan','runtime_windows_start','runtime_windows_step','runtime_windows_status','runtime_windows_reconcile'])assert.ok(listed.tools.some(tool=>tool.name===name),name);
+});
+
+test('draft target catalog advertises enforced observations but never asserts site readiness or upgrades old receipts',async t=>{
+  const target={id:'draft-contact',family:'form.draft-submit',action:'submit_form',draft_is_local:true,effect_boundary:'single_form_submission',url:'https://example.com/contact',ready:'#form',auth_gate:'input[type=password]',auth_required:false,account_selector:'#account',account_text:'owner',identity_field:'id',identity_parameter:'id',fields:{id:{selector:'#id',kind:'text'}},submit:'#submit',readback_url:'https://example.com/readback',known_popups:[],draft_only:true};
+  const x=await base(t,{targets:[target]}),api=x.api(),catalog=await api.call('runtime_pack_catalog',{}),plan=await api.call('runtime_pack_plan',{prompt:'Prepare an unsent contact draft'});
+  assert.deepEqual(catalog.browser_draft_readback_contract,BROWSER_DRAFT_READBACK_CONTRACT);assert.deepEqual(plan.connections.targets[0].draft_readback_contract,BROWSER_DRAFT_READBACK_CONTRACT);
+  assert.equal(catalog.browser_draft_readback_contract.readiness,'requires_current_execution');assert.equal(catalog.browser_draft_readback_contract.legacy_receipts,'not_backfilled');assert.equal(plan.dispatch_allowed,false);assert.equal(plan.connections.targets[0].submission_enabled,false);
+  const none=await base(t),empty=await none.api().call('runtime_pack_catalog',{});assert.equal(empty.browser_draft_readback_contract,undefined);
 });
 
 test('runtime native research.search, portal.collect and file.pipeline execute bounded sources and verified exports without changing originals',async t=>{

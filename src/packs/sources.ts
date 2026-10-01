@@ -1,18 +1,18 @@
 import {join} from 'node:path';
-import {randomUUID} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {requireCondition} from '../core/contracts.js';
 import {OwnedPersistentPage} from '../taskpack/owned-playwright.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {type Source,type Row,type Recipe,rowSchema} from './contracts.js';
-import {parseData,readScopedFile,responseBytes,sha,MAX_ROWS} from './data.js';
+import {scopedFileChunks,responseChunks,iterateParsedRows,MAX_ROWS} from './data.js';
 import {RoutedBrowser,type BrowserRouteOptions} from '../browser/executor-routing.js';
 
 export interface SourceNormalization {
   version:1;kind:'declared_numeric_columns';columns:string[];
   raw_rows_sha256:string;normalized_rows_sha256:string;
 }
-export interface SourceEvidence {source_id:string;request_sha256:string;content_sha256:string;observed_at:string;rows:number;elapsed_ms:number;executor:string;projection_fields?:string[];http_status?:number;response_bytes?:number;response_shape?:'array';normalization?:SourceNormalization;}
+export interface SourceEvidence {source_id:string;request_sha256:string;content_sha256:string;observed_at:string;rows:number;elapsed_ms:number;executor:string;projection_fields?:string[];csv_header?:string[];http_status?:number;response_bytes?:number;response_shape?:'array';normalization?:SourceNormalization;}
 
 /** Convert only host-declared columns, with no blank, locale, ID or infinity
  * guessing. Unsafe integers cannot retain an exact identity in a JS number. */
@@ -50,31 +50,34 @@ function sourceBrowserError(error:unknown):never{
 }
 export async function collectSource(source:Source,parameters:Record<string,string>,config:HostConfig,routeOptions?:Partial<BrowserRouteOptions>):Promise<{rows:Row[];evidence:SourceEvidence}>{
   const start=performance.now();let rows:Row[],contentHash:string,executor=source.kind==='browser'?'playwright':source.kind==='http'?'http_get':'local_file';
+  let csvHeader:string[]|undefined;const observeCsvHeader=(header:readonly string[])=>{csvHeader=[...header];};
   let httpEvidence:Pick<SourceEvidence,'http_status'|'response_bytes'|'response_shape'>={};
   if(source.kind==='file'){
     requireCondition(Object.keys(parameters).length===0,'FILE_PARAMETERS_UNSUPPORTED');
-    const bytes=await readScopedFile(source.path);contentHash=sha(bytes);rows=parseData(bytes.toString('utf8'),source.format);
+    const path=source.path,digest=createHash('sha256');rows=[];
+    async function* observed(){for await(const chunk of scopedFileChunks(path)){digest.update(chunk);yield chunk;}}
+    for await(const row of iterateParsedRows(observed(),source.format,undefined,observeCsvHeader))rows.push(row);
+    contentHash=digest.digest('hex');
   }else{
     requireCondition(Object.keys(parameters).every(p=>source.parameters.includes(p)),'SOURCE_PARAMETER_NOT_DELEGATED');
     const url=new URL(source.url);for(const [key,value]of Object.entries(parameters))url.searchParams.set(key,value);
     if(source.kind==='http'){
-      const response=await fetch(url,{redirect:'error',signal:AbortSignal.timeout(15000),headers:{Accept:source.format==='json'?'application/json':'text/csv'}});
-      const bytes=await responseBytes(response);contentHash=sha(bytes);
-      httpEvidence={http_status:response.status,response_bytes:bytes.length};
-      if(source.json_fields){
-        requireCondition(source.format==='json','SOURCE_PROJECTION_REQUIRES_JSON');
-        const raw:unknown=JSON.parse(bytes.toString('utf8'));
-        requireCondition(Array.isArray(raw)&&raw.length<=MAX_ROWS,'SOURCE_ROWS_REQUIRED');
-        rows=raw.map(record=>{
-          requireCondition(record!==null&&typeof record==='object'&&!Array.isArray(record),'SOURCE_ROW_REQUIRED');
-          const selected:Record<string,unknown>={};
-          for(const field of source.json_fields!){
-            requireCondition(Object.hasOwn(record,field),'SOURCE_PROJECTION_FIELD_MISSING');
-            selected[field]=(record as Record<string,unknown>)[field];
-          }
-          return rowSchema.parse(selected);
-        });
-      }else rows=parseData(bytes.toString('utf8'),source.format);
+      const controller=new AbortController(),headerTimer=setTimeout(()=>controller.abort(new DOMException('Source response headers timed out','TimeoutError')),15000);
+      let response:Response;
+      try{response=await fetch(url,{redirect:'error',signal:controller.signal,headers:{Accept:source.format==='json'?'application/json':'text/csv'}});}
+      finally{clearTimeout(headerTimer);}
+      if(!response.ok){controller.abort();throw Error('PACK_SOURCE_HTTP_ERROR');}
+      const contentType=response.headers.get('content-type')?.split(';',1)[0]?.trim().toLowerCase();
+      if(contentType==='text/html'||contentType==='application/xhtml+xml'){
+        controller.abort();
+        throw Error('PACK_SOURCE_HTTP_HTML_RESPONSE');
+      }
+      requireCondition(!source.json_fields||source.format==='json','SOURCE_PROJECTION_REQUIRES_JSON');
+      const digest=createHash('sha256');let responseBytes=0;rows=[];
+      async function* observed(){for await(const chunk of responseChunks(response)){digest.update(chunk);responseBytes+=chunk.length;yield chunk;}}
+      for await(const row of iterateParsedRows(observed(),source.format,source.json_fields,observeCsvHeader))rows.push(row);
+      contentHash=digest.digest('hex');
+      httpEvidence={http_status:response.status,response_bytes:responseBytes};
       // A successful JSON parse above validates the original top-level array,
       // not an agent assertion. Never retrofit this into historical receipts.
       if(source.format==='json')httpEvidence.response_shape='array';
@@ -101,21 +104,23 @@ export async function collectSource(source:Source,parameters:Record<string,strin
     }
   }
   // Credentials cannot be persisted as collected rows, or forwarded to models.
-  requireCondition(!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(JSON.stringify(rows)),'CREDENTIAL_LIKE_INPUT');
-  requireCondition(rows.every(row=>Object.keys(row).every(key=>!/^(?:password|passwd|cookie|authorization|access_token|refresh_token|api_key)$/iu.test(key))),'SECRET_COLUMN_FORBIDDEN');
+  for(const row of rows){
+    requireCondition(!/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(JSON.stringify(row)),'CREDENTIAL_LIKE_INPUT');
+    requireCondition(Object.keys(row).every(key=>!/^(?:password|passwd|cookie|authorization|access_token|refresh_token|api_key)$/iu.test(key)),'SECRET_COLUMN_FORBIDDEN');
+  }
   let normalization:SourceNormalization|undefined;
   if(source.numeric_columns?.length){
     const rawHash=snapshotHash(rows);rows=normalizeDeclaredSourceRows(rows,source.numeric_columns);
     normalization={version:1,kind:'declared_numeric_columns',columns:[...source.numeric_columns],raw_rows_sha256:rawHash,normalized_rows_sha256:snapshotHash(rows)};
   }
-  return {rows,evidence:{source_id:source.id,request_sha256:snapshotHash({id:source.id,parameters}),content_sha256:contentHash,observed_at:new Date().toISOString(),rows:rows.length,elapsed_ms:Math.round(performance.now()-start),executor,...httpEvidence,...(source.kind==='http'&&source.json_fields?{projection_fields:source.json_fields}: {}),...(normalization?{normalization}:{})}};
+  return {rows,evidence:{source_id:source.id,request_sha256:snapshotHash({id:source.id,parameters}),content_sha256:contentHash,observed_at:new Date().toISOString(),rows:rows.length,elapsed_ms:Math.round(performance.now()-start),executor,...httpEvidence,...(source.kind==='http'&&source.json_fields?{projection_fields:source.json_fields}: {}),...(csvHeader?{csv_header:csvHeader}:{}),...(normalization?{normalization}:{})}};
 }
 export async function collect(recipe:Extract<Recipe,{sources:unknown}>,config:HostConfig){
   const rows:Row[]=[],evidence:SourceEvidence[]=[];const policy=config.packs;requireCondition(policy,'PACKS_NOT_CONNECTED');
   for(const requested of recipe.sources){
     const source=policy.sources.find(s=>s.id===requested.id);requireCondition(source,'SOURCE_NOT_DELEGATED');
     if(recipe.family==='file.pipeline')requireCondition(source.kind==='file','FILE_PIPELINE_REQUIRES_LOCAL_SOURCE');
-    const result=await collectSource(source,requested.parameters,config,{preference:recipe.browser,request:recipe.request});rows.push(...result.rows);evidence.push(result.evidence);requireCondition(rows.length<=MAX_ROWS,'SOURCE_TOO_MANY_ROWS');
+    const result=await collectSource(source,requested.parameters,config,{preference:recipe.browser,request:recipe.request});for(const row of result.rows)rows.push(row);evidence.push(result.evidence);
   }
   return {rows,evidence};
 }

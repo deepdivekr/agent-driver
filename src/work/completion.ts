@@ -6,6 +6,7 @@ import {type PackStore} from '../packs/store.js';
 import {requireCondition} from '../core/contracts.js';
 import {nativeCompletionPredicateSchema,nativeCompletionTextIsCanonical} from './completion-checks.js';
 import {type NativeCompletionResolver,type NativeCompletionResolution} from './native-completion.js';
+import {type CollectionCompletionResolver} from './collection-contract.js';
 
 const identifier=z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$/u);
 const checkSchema=z.object({id:identifier,result:z.string().trim().min(1).max(4000),evidence:z.string().trim().min(1).max(4000),native_check:nativeCompletionPredicateSchema.optional()}).strict().refine(nativeCompletionTextIsCanonical,'NATIVE_COMPLETION_TEXT_NOT_CANONICAL');
@@ -27,7 +28,7 @@ export interface WorkCompletionAuditEvent {
   provider?:string;model?:string;
   verifier?:'native';certificate_sha256?:string;
 }
-export interface WorkCompletionVerifierOptions {progress?:WorkClientHooks['progress'];audit?:(event:WorkCompletionAuditEvent)=>void|Promise<void>;guard?:()=>void|Promise<void>;literalRefMode?:boolean;nativeResolver?:NativeCompletionResolver;originalUserRequest?:{prompt:string;completion_condition:string|null;delivery_target_ids:string[]|null;user_directions?:Array<{run_id:string;step_id:string;instruction:string;created_at:string}>};}
+export interface WorkCompletionVerifierOptions {progress?:WorkClientHooks['progress'];audit?:(event:WorkCompletionAuditEvent)=>void|Promise<void>;guard?:()=>void|Promise<void>;literalRefMode?:boolean;nativeResolver?:NativeCompletionResolver;collectionResolver?:CollectionCompletionResolver;originalUserRequest?:{prompt:string;completion_condition:string|null;delivery_target_ids:string[]|null;user_directions?:Array<{run_id:string;step_id:string;instruction:string;created_at:string}>};}
 
 const HOST_TRACE_VERIFICATION_GUIDANCE=`HOST TRACE PROVENANCE: The host supplies office_controlled_run_trace only after independently reading its owned persisted checkpoint, checking receipt hashes, and closing tool admission. Its recorded closure and dispatch history are host observations, not the executor's summary or a page/file's self-reported claim. They prove only the Office-controlled capability dispatches described in scope. lifetime_dispatch_counts includes earlier operations preserved across resumes. since_admission_counts covers only the suffix after the host-captured entry checkpoint; use that suffix for "no NEW read during this resume", not the lifetime read count. Require both closure=closed and admission_trace.closure=closed before relying on since_admission_counts. inherited_evidence_ids identifies successful receipt evidence actually retained at admission; match those IDs to the supplied ordinary source receipts rather than accepting an output's statement that it reused them. A mixed check such as "produce the same observed source values in a TXT without recollecting them in this resume" needs BOTH actual source/file leaf values establishing the positive result and the closed host admission trace establishing the controlled-process constraint. Cite and quote both ordinary evidence and the relevant trace statement, using evidence_use observed_result for that mixed result. A positive value cannot be proved by trace counts alone; a file's prose claiming reuse cannot prove the process. If the host admission trace is open/unknown, counts conflict with the requested process, IDs do not bind the alleged retained source, or ordinary content does not establish the positive result, return unsupported or unknown as appropriate. Do not expand this evidence to other applications, other runs, uninstrumented internals or future actions. These distinctions describe admissible evidence, not a requirement to return supported.
 PROCESS REQUIREMENT SCOPE: Unless a user explicitly asks for machine-wide or outside-harness absence, interpret process prohibitions such as "로그인, 폼 입력, 제출, 외부 전송이 전혀 없었음" as this specific Work's Office-controlled capability dispatches through the verification checkpoint. Do not invent a requirement to prove what all other apps or the entire PC did. In ordinary requested research, HTTP reads of the requested source are not message/result sending, publishing, submission or an external-write capability. An explicit prohibition on all network requests, including source reads, remains broader and must not be silently narrowed. Match login/form-input/submission restrictions to the actual controlled tools and action history; external_write=0 alone cannot prove every kind of absence. Closed trace counts and tool history can establish only that scoped process condition. Explicit machine-wide, other-application, uninstrumented-internal or all-network absence must remain unknown or unsupported when the supplied evidence cannot establish it. Open, absent, truncated or mismatched traces never establish zero, and scope clarification never requires a supported verdict.`;
@@ -314,11 +315,10 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       // whole receipt under a separate strict ceiling; never truncate, omit
       // contradictory leaves or silently replace the actual row set.
       const singleRecordBatchLimit=options.literalRefMode?40000:callInputLimit;
-      // Production's original-request literal path verifies one generated
-      // check at a time below. Inspect at most two eligible pairs per batch;
-      // each retains its whole receipt. This bounds each judgment while
-      // retaining every leaf and every eligible check/receipt pair.
-      const pairLimit=options.literalRefMode?2:128;
+      // Share each complete receipt across the requested conditions instead
+      // of sending it in a separate pass for every condition. Byte ceilings
+      // still bound the input; every eligible check/receipt pair is inspected.
+      const pairLimit=options.literalRefMode?2*requested.length:128;
       // A literal original-request gate can cite all 32 ordinary receipts plus
       // the host trace. Large receipts may each need their own batch.
       const batchCountLimit=options.literalRefMode?33:maxEvidenceBatches;
@@ -330,6 +330,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const task=(async()=>{
         await emit('model.started','Verifying completion checks against observed tool evidence.');
         let input:Record<string,unknown>=directInput;
+        let verdictGroups:Array<Record<string,unknown>>|null=null;
         const projectedQuotes=new Map<string,string[]>();
         const projectedQuoteRefs=new Map<string,string>();
         const batchUnavailable=async(code:string,batchIndex?:number,batchCount?:number)=>{await auditEvent({attempt:1,status:'unavailable',code,input_sha256:binding,evidence_manifest_sha256:manifestHash,...(batchIndex?{batch_index:batchIndex}:{}),...(batchCount?{batch_count:batchCount}:{}),checks:[]});throw Error(code);};
@@ -425,16 +426,48 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
           }
           requireCondition(projected.length===records.length&&projected.every((item,index)=>item.record_id===manifest[index]!.record_id&&item.value_sha256===manifest[index]!.value_sha256),'WORK_COMPLETION_BATCH_COVERAGE_INVALID');
           input={stage_id,...(options.originalUserRequest?{original_user_request:options.originalUserRequest}:{}),checks:inputs,projection:'host_validated_leaf_findings',source_input_sha256:binding,evidence_manifest_sha256:manifestHash,manifest,observations:projected};
-          if(Buffer.byteLength(JSON.stringify(input))>evidenceBatchLimit)await batchUnavailable('WORK_COMPLETION_BATCH_SUMMARY_BUDGET_EXCEEDED');
+          if(Buffer.byteLength(JSON.stringify(input))>evidenceBatchLimit){
+            // All originals have already been inspected for every eligible
+            // pair. Split only the final judgments, not the inspection pass.
+            // Retain every record and every contribution for the relevant
+            // condition (including context/negative classifications). Never
+            // truncate quotations or discard a contradictory original.
+            const groupInput=(group:typeof inputs)=>({...input,checks:group,observations:projected.map(record=>({...record,findings:record.findings.filter(finding=>group.some(check=>check.id===finding.check_id))}))});
+            verdictGroups=[];let group:typeof inputs=[];
+            for(const check of inputs){
+              const next=[...group,check];
+              if(group.length&&Buffer.byteLength(JSON.stringify(groupInput(next)))>evidenceBatchLimit-batchCorrectionReserve){verdictGroups.push(groupInput(group));group=[];}
+              group.push(check);
+              if(Buffer.byteLength(JSON.stringify(groupInput(group)))>evidenceBatchLimit-batchCorrectionReserve)await batchUnavailable('WORK_COMPLETION_BATCH_SUMMARY_BUDGET_EXCEEDED');
+            }
+            if(group.length)verdictGroups.push(groupInput(group));
+            requireCondition(verdictGroups.length<=8,'WORK_COMPLETION_VERDICT_GROUP_LIMIT');
+          }
           await emit('model.started','Comparing host-validated excerpts across all original receipts and completion checks.');
         }
         let correction:Record<string,unknown>|null=null,firstIssue:WorkCompletionAuditIssue|null=null;
         // One output-only correction; no tool authority and no effect replay are introduced.
         for(const attempt of [1,2] as const){
           const attemptInput=correction?{...input,correction}:input,initialCalls=model.calls.length;
-          requireCondition(Buffer.byteLength(JSON.stringify(attemptInput))<=80000,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
+          requireCondition(verdictGroups!==null||Buffer.byteLength(JSON.stringify(attemptInput))<=80000,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
           let raw:unknown;
-          try{await guarded();raw=await model.call('verify',WORK_COMPLETION_VERIFICATION_INSTRUCTIONS+(oversized?'\n'+WORK_COMPLETION_PROJECTED_INSTRUCTIONS+(options.literalRefMode?'\n'+WORK_COMPLETION_PROJECTED_PATH_INSTRUCTIONS:''):options.literalRefMode?'\n'+WORK_COMPLETION_LITERAL_REF_INSTRUCTIONS:'')+(correction?(oversized?' This is the only correction attempt. Re-evaluate ALL checks and EVERY cited evidence ID against the same projected supports findings; select only their exact quote_ref values. Fix all invalid references in one response. Never upgrade unsupported or unknown just to pass. No tools, replay or invented evidence.':options.literalRefMode?' This is the only correction attempt. Re-evaluate all checks against the SAME full original observations and select only valid literal_leaf_manifest quote_ref values for each cited evidence ID. Do not upgrade unsupported or unknown just to pass. No tools or invented evidence.':' The previous verifier output violated the host constraint described in correction. This is the only correction attempt. Re-evaluate all checks, fix the typed verdict/IDs/quoted leaf values against the SAME observations, and never upgrade unsupported or unknown just to pass. Do not call tools, repeat an operation or invent missing evidence.'):'') ,attemptInput,z.toJSONSchema(oversized||options.literalRefMode?projectedCompletionVerificationSchema:workCompletionVerificationSchema));await guarded();}
+          try{const instructions=WORK_COMPLETION_VERIFICATION_INSTRUCTIONS+(oversized?'\n'+WORK_COMPLETION_PROJECTED_INSTRUCTIONS+(options.literalRefMode?'\n'+WORK_COMPLETION_PROJECTED_PATH_INSTRUCTIONS:''):options.literalRefMode?'\n'+WORK_COMPLETION_LITERAL_REF_INSTRUCTIONS:'')+(correction?(oversized?' This is the only correction attempt. Re-evaluate ALL checks and EVERY cited evidence ID against the same projected supports findings; select only their exact quote_ref values. Fix all invalid references in one response. Never upgrade unsupported or unknown just to pass. No tools, replay or invented evidence.':options.literalRefMode?' This is the only correction attempt. Re-evaluate all checks against the SAME full original observations and select only valid literal_leaf_manifest quote_ref values for each cited evidence ID. Do not upgrade unsupported or unknown just to pass. No tools or invented evidence.':' The previous verifier output violated the host constraint described in correction. This is the only correction attempt. Re-evaluate all checks, fix the typed verdict/IDs/quoted leaf values against the SAME observations, and never upgrade unsupported or unknown just to pass. Do not call tools, repeat an operation or invent missing evidence.'):'');
+            if(verdictGroups){
+              const answers:z.infer<typeof projectedCompletionVerificationSchema>['checks']=[];
+              for(const [index,group] of verdictGroups.entries()){
+                const groupChecks=group.checks as typeof inputs;
+                const groupInput=correction?{...group,correction:{...correction,required_check_ids:groupChecks.map(check=>check.id),allowed_evidence_ids:Object.fromEntries(groupChecks.map(check=>[check.id,check.allowed_evidence_ids]))}}:group;
+                requireCondition(Buffer.byteLength(JSON.stringify(groupInput))<=80000,'WORK_COMPLETION_CORRECTION_BUDGET_EXCEEDED');
+                await emit('model.started',`Comparing retained evidence for final condition group ${index+1}/${verdictGroups.length}; no original inspection is repeated.`);
+                await guarded();const value=await model.call('verify',instructions,groupInput,z.toJSONSchema(projectedCompletionVerificationSchema));await guarded();
+                const parsed=projectedCompletionVerificationSchema.parse(value),expected=(group.checks as typeof inputs).map(check=>check.id);
+                requireCondition(parsed.checks.length===expected.length&&new Set(parsed.checks.map(check=>check.id)).size===expected.length&&parsed.checks.every(check=>expected.includes(check.id)),'WORK_COMPLETION_VERIFIER_CHECKS_MISMATCH');
+                await auditEvent({attempt,status:'accepted',code:'WORK_COMPLETION_VERDICT_GROUP_OBSERVED',input_sha256:hashJson(groupInput),evidence_manifest_sha256:manifestHash,batch_index:index+1,batch_count:verdictGroups.length,checks:[]});
+                answers.push(...parsed.checks);
+              }
+              raw={checks:answers};
+            }else{await guarded();raw=await model.call('verify',instructions,attemptInput,z.toJSONSchema(oversized||options.literalRefMode?projectedCompletionVerificationSchema:workCompletionVerificationSchema));await guarded();}
+          }
           catch(error){if(error instanceof CompletionGuardError)throw error;await auditEvent({attempt,status:'unavailable',code:codeOf(error),input_sha256:hashJson(attemptInput),evidence_manifest_sha256:manifestHash,checks:[]});return reject(codeOf(error));}
           const accepted=model.calls.slice(initialCalls).at(-1);let answer:WorkCompletionVerification|null=null;
           const audit=async(status:WorkCompletionAuditEvent['status'],code:string,issue?:WorkCompletionAuditIssue)=>{
@@ -493,26 +526,93 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       try{return await reject(codeOf(error));}catch{return false;}
     }
   };
-  if(!options.originalUserRequest)return verify;
+  if(!options.originalUserRequest)return options.collectionResolver?async()=>false:verify;
   return async(checks,observations,claim)=>{
     const original=z.object({prompt:z.string().min(1).max(8000),completion_condition:z.string().max(2000).nullable(),delivery_target_ids:z.array(identifier).max(10).nullable(),user_directions:z.array(z.object({run_id:identifier,step_id:identifier,instruction:z.string().min(1).max(4000),created_at:z.string().datetime({offset:true})}).strict()).max(20).optional()}).strict().safeParse(options.originalUserRequest);
     if(!original.success)return false;
+    if(options.collectionResolver){
+      // A first-interpretation collection contract is host-sealed, not a
+      // worker's assertion that its recipe happens to satisfy the goal. Keep
+      // dispatch/evidence gates even when no semantic judgment is needed.
+      try{
+        await options.guard?.();
+        const parsed=z.array(checkSchema).min(1).max(8).parse(checks),ids=new Set(parsed.map(check=>check.id));
+        requireCondition(ids.size===parsed.length,'WORK_COMPLETION_CHECKS_DUPLICATE');
+        requireCondition(claim.action==='complete'&&claim.completed_checks.length===parsed.length&&new Set(claim.completed_checks.map(check=>check.id)).size===parsed.length&&claim.completed_checks.every(check=>ids.has(check.id)),'WORK_COMPLETION_CLAIM_INVALID');
+        const traces=observations.filter(item=>item.invocation.tool_name===controlledTraceTool),ordinary=observations.filter(item=>item.invocation.tool_name!==controlledTraceTool);
+        requireCondition(traces.length<=1&&ordinary.length<=32,'WORK_COMPLETION_OBSERVATION_LIMIT');
+        requireCondition(!observations.some(item=>item.receipt.effect_state==='uncertain'||item.receipt.status==='reconciliation_required'),'WORK_COMPLETION_EFFECT_UNCERTAIN');
+        const evidence=new Map<string,string>();
+        for(const observation of observations){
+          if(observation.receipt.status!=='succeeded')continue;
+          requireCondition(observation.invocation.dispatched,'WORK_COMPLETION_DISPATCH_INCONSISTENT');
+          requireCondition(!['local_write','external_write'].includes(observation.invocation.effect)||observation.receipt.effect_state==='verified','WORK_COMPLETION_WRITE_UNVERIFIED');
+          for(const evidenceId of observation.receipt.evidence_ids){
+            identifier.parse(evidenceId);const digest=hashJson({value:observation.receipt.value,effect_state:observation.receipt.effect_state});
+            requireCondition(!evidence.has(evidenceId)||evidence.get(evidenceId)===digest,'WORK_COMPLETION_EVIDENCE_ID_CONFLICT');evidence.set(evidenceId,digest);
+          }
+        }
+        for(const selected of claim.completed_checks)requireCondition(selected.evidence_ids.length>0&&selected.evidence_ids.length<=33&&new Set(selected.evidence_ids).size===selected.evidence_ids.length&&selected.evidence_ids.every(id=>evidence.has(id)),'WORK_COMPLETION_EVIDENCE_MISSING');
+        const resolved=await options.collectionResolver(parsed,observations,claim);
+        await options.guard?.();
+        if(resolved){
+          // Only a sealed collection contract needs a closed process trace at
+          // this gate. Legacy Works continue through the original-goal verifier,
+          // which validates trace binding and checks closure if citing trace facts.
+          for(const trace of traces){
+            const traceSeal=traceSeals.get(trace.receipt.evidence_ids[0]??'');
+            requireCondition(traceSeal&&traceSeal.observation_sha256===hashJson(trace)&&traceSeal.source_observations_sha256===hashJson(ordinary),'WORK_COMPLETION_TRACE_NOT_HOST_BOUND');
+            requireCondition(traceSeal.closed,'WORK_COMPLETION_TRACE_NOT_CLOSED');
+          }
+          const covered=new Set(resolved.covered_check_ids);
+          requireCondition(covered.size>0&&covered.size===resolved.covered_check_ids.length&&[...covered].every(id=>ids.has(id)),'WORK_COLLECTION_CHECK_INVALID');
+          requireCondition(!resolved.verified||resolved.evidence_ids.length>0&&resolved.evidence_ids.every(id=>evidence.has(id)),'WORK_COLLECTION_EVIDENCE_INVALID');
+          await options.audit?.({attempt:1,status:resolved.verified?'accepted':'rejected',code:resolved.verified?'WORK_COLLECTION_CONTRACT_VERIFIED':'WORK_COLLECTION_CONTRACT_NOT_VERIFIED',input_sha256:hashJson({checks,claim,observations}),verifier:'native',...(resolved.certificate_sha256?{certificate_sha256:resolved.certificate_sha256}:{}),checks:[...covered].map(id=>({id,verdict:resolved.verified?'supported':'unknown',evidence_ids:resolved.evidence_ids,evidence_use:'observed_result',reason_sha256:hashJson(resolved.reason),quotes:[]}))});
+          await options.guard?.();
+          await options.progress?.({kind:'model.result',turn:Math.max(0,...observations.map(item=>item.invocation.turn+1)),stage_id:'completion.verify',summary:resolved.verified?'Collection verified in code against the sealed source, period, filters, complete observed row set and storage format.':'Collection is incomplete: '+safeControlText(resolved.reason,500)});
+          await options.guard?.();
+          if(!resolved.verified)return false;
+          // Only conditions outside the sealed deterministic contract need a
+          // separate judgment. Never re-ask a model to approve the whole CSV.
+          const remaining=parsed.filter(check=>!covered.has(check.id));
+          // Inspect an evidence batch once for all remaining conditions, not
+          // once per check. Covered rows never re-enter semantic verification.
+          if(remaining.length&&!await verify(remaining,observations,{...claim,completed_checks:claim.completed_checks.filter(item=>!covered.has(item.id))}))return false;
+          await options.guard?.();return true;
+        }
+      }catch(error){
+        try{await options.guard?.();await options.audit?.({attempt:1,status:'rejected',code:codeOf(error),input_sha256:hashJson({checks,claim}),checks:[]});}catch{/* A stale or missing authority never becomes a model fallback. */}
+        return false;
+      }
+    }
     const used=new Set(checks.map(check=>check.id));let id='original_user_request';for(let suffix=1;used.has(id);suffix++)id=`original_user_request_${suffix}`;
     const hostCheck={id,result:'The observed business result and Office output satisfy the FULL original_user_request.prompt and literal original_user_request.completion_condition, including all input rows, quantities, qualifiers and output restrictions. Final completion_verified is established by this host gate, not a preexisting receipt.',evidence:'Compare all original successful source and output receipts, independently saved/read-back content, and the closed controlled-run trace where a process restriction is requested.'};
     const hostIds=[...new Set(observations.filter(item=>item.receipt.status==='succeeded'&&item.receipt.effect_state!=='uncertain'&&observableLeaves(item.receipt.value).length>0).map(item=>item.receipt.evidence_ids[0]).filter((value):value is string=>typeof value==='string'))];
     if(hostIds.length===0)return false;
     const hostClaim={...claim,completed_checks:[...claim.completed_checks,{id,evidence_ids:hostIds}]};
     if(options.literalRefMode||checks.some(check=>Object.hasOwn(check,'native_check'))){
-      // Every generated check is still mandatory, but each high-reasoning call
-      // emits a verdict and citations for only one check. The final
-      // immutable request check separately receives EVERY observable receipt,
-      // including older contradictory attempts and the host-closed trace.
+      // Native predicates remain code checks. Semantic conditions and the full
+      // original request share one evidence pass when they fit the schema.
+      // The full-request condition still receives every observable receipt,
+      // including historical failures and the host-closed trace.
       if(checks.length<1||checks.length>8||claim.completed_checks.length!==checks.length||new Set(claim.completed_checks.map(check=>check.id)).size!==checks.length||claim.completed_checks.some(check=>!used.has(check.id)))return false;
-      for(let start=0;start<checks.length;start++){
-        const part=checks.slice(start,start+1),partIds=new Set(part.map(check=>check.id));
-        if(!await verify(part,observations,{...claim,completed_checks:claim.completed_checks.filter(check=>partIds.has(check.id))}))return false;
+      for(const check of checks.filter(check=>Object.hasOwn(check,'native_check'))){
+        if(!await verify([check],observations,{...claim,completed_checks:claim.completed_checks.filter(item=>item.id===check.id)}))return false;
       }
-      return verify([hostCheck],observations,{...claim,completed_checks:[{id,evidence_ids:hostIds}]});
+      const semantic=checks.filter(check=>!Object.hasOwn(check,'native_check'));
+      // Very verbose conditions must not consume the whole evidence budget.
+      // Partition conditions, never the contents of an indivisible receipt.
+      const groups:Array<Array<typeof hostCheck>>=[];
+      for(const check of [...semantic,hostCheck]){
+        const previous=groups.at(-1);
+        if(!previous||previous.length>=8||Buffer.byteLength(JSON.stringify([...previous,check]))>4000)groups.push([check]);
+        else previous.push(check);
+      }
+      for(const group of groups){
+        const ids=new Set(group.map(check=>check.id));
+        if(!await verify(group,observations,{...claim,completed_checks:hostClaim.completed_checks.filter(check=>ids.has(check.id))}))return false;
+      }
+      return true;
     }
     if(checks.length<8)return verify([...checks,hostCheck],observations,hostClaim);
     if(!await verify(checks,observations,claim))return false;

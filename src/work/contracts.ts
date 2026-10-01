@@ -5,6 +5,7 @@ import {browserPreferenceSchema} from '../browser/executor-contracts.js';
 import {hasBusinessStages,initialWorkPlan,modelWorkPlan,modelWorkPlanSchema,validateWorkPlan,workPlanSchema} from './plan.js';
 import {workResultGetSchema,workResultsListSchema} from './results.js';
 import {nativeCompletionPredicateSchema,nativeCompletionTextIsCanonical} from './completion-checks.js';
+import {collectionContractSchema,modelCollectionContractSchema,compileModelCollectionContract} from './collection-contract.js';
 
 const id=z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/u);
 const sentence=z.string().trim().min(1).max(2000);
@@ -24,13 +25,14 @@ const workProposalFields=z.object({
   assumptions:z.array(z.object({field:sentence.max(120),value:sentence.max(500),basis:sentence.max(500)}).strict()).max(8),
   route:z.object({kind:z.enum(['pack','swarm','workflow','unknown']),pack_family:basePackFamilyId.nullable()}).strict(),
   requested_effect:z.enum(['read_only','draft_only','local_file_write','external_effect_requested','unknown']),
+  collection_contract:collectionContractSchema.optional(),
   browser:browserPreferenceSchema.optional(),
   recurrence:z.object({kind:z.enum(['once','recurring']),rule:sentence.max(300).nullable()}).strict(),
   questions:z.array(workQuestionSchema).max(4),
 }).strict();
 // A new model definition must describe observable business stages. Old saved
 // Works and imported plans remain readable through the separate storage form.
-export const workProposalSchema=workProposalFields.extend({plan:modelWorkPlanSchema}).strict();
+export const workProposalSchema=workProposalFields.extend({plan:modelWorkPlanSchema,collection_contract:modelCollectionContractSchema.optional()}).strict();
 export type WorkProposal=z.infer<typeof workProposalFields>&{plan:z.infer<typeof workPlanSchema>};
 const storedWorkProposalSchema=workProposalFields.extend({plan:workPlanSchema.optional()}).strict();
 
@@ -76,6 +78,11 @@ export function validateWorkProposal(raw:unknown,mode:WorkMode,answered=false){
   const proposal={...parsed,plan:validateWorkPlan(parsed.plan??initialWorkPlan(parsed.desired_outcome,parsed.requested_effect))};
   const ids=proposal.completion_checks.map(check=>check.id);
   if(new Set(ids).size!==ids.length)throw Error('WORK_CHECK_ID_DUPLICATE');
+  if(proposal.collection_contract){
+    const covered=proposal.collection_contract.covered_check_ids;
+    if(new Set(covered).size!==covered.length||covered.some(id=>!ids.includes(id)))throw Error('WORK_COLLECTION_CHECK_INVALID');
+    if(proposal.route.kind!=='pack'||proposal.route.pack_family!==proposal.collection_contract.recipe.family)throw Error('WORK_COLLECTION_ROUTE_MISMATCH');
+  }
   if(proposal.route.kind!=='pack'&&proposal.route.pack_family!==null)throw Error('WORK_ROUTE_FAMILY_INVALID');
   if(proposal.route.kind==='pack'&&proposal.route.pack_family===null)throw Error('WORK_ROUTE_FAMILY_REQUIRED');
   if(proposal.recurrence.kind==='once'&&proposal.recurrence.rule!==null)throw Error('WORK_RECURRENCE_INVALID');
@@ -96,6 +103,7 @@ export function validateWorkProposal(raw:unknown,mode:WorkMode,answered=false){
 export function validateModelWorkProposal(raw:unknown,mode:WorkMode,answered=false,previous:WorkProposal|null=null):WorkProposal{
   const candidate=raw&&typeof raw==='object'&&!Array.isArray(raw)?raw as Record<string,unknown>:null;
   const fields={...candidate};delete fields.plan;
+  if(fields.collection_contract!==undefined)fields.collection_contract=compileModelCollectionContract(fields.collection_contract);
   const proposed=validateWorkProposal(fields,mode,answered);
   if(previous&&hasBusinessStages(previous.plan)&&(!candidate||!Object.hasOwn(candidate,'plan')))throw Error('WORK_PLAN_REQUIRED_FOR_REPLAN');
   const plan=candidate&&Object.hasOwn(candidate,'plan')?

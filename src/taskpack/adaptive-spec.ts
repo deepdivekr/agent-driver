@@ -18,7 +18,7 @@ export const adaptiveSpecSchema=z.object({
 }).strict();
 export type AdaptiveSpec=z.infer<typeof adaptiveSpecSchema>;
 export interface AdaptiveTask {request:string;start_url:string;allowed_origins:string[];}
-export interface ModelCall {purpose:'design'|'repair'|'correct'|'verify';provider?:string;auth?:'client_subscription'|'subscription'|'api_key'|'unknown';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;input_tokens:number|'unobserved';output_tokens:number|'unobserved';total_tokens:number|'unobserved';continuity?:'new_session'|'resumed_session'|'checkpoint_only';session_turn?:number;failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode'|'auth_error'|'quota_exhausted'|'rate_limited'|'model_unsupported'|'provider_unavailable';}
+export interface ModelCall {purpose:'design'|'repair'|'correct'|'verify';provider?:string;auth?:'client_subscription'|'subscription'|'api_key'|'unknown';model:string;elapsed_ms:number;input_sha256:string;status:'accepted'|'failed';http_status?:number;input_tokens:number|'unobserved';output_tokens:number|'unobserved';total_tokens:number|'unobserved';continuity?:'new_session'|'resumed_session'|'checkpoint_only';session_turn?:number;failure_kind?:'http_error'|'timeout'|'network'|'incomplete'|'invalid_output'|'refusal'|'json_decode'|'auth_error'|'quota_exhausted'|'rate_limited'|'model_unsupported'|'schema_invalid'|'provider_unavailable';}
 export type ModelRole='planner'|'worker'|'verifier'|'synthesis';
 export interface StructuredModel {
   forRole?(role:ModelRole):StructuredModel;

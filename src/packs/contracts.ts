@@ -62,7 +62,30 @@ export type Source=z.infer<typeof sourceSchema>;
 export type Target=z.infer<typeof targetSchema>;
 export type LocalRecord=z.infer<typeof localRecordSchema>;
 export const sourceRequest=z.object({id:key,parameters:z.record(key,z.string().max(400)).default({})}).strict();
-export const filterSchema=z.object({field,op:z.enum(['eq','contains','gte','lte']),value:scalar}).strict();
+/** Date-only values denote a UTC calendar day. Timestamps must carry Z or an
+ * explicit numeric offset; local-clock and numeric epoch guesses are invalid. */
+export function parsePackDate(value:unknown):{epoch_ms:number;date_only:boolean}|null{
+  if(typeof value!=='string')return null;
+  const match=/^(\d{4})-(\d{2})-(\d{2})(?:T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?(Z|[+-]\d{2}:\d{2}))?$/u.exec(value);
+  if(!match)return null;
+  const year=Number(match[1]),month=Number(match[2]),day=Number(match[3]);
+  if(year<1||month<1||month>12||day<1||day>31)return null;
+  const date=new Date(0);date.setUTCFullYear(year,month-1,day);date.setUTCHours(0,0,0,0);
+  if(date.getUTCFullYear()!==year||date.getUTCMonth()!==month-1||date.getUTCDate()!==day)return null;
+  if(match[4]===undefined)return {epoch_ms:date.getTime(),date_only:true};
+  const hour=Number(match[4]),minute=Number(match[5]),second=Number(match[6]),millisecond=Number((match[7]??'').padEnd(3,'0'))||0;
+  if(hour>23||minute>59||second>59)return null;
+  const zone=match[8]!;let offsetMinutes=0;
+  if(zone!=='Z'){
+    const hours=Number(zone.slice(1,3)),minutes=Number(zone.slice(4,6));if(hours>23||minutes>59||zone==='-00:00')return null;
+    offsetMinutes=(zone[0]==='+'?1:-1)*(hours*60+minutes);
+  }
+  const epoch=date.getTime()+hour*3600000+minute*60000+second*1000+millisecond-offsetMinutes*60000;
+  return Number.isSafeInteger(epoch)?{epoch_ms:epoch,date_only:false}:null;
+}
+export const filterSchema=z.object({field,op:z.enum(['eq','contains','gte','lte','date_gte','date_lt','date_lte']).describe('date_gte/date_lt/date_lte compare strict dates. YYYY-MM-DD means a UTC calendar day; date_lte includes that entire UTC day. Timestamps require Z or an explicit offset, such as +09:00 for Korea.'),value:scalar.describe('For date_* use YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss[.SSS]Z/±HH:MM. Never use a numeric epoch or timezone-free clock time.')}).strict().superRefine((filter,context)=>{
+  if(filter.op.startsWith('date_')&&!parsePackDate(filter.value))context.addIssue({code:'custom',message:'date filter requires valid YYYY-MM-DD UTC day or ISO timestamp with explicit Z/offset'});
+});
 const common={version:z.literal(1),request:z.string().trim().min(1).max(8000),browser:browserPreferenceSchema.optional()};
 const collection={sources:z.array(sourceRequest).min(1).max(24),filters:z.array(filterSchema).max(30).default([]),deduplicate_by:z.array(field).max(10).default([])};
 const sort=z.object({field,direction:z.enum(['asc','desc'])}).strict();
@@ -71,15 +94,17 @@ const relevance=judgment.extend({accept_labels:z.array(key).min(1).max(20)}).str
   if(value.accept_labels.some(label=>!Object.hasOwn(value.labels,label)))context.addIssue({code:'custom',message:'accept label missing'});
 });
 const mutation={target:key,values:rowSchema,expected_before_sha256:z.string().regex(/^[a-f0-9]{64}$/).nullable()};
+export const portalCollectRecipeSchema=z.object({...common,family:z.literal('portal.collect'),...collection,columns:z.array(field).min(1).max(100).refine(columns=>new Set(columns).size===columns.length,'duplicate portal column').optional(),format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict();
+export const filePipelineRecipeSchema=z.object({...common,family:z.literal('file.pipeline'),...collection,columns:z.array(field).min(1).max(100),numeric_columns:z.array(field).max(100),sort:sort.nullable(),format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict();
 export const recipeSchema=z.discriminatedUnion('family',[
   z.object({...common,family:z.literal('research.search'),...collection,query:z.string().max(500),search_fields:z.array(field).min(1).max(20),relevance:relevance.nullable().default(null),sort:sort.nullable(),limit:z.number().int().min(1).max(1000),verification:evidenceChecksSchema.optional()}).strict(),
-  z.object({...common,family:z.literal('portal.collect'),...collection,columns:z.array(field).min(1).max(100).refine(columns=>new Set(columns).size===columns.length,'duplicate portal column').optional(),format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict(),
+  portalCollectRecipeSchema,
   z.object({...common,family:z.literal('form.draft-submit'),...mutation}).strict(),
   z.object({...common,family:z.literal('record.update'),...mutation}).strict(),
   z.object({...common,family:z.literal('choose.stage'),...mutation}).strict(),
   z.object({...common,family:z.literal('inbox.triage'),...collection,judgment,draft_by_label:z.record(key,z.string().max(4000))}).strict(),
   z.object({...common,family:z.literal('monitor.watch'),...collection,interval_seconds:z.number().int().min(60).max(2592000),mode:z.enum(['any_change','minimum_decreases']),value_field:field.nullable(),comparison_fields:z.array(field).min(1).max(20)}).strict(),
-  z.object({...common,family:z.literal('file.pipeline'),...collection,columns:z.array(field).min(1).max(100),numeric_columns:z.array(field).max(100),sort:sort.nullable(),format:z.enum(['json','csv']),verification:evidenceChecksSchema.optional()}).strict(),
+  filePipelineRecipeSchema,
 ]);
 export type Recipe=z.infer<typeof recipeSchema>;
 export type MutationRecipe=Extract<Recipe,{family:'form.draft-submit'|'record.update'|'choose.stage'}>;

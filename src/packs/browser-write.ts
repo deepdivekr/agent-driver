@@ -8,6 +8,9 @@ import {type MutationRecipe,type Target,type Row,rowSchema} from './contracts.js
 import {join} from 'node:path';
 import {MAX_BYTES} from './data.js';
 
+/** Implementation contract, not a claim that a particular site is ready. */
+export const BROWSER_DRAFT_READBACK_CONTRACT={version:1,enforced_by:'runtime_pack_run',required_observations:['verified_values_before_capture','verified_values_after_capture','capture_ref','capture_sha256'],comparison:'all_requested_control_values_before_and_after_capture',submission:'disabled',readiness:'requires_current_execution',legacy_receipts:'not_backfilled'} as const;
+
 export function targetCapability(target:Target):Capability{return {
   id:`pack.${target.id}`,effect:'write_external',route:`pack.browser.${target.id}`,environments:['owned_headless'],hiddenVerified:false,
   requiresForeground:false,requiresOsInput:false,usesUserTarget:false,requiresClipboard:false,requiresFileDialog:false,verification:'independent_readback',

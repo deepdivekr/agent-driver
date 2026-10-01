@@ -47,6 +47,16 @@ test('runtime definition exposes only the typed unsupported-model code, never pr
  const logs=workTail(x.api.store,x.config.project.id,work.work_id);assert.ok(logs.some(log=>log.kind==='definition.failed'&&log.metadata.reason==='STRUCTURED_MODEL_UNSUPPORTED'));
  assert.equal(logs.some(log=>log.kind==='definition.correction_started'),false);
 });
+test('runtime definition reports an app response-schema fault without a futile model correction',async t=>{
+ for(const code of ['CLIENT_OUTPUT_SCHEMA_UNSUPPORTED','CLIENT_SCHEMA_INVALID']){
+  const model=scripted(new Error(code)),x=await fixture(t,model),work=await x.api.call('runtime_work_start',{request_id:`schema-${code}`,prompt:'공개 자료를 정리해 줘'});
+  assert.equal(work.status,'needs_model');assert.equal(work.reason,code);assert.deepEqual(model.calls.map(call=>call.purpose),['design']);assert.deepEqual(work.runs,[]);
+  const logs=workTail(x.api.store,x.config.project.id,work.work_id);
+  assert.ok(logs.some(row=>row.kind==='definition.model_failure'&&row.metadata.reason===code));
+  assert.ok(logs.some(row=>row.kind==='definition.failed'&&row.metadata.reason===code));
+  assert.equal(logs.some(row=>row.kind==='definition.correction_started'),false);
+ }
+});
 test('runtime definition keeps typed provider failure diagnostics without logging raw provider output',async t=>{
  const model=scripted(new Error('STRUCTURED_MODEL_UNAVAILABLE')),x=await fixture(t,model),work=await x.api.call('runtime_work_start',{request_id:'typed-provider-diagnostic',prompt:'공개 페이지를 조회해 줘'});
  assert.equal(work.status,'needs_model');assert.equal(work.reason,'MODEL_OR_DEFINITION_UNAVAILABLE');

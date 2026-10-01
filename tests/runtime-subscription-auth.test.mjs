@@ -9,6 +9,8 @@ import {optionalTypeSafeTransportFromHostEnvironment} from '../dist/taskpack/typ
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 import {LlmSwarmPlanner} from '../dist/swarm/planner.js';
 import {z} from 'zod';
+import {workProposalSchema,validateModelWorkProposal} from '../dist/work/contracts.js';
+import {nativeCompletionCheck} from '../dist/work/completion-checks.js';
 
 const schema={type:'object',additionalProperties:false,required:['choice'],properties:{choice:{type:'string',enum:['A','B']}}};
 const fixtureExecutables={
@@ -298,6 +300,54 @@ test('runtime contract Codex local schema references retain required and optiona
   assert.deepEqual(result.transport.properties.optional_nullable,{$ref:'#/$defs/nullable'});
   assert.deepEqual(result.transport.$defs.payload.required,['keep','extra']);assert.equal(result.transport.$defs.payload.additionalProperties,false);
   assert.deepEqual(original,before);
+});
+
+test('runtime contract full Work schema supports Codex and Claude without changing host native completion contracts',async()=>{
+  const predicates=[
+    {version:1,kind:'native_pack_output',family:'file.pipeline',format:'csv',columns:['price'],output_rows:1,numeric_columns:['price'],sort:{field:'price',direction:'asc'}},
+    {version:1,kind:'native_watch_observations',family:'monitor.watch',mode:'minimum_decreases',comparison_fields:['id'],value_field:'price',expected_change:'unchanged',minimum_elapsed_seconds:60},
+  ];
+  const original=z.toJSONSchema(workProposalSchema),before=structuredClone(original);
+  for(const predicate of predicates){
+    const response={title:'Observe a source',desired_outcome:'Keep the original source and inspect the output',completion_checks:[nativeCompletionCheck('native',predicate)],assumptions:[],route:{kind:'pack',pack_family:predicate.family},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],plan:{steps:[{id:'observe',goal:'Inspect source',observable_outcome:'Bound source receipt',depends_on:[],effect:'read_only',tool_hints:[]}]}};
+    const codex=await codexSchemaRoundTrip(original,{...response,browser:null});
+    const visit=node=>{if(!node||typeof node!=='object')return;assert.equal(Object.hasOwn(node,'oneOf'),false);Object.values(node).forEach(visit);};visit(codex.transport);
+    assert.equal(codex.transport.properties.completion_checks.items.properties.native_check.anyOf[0].anyOf.length,2);
+    assert.deepEqual(workProposalSchema.parse(codex.value),response);
+    assert.deepEqual(validateModelWorkProposal(codex.value,'quick').completion_checks,response.completion_checks);
+    let transported;
+    const claude=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'claude'}),runner:{async run(request){
+      if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};
+      transported=JSON.parse(request.args[request.args.indexOf('--json-schema')+1]);
+      return {code:0,stdout:JSON.stringify({is_error:false,structured_output:response}),stderr:''};
+    }}});
+    const claudeValue=await claude.call('design','Return a bounded Work.',{},original),expectedClaude=structuredClone(original);delete expectedClaude.$schema;
+    assert.deepEqual(transported,expectedClaude);assert.deepEqual(workProposalSchema.parse(claudeValue),response);
+    for(const value of [codex.value,claudeValue]){
+      const spoof=structuredClone(value);spoof.completion_checks[0].result='The entire user goal is proven';
+      assert.throws(()=>validateModelWorkProposal(spoof,'quick'),/NATIVE_COMPLETION_TEXT_NOT_CANONICAL/);
+      const invalid=structuredClone(value);invalid.completion_checks[0].native_check.kind='unknown';
+      assert.equal(workProposalSchema.safeParse(invalid).success,false);
+    }
+  }
+  assert.deepEqual(original,before);
+});
+
+test('runtime contract Codex never broadens overlapping oneOf constraints or optional discriminators',async()=>{
+  for(const branches of [
+    [{type:'object',required:['kind'],properties:{kind:{const:'same'}}},{type:'object',required:['kind'],properties:{kind:{const:'same'}}}],
+    [{type:'object',properties:{kind:{const:'a'}}},{type:'object',properties:{kind:{const:'b'}}}],
+    [{type:'number'},{type:'integer'}],
+    [{type:'object',required:['kind'],properties:{kind:{const:-0}}},{type:'object',required:['kind'],properties:{kind:{const:0}}}],
+  ]){
+    let invoked=false;
+    const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex'}),runner:{async run(request){
+      if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+      invoked=true;throw Error('must reject before model invocation');
+    }}});
+    await assert.rejects(model.call('design','Return bounded data.',{},{type:'object',required:['value'],properties:{value:{oneOf:branches}},additionalProperties:false}));
+    assert.equal(invoked,false);
+  }
 });
 
 test('runtime contract Codex transport never deletes required nulls, unknown keys, dictionary values or broadens caller allowlists',async()=>{

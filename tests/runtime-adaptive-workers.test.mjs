@@ -90,10 +90,29 @@ test('runtime contract native Codex assignee resumes after a wrapper restart and
   assert.equal((await call()).continuity,'new_session');assert.equal((await call()).continuity,'resumed_session');
   let requests=invocations(runner);assert.equal(requests[0].args.includes('--ephemeral'),false);assert.equal(requests[1].args.includes('resume'),true);assert.equal(requests[0].cwd,requests[1].cwd);assert.deepEqual(JSON.parse(requests[1].stdin.split('INPUT:\n')[1]).checkpoint,input.checkpoint);
   for(const binding of [{...context,work_id:'work-b'},{...context,run_id:'run-b'},{...context,stage_id:'reader-b'}])assert.equal((await call(binding)).continuity,'new_session');
-  assert.equal((await call(context,'verifier')).continuity,'new_session');assert.equal((await call(context,'worker','Changed instructions.')).continuity,'new_session');
+  assert.equal((await call(context,'verifier')).continuity,'checkpoint_only');assert.equal((await call(context,'worker','Changed instructions.')).continuity,'new_session');
   saveModelSettings(path,{revision:1,onboarding_step:3,selection:{...selection,role_models:{...selection.role_models,worker:{codex:'new-worker-model',claude:null,opencode:null}}}},{});
   assert.equal((await call()).continuity,'new_session');
   const records=await readdir(join(root,'decision-sessions'));for(const dir of records){const text=await readFile(join(root,'decision-sessions',dir,'session.json'),'utf8');assert.doesNotMatch(text,/Already read|Read only|token|password/u);}
+});
+
+test('runtime contract independent verifier stays stateless with the exact saved model and complete current evidence',async t=>{
+  for(const client of ['codex','claude']){
+    const {path}=await setup(t,{...selection,client}),runner=runnerFor();
+    for(let batch=0;batch<2;batch++){
+      const current={...input,batch,observations:[{text:`Complete original receipt ${batch}`} ]};
+      const model=factory(path,runner).forWork(context).forRole('verifier');
+      await model.call('correct','Independently inspect this entire current receipt.',current,schema);
+      assert.equal(model.calls.at(-1).continuity,'checkpoint_only');
+      const request=invocations(runner).at(-1);
+      assert.equal(request.args.includes('resume')||request.args.includes('--resume'),false);
+      assert.ok(request.args.includes(client==='codex'?'--ephemeral':'--no-session-persistence'));
+      assert.equal(model.calls.at(-1).model,client==='codex'?'review-model':'review-claude');
+      const sent=JSON.parse(request.stdin.split('INPUT:\n')[1]);
+      assert.deepEqual(sent.observations,current.observations);assert.deepEqual(sent.checkpoint,input.checkpoint);
+      assert.equal(sent.work_id,context.work_id);assert.equal(sent.run_id,context.run_id);
+    }
+  }
 });
 
 test('runtime contract two workers in one business stage keep separate native sessions and shared stage provenance',async t=>{

@@ -73,8 +73,8 @@ test('runtime fixture: definitive false and typed repair keep original non-trans
   }
 });
 
-test('runtime fixture: auth, quota, invalid output and unsupported verifier failures are not transport retries',async()=>{
-  for(const code of ['AUTH_EXPIRED','QUOTA_EXHAUSTED','STRUCTURED_MODEL_UNSUPPORTED','CLIENT_STRUCTURED_OUTPUT_INVALID']){
+test('runtime fixture: auth, quota, schema, invalid output and unsupported verifier failures are not transport retries',async()=>{
+  for(const code of ['AUTH_EXPIRED','QUOTA_EXHAUSTED','STRUCTURED_MODEL_UNSUPPORTED','CLIENT_SCHEMA_INVALID','CLIENT_OUTPUT_SCHEMA_UNSUPPORTED','CLIENT_STRUCTURED_OUTPUT_INVALID']){
     const fixture=host(async()=>{throw Error(code);}),result=await run(model([read,claim]),fixture);
     assert.equal(result.completion_verified,false);assert.notEqual(result.reason,'WORK_CLIENT_VERIFICATION_TRANSIENT');
     assert.equal(fixture.events.filter(event=>event.kind.startsWith('verification.')).length,0);
@@ -143,4 +143,17 @@ test('runtime fixture: supervisor persists verifier-only retries and completes w
   assert.equal(authEnd?.state,'waiting_model',JSON.stringify(authEnd));assert.equal(authEnd.reason,'auth_expired');
   const authRetry=store.hermesState.prepare("SELECT COUNT(*) AS n FROM office_activity WHERE work_id=? AND kind LIKE 'verification.retry_%'").get(authWork.work_id);
   assert.equal(authRetry.n,0);assert.equal(authEnd.result?.completion_verified,false);
+
+  native.verifierFailureKind='schema_invalid';
+  const schemaWork=await new WorkRuntime(store,config,native).start({request_id:'verification-schema-work',prompt:'자료를 확인해줘'});
+  assert.equal(schemaWork.status,'ready');supervisor.start(schemaWork.work_id,schemaWork.revision,true);
+  let schemaEnd;
+  for(let index=0;index<120;index++){
+    schemaEnd=supervisorStatus(store,config.project.id,schemaWork.work_id);
+    if(['waiting_model','failed','awaiting_review','succeeded'].includes(schemaEnd?.state))break;
+    await delay(25);
+  }
+  assert.equal(schemaEnd?.state,'failed',JSON.stringify(schemaEnd));assert.equal(schemaEnd.reason,'CLIENT_SCHEMA_INVALID');
+  const schemaRetry=store.hermesState.prepare("SELECT COUNT(*) AS n FROM office_activity WHERE work_id=? AND kind LIKE 'verification.retry_%'").get(schemaWork.work_id);
+  assert.equal(schemaRetry.n,0);assert.equal(schemaEnd.result?.completion_verified,false);
 });

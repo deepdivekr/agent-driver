@@ -4,8 +4,17 @@ import {mkdtemp,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 import {PackStore} from '../dist/packs/store.js';
 import {WorkSchedules,nextScheduleSlot,latestScheduleSlot,workScheduleSchema} from '../dist/work/schedule.js';
+
+test('runtime contract schedule, custom Pack schedule and lifecycle entrypoints load independently without ESM initialization cycles',()=>{
+ for(const entry of ['schedule','custom-pack-schedule','lifecycle']){
+  const url=new URL(`../dist/work/${entry}.js`,import.meta.url).href;
+  const child=spawnSync(process.execPath,['--input-type=module','--eval',`await import(${JSON.stringify(url)});`],{encoding:'utf8'});
+  assert.equal(child.status,0,`${entry} import failed: ${child.stderr}`);
+ }
+});
 
 const timestamp=value=>Date.parse(value);
 const spec=rule=>({title:'Daily report',desired_outcome:'Collect the current report',completion_checks:[{id:'report',result:'Current report is collected',evidence:'Source readback'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'recurring',rule},questions:[],plan:{revision:0,source:'request',steps:[]}});

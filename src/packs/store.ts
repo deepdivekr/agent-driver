@@ -469,7 +469,7 @@ export class PackStore extends TerminalStore {
     // cancelled, replaced or already-finished definition.
     return this.connection.prepare("UPDATE office_intake SET define_lease_until_ms=? WHERE project_id=? AND work_id=? AND define_owner=? AND define_lease_until_ms>? AND status IN ('defining','needs_model')").run(now+90_000,project,id,owner,now).changes===1;
   }
-  finishWorkDefinition(project:string,id:string,owner:string,spec:unknown,questions:unknown[],status:'ready'|'awaiting_details'){
+  finishWorkDefinition(project:string,id:string,owner:string,spec:unknown,questions:unknown[],status:'ready'|'awaiting_details',onDefined?:()=>void){
     return this.transaction(()=>{
       assertWorkConnected(this,project,id);
       const current=this.intakeWork(project,id),at=new Date().toISOString();
@@ -479,6 +479,7 @@ export class PackStore extends TerminalStore {
       const outcome=typeof spec==='object'&&spec!==null&&'desired_outcome' in spec?String(spec.desired_outcome):current.prompt;
       this.connection.prepare('UPDATE office_work SET title=?,goal=?,updated_at=? WHERE id=? AND project_id=?').run(title,outcome,at,id,project);
       this.connection.prepare('INSERT INTO office_work_revision VALUES (?,?,?,?,?,?)').run(id,current.revision+1,'defined',JSON.stringify(spec),JSON.stringify(current.answers),at);
+      onDefined?.();
       return this.intakeWork(project,id);
     });
   }

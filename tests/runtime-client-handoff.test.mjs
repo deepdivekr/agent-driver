@@ -8,7 +8,7 @@ import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js'
 import {saveModelSettings,readModelSettings,effectiveModelEnvironment} from '../dist/onboarding/model-settings.js';
 import {apiModelCatalog,claudeModelCatalog} from '../dist/onboarding/model-catalog.js';
 import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
-import {clientHandoffSchema} from '../dist/integrations/client-handoff.js';
+import {classifyClientFailure,clientHandoffSchema,isNonRetryableClientFailure} from '../dist/integrations/client-handoff.js';
 
 const key='fixture-provider-key-not-real-12345';
 const selection={mode:'subscription',client:'codex',client_models:{codex:'gpt-5.6-luna',claude:'sonnet',opencode:'openrouter/test-model'},api_to_subscription:false,api_provider:'openai',api_model:'gpt-5.6-luna',api_base_url:'',reasoning:'low',jev:'off'};
@@ -67,6 +67,37 @@ test('unsupported selected model without a subscription successor remains an exp
   assert.deepEqual(events.map(event=>[event.source,event.target,event.reason,event.status]),[['codex',null,'model_unsupported','no_candidate']]);
   assert.equal(model.calls[0].failure_kind,'model_unsupported');
   assert.doesNotMatch(JSON.stringify({events,calls:model.calls}),/private-output-must-not-leak/u);
+});
+
+test('request-schema errors are distinct from provider, auth, quota and model output failures',()=>{
+  assert.equal(classifyClientFailure(Error('CLIENT_OUTPUT_SCHEMA_UNSUPPORTED')),'schema_invalid');
+  assert.equal(classifyClientFailure(Error('CLIENT_SCHEMA_INVALID')),'schema_invalid');
+  assert.equal(classifyClientFailure('HTTP 400: Invalid schema for response_format: completion_checks/items/native_check/anyOf/0: oneOf is not permitted'),'schema_invalid');
+  assert.equal(isNonRetryableClientFailure(Error('CLIENT_OUTPUT_SCHEMA_UNSUPPORTED')),true);
+  assert.equal(isNonRetryableClientFailure(Error('CLIENT_SCHEMA_INVALID')),true);
+  assert.equal(isNonRetryableClientFailure(Error('CLIENT_QUOTA_EXHAUSTED')),false);
+  assert.equal(classifyClientFailure('Weekly usage limit reached'),'quota_exhausted');
+  assert.equal(classifyClientFailure('Session expired'),'auth_expired');
+  assert.equal(clientHandoffSchema.safeParse({id:'00000000-0000-4000-8000-000000000001',project_id:'fixture',work_id:null,run_id:null,stage_id:null,source:'codex',target:'claude',source_model:'model',target_model:'model',reason:'schema_invalid',effect_state:'none',status:'transferred',input_sha256:'a'.repeat(64),created_at:'2026-10-01T00:00:00.000Z'}).success,false);
+});
+
+test('Codex HTTP400 response schema stops before another subscription or ambient paid API invocation',async()=>{
+  const events=[],calls=[];let paid=0;
+  const runner={async run(request){calls.push(request);
+    if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
+    if(request.executable==='/fixture/codex')return {code:1,stdout:JSON.stringify({type:'error',message:'Invalid schema for response_format: completion_checks/items/native_check/anyOf/0: oneOf is not permitted. private-value-must-not-leak'}),stderr:'Command failed'};
+    throw Error('UNEXPECTED_SUCCESSOR_OR_MODEL_CALL');
+  }};
+  const fallbackModel={calls:[],async call(){paid++;return {choice:'paid'};}};
+  const model=new SubscriptionAwareStructuredModel({environment:{AGENT_DRIVER_LLM_CLIENT:'codex,claude,api',AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude'},runner,fallbackModel,fallbackKind:'api_key',onHandoff:event=>events.push(event)});
+  await assert.rejects(model.call('correct','Choose.',{work_id:'work-schema'},schema),/^Error: CLIENT_SCHEMA_INVALID$/u);
+  assert.equal(calls.filter(call=>call.executable==='/fixture/codex'&&call.args.includes('exec')).length,1);
+  assert.equal(calls.some(call=>call.executable==='/fixture/claude'),false);
+  assert.equal(paid,0);assert.equal(events.length,0);
+  assert.equal(model.calls[0].failure_kind,'schema_invalid');
+  assert.doesNotMatch(JSON.stringify({calls:model.calls,events}),/private-value-must-not-leak/u);
+  await assert.rejects(model.call('correct','Choose.',{work_id:'work-schema'},schema),/^Error: CLIENT_SCHEMA_INVALID$/u);
+  assert.equal(calls.filter(call=>call.args.join(' ')==='login status').length,1,'an app schema error must not invalidate a verified subscription login');
 });
 
 test('mixed unsupported-model and quota failures retain a generic aggregate result with an actionable no-candidate receipt',async()=>{

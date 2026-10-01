@@ -11,9 +11,26 @@ import {WorkClientToolInputError} from '../dist/work/client-executor.js';
 import {initWorkExecution} from '../dist/work/activity.js';
 import {initialWorkPlan} from '../dist/work/plan.js';
 import {sha} from '../dist/packs/data.js';
+import {localRecordDraftCertificate} from '../dist/packs/native-output-certificate.js';
 
 const spec={title:'Local review draft',desired_outcome:'Draft one scoped local annotation without changing the source',completion_checks:[{id:'draft',result:'A separately saved record draft',evidence:'Pack artifact and original hash'}],assumptions:[],route:{kind:'pack',pack_family:'record.update'},requested_effect:'local_file_write',recurrence:{kind:'once',rule:null},questions:[],plan:initialWorkPlan('Draft a local annotation','local_file_write')};
 const model={calls:[],async call(){throw Error('No model call in contract regression');}};
+
+test('fresh local-record comparison proves the whole draft without replay and rejects changed originals or output',async t=>{
+  const x=await setup(t),toolkit=new WorkExecutionTools(x.api.store,x.config,x.api,x.work.id,randomUUID(),spec,x.work.prompt,()=>{},model);t.after(()=>toolkit.close());
+  const before=await readFile(x.source),observed=await toolkit.execute('runtime_pack_local_record_inspect',{target:'review',identity:'public-a'},'proof-inspect');
+  const recipe={version:1,family:'record.update',request:'Draft scoped note',target:'review',values:{id:'public-a',local_note:'review'},expected_before_sha256:observed.before_sha256};
+  const result=await toolkit.execute('runtime_pack_run',{recipe},'proof-draft'),run=x.api.store.packRun(x.config.project.id,result.run_id),old=JSON.stringify(run.result);
+  const value=await toolkit.execute('runtime_pack_status',{run_id:run.id},'proof-status'),receipt=await toolkit.receipt('runtime_pack_status',value,'proof-status'),proof=receipt.value.local_record_draft_certificate;
+  assert.equal(proof.exact_full_array_match,true);assert.equal(proof.matched_rows,1);assert.equal(proof.source_rows,2);assert.equal(proof.non_target_fields_unchanged,true);assert.equal(proof.original_unchanged_at_check,true);assert.equal(proof.user_goal_verified,'not_asserted');
+  assert.equal(JSON.stringify(proof).includes(x.source),false);assert.equal(JSON.stringify(x.api.store.packRun(x.config.project.id,run.id).result),old);
+  await writeFile(x.source,JSON.stringify([x.records[0],{...x.records[1],untouched:'changed'}]));
+  assert.equal(await localRecordDraftCertificate(x.config,run),null);await writeFile(x.source,before);
+  const artifact=await readFile(run.result.artifact.path);await writeFile(run.result.artifact.path,JSON.stringify([x.records[0]]));
+  assert.equal(await localRecordDraftCertificate(x.config,run),null);await writeFile(run.result.artifact.path,artifact);
+  assert.equal((await localRecordDraftCertificate(x.config,run)).exact_full_array_match,true);
+  assert.equal(x.api.store.hermesState.prepare('SELECT COUNT(*) AS n FROM family_run').get().n,1);
+});
 
 async function setup(t){
   const root=await mkdtemp(join(tmpdir(),'phase112-local-record-')),source=join(root,'records.json'),configPath=join(root,'host.json');
