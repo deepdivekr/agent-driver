@@ -197,7 +197,7 @@ export class WorkResults {
         if(depth>4||visited++>400)return;
         if(Array.isArray(raw)){for(const value of raw.slice(0,32))collect(value,observedAt,depth+1);return;}
         const value=object(raw);
-        if(typeof value.url==='string'&&safeUrl(value.url)&&sources.length<32&&!seen.has('url:'+safeUrl(value.url))){seen.add('url:'+safeUrl(value.url));sources.push({label:safe(String(value.title??value.url),300),url:safeUrl(value.url)!,...(observedAt?{observed_at:observedAt}:{})});}
+        if(typeof value.url==='string'&&safeUrl(value.url)&&sources.length<32&&!seen.has('url:'+safeUrl(value.url))){seen.add('url:'+safeUrl(value.url));sources.push({label:safe(String(value.title||value.url),300)||'source',url:safeUrl(value.url)!,...(observedAt?{observed_at:observedAt}:{})});}
         if(typeof value.path==='string'&&typeof value.sha256==='string'&&digest.safeParse(value.sha256).success&&isAbsolute(value.path)&&artifacts.length<20&&!seen.has('artifact:'+value.path)){seen.add('artifact:'+value.path);artifacts.push({label:basename(value.path),path:value.path,sha256:value.sha256,...(typeof value.bytes==='number'&&Number.isInteger(value.bytes)&&value.bytes>=0?{bytes:value.bytes}:{})});}
         for(const child of Object.values(value))if(child&&typeof child==='object')collect(child,observedAt,depth+1);
       };
@@ -258,7 +258,7 @@ export class WorkResults {
     const delivered:WorkResult[]=[];
     for(const row of rows){
       if(!canDispatch()||readWorkLifecycle(this.store,project,workId).state!=='connected'||this.store.intakeWorkOptional(project,workId)?.paused)break;
-      const body=object(JSON.parse(String(row.body)));if(body.completion_verified!==true)continue;
+      // A pending row exists only for an outcome the notification level admitted when it was recorded.
       if(!row.connector_id||!row.target_fingerprint||this.settings?.fingerprint(String(row.connector_id))!==row.target_fingerprint){
         this.store.hermesState.prepare("UPDATE office_result_delivery SET status='failed',reason='DELIVERY_TARGET_CHANGED',revision=revision+1,updated_at=? WHERE id=? AND status='pending'").run(at(),String(row.id));
         this.activity(project,workId,'delivery.failed','Delivery destination changed before sending.');continue;
