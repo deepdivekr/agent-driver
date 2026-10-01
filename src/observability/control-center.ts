@@ -321,7 +321,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         if(input.delivery_target_ids?.some(id=>id!=='app'&&!deliverySettings.target(id)))throw Error('DELIVERY_TARGET_NOT_CONFIGURED');
         if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
         const intent={execute,cost_acknowledged,...(timezone?{timezone}:{})};
-        const recordStart=(work:ReturnType<WorkRuntime['status']>)=>{if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The user requested this Work run using the configured AI allowance. Future recurring runs and external changes remain separately gated.',{stage_id:'admission',status:'requested'});};
+        const recordStart=(work:ReturnType<WorkRuntime['status']>)=>{if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The owner requested this Work run using the configured AI allowance. External submissions remain separately gated.',{stage_id:'admission',status:'requested'});};
         if(request.headers.accept==='application/x-ndjson'){
           response.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8',...headers()});const send=(event:unknown)=>{if(!response.destroyed)response.write(JSON.stringify(event)+'\n');};
           try{const work=await workRuntime.start(input,registered=>{recordStart(registered);send({type:'registered',work:registered});});if(stopped||reloading||options.reloadStatus?.().state==='reloading')throw Error(stopped?'CONTROL_CENTER_CLOSING':'CONTROL_CENTER_RELOADING');send({type:'result',result:finishIntake(work,intent)});}
@@ -350,7 +350,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
         if(Object.values(input.answers).some(value=>/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(value)))throw Error('CREDENTIAL_LIKE_INPUT');
         const work=await workRuntime.answer(input);if(rejectStopped())return;
-        if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The user requested this Work run using the configured AI allowance. Future recurring runs and external changes remain separately gated.',{stage_id:'admission',status:'requested'});
+        if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The owner requested this Work run using the configured AI allowance. External submissions remain separately gated.',{stage_id:'admission',status:'requested'});
         const result=finishIntake(work,{execute,cost_acknowledged,...(timezone?{timezone}:{})});
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_ANSWER_FAILED'}),'application/json; charset=utf-8');}return;

@@ -106,7 +106,7 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     assert.equal(await page.locator('#mcp-clients .client>p').count(),0,'Client descriptions must not clutter the connection list');
     await page.locator('#windows-bridge>summary').click();
     assert.ok(await page.locator('#windows-bridge-help').isVisible());
-    assert.match(await page.locator('#windows-bridge-help').textContent(),lang==='ko'?/건너뛰어도 됩니다/u:/Skip it if you connected a WSL app/u);assert.match(await page.locator('#windows-bridge').innerText(),lang==='ko'?/터미널이나 채팅에 실행하는 명령이 아닙니다/u:/not a command to run in PowerShell/u);
+    assert.match(await page.locator('#windows-bridge-help').textContent(),lang==='ko'?/건너뛰어도 됩니다/u:/Skip it if you connected a WSL app/u);assert.match(await page.locator('#windows-bridge').innerText(),lang==='ko'?/터미널이나 채팅에 입력하는 명령이 아닙니다/u:/not commands for a terminal or chat/u);
     assert.equal(buttons.filter(b=>b.text===(lang==='ko'?'연결':'Connect')).length,2,'Only the two signed-in clients should offer registration');
     assert.equal(await page.locator('#mcp-clients [data-client=opencode] .cact button').count(),1,'Log in first; do not offer registration alongside it');
     assert.equal(await page.getByText(lang==='ko'?'MCP 연결':'Connect MCP',{exact:true}).count(),0);

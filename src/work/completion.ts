@@ -165,7 +165,7 @@ export function createWorkRunTraceEvidence(store:TraceStore,project:string,reque
 }
 
 // Receipt metadata such as {status:'succeeded'} does not establish an observable result.
-const metadataKeys=new Set(['status','ok','success','error','request_id','work_id','run_id','stage_id','evidence_ids','effect_state','retry_safe','observed_at','_office_compaction','truncated']);
+const metadataKeys=new Set(['status','ok','success','error','request_id','work_id','run_id','stage_id','evidence_ids','effect_state','retry_safe','_office_compaction','truncated']);
 const businessRowValueKeys=new Set(['status','ok','success','error']);
 const excludedMetadataKey=(key:string,withinArray:boolean)=>metadataKeys.has(key)&&!(withinArray&&businessRowValueKeys.has(key));
 function observableLeaves(value:unknown,depth=0,withinArray=false):string[]{
@@ -646,8 +646,9 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
   /** One compact semantic judgment for light-tier Work. Returns null when it
    * cannot decide, so the strict path runs; never weaker than that fallback
    * for a clear denial. */
+  let lightNote='';
   const lightVerify=async(checks:Array<{id:string;result:string;evidence:string}>,observations:WorkClientCheckpoint['observations'],claim:Parameters<WorkCompletionVerifier>[2]):Promise<boolean|null>=>{
-    const guarded=async()=>{try{await options.guard?.();}catch(error){throw new CompletionGuardError(error);}};
+    const guarded=async()=>{try{await options.guard?.();}catch(error){throw new CompletionGuardError(error);}};lightNote='';
     // Structural gates stay in code. Anything unusual goes to the strict path,
     // which reports the precise rejection.
     const parsedChecks=z.array(checkSchema).min(1).max(9).safeParse(checks);
@@ -686,6 +687,8 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
     const ids=new Set(checks.map(check=>check.id));
     if(answer.checks.length!==ids.size||new Set(answer.checks.map(check=>check.id)).size!==ids.size||answer.checks.some(check=>!ids.has(check.id)))return null;
     const audit=async(status:'accepted'|'rejected',code:string,issue?:WorkCompletionAuditIssue)=>{await guarded();await options.audit?.({attempt:1,status,code,input_sha256:hashJson(input),verifier:'light',...(issue?{issue}:{}),checks:answer.checks.map(check=>({id:check.id,verdict:check.verdict,evidence_ids:check.evidence_ids,evidence_use:'observed_result',reason_sha256:hashJson(check.reason),quotes:check.quotes.map(quote=>({evidence_id:quote.evidence_id,quote_sha256:hashJson(quote.quote),bytes:Buffer.byteLength(quote.quote)}))}))});await guarded();};
+    const undecided=answer.checks.find(check=>check.verdict==='unknown');
+    if(undecided)lightNote=`${undecided.id}: ${safeControlText(undecided.reason,300)}`;
     const denied=answer.checks.find(check=>check.verdict==='unsupported');
     if(denied){
       await guarded();await options.denial?.({check_id:denied.id,reason:safeControlText(denied.reason,600)});
@@ -702,6 +705,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       // Every quote must be shown content; at least one per check must be an
       // observed value, so a status or ID line beside real evidence is tolerated
       // but a check resting on such lines alone is not.
+      lightNote=`${check.id}: a quote is not an observed value of its cited receipt`;
       const grounded=(quote:string,leaves:string[])=>leaves.some(leaf=>{const escaped=JSON.stringify(leaf).slice(1,-1);return leaf.includes(quote)||escaped.includes(quote)||quote.includes(leaf)||quote.includes(escaped);});
       if(!check.quotes.length||check.quotes.some(quote=>!check.evidence_ids.includes(quote.evidence_id)||!shown.get(quote.evidence_id)?.content.includes(quote.quote))||!check.quotes.some(quote=>grounded(quote.quote,shown.get(quote.evidence_id)!.leaves)))return null;
       if(check.id.startsWith('original_user_request')&&check.quotes.every(quote=>traceIds.has(quote.evidence_id)))return null;
@@ -712,7 +716,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
   };
   /** Light tier first; strict whenever light cannot decide. */
   const semanticVerify=async(checks:Array<{id:string;result:string;evidence:string}>,observations:WorkClientCheckpoint['observations'],claim:Parameters<WorkCompletionVerifier>[2])=>{
-    if(completionRiskTier(observations)==='light'){const light=await lightVerify(checks,observations,claim);if(light!==null)return light;await options.progress?.({kind:'model.result',turn:Math.max(0,...observations.map(item=>item.invocation.turn+1)),stage_id:'completion.verify',summary:'Light verification could not decide; running full verification.'});}
+    if(completionRiskTier(observations)==='light'){const light=await lightVerify(checks,observations,claim);if(light!==null)return light;await options.progress?.({kind:'model.result',turn:Math.max(0,...observations.map(item=>item.invocation.turn+1)),stage_id:'completion.verify',summary:`Light verification could not decide; running full verification.${lightNote?` (${lightNote})`:''}`});}
     for(const group of semanticGroups(checks)){
       const ids=new Set(group.map(check=>check.id));
       if(!await verify(group,observations,{...claim,completed_checks:claim.completed_checks.filter(check=>ids.has(check.id))}))return false;

@@ -33,7 +33,7 @@ test('runtime fixture setup checks stream localized historical/live outcomes and
    assert.doesNotMatch(await page.locator('#setup-log').textContent(),/[가-힣]/u);
    await page.locator('#windows-bridge>summary').click();
    assert.match(await page.locator('#windows-bridge-help').innerText(),/Skip it if you connected a WSL app/u);
-   assert.match(await page.locator('#windows-bridge').innerText(),/not a command to run in PowerShell/u);
+   assert.match(await page.locator('#windows-bridge').innerText(),/not commands for a terminal or chat/u);
    assert.match(await page.locator('#windows-bridge-config').textContent(),/업무/u,'User paths are not translated');
    hold=true;await page.locator('#refresh-mcp').click();
    await page.waitForFunction(()=>document.querySelector('#tail-last').textContent.includes('Checking app installation'));
