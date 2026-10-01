@@ -98,9 +98,11 @@ test('runtime contract Aside unusual traffic stays blocked after one environment
   assert.deepEqual(f.browser.checkpoint().environment_recovery,{reason:'unusual_traffic',target_id:'aside'});
 });
 
-test('runtime contract CAPTCHA-only login and permission-denial observations never trigger search-environment recovery',async t=>{
+test('runtime contract login and permission-denial observations never trigger search-environment recovery; a human check does',async t=>{
+  // B5 ladder: a human-verification wall is the background browser being refused, so the read moves once to the registered Aside.
+  {const wall={...unusual(),text:'Verify you are human. Complete the CAPTCHA.'},f=fixture(t,{responses:executor=>executor.id==='headless'?wall:observed(requested,'Results','Observed results')});await f.browser.open(requested);await f.browser.observe();
+    assert.deepEqual(opened(f).map(entry=>entry.id),['headless','aside']);assert.equal(f.browser.checkpoint().environment_recovery.target_id,'aside');}
   for(const page of [
-    {...unusual(),text:'Verify you are human. Complete the CAPTCHA.'},
     observed(origin+'/accounts/Login','Sign in','Sign in to continue.'),
     observed(requested,'Access denied','You do not have permission to access this page.'),
   ]){
