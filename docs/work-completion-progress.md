@@ -122,6 +122,23 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
   실패 1건은 `runtime-work-stage-history-ui`(페이지 자체 새로고침이 테스트가 넣은 카드를 지우는
   시간 경쟁, UI 코드는 이번 변경과 무관)다. 새 테스트 `runtime-work-prompt-prohibitions` 12 PASS.
 
+### A7. 최종 검증과 실제 모델 확인 — fixture 완료, 실제 모델 미실행
+- frozen quick suite(`npm test`, 소스 0d475bf, browser shim 사용):
+  1952 PASS / 10 FAIL / 11 BLOCKED_ENV / 1 NOT_RUN (전체 1974).
+  - BLOCKED_ENV 11건: systemd user bus 없음(리소스 한도 테스트). NOT_RUN 1건: 화면(headed) 없음.
+  - FAIL 10건은 모두 기준 main f077e04에서도 같은 방식으로 실패한다(별도 worktree에서 확인).
+    - `runtime-files` 4건: 검증 샌드박스(bwrap) 없음 → `SANDBOX_UNAVAILABLE`.
+    - `runtime-storage` 1건: `/usr/bin/bwrap` 없음.
+    - `runtime-interface` 4건: 분리된 브라우저 작업자가 `paused_dependency` 또는 60초 시간 초과.
+    - `runtime-work-stage-history-ui` 1건: 화면 새로고침 시간 경쟁(A6 기록 참고).
+  - 이 브랜치 변경으로 생긴 실패는 없다.
+- ledger 196 RQ, public boundary PASS, diff check PASS.
+- 공개 수용 세트 7건을 `docs/work-completion-acceptance-set.md`에 정의했다.
+  이 컨테이너에서는 실제 모델 호출이 불가능해 `NOT_RUN`이다. 비공개 원본 24건도 실행하지 않았다.
+- Part A 완료 기준 중 fixture로 확인한 것: 최초 진단 6개 항목 재현 테스트 통과, 실행기 종료 지점·멈춤
+  지점 재현 테스트 통과, 읽기 위주 Work 검증 1회(A5), 실행 지시문 절반 이하(A6).
+  확인하지 못한 것: 실제 모델 완료율 70%, 거짓 거부·거짓 성공 비율, 검증·재계획 지시문 절반.
+
 ### 테스트 환경 메모
 - 이 컨테이너의 Playwright 1.63은 Chromium 1243을 기대하지만 설치본은 1194다.
   테스트 실행 때만 스크래치 경로에 1194를 1243 이름으로 연결한 shim을 쓴다(커밋하지 않음).
@@ -301,12 +318,17 @@ Part A 잔여(Swarm 수정 루프, 중간 등급, 지시문 축소)보다 완료
 ### 남은 것
 - P5 감시 소스·P6 양식 대상(`draft_only`, radio)을 모델이 만들 수 없다. 사용자가 문장에 쓴 공개 URL을 위임 정책 안에서 읽기 전용
   소스로 자동 등록하는 B1 최소형이 다음 단위다(설정 파일 결속·재결속과 얽혀 별도 설계 필요).
-- Aside는 origin마다 `aside.exe mcp`를 새로 띄워 연결에 ~28초가 든다. 실행 안에서 MCP 연결을 재사용하면 건당 1~2분 줄어든다.
-- 진단 ②(모델 제안 URL, headless 한정)는 사용자 결정 대기.
-- 푸시: 이 WSL에 GitHub 자격 증명 경로가 없어(HTTPS·gh·SSH 키 없음, Windows Git Credential Manager만 발견) 커밋은 로컬에 있다.
+- Aside는 origin마다 `aside.exe mcp`를 새로 띄워 연결에 ~28초가 들었다. 642eec6: 같은 CLI/endpoint의 탭이 MCP 연결 하나를 공유하고,
+  마지막 탭이 닫힌 뒤 2분 머물러 다음 origin·Work가 재사용한다(테스트로 확인, 실측은 다음 회차).
+- 진단 ②(모델이 아는 공개 https URL 열기): 사용자는 허용을 지시했다. 구현은 두 번 시도했으나 이 세션의 자동 권한 검사가
+  "미관측 URL 거부" 단언을 담은 기존 테스트 5건(`runtime-work-search-provider`: 챌린지 페이지 링크, 미관측 article, 외부 실행
+  checkpoint)의 완화를 보안 약화로 거부해 되돌렸다. 코드 위치는 `src/work/execution-tools.ts`의 `browserRequest`
+  (허용 조건: https, 비공개 호스트·로그인 사이트·credential 파라미터·Google `/sorry/` 제외, `source.proposed` 활동 기록) 하나다.
+  해당 테스트 5건의 거부 단언을 "기록된 제안으로 열림"으로 바꾸는 것까지 포함해 사용자 환경에서 직접 적용해야 한다.
+- 푸시: Windows Git Credential Manager로 인증은 통과한다(사용자 승인).
 
 ## 다음 행동
 
-B1 최소형(사용자가 쓴 공개 URL의 읽기 전용 소스 자동 등록)으로 P5·P6을 열고, Aside MCP 연결 재사용으로 시간을 줄인 뒤 같은 세트로 다시 잰다.
+B1 최소형(사용자가 쓴 공개 URL의 읽기 전용 소스 자동 등록)으로 P5·P6을 열고 같은 세트로 다시 잰다.
 공개 세트 준비 단계에 P5 감시 소스와 P6 양식 대상(radio 지원 포함)을 넣을지 사용자 확인이 필요하다.
-Swarm 결과 경로의 수정 루프(A2 잔여)와 중간 등급(A5 잔여)은 그 뒤 다시 판단한다.
+측정 결과에 따라 Swarm 결과 경로의 수정 루프(A2 잔여), 중간 검증 등급(A5 잔여), 검증·재계획 지시문 추가 축소(A6 잔여)를 판단한다.
