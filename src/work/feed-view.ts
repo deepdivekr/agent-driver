@@ -1,0 +1,32 @@
+/** A long feed or list response is shown as its entries, one per line, so a run reads it once instead of paging
+ * through markup (live: a news Work spent its turns on byte ranges of four feeds). The entries are parsed by the host
+ * from the bytes it received; nothing is summarised or reordered. */
+const decode=(value:string)=>value.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gu,'$1').replace(/&lt;/gu,'<').replace(/&gt;/gu,'>').replace(/<[^>]+>/gu,' ').replace(/&quot;/gu,'"').replace(/&#39;|&apos;/gu,"'").replace(/&amp;/gu,'&').replace(/\s+/gu,' ').trim();
+const tag=(block:string,names:string[])=>{for(const name of names){const match=new RegExp(`<${name}(?:\\s[^>]*)?>([\\s\\S]*?)</${name}>`,'iu').exec(block);if(match&&decode(match[1]!))return decode(match[1]!);}return '';};
+export interface FeedEntry {title:string;link:string;author:string;published:string;summary:string;}
+export function feedEntries(xml:string,limit=40):FeedEntry[]|null{
+  if(!/<(?:rss|feed|rdf:RDF)[\s>]/iu.test(xml.slice(0,2000)))return null;
+  const blocks=[...xml.matchAll(/<(item|entry)(?:\s[^>]*)?>([\s\S]*?)<\/\1>/giu)].map(match=>match[2]!);if(!blocks.length)return null;
+  return blocks.slice(0,limit).map(block=>{
+    const href=/<link\b[^>]*\bhref=["']([^"']+)["'][^>]*\/?>(?![\s\S]*?<link\b[^>]*\brel=["']alternate)/iu.exec(block)?.[1]??/<link\b[^>]*\brel=["']alternate["'][^>]*\bhref=["']([^"']+)["']/iu.exec(block)?.[1]??/<link\b[^>]*\bhref=["']([^"']+)["']/iu.exec(block)?.[1];
+    return {title:tag(block,['title']).slice(0,300),link:(href??tag(block,['link','guid','id'])).slice(0,500),author:(tag(block,['dc:creator','name','author'])).slice(0,120),published:tag(block,['pubDate','published','updated','dc:date']).slice(0,60),summary:tag(block,['description','summary','content:encoded','content']).slice(0,280)};
+  });
+}
+/** The largest array of objects inside a JSON document, as rows of their short scalar fields. */
+export function jsonListRows(document:unknown,limit=60):Array<Record<string,string|number|boolean|null>>|null{
+  let best:unknown[]|null=null;
+  const visit=(value:unknown,depth:number)=>{
+    if(depth>4||value===null||typeof value!=='object')return;
+    if(Array.isArray(value)){if(value.length>=3&&value.every(item=>item&&typeof item==='object'&&!Array.isArray(item))&&(!best||value.length>best.length))best=value;for(const item of value.slice(0,3))visit(item,depth+1);return;}
+    for(const child of Object.values(value))visit(child,depth+1);
+  };
+  visit(document,0);if(!best)return null;
+  return (best as Array<Record<string,unknown>>).slice(0,limit).map(item=>Object.fromEntries(Object.entries(item).filter(([key,value])=>!/(?:password|token|secret|api.?key|cookie|session)/iu.test(key)&&(value===null||typeof value==='number'||typeof value==='boolean'||typeof value==='string'&&value.length<=300)).slice(0,14)) as Record<string,string|number|boolean|null>);
+}
+/** The entry view of a body that does not fit one page, or null when the body is neither a feed nor a JSON list. */
+export function listView(body:string,contentType:string):{kind:'feed'|'json_list';text:string;entries:number}|null{
+  const type=contentType.toLowerCase();
+  if(/xml|rss|atom/u.test(type)||/^\s*<\?xml/u.test(body)){const entries=feedEntries(body);if(entries?.length)return {kind:'feed',entries:entries.length,text:entries.map(entry=>JSON.stringify(entry)).join('\n')};}
+  if(/json/u.test(type)){try{const rows=jsonListRows(JSON.parse(body));if(rows?.length)return {kind:'json_list',entries:rows.length,text:rows.map(row=>JSON.stringify(row)).join('\n')};}catch{/* Not JSON after all. */}}
+  return null;
+}

@@ -7,6 +7,7 @@ import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type B
 import {type PackStore} from '../packs/store.js';
 import {type Recipe,type Row} from '../packs/contracts.js';
 import {warmBrowserConnection} from '../browser/mcp-executor.js';
+import {listView} from './feed-view.js';
 import {workActivity} from './activity.js';
 import '../core/network.js';
 import {compareSavedRows,detectTable,registerAutoSource,tableRows} from '../packs/auto-sources.js';
@@ -540,7 +541,10 @@ export class WorkExecutionTools {
    * already bound by a saved checkpoint for this origin keeps its placement. */
   private async textResource(input:z.infer<typeof browserInput>){
     workActivity(this.store,this.config.project.id,this.workId,'source.started','Reading a public text resource over HTTPS.',{tool_name:'office_browser_read',status:'running',target_url:input.url});
-    const {body,...value}=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
+    const {body,...read}=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
+    // A feed or JSON list that does not fit one page is shown as its entries instead of byte ranges of markup.
+    const listed=input.offset===0&&read.has_more?listView(Buffer.from(body()).toString('utf8'),read.content_type):null;
+    const value=listed?{...read,text:listed.text.slice(0,input.max_bytes),has_more:false,next_offset:null,rendered:{from:listed.kind,entries:listed.entries,note:'Entries parsed by the host from the complete response, one JSON object per line.'}}:read;
     this.allowedUrls.add(value.url);
     // The complete body of a table read stays with this run so a saved result can be compared with all of it.
     const table=input.offset===0?await detectTable(body(),value.content_type,value.url):null;
@@ -781,7 +785,9 @@ export class WorkExecutionTools {
       if(explicit&&textResourcePath.test(parsed.pathname))return this.textResource(explicit);
       const socialSite=(social?.site??(Object.hasOwn(knownLoginSites,parsed.hostname.toLowerCase().replace(/^www\./u,''))?parsed.hostname.toLowerCase().replace(/^www\./u,'') as SocialSearchRequest['site']:null));
       const authTarget=socialSite?this.socialTarget(socialSite):null;
-      if(socialSite)requireCondition(authTarget,'WORK_SOCIAL_PROFILE_NOT_READY');
+      // One page on a sign-in site without a connected profile is a read the run cannot make, not the end of the
+      // Work (live: a news Work with twenty good reads failed on one social link).
+      if(socialSite&&!authTarget)throw new WorkClientToolInputError('WORK_SOCIAL_PROFILE_NOT_READY',`${socialSite} needs a signed-in browser profile, which is not connected. Nothing was opened. Use another source for this fact, or state it as a limit of the result.`);
       // Ladder (plan B5): the runtime-owned background browser first; when it is refused (search challenge,
       // bot wall) the read moves once to the Aside the owner registered. No foreground browser is used otherwise.
       const legacyKey=`work:${this.runId}:${origin}`,originalCheckpointKey=`${legacyKey}:${hashJson({entry_url:url})}`;

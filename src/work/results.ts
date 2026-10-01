@@ -202,7 +202,9 @@ export class WorkResults {
         for(const child of Object.values(value))if(child&&typeof child==='object')collect(child,observedAt,depth+1);
       };
       for(const raw of observations.slice(-64)){const observation=object(raw),receipt=object(observation.receipt);if(['succeeded','completed','ok'].includes(String(receipt.status)))collect(receipt.value,typeof observation.observed_at==='string'?observation.observed_at:undefined);}
-      this.record(project,{work_id:workId,run_id:String(row.run_id),source_kind:'client',work_revision:Number(row.work_revision),summary:safe(String(output.summary??`client · ${row.state}`),4000)||`client · ${row.state}`,text:safe(String(output.text??output.summary??'')),sources,artifacts});
+      // The result is what was saved, not only the executor's sentence about it: the last saved Office result is the text.
+      let savedText='';for(const raw of observations){const observation=object(raw),invocation=object(observation.invocation),receipt=object(observation.receipt),value=object(receipt.value);if(invocation.tool_name==='office_result_draft'&&receipt.status==='succeeded'&&typeof value.text==='string')savedText=value.text;}
+      this.record(project,{work_id:workId,run_id:String(row.run_id),source_kind:'client',work_revision:Number(row.work_revision),summary:safe(String(output.summary??`client · ${row.state}`),4000)||`client · ${row.state}`,text:safe(savedText||String(output.text??output.summary??'')),sources,artifacts});
     }
     if(table(this.store,'hermes_turn'))for(const turn of this.store.hermesState.prepare("SELECT id,reply FROM hermes_turn WHERE project_id=? AND work_id=? AND status='finished' AND reply<>'' ORDER BY created_at DESC LIMIT 10").all(project,workId))this.record(project,{work_id:workId,run_id:String(turn.id),source_kind:'hermes',work_revision:revision,summary:safe(String(turn.reply).split('\n')[0]??'Hermes reply',4000)||'Hermes reply',text:String(turn.reply)});
     if(table(this.store,'office_remote_work')){

@@ -104,14 +104,15 @@ test('provider adapters use bounded POSTs and require provider acknowledgements'
   const telegramConnector=createDeliveryConnector(telegram,transport);
   const ack=await telegramConnector.send({result,target_alias:'updates',idempotency_key:'unique'});
   assert.equal(ack.status,'delivered');assert.match(ack.receipt_id,/telegram:/u);
-  assert.equal(calls[0].options.redirect,'error');assert.match(calls[0].url,/sendDocument$/u);
-  assert.equal(calls[0].options.body.get('document').name,'result.txt');assert.match(await calls[0].options.body.get('document').text(),/A{1000}/u);
+  // A long result is sent as a message cut to the platform limit, with a note; the complete file stays in the app.
+  assert.equal(calls[0].options.redirect,'error');assert.match(calls[0].url,/sendMessage$/u);
+  const sent=JSON.parse(calls[0].options.body).text;assert.ok([...sent].length<=4096);assert.match(sent,/A{1000}/u);assert.match(sent,/앞부분만 표시\. 전체 파일은 앱에서/u);
   const discord=createDeliveryConnector({id:'server',platform:'discord',label:'Server',webhook_url:'https://discord.com/api/webhooks/12345678901234567890/ABCDEFGHIJKLMNOPQRSTUVWXYZabcdef'},async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify({id:'12345678901234567890'}),{status:200});});
   assert.equal((await discord.send({result,target_alias:'server',idempotency_key:'unique'})).status,'delivered');assert.match(calls[1].url,/\?wait=true$/u);
-  assert.deepEqual(JSON.parse(calls[1].options.body.get('payload_json')).allowed_mentions,{parse:[]});assert.equal(calls[1].options.body.get('files[0]').name,'result.txt');
+  const discordBody=JSON.parse(calls[1].options.body);assert.deepEqual(discordBody.allowed_mentions,{parse:[]});assert.ok([...discordBody.content].length<=1900);
   const slack=createDeliveryConnector({id:'slack',platform:'slack',label:'Slack',webhook_url:'https://hooks.slack.com/services/AAAA/BBBB/CCCC'},async(url,options)=>{calls.push({url,options});return new Response('ok',{status:200});});
   assert.equal((await slack.send({result,target_alias:'slack',idempotency_key:'unique'})).status,'delivered');
-  assert.equal(JSON.parse(calls[2].options.body).text.includes(result.text),true);
+  assert.match(JSON.parse(calls[2].options.body).text,/A{1000}/u);
   for(const [http,effect] of [[408,'uncertain'],[429,'not_dispatched']]){
     const rejected=createDeliveryConnector({id:'slack',platform:'slack',label:'Slack',webhook_url:'https://hooks.slack.com/services/AAAA/BBBB/CCCC'},async()=>new Response('rejected',{status:http}));
     assert.equal((await rejected.send({result,target_alias:'slack',idempotency_key:'unique'})).effect_state,effect);
@@ -126,6 +127,13 @@ test('B1: the notification level decides which outcomes are sent, and the messag
   assert.equal(notifies('results_and_owner','retry_wait',false),false,'A transient wait is not a reason to message the owner.');assert.equal(notifies('all','retry_wait',false),true);
   const result={id:'r-1',work_title:'지진 수집',source_status:'succeeded',work_completion_verified:true,summary:'14건을 저장했다.',text:'14건을 저장했다.',artifacts:[{id:'a'}]};
   assert.equal(deliveryContent(result),'지진 수집\n[완료] 검증을 통과했습니다.\n\n14건을 저장했다.\n\n원본 파일은 앱에서 내려받을 수 있습니다.\n\nWork result r-1');
+  // The message carries the result itself; a long one is cut at a line end and says so. The file stays in the app.
+  const rows=Array.from({length:400},(_,i)=>`2026-10-01T0${i%10}:00:00Z,4.${i%10},Place number ${i}`),long={...result,text:['시각,규모,위치',...rows].join('\n')};
+  const short=deliveryContent({...result,text:'시각,규모,위치\n2026-10-01T01:00:00Z,4.6,Offshore'});
+  assert.match(short,/— 결과 —\n시각,규모,위치\n2026-10-01T01:00:00Z,4\.6,Offshore\n\nWork result r-1$/u);assert.doesNotMatch(short,/표시\./u);
+  const cut=deliveryContent(long);assert.ok([...cut].length<=4000,'Within the Telegram message limit.');
+  assert.match(cut,/… \(전체 401줄 중 \d+줄 표시\. 전체 파일은 앱에서 내려받을 수 있습니다\.\)\n\nWork result r-1$/u);assert.ok(cut.includes('시각,규모,위치\n2026-10-01T00:00:00Z,4.0,Place number 0'));
+  assert.ok([...deliveryContent(long,1850)].length<=1850,'The same rule fits a smaller platform limit.');
   assert.match(deliveryContent({...result,source_status:'waiting_auth',work_completion_verified:false,artifacts:[]}),/^지진 수집\n\[확인 필요\] 로그인이 필요합니다\./u);
 });
 
