@@ -441,8 +441,19 @@ export class WorkSupervisor {
         }
         this.finish(row,swarm.status==='succeeded'&&!verified?'awaiting_review':swarm.status,swarm.status==='succeeded'&&!verified?'WORK_CLIENT_COMPLETION_REQUIRES_VERIFICATION':swarm.reason,{summary:swarm.summary,text:swarm.summary,completion_verified:verified,checks:spec.completion_checks,swarm_run_id:swarm.run_id});return;
       }
-      requireCondition(!checkpoint||!('kind' in checkpoint),'WORK_EXECUTOR_CHANGE_REQUIRES_REVIEW');
-      if(checkpoint&&(row.replan_required||row.resume_wait)){
+      // Plan B6: the Work moved from parallel workers to a single executor. Its verified receipts are the same
+      // Work's evidence and continue with it; nothing is replayed. An uncertain effect still needs reconciliation.
+      let inheritedFromSwarm=false;
+      if(checkpoint&&'kind' in checkpoint){
+        const earlier=checkpoint as SupervisedSwarmCheckpoint,workers=Object.values(earlier.workers);
+        requireCondition(!workers.some(worker=>worker.pending?.dispatched&&worker.pending.effect!=='read_only'||worker.observations.some(item=>item.receipt.effect_state==='uncertain'||item.receipt.status==='reconciliation_required')),'WORK_RECONCILIATION_REQUIRED');
+        const seen=new Set<string>(),inherited=[...earlier.completed_workers.flatMap(id=>earlier.workers[id]?.observations??[]),...earlier.final_observations]
+          .filter(item=>item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.invocation.tool_name!=='office_controlled_run_trace'&&!seen.has(item.invocation.request_id)&&Boolean(seen.add(item.invocation.request_id))).slice(-40);
+        checkpoint={format:1,work_id:row.work_id,run_id:row.run_id,binding:'',turn:inherited.reduce((turn,item)=>Math.max(turn,item.invocation.turn+1),0),pending:null,observations:inherited,summary:''} as WorkClientCheckpoint;
+        inheritedFromSwarm=true;
+        workActivity(this.store,project,row.work_id,'supervisor.executor_changed',`The Work continues with a single executor. ${inherited.length} verified receipt${inherited.length===1?'':'s'} of the earlier parallel run ${earlier.run_id} ${inherited.length===1?'is':'are'} kept as its evidence; nothing is run again.`,{run_id:row.run_id,stage_id:'execution',status:'running'});
+      }
+      if(checkpoint&&(row.replan_required||row.resume_wait||inheritedFromSwarm)){
         requireCondition(!checkpoint.pending?.dispatched||checkpoint.pending.effect==='read_only','WORK_RECONCILIATION_REQUIRED');
         const pending=checkpoint.pending;
         if(pending?.dispatched){

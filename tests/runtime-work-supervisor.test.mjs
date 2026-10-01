@@ -266,3 +266,23 @@ test('runtime fixture actual desktop/mobile UI has execute, true live tail, cont
   assert.deepEqual(errors,[]);await page.close();
  }
 });
+
+// Plan B6: a Work that moved from parallel workers to the single executor keeps its verified receipts and continues.
+test('B6: a run whose checkpoint came from parallel workers continues with the single executor, keeps verified receipts and replays nothing',async t=>{
+  const x=await setup(t),supervisor=new WorkSupervisor(x.store,x.config,x.model,{tick_ms:25,auto_start:false});x.cleanup.push(()=>supervisor.close());
+  const db=x.store.hermesState,project=x.config.project.id,work=x.store.intakeWork(project,x.work.work_id),runId=randomUUID(),at=new Date().toISOString();
+  const observation=(tool,effect,state)=>({invocation:{request_id:`swarm-${tool}`,turn:0,stage_id:'collect',tool_name:tool,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{rows:[{id:'one',title:'Observed source',value:23}]},evidence_ids:[`ev-${tool}`],effect_state:state,retry_safe:true},observed_at:at});
+  const worker=observations=>({format:1,work_id:work.id,run_id:'swarm-run',binding:'worker',turn:1,pending:null,observations,summary:''});
+  const swarm=overrides=>({format:1,kind:'swarm',run_id:'swarm-run',work_id:work.id,workers:{done:worker([observation('runtime_pack_run','read_only','none')]),unfinished:worker([observation('unverified_read','read_only','none')])},completed_workers:['done'],work_revision:work.revision,direction_binding:null,applied_directions:[],final_observations:[],stage_reports:[],stage_assessment_binding:null,peak_active_workers:null,...overrides});
+  db.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?)').run(runId,project,work.id,work.revision,'queued',JSON.stringify(swarm({})),x.config.fingerprint,0,at,at);
+  supervisor.activate();
+  // The fixture's earlier parallel run exists only as this checkpoint, so wait on the row rather than the swarm view.
+  for(let i=0;i<200&&!['succeeded','failed','awaiting_review'].includes(db.prepare('SELECT state FROM office_supervisor WHERE run_id=?').get(runId).state);i++)await delay(25);
+  const end=supervisorStatus(x.store,project,work.id);
+  assert.equal(end.state,'succeeded',JSON.stringify(end));assert.equal(end.result.completion_verified,true);
+  const activity=db.prepare("SELECT kind,summary FROM office_activity WHERE work_id=?").all(work.id);
+  assert.match(activity.find(item=>item.kind==='supervisor.executor_changed').summary,/1 verified receipt of the earlier parallel run swarm-run is kept/u);
+  assert.equal(activity.filter(item=>item.kind==='tool.started').length,0,'The verified source is not read again.');
+  const kept=JSON.parse(db.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(runId).checkpoint).observations.map(item=>item.invocation.request_id);
+  assert.ok(kept.includes('swarm-runtime_pack_run'));assert.ok(!kept.includes('swarm-unverified_read'),'A worker that was not verified contributes nothing.');
+});

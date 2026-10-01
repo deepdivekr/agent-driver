@@ -1040,7 +1040,14 @@ export class WorkExecutionTools {
     // Only this host's scoped durable-run comparison produces this observation.
     // Its state proves an execution phase, never the business outcome by itself.
     const recordCertificate=name==='runtime_pack_status'&&data&&hostRunObservation&&typeof data.run_id==='string'?await localRecordDraftCertificate(this.config,this.ownPack(data.run_id)):null;
-    let scopedValue=name==='runtime_pack_run'&&data?{...data,source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null,executed_contract:executedContract,host_run_observation:hostRunObservation}:name==='runtime_pack_status'&&data?{...data,executed_contract:executedContract,host_run_observation:hostRunObservation,native_output_certificate:outputCertificate,saved_source_readback:sourceReadback,...(recordCertificate?{local_record_draft_certificate:recordCertificate}:{})}:value;
+    // Where the rows came from, in the receipt itself: a check about the source or its period is then judged
+    // from this receipt (live: five extra reads after a code-verified collection, only to find the feed's address).
+    const publicSources=name==='runtime_pack_run'&&data?(Array.isArray(object(data.result)?.evidence)?object(data.result)!.evidence as unknown[]:[]).flatMap(item=>{
+      const evidence=object(item),source=this.config.packs?.sources.find(candidate=>candidate.id===evidence?.source_id);if(!source||source.kind!=='http')return [];
+      try{const url=new URL(source.url);if(url.username||url.password)return [];url.search='';url.hash='';return [{source_id:source.id,location:url.href,method:'GET',observed_at:evidence!.observed_at,rows_observed:evidence!.rows}];}catch{return [];}
+    }):[];
+    const sealedDone=name==='runtime_pack_run'&&status==='succeeded'&&Boolean(this.spec.collection_contract)&&data?.next_action==='inspect_result';
+    let scopedValue=name==='runtime_pack_run'&&data?{...data,...(sealedDone?{next_action:'propose_complete',next_action_reason:'The host compares every observed source row and the saved output with the sealed collection contract in code. Judge any remaining check from this receipt; read more only when a check needs something this receipt does not state.'}:{}),...(publicSources.length?{public_sources:publicSources}:{}),source_integrity:effectState==='verified'?this.trustedSourceIntegrity(data,requestId):null,executed_contract:executedContract,host_run_observation:hostRunObservation}:name==='runtime_pack_status'&&data?{...data,executed_contract:executedContract,host_run_observation:hostRunObservation,native_output_certificate:outputCertificate,saved_source_readback:sourceReadback,...(recordCertificate?{local_record_draft_certificate:recordCertificate}:{})}:value;
     if(name==='runtime_pack_status'&&sourceReadback?.scope==='saved_source_observations_before_filtering'&&Buffer.byteLength(JSON.stringify(scopedValue))>16000){
       // This optional inline source preview must not crowd out the immutable
       // result/contract/certificate. Originals remain available losslessly via
