@@ -38,8 +38,9 @@ for(const [name,args] of [['runtime_pack_status',{run_id:'foreign-pack'}],['offi
   assert.match(JSON.stringify(x.inputs[1].validation_error),/WORK_CLIENT_STAGE_ALREADY_COMPLETED/);
  });
 test('runtime contract completed-result rereads have a three-read budget per admitted executor turn',async()=>{
- const x=await resume(await saved(),Array.from({length:4},()=>tool('runtime_pack_status',{run_id:'owned-pack'})));
- assert.equal(x.dispatched.length,3);assert.equal(x.result.status,'awaiting_review');assert.equal(x.result.reason,'WORK_CLIENT_RESULT_READBACK_BUDGET');
+ const x=await resume(await saved(),[...Array.from({length:4},()=>tool('runtime_pack_status',{run_id:'owned-pack'})),{action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'Wait for configuration.',completed_checks:[],wait_reason:'configuration',completed_stages:[]}]);
+ assert.equal(x.dispatched.length,3);assert.equal(x.result.status,'paused');
+ assert.equal(x.result.checkpoint.observations.at(-1).receipt.value.error,'WORK_CLIENT_RESULT_READBACK_BUDGET','The fourth reread is refused without dispatch, and the model is told to propose completion.');
 });
 test('runtime contract a readback name cannot disguise an external-write capability',async()=>{
  const catalog=tools.map(item=>item.name==='runtime_pack_status'?{...item,effect:'external_write'}:item);

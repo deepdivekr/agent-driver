@@ -22,7 +22,78 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
 - 기존 계획서: 새 기준 안내와 R3 쓰기 재실행 금지 조항에 “대체됨” 표시.
 - 코드 변경 없음.
 
+### A1. 검증 거짓 거부 제거 — 완료
+- `supersededOutputEvidence`: 같은 실행에서 같은 제목·형식의 Office 결과 파일을 나중에
+  다시 저장하면 이전 파일과 그 readback에 `host_superseded_by`를 붙인다.
+  표시된 기록의 배치 `contradicts`/`unresolved_material`은 즉시 거부하지 않고 표시와 함께
+  최종 판단에 넘긴다. 최종 판단은 그 기록을 인용할 수 없다
+  (`WORK_COMPLETION_SUPERSEDED_EVIDENCE_CITED`, 출력 교정 1회).
+- 현재 기록의 모순은 계속 배치 단계에서 막는다. 모든 모순을 최종 모델에 맡기면
+  현재 산출물의 실제 위반(누락 행·중복 키·잘못된 상태)을 모델이 놓칠 수 있어,
+  완화 범위를 호스트가 코드로 증명하는 대체된 산출물로 한정했다.
+- 생성된 검사에는 대체된 산출물을 넓혀 붙이지 않는다(실행기가 직접 인용하면 유지).
+- 한 receipt의 셀 단위 인용 목록이 40KB 단일 기록 한도를 넘을 때만 표를
+  `<ref_prefix>.<row>.<col>` 색인으로 바꾼다. 표가 아닌 receipt는 계속 모델 호출 전에 거부한다.
+- 검증 모델 호출 수를 `supervisor.verification.calls` 활동으로 기록한다.
+
+### A2. 거부 뒤 수정 루프 — 완료(Swarm 제외)
+- 거부 이유는 감사(audit) 기록이 아닌 별도 `denial` 콜백으로 수정 단계에 전달한다.
+  감사 기록에는 기존처럼 이유의 해시만 남는다(개인정보 보호 테스트 유지).
+- 수정 기회는 `WORK_COMPLETION_REPAIR_BUDGET=3`. 새 증거가 없으면 Work 실행당 한 번
+  같은 receipt를 새로 재검증한다. 그다음은 `WORK_CLIENT_COMPLETION_REPAIR_NO_NEW_EVIDENCE`.
+- 검증기 출력이 교정 후에도 쓸 수 없으면(인용·스키마 오류)
+  `WORK_COMPLETION_VERIFIER_OUTPUT_UNUSABLE`로 저장된 주장에서 검증만 최대 2회 재시도한다.
+  소진되면 `WORK_CLIENT_VERIFICATION_OUTPUT_UNUSABLE`로 보류한다. 도구는 다시 실행하지 않는다.
+- 봉인된 수집 계약 불일치(`WORK_COLLECTION_CONTRACT_NOT_VERIFIED`)도 수정 대상이다.
+- 수정 중 외부 쓰기·같은 쓰기 재실행·도구 예산 초과는 Work를 끝내지 않고
+  발송되지 않은 관측으로 기록해 모델이 다시 고르게 한다. Office 결과 파일
+  (`office_result_draft`)은 새 요청 ID로 다시 쓸 수 있다.
+- 남은 일: Swarm 결과 경로(`supervisor.ts`의 Swarm 검증)는 아직 수정 루프가 없다.
+
+### A3. 실행기가 완료 전에 끝내는 지점 제거 — 완료
+- 완료 제안의 검사 누락·요청 ID 인용·없는 ID는 기존 receipt로 정규화한다.
+  receipt가 하나도 없으면 발송되지 않은 관측으로 거부하고 계속한다.
+- 결정 출력 교정은 실행당 3회. 교정 실패는 다음 결정으로 넘어가고, 소진되면
+  `WORK_CLIENT_DECISION_OUTPUT_UNUSABLE`(재시도 대상)이다.
+- 같은 잘못된 입력을 두 번 내면 그 도구를 이번 실행에서 제외한다.
+- 효과가 없는 `failed` receipt는 다음 결정에 넘기고, 효과가 있었던 실패만 종료한다.
+- 저장 결과 재확인 3회 초과는 발송되지 않은 관측으로 거부한다.
+- 발송되지 않은 관측(거부·재사용 기록)은 별도 요청 ID를 쓴다. 같은 ID를 쓰면
+  실행 trace의 중복 검사(`WORK_TRACE_DISPATCH_AMBIGUOUS`)에 걸린다.
+- receipt 재사용은 turn만 올리지 않고 `WORK_CLIENT_TOOL_RECEIPT_REUSED` 기록을 남긴다.
+- 32개 관측 창을 넘는 기록은 `evicted_observations` 원장으로 요약해 trace가 계속
+  닫히고 수치도 맞게 한다. 원장 이후의 입장 이후 수치(since admission)는 unknown이 된다.
+
+### A4. 진행 중인 Work가 멈추지 않게 — 완료
+- 새 성공 receipt나 단계 보고가 생긴 실행은 시도 횟수를 0으로 되돌리고 2초 뒤 재시도한다.
+  진행 없는 실행만 3회 후 `failed`. turn 120 이상은 진행으로 보지 않는다.
+- 모델 일시 불가(쿼터·속도 제한·제공자 장애·검증 전송 실패)는 `retry_wait`로
+  1분부터 최대 30분까지 지수 백오프로 자동 재개한다. 로그인 만료·미지원 모델은 그대로 사용자 대기.
+- 발견한 데드엔드: 실행의 `config_hash`는 생성 시 고정되고 갱신되지 않아, 호스트 설정이
+  한 번 바뀌면 그 실행은 재개해도 영원히 `CONFIG_CHANGED`였다. 이제 현재 설정으로
+  다시 로드된 supervisor가 실행을 현재 설정·AI 설정으로 다시 묶고(재개와 같은 checkpoint
+  재결속) 이어 간다(`supervisor.rebound`). 이전 설정을 가진 supervisor는 실행을 잡지 않고
+  `CONFIG_RELOAD_REQUIRED`로 남긴다. 효과가 불확실한 실행은 다시 묶지 않는다.
+  커스텀 Pack 회차는 기존 결속을 유지한다(Part B 범위).
+
+### 테스트 환경 메모
+- 이 컨테이너의 Playwright 1.63은 Chromium 1243을 기대하지만 설치본은 1194다.
+  테스트 실행 때만 스크래치 경로에 1194를 1243 이름으로 연결한 shim을 쓴다(커밋하지 않음).
+- `runtime-work-stage-history-ui`는 기준 main에서도 1회 통과·1회 실패하는 시간 의존 테스트다.
+- 실제 구독 모델 호출은 이 컨테이너에서 하지 않았다. 모든 결과는 fixture 기준이다.
+
+### A1–A4 검증 (fixture 기준)
+- TypeScript build PASS.
+- Work 관련 테스트 전체(`runtime-work-*`, custom Pack, supervised Swarm, live control,
+  pasted Work, draft-only, control-service reload): 723 PASS / 0 FAIL (browser shim 사용).
+- 새 회귀 테스트: `runtime-work-completion-superseded`(A1), `runtime-work-completion-repair`
+  확장(A2), `runtime-work-completion-path`(A3), `runtime-work-supervisor-continuity`(A4).
+- 기존 테스트 중 "즉시 failed/awaiting_review"를 고정하던 것은 같은 안전 조건(발송 없음,
+  재실행 없음, 제한된 반복)을 유지한 채 새 동작(거부 기록 후 계속, 제한 후 재시도)으로 갱신했다.
+- ledger 196 RQ, public boundary PASS, diff check PASS.
+- frozen quick suite는 A7에서 최종 소스로 실행한다.
+
 ## 다음 행동
 
-A1(검증 거짓 거부 제거)부터 진행한다. 각 단위는 실패 재현 테스트를 먼저 추가하고,
-빌드와 관련 테스트를 통과한 뒤 커밋·푸시하며 이 기록을 갱신한다.
+A5(위험도 비례 검증), A6(지시문 축소), A7(frozen quick suite와 진행 기록)을 진행한다.
+Swarm 결과 경로의 수정 루프(A2 잔여)는 A5 이후 다시 판단한다.

@@ -9,7 +9,7 @@ import {type SwarmPlan,type SwarmRunSnapshot,type SwarmWorkerReport,swarmWorkerR
 import {RoutedSwarmBrowser} from '../swarm/routed-browser.js';
 import {requireCondition} from '../core/contracts.js';
 import {safeControlText} from '../observability/safe-text.js';
-import {boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientInvocation,type WorkClientProgress,type WorkClientRequest,type WorkClientToolReceipt} from './client-executor.js';
+import {appendWorkObservation,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientInvocation,type WorkClientProgress,type WorkClientRequest,type WorkClientToolReceipt} from './client-executor.js';
 import {type WorkPlan} from './plan.js';
 import {acceptStageClaims,businessSteps,currentStageReports,stageBinding,stageClaimSchema,stageReportSchema} from './stages.js';
 
@@ -258,7 +258,7 @@ export async function executeSupervisedSwarm(api:RuntimeApi,model:StructuredMode
         await readSources();requireCondition(observed.size>0&&[...observed.keys()].every(url=>readbacks.has(url)),'UNOBSERVED_EVIDENCE_SPAN');
         receipt={status:'succeeded',value:boundWorkToolValue({sources:[...observed.values()].map(source=>({...source,text:source.text.slice(0,8000)}))}),evidence_ids:[`sources-${workerId}`],effect_state:'none',retry_safe:true};
       }
-      workerCheckpoint={...workerCheckpoint,pending:null,turn:invocation.turn+1,observations:[...workerCheckpoint.observations,{invocation,receipt,observed_at:new Date().toISOString()}].slice(-32),summary:`Independently observed ${derived?'predecessor evidence':'delegated sources'}.`};
+      workerCheckpoint={...appendWorkObservation(workerCheckpoint,{invocation,receipt,observed_at:new Date().toISOString()}),pending:null,turn:invocation.turn+1,summary:`Independently observed ${derived?'predecessor evidence':'delegated sources'}.`};
       // Completed effects survive a pause/revision arriving during the awaited read.
       await saveWorker();await progress({kind:'tool.result',worker_id:workerId,turn:invocation.turn,stage_id:workStageId,...(workStageBinding?{stage_binding:workStageBinding}:{}),tool_name:tool.name,summary:`${tool.name}: succeeded`});await guard();
       const derivedEvidence=derived?predecessorEvidence():null,upstream=derivedEvidence?.predecessors??[],availableCards=upstream.flatMap(item=>item.report.fact_cards);

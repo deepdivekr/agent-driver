@@ -354,7 +354,8 @@ for(const boundary of ['foreign_work','other_run','arbitrary_request','changed_r
 test('runtime fixture repeated failed quality read cannot dispatch or create an unbounded retry loop',async t=>{
  const x=await qualityReadFixture(t);let modelCalls=0,effects=0;
  const result=await new BoundedWorkClientExecutor({calls:[],async call(){modelCalls++;return {action:'tool',stage_id:'read-old',tool_name:'office_result_read',arguments_json:JSON.stringify({request_id:x.canonical}),summary:'Try the same rejected quality read.',completed_checks:[],wait_reason:null};}}).execute({work_id:x.work.id,run_id:x.toolkit.runId,prompt:x.work.prompt,completion_checks:x.spec.completion_checks,checkpoint:x.checkpoint,max_turns:4},{tools:x.toolkit.catalog(),checkpoint:x.save,validateTool:async(name,args,context)=>{await x.toolkit.validate(name,args,context.request_id);},executeTool:async()=>{effects++;throw Error('Rejected input must not dispatch.');}});
- assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_REPEATED_INVALID_TOOL_INPUT');assert.equal(modelCalls,2);assert.equal(effects,0);assert.equal(result.checkpoint.pending,null);assert.equal(x.calls.length,1);assert.equal(await readFile(x.source,'utf8'),x.original);
+ assert.equal(result.status,'retryable_failure');assert.equal(result.reason,'WORK_CLIENT_TURN_BUDGET_REACHED');assert.equal(modelCalls,4,'Bounded by the run attempt turn budget.');assert.equal(effects,0);
+ assert.ok(result.checkpoint.observations.every(item=>!item.invocation.dispatched||item.invocation.request_id===x.canonical),'No rejected read was dispatched.');assert.equal(result.checkpoint.pending,null);assert.equal(x.calls.length,1);assert.equal(await readFile(x.source,'utf8'),x.original);
 });
 
 test('runtime native registered file Pack receipts contain actual before/after hashes without exposing original contents and retain them after resume',async t=>{

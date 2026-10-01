@@ -187,8 +187,11 @@ test('normal repeated Pack calls reuse the canonical completed invocation withou
   await x.api.call('runtime_work_execute',{work_id:repeat.work_id,revision:repeat.revision,cost_acknowledged:true});
   const end=await terminal(x,repeat.work_id);assert.equal(end.state,'succeeded',JSON.stringify(end));assert.equal(end.result.completion_verified,true);
   assert.ok(x.model.repeatedWorkIds.has(repeat.work_id),'The fixture really requested the same Pack call twice.');
-  const row=x.api.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id),checkpoint=JSON.parse(row.checkpoint),observations=checkpoint.observations.filter(item=>item.invocation.tool_name==='runtime_pack_run');
+  const row=x.api.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id),checkpoint=JSON.parse(row.checkpoint),observations=checkpoint.observations.filter(item=>item.invocation.tool_name==='runtime_pack_run'&&item.invocation.dispatched);
   assert.equal(observations.length,1,'The canonical completed receipt is retained once, rather than contradicted by a deduplicated second response.');
+  const notes=checkpoint.observations.filter(item=>item.invocation.tool_name==='runtime_pack_run'&&!item.invocation.dispatched);
+  assert.ok(notes.length>=1&&notes.every(item=>item.receipt.value.error==='WORK_CLIENT_TOOL_RECEIPT_REUSED'&&item.receipt.evidence_ids.length===0&&item.invocation.request_id!==repeat.request_id),'The reuse is a not-dispatched note with its own identity and no evidence.');
+  assert.equal(checkpoint.turn,checkpoint.observations.length,'One observation per turn keeps the execution trace closable.');
   assert.equal(observations[0].invocation.request_id,repeat.request_id);assert.equal(observations[0].receipt.status,'succeeded');assert.equal(observations[0].receipt.effect_state,'verified');
   assert.equal(x.api.store.officeRuns(x.config.project.id,repeat.work_id).length,1);
   const starts=x.api.store.hermesState.prepare("SELECT metadata FROM office_activity WHERE project_id=? AND work_id=? AND kind='tool.started'").all(x.config.project.id,repeat.work_id).filter(item=>JSON.parse(item.metadata).tool_name==='runtime_pack_run');
