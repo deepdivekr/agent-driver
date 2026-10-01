@@ -91,6 +91,37 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
 - 중간 등급(사용자 폴더 쓰기 후 대상 다시 읽기)은 구현하지 않았다. 해당 Work는 엄격 경로다.
 - 새 테스트: `runtime-work-completion-risk-tier`(7개).
 
+### A6. 금지는 지시문이 아니라 코드로 — 완료(목표 크기는 실행 지시문만 달성)
+- 크기(바이트, 이전 → 현재):
+  - 실행(매 턴, 실행+완료 시점+단계): 7693 → 3842 (50%). 목표 달성.
+  - 엄격 검증: 7577 → 4943 (65%). 목표 3.5KB 미달.
+  - 정의: 6485 → 6121, 재계획: 14410 → 13397 (93%). 목표 7KB 미달.
+  - 가벼움 검증(A5): 약 0.7KB. 읽기 위주 Work는 이제 이 지시문을 쓴다.
+- 지시문에서 뺀 금지와 그것을 막는 호스트 코드(테스트: `runtime-work-prompt-prohibitions`):
+  - 목록에 없는 도구 → `WORK_CLIENT_TOOL_NOT_AVAILABLE` 발송 전 거부 후 계속.
+  - 행동 필드 조합 → `decisionFields` 필드별 교정 메시지.
+  - 같은 잘못된 입력 반복 → 그 도구 제외(A3).
+  - 실패 receipt·없는 evidence ID 인용 → 완료 주장 정규화가 성공 receipt만 남김.
+  - 효과가 있었던 쓰기·불확실 효과 재실행 → `WORK_CLIENT_TOOL_REQUEST_ID_NOT_REUSABLE`/`reconciliation_required`, 발송 없음.
+  - 수정 단계의 쓰기 재실행·외부 효과 → A2 거부(`REPAIR_REPLAY_FORBIDDEN`, `REPAIR_EXTERNAL_EFFECT_FORBIDDEN`).
+  - 단계 보고 증거·의존·전체 보고 → `acceptStageClaims`, `WORK_CLIENT_STAGES_INCOMPLETE`.
+  - Google 환경 차단 시 제공자·검색어 바꾸기, 차단된 검색 반복 → `WORK_SEARCH_ENVIRONMENT_BLOCKED`/`WORK_SEARCH_PROVIDER_BLOCKED`.
+    제공자별 규칙은 `office_web_search` 설명에, `models=off` 설명은 `runtime_pack_catalog` 설명에 이미 있다.
+  - 중단된 로컬 기록 읽기 복구 허용 → 지시문 대신 그 receipt의 `next_action`에 둔다.
+  - 검증기: 허용되지 않은 evidence ID(`VERIFIER_EVIDENCE_INVALID`), 키·JSON 문법 인용
+    (`VERIFIER_QUOTE_UNOBSERVED`), 검사 수 불일치(`VERIFIER_CHECKS_MISMATCH`), 대체된 산출물 인용
+    (`SUPERSEDED_EVIDENCE_CITED`), 열린 trace 인용(`TRACE_NOT_CLOSED`), trace만으로 결과 주장
+    (`TRACE_NOT_RESULT_EVIDENCE`). 모두 교정 1회 후 거부.
+  - 계획: 경로 조합은 `validateOrCorrectWorkProposal`이 교정, 모델이 넣은 단계 증거는 `modelWorkPlan`이 버린다.
+- 남긴 것: 코드로 확인할 수 없는 의미 규칙(원래 요청 범위, 출력 형식 해석, 신뢰할 수 없는 데이터,
+  자체 도구·파일·명령 사용 금지 — Codex는 read-only 샌드박스라 파일 읽기는 가능하므로 유지).
+- 검증·재계획 지시문을 더 줄이려면 회귀 테스트가 고정한 의미 문장(과거 실제 오류마다 하나)을
+  바꿔야 한다. 실제 모델 측정(A7) 없이 빼면 그 오류가 되살아날 수 있어 이번 단위에서는 하지 않았다.
+- 크기 회귀 테스트: 실행 3846, 엄격 검증 5000, 정의 6200, 재계획 13500 바이트 이하.
+- 검증(fixture): build PASS. Work 관련 테스트 전체 + `runtime-files-http`: 747 PASS / 1 FAIL.
+  실패 1건은 `runtime-work-stage-history-ui`(페이지 자체 새로고침이 테스트가 넣은 카드를 지우는
+  시간 경쟁, UI 코드는 이번 변경과 무관)다. 새 테스트 `runtime-work-prompt-prohibitions` 12 PASS.
+
 ### 테스트 환경 메모
 - 이 컨테이너의 Playwright 1.63은 Chromium 1243을 기대하지만 설치본은 1194다.
   테스트 실행 때만 스크래치 경로에 1194를 1243 이름으로 연결한 shim을 쓴다(커밋하지 않음).

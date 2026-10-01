@@ -68,7 +68,7 @@ test('replanned same-ID stage exposes only exact current-binding evidence while 
   assert.deepEqual(context.stages[0].eligible_evidence_ids,[]);assert.equal(context.stages[0].stale_same_id_receipt_count,1);
   assert.equal(context.stages[1].state,'blocked');assert.deepEqual(context.allowed_action_stage_ids,['collect']);
   assert.match(context.warning,/same-ID receipt with a different current stage binding cannot support/u);
-  assert.match(next.model.calls[0].instructions,/CURRENT exact stage binding/u);
+  assert.match(next.model.calls[0].instructions,/successful receipts under the current stage binding/u);
 });
 
 test('a completed stage cannot be dispatched again after its execution claim',async()=>{

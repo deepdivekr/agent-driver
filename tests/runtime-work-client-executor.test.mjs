@@ -25,7 +25,7 @@ const selection={mode:'subscription',client:'codex',client_models:{codex:'saved-
 async function fixture(t){const root=await mkdtemp(join(tmpdir(),'office-client-'));t.after(()=>rm(root,{recursive:true,force:true}));return join(root,'models.json');}
 
 test('bounded client decisions execute real host callbacks and need observed evidence plus host verification',async()=>{
-  const provider=model([choose(),done()]),originalCall=provider.call.bind(provider);provider.call=async(...args)=>{assert.match(args[1],/action=complete proposes independent host verification/u);assert.match(args[1],/Actual requested result receipts and readback must exist/u);return originalCall(...args);};
+  const provider=model([choose(),done()]),originalCall=provider.call.bind(provider);provider.call=async(...args)=>{assert.match(args[1],/Propose complete once the requested result receipts and readbacks exist/u);assert.match(args[1],/The host then verifies independently and sets completion itself/u);return originalCall(...args);};
   const host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
   assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);assert.equal(host.executions.length,1);
   assert.deepEqual(provider.inputs[0].completion_gate,{phase:'pre_verification',complete_action:'proposal_for_independent_host_verification',final_flag:'set_by_host_after_verification',closed_trace:'generated_by_host_at_complete_cutpoint',evidence_role:'control_metadata_not_result_evidence',business_receipts:'required_before_complete_proposal'});
@@ -134,7 +134,7 @@ for(const code of ['PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE','PACK_LOCAL_RECORD_RE
   assert.equal(result.status,'retryable_failure');assert.equal(result.reason,code);
   assert.equal(result.checkpoint.pending,null);assert.equal(result.checkpoint.observations.length,1);
   const observed=result.checkpoint.observations[0];assert.equal(observed.invocation.dispatched,true);assert.equal(observed.receipt.value.status,'read_failed');assert.equal(observed.receipt.value.error,code);assert.equal(observed.receipt.value.result_observation,'error_returned');assert.equal(observed.receipt.effect_state,'none');assert.deepEqual(observed.receipt.evidence_ids,[]);
-  assert.equal(host.saved.at(-1).pending,null);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/historical runtime_pack_local_record_inspect read_interrupted.*newly validated read-only inspect/u);
+  assert.equal(host.saved.at(-1).pending,null);
 });
 test('a saved read retry is preflighted without falsifying its prior dispatched history, then corrected with fresh evidence',async()=>{
   const initial=await interruptedRead(),provider=model([choose('browser_read',{url:'https://example.test/verified'}),done()]),host=hooks({validateTool(_name,args){if(args.url==='https://example.test/news')throw new WorkClientToolInputError('WORK_RESULT_QUALITY_NOT_VERIFIED','Correct the known failed source check before trying to read that output.');}});
@@ -315,7 +315,7 @@ test('an explicit resumed read may use identical arguments after the host capabi
   let validations=0;const fixed=hooks({validateTool(){validations++;}}),provider=model([choose(),done()]);
   const resumed=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:first.checkpoint,resume_wait:true,context:{user_directions:[{instruction:'The registered browser connection was corrected. Retry the same read-only source.'}]}},fixed);
   assert.equal(resumed.status,'succeeded');assert.equal(validations,1);assert.equal(fixed.executions.length,1);assert.deepEqual(fixed.executions[0].args,first.checkpoint.observations[0].invocation.arguments);assert.deepEqual(resumed.checkpoint.observations[0],first.checkpoint.observations[0]);assert.equal(resumed.checkpoint.observations[1].receipt.status,'succeeded');assert.equal(resumed.checkpoint.observations[1].invocation.dispatched,true);
-  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/Do not repeat unchanged invalid input under unchanged constraints/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/one newly validated read-only attempt/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/does not bypass a permission\/login\/challenge denial/u);assert.doesNotMatch(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/never repeat the exact rejected input/u);
+  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/one newly validated read-only attempt/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/host validation still decides/u);assert.doesNotMatch(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/never repeat the exact rejected input/u);
 });
 
 test('malformed tool JSON and unavailable capabilities can be corrected before any host invocation',async()=>{
