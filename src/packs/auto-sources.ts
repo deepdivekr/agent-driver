@@ -2,7 +2,7 @@ import {existsSync,readFileSync,renameSync,writeFileSync} from 'node:fs';
 import {dirname,join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {z} from 'zod';
-import {iterateParsedRows} from './data.js';
+import {featureRows,iterateParsedRows} from './data.js';
 import {field,packPolicySchema,sourceSchema,type Row,type Source} from './contracts.js';
 import {type HostConfig} from '../interface/config.js';
 
@@ -12,7 +12,7 @@ import {type HostConfig} from '../interface/config.js';
  * URL the host already read, without parameters or credentials. It is not part of the run fingerprint. */
 const entrySchema=z.object({source:sourceSchema,columns:z.array(field).max(100),observed_at:z.string().datetime()}).strict();
 export type AutoSourceEntry=z.infer<typeof entrySchema>;
-export interface DetectedTable {format:'csv'|'json';columns:string[];numeric_columns:string[];json_fields?:string[];rows:number;}
+export interface DetectedTable {format:'csv'|'json';columns:string[];numeric_columns:string[];json_fields?:string[];json_rows?:'features';rows:number;}
 const MAX_AUTO_SOURCES=40,file='auto-sources.json';
 const privateHost=(value:string)=>/^(?:localhost$|.*\.localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.|\[)|\.(?:local|lan|internal)$/iu.test(value);
 const sensitive=/(?:password|token|secret|api.?key|auth|session|cookie|signature)/iu;
@@ -49,8 +49,24 @@ export function applyAutoSources(config:HostConfig):void{
 /** A complete response body that is a table the Pack reader accepts, or null. */
 export async function detectTable(bytes:Uint8Array,contentType:string,url:string):Promise<DetectedTable|null>{
   const type=contentType.split(';',1)[0]!.trim().toLowerCase(),path=(()=>{try{return new URL(url).pathname.toLowerCase();}catch{return '';}})();
-  const format=type==='text/csv'||type==='application/csv'||path.endsWith('.csv')?'csv':type==='application/json'||path.endsWith('.json')?'json':null;
+  const format=type==='text/csv'||type==='application/csv'||path.endsWith('.csv')?'csv':['application/json','application/geo+json'].includes(type)||path.endsWith('.json')||path.endsWith('.geojson')?'json':null;
   if(!format||bytes.length===0)return null;
+  const scalar=(value:unknown)=>value===null||['string','number','boolean'].includes(typeof value);
+  const numericOf=(rows:readonly Row[],columns:readonly string[])=>columns.filter(name=>rows.every(row=>{const value=row[name];return typeof value==='number'&&Number.isFinite(value)||typeof value==='string'&&/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value);}));
+  if(format==='json'){
+    // A GeoJSON feed (live: the standing USGS feed the model reads is one): rows are the features' properties.
+    try{
+      const document:unknown=JSON.parse(Buffer.from(bytes).toString('utf8')),features=(document as {type?:unknown;features?:unknown})?.type==='FeatureCollection'?(document as {features?:unknown}).features:null;
+      if(Array.isArray(features)){
+        const properties=features.map(feature=>(feature as {properties?:unknown}|null)?.properties);
+        if(!properties.length||properties.some(item=>item===null||typeof item!=='object'||Array.isArray(item)))return null;
+        const fields=Object.keys(properties[0] as object).filter(name=>field.safeParse(name).success&&!sensitive.test(name)&&properties.every(item=>Object.hasOwn(item as object,name)&&scalar((item as Record<string,unknown>)[name]))).slice(0,100);
+        if(fields.length<2)return null;
+        const rows=featureRows(document,fields);
+        return {format,columns:fields,numeric_columns:numericOf(rows,fields),json_fields:fields,json_rows:'features',rows:rows.length};
+      }
+    }catch{return null;}
+  }
   const read=async(jsonFields?:string[])=>{
     const rows:Row[]=[];let header:readonly string[]|null=null;
     async function* chunks(){yield bytes;}
@@ -63,29 +79,37 @@ export async function detectTable(bytes:Uint8Array,contentType:string,url:string
       // Rows with nested values: keep the scalar fields every sampled row has.
       const raw:unknown=JSON.parse(Buffer.from(bytes).toString('utf8'));if(!Array.isArray(raw)||!raw.length)return null;
       const sample=raw.slice(0,200);if(sample.some(row=>row===null||typeof row!=='object'||Array.isArray(row)))return null;
-      jsonFields=Object.keys(sample[0] as object).filter(name=>field.safeParse(name).success&&sample.every(row=>{const value=(row as Record<string,unknown>)[name];return value===null||['string','number','boolean'].includes(typeof value);})).slice(0,100);
+      jsonFields=Object.keys(sample[0] as object).filter(name=>field.safeParse(name).success&&sample.every(row=>scalar((row as Record<string,unknown>)[name]))).slice(0,100);
       if(jsonFields.length<2)return null;result=await read(jsonFields).catch(()=>null);
     }
     if(!result||!result.rows.length)return null;
     const columns=(result.header?[...result.header]:Object.keys(result.rows[0]!)).filter(name=>field.safeParse(name).success&&!sensitive.test(name)).slice(0,100);
     if(columns.length<2)return null;
     // The Pack reader rejects a declared numeric column with any non-numeric value, so every row must qualify.
-    const numeric=columns.filter(name=>result!.rows.every(row=>{const value=row[name];return typeof value==='number'&&Number.isFinite(value)||typeof value==='string'&&/^-?(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(value);}));
+    const numeric=numericOf(result.rows,columns);
     return {format,columns,numeric_columns:numeric,...(jsonFields?{json_fields:jsonFields}:{}),rows:result.rows.length};
   }catch{return null;}
 }
 /** Remembers one observed public table. Returns its source id, or null when it is not eligible or the list is full. */
 export function registerAutoSource(config:HostConfig,url:string,table:DetectedTable):{id:string;created:boolean}|null{
-  const fixture=config.environment==='fixture',target=publicUrl(url,fixture);if(!target)return null;
+  // A URL with a query is one question asked at one moment (live: a fixed start/end time), not a standing table.
+  const fixture=config.environment==='fixture',target=publicUrl(url,fixture);if(!target||target.search)return null;
   const existing=config.packs?.sources.find(item=>item.kind!=='file'&&item.url===target.href);
   if(existing)return {id:existing.id,created:false};
   const directory=dataDir(config),entries=readAutoSources(directory,fixture);if(entries.length>=MAX_AUTO_SOURCES||(config.packs?.sources.length??0)>=64)return null;
   const name=`${target.hostname.replace(/^www\./u,'')}${target.pathname}`.toLowerCase().replace(/\.(?:csv|json)$/u,'').replace(/[^a-z0-9]+/gu,'_').replace(/^_+|_+$/gu,'').slice(0,48)||'source';
   const id=`auto_${name}_${createHash('sha256').update(target.href).digest('hex').slice(0,6)}`;
-  const parsed=sourceSchema.safeParse({id,kind:'http',url:target.href,parameters:[],format:table.format,...(table.numeric_columns.length?{numeric_columns:table.numeric_columns}:{}),...(table.json_fields?{json_fields:table.json_fields}:{})});
+  const parsed=sourceSchema.safeParse({id,kind:'http',url:target.href,parameters:[],format:table.format,...(table.numeric_columns.length?{numeric_columns:table.numeric_columns}:{}),...(table.json_fields?{json_fields:table.json_fields}:{}),...(table.json_rows?{json_rows:table.json_rows}:{})});
   if(!parsed.success)return null;
   const path=join(directory,file),next=[...entries.filter(entry=>entry.source.id!==id),{source:parsed.data,columns:table.columns,observed_at:new Date().toISOString()}];
   writeFileSync(`${path}.tmp`,JSON.stringify(next,null,1),{mode:0o600});renameSync(`${path}.tmp`,path);
   applyAutoSources(config);
   return {id,created:true};
+}
+/** The owner forgets one remembered source. Sources from the owner's own configuration are never touched. */
+export function forgetAutoSource(config:HostConfig,id:string):boolean{
+  const directory=dataDir(config),entries=readAutoSources(directory,config.environment==='fixture');if(!entries.some(entry=>entry.source.id===id))return false;
+  const path=join(directory,file);writeFileSync(`${path}.tmp`,JSON.stringify(entries.filter(entry=>entry.source.id!==id),null,1),{mode:0o600});renameSync(`${path}.tmp`,path);
+  if(config.autoSources?.[id]&&config.packs){const index=config.packs.sources.findIndex(source=>source.id===id);if(index>=0)config.packs.sources.splice(index,1);delete config.autoSources[id];}
+  return true;
 }

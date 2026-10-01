@@ -97,8 +97,13 @@ test('B2: a verified procedure is saved, offered to a similar request, and dropp
   assert.equal(similarProcedure(store,'p','USGS 공개 피드에서 지난 24시간 지진을 CSV 저장해줘'),null,'An unrelated request gets nothing.');
   assert.equal(similarProcedure(store,'other-project',request),null,'Procedures stay inside their project.');
   assert.equal(recordVerifiedProcedure(store,'p','work-2',request,run).successes,3,'The same request verified again raises its score.');
-  recordProcedureFailure(store,'p',saved.id);recordProcedureFailure(store,'p',saved.id);assert.ok(similarProcedure(store,'p',request),'Three verified runs against two failures: still offered.');
-  recordProcedureFailure(store,'p',saved.id);assert.equal(similarProcedure(store,'p',request),null,'A procedure that fails as often as it succeeds is no longer offered.');
+  // Life cycle: candidate -> regular at the second verified run; two failures in a row demote; a verified run restores; only the owner switches off.
+  const {listProcedures,setProcedureDisabled}=await import('../dist/work/procedures.js'),state=()=>listProcedures(store,'p')[0].grade;
+  assert.equal(state(),'regular');recordProcedureFailure(store,'p',saved.id);assert.ok(similarProcedure(store,'p',request),'One failure does not demote.');
+  recordProcedureFailure(store,'p',saved.id);assert.equal(state(),'demoted');assert.equal(similarProcedure(store,'p',request),null,'Two failures in a row: no longer offered.');
+  recordVerifiedProcedure(store,'p','work-3',request,run);assert.equal(state(),'regular','A verified run restores it.');assert.ok(similarProcedure(store,'p',request));
+  assert.equal(setProcedureDisabled(store,'p',saved.id,true),true);assert.equal(state(),'off');assert.equal(similarProcedure(store,'p',request),null,'Switched off by the owner.');
+  assert.equal(setProcedureDisabled(store,'p',saved.id,false),true);assert.ok(similarProcedure(store,'p',request));assert.equal(setProcedureDisabled(store,'p','0'.repeat(32),true),false);
 });
 
 // B1: `awaiting_review` is not a place to leave the owner when the run only read. Live, a fresh attempt of a
@@ -182,4 +187,31 @@ test('B1: a due scheduled run waits at the daily limit with one note, and starts
   db.prepare('UPDATE office_work_schedule SET next_run_ms=?,last_slot=NULL WHERE work_id=?').run(Date.now()-72*3600_000,started.work_id);
   db.prepare('UPDATE office_work_schedule SET anchor_ms=? WHERE work_id=?').run(Date.now()-96*3600_000,started.work_id);
   await new Promise(resolve=>setTimeout(resolve,500));assert.equal(runs().length,2,'A caught-up past slot started today is counted against today.');
+});
+
+// Plan B3: the planner chooses among verified procedures the host lists; the host accepts only a listed id.
+test('B3: the planner sees verified procedure candidates and its selection is kept only when the host listed it',async t=>{
+  const {PackStore}=await import('../dist/packs/store.js'),{WorkRuntime}=await import('../dist/work/runtime.js'),{recordVerifiedProcedure,selectedProcedure,procedureCandidates}=await import('../dist/work/procedures.js');
+  const root=await mkdtemp(join(tmpdir(),'work-select-')),host=join(root,'host.json');t.after(()=>rm(root,{recursive:true,force:true}));
+  await writeFile(host,JSON.stringify({schema_version:1,project_id:'select',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',work:{model_data_approved:true,autonomy:'delegated'}}));
+  const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);t.after(()=>store.close());
+  const base={title:'버전 확인',desired_outcome:'두 버전을 JSON으로 남긴다',completion_checks:[{id:'versions',result:'두 버전이 담긴 JSON',evidence:'공식 페이지 읽기'}],assumptions:[],route:{kind:'unknown',pack_family:null},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],plan:{steps:[{id:'read',goal:'공식 페이지에서 버전 확인',depends_on:[],effect:'read_only',tool_hints:[],observable_outcome:'두 버전이 확인된다'}]}};
+  const inputs=[];let selection;
+  const model={calls:[],async call(purpose,instructions,input){inputs.push({instructions,input});return {...base,...(selection===undefined?{}:{procedure_selection:selection})};}};
+  const runtime=new WorkRuntime(store,config,model),request='Python과 Node.js 최신 안정 버전을 각 공식 사이트에서 확인해 JSON으로 저장해줘';
+  const first=await runtime.start({request_id:'s1',prompt:request});
+  assert.equal(inputs.at(-1).input.verified_procedure_candidates,undefined,'Nothing learned yet: no candidates and no extra instruction.');assert.doesNotMatch(inputs.at(-1).instructions,/verified_procedure_candidates/u);
+  const observation={invocation:{request_id:'r-1',turn:0,stage_id:'read',tool_name:'office_browser_read',arguments:{url:'https://www.python.org/downloads/'},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{},evidence_ids:['e-1'],effect_state:'none',retry_safe:true},observed_at:new Date().toISOString()};
+  const saved=recordVerifiedProcedure(store,config.project.id,first.work_id,request,[observation]);
+  assert.deepEqual(procedureCandidates(store,config.project.id,'Python 최신 안정 버전을 공식 사이트에서 확인해줘').map(item=>[item.id,item.grade,item.tools]),[[saved.id,'candidate',['office_browser_read']]]);
+  selection={id:saved.id,fit_reason:'같은 업무다'};
+  const second=await runtime.start({request_id:'s2',prompt:'Python과 Node.js의 최신 안정 버전을 공식 사이트에서 확인해 JSON 파일로 저장해줘'});
+  const offered=inputs.at(-1).input.verified_procedure_candidates;assert.equal(offered[0].id,saved.id);assert.equal(JSON.stringify(offered).includes('python.org'),false,'Arguments and values stay out of the planning input.');
+  assert.match(inputs.at(-1).instructions,/procedure_selection/u);
+  assert.equal(store.intakeWork(config.project.id,second.work_id).spec.procedure_selection.id,saved.id);
+  assert.equal(selectedProcedure(store,config.project.id,saved.id,request).steps.length,1);
+  selection={id:'f'.repeat(32),fit_reason:'지어낸 절차'};
+  const third=await runtime.start({request_id:'s3',prompt:'Python과 Node.js 최신 안정 버전을 공식 사이트에서 다시 확인해 JSON으로 저장해줘'});
+  assert.equal(store.intakeWork(config.project.id,third.work_id).spec.procedure_selection,undefined,'An id the host did not list is dropped, and the Work is still defined.');
+  assert.equal(third.definition_status,'ready');
 });

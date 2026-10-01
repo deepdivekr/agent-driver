@@ -20,6 +20,8 @@ test('a complete CSV or flat JSON body is recognised as a table; pages, nested d
   const nested=await detectTable(bytes(JSON.stringify([{version:'v1',date:'2026-01-01',files:['a']},{version:'v2',date:'2026-02-01',files:[]}])),'application/json','https://example.org/index.json');
   assert.deepEqual(nested,{format:'json',columns:['version','date'],numeric_columns:[],json_fields:['version','date'],rows:2},'Nested values are left out by projection.');
   assert.equal(await detectTable(bytes('{"type":"FeatureCollection","features":[]}'),'application/json','https://example.org/feed.geojson'),null);
+  const geo=JSON.stringify({type:'FeatureCollection',metadata:{count:2},features:[{type:'Feature',properties:{mag:4.6,place:'Offshore',time:1790000000000,ids:',a,'},geometry:{type:'Point',coordinates:[1,2,3]}},{type:'Feature',properties:{mag:5.1,place:'Inland',time:1790000100000,ids:',b,'},geometry:null}]});
+  assert.deepEqual(await detectTable(bytes(geo),'application/geo+json','https://example.org/summary/4.5_day.geojson'),{format:'json',columns:['mag','place','time','ids'],numeric_columns:['mag','time'],json_fields:['mag','place','time','ids'],json_rows:'features',rows:2},'A GeoJSON feed is a table of its features\' properties.');
   assert.equal(await detectTable(bytes('<html><body>hello</body></html>'),'text/html','https://example.org/'),null);
   assert.equal(await detectTable(bytes('only\n1\n'),'text/csv','https://example.org/one.csv'),null,'One column is not worth a source.');
   assert.equal((await detectTable(bytes('a,b\n1,x\n,y\n'),'text/csv','https://example.org/t.csv')).numeric_columns.length,0,'A column with an empty value is not declared numeric.');
@@ -34,7 +36,7 @@ test('a remembered source joins the loaded config without changing its fingerpri
   const {mkdir}=await import('node:fs/promises');await mkdir(join(root,'data'),{recursive:true});
   const config=loadHostConfig(host),fingerprint=config.fingerprint;assert.equal(config.packs,null);
   const table=await detectTable(bytes(csv),'text/csv',url);
-  for(const refused of ['https://user:pw@example.org/a.csv','https://example.org/a.csv?api_key=1','https://192.168.0.2/a.csv','http://example.org/a.csv','https://intranet.local/a.csv'])assert.equal(registerAutoSource(config,refused,table),null,refused);
+  for(const refused of ['https://example.org/query?format=csv&starttime=2026-09-30T14%3A04%3A08Z','https://user:pw@example.org/a.csv','https://example.org/a.csv?api_key=1','https://192.168.0.2/a.csv','http://example.org/a.csv','https://intranet.local/a.csv'])assert.equal(registerAutoSource(config,refused,table),null,refused);
   const registered=registerAutoSource(config,url,table);
   assert.equal(registered.created,true);assert.match(registered.id,/^auto_127_0_0_1_feeds_quakes_[a-f0-9]{6}$/u);
   assert.deepEqual(registerAutoSource(config,url,table),{id:registered.id,created:false},'The same URL is remembered once.');
@@ -44,8 +46,40 @@ test('a remembered source joins the loaded config without changing its fingerpri
   const listed=connectedSourceCatalog(reloaded)[0];assert.equal(listed.registration,'remembered_public_read');assert.deepEqual(listed.declared_columns,['time','mag','place','note']);
   const collected=await collectSource(reloaded.packs.sources[0],{},reloaded);
   assert.deepEqual(collected.rows.map(row=>[row.mag,row.place]),[[4.6,'10 km S of Town, Country'],[5.1,'Offshore']],'Rows come from the Pack reader with the numeric column normalised.');
+  // A GeoJSON feed is collected through the same reader.
+  const geoServer=createServer((request,response)=>{response.writeHead(200,{'content-type':'application/geo+json'});response.end(JSON.stringify({type:'FeatureCollection',features:[{properties:{mag:4.6,place:'Offshore',extra:{nested:true}}},{properties:{mag:5.1,place:'Inland',extra:null}}]}));});
+  await new Promise(resolve=>geoServer.listen(0,'127.0.0.1',resolve));t.after(()=>new Promise(resolve=>{geoServer.close(resolve);geoServer.closeAllConnections();}));
+  const geoUrl=`http://127.0.0.1:${geoServer.address().port}/summary/day.geojson`,geoBody=new Uint8Array(await (await fetch(geoUrl)).arrayBuffer()),geoTable=await detectTable(geoBody,'application/geo+json',geoUrl);
+  assert.deepEqual(geoTable.json_fields,['mag','place']);const geoSource=registerAutoSource(config,geoUrl,geoTable);
+  const features=await collectSource(config.packs.sources.find(source=>source.id===geoSource.id),{},config);
+  assert.deepEqual(features.rows,[{mag:4.6,place:'Offshore'},{mag:5.1,place:'Inland'}]);assert.equal(features.evidence.response_shape,'feature_collection');
   // A damaged or foreign list is ignored rather than trusted.
   await writeFile(join(root,'data','auto-sources.json'),JSON.stringify([{source:{id:'x',kind:'file',path:'/etc/passwd',format:'csv'},columns:['a','b'],observed_at:new Date().toISOString()},{source:{id:'y',kind:'http',url:'https://example.org/a.csv',parameters:['token'],format:'csv'},columns:['a','b'],observed_at:new Date().toISOString()}]));
   assert.deepEqual(readAutoSources(join(root,'data')),[]);assert.equal(loadHostConfig(host).packs,null);
   assert.ok(JSON.parse(await readFile(host,'utf8')).packs===undefined,'The owner file is never written.');
+});
+
+// Plan B2: the owner sees what was learned and can switch a procedure off or forget a source. Nothing else changes them.
+test('Control Center lists learned procedures and remembered sources; the owner switches one off and forgets the other',{timeout:60000},async t=>{
+  const {chromium}=await import('playwright'),{startControlCenter}=await import('../dist/observability/control-center.js'),{PackStore}=await import('../dist/packs/store.js'),{recordVerifiedProcedure,similarProcedure}=await import('../dist/work/procedures.js');
+  const root=await mkdtemp(join(tmpdir(),'learned-ui-')),host=join(root,'host.json');
+  await writeFile(host,JSON.stringify({schema_version:1,project_id:'learned',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production'}));
+  const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
+  const request='Python과 Node.js 최신 안정 버전을 각 공식 사이트에서 확인해 JSON으로 저장해줘';
+  const observation={invocation:{request_id:'r-1',turn:0,stage_id:'read',tool_name:'office_browser_read',arguments:{url:'https://www.python.org/downloads/'},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{},evidence_ids:['e-1'],effect_state:'none',retry_safe:true},observed_at:new Date().toISOString()};
+  const saved=recordVerifiedProcedure(store,'learned','w1',request,[observation]);
+  registerAutoSource(config,'https://data.example.org/feeds/quakes.csv',await detectTable(bytes(csv),'text/csv','https://data.example.org/feeds/quakes.csv'));
+  const server=await startControlCenter(config),browser=await chromium.launch({headless:true});
+  t.after(async()=>{await browser.close();await server.close();store.close();await rm(root,{recursive:true,force:true});});
+  const status=await (await fetch(new URL('learned/status',server.url))).json();
+  assert.deepEqual(status.procedures.map(item=>[item.id,item.grade,item.successes,item.steps]),[[saved.id,'candidate',1,1]]);assert.equal(status.sources[0].url,'https://data.example.org/feeds/quakes.csv');
+  assert.equal((await fetch(new URL('learned/action',server.url),{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({kind:'procedure',id:saved.id,disabled:true})})).status,403,'Only the Control Center page may change it.');
+  const context=await browser.newContext();await context.addInitScript(()=>localStorage.setItem('office-lang','ko'));
+  const page=await context.newPage();await page.goto(server.url,{waitUntil:'domcontentloaded'});
+  await page.locator('#learned summary').click();await page.locator('[data-learned-procedure]').waitFor();
+  assert.match(await page.locator('#learned-body').innerText(),/후보 · 성공 1회 · 실패 0회 · 1단계/u);
+  await page.locator('[data-learned-procedure]').click();await page.getByText('꺼짐').waitFor();
+  assert.equal(similarProcedure(store,'learned',request),null,'A switched-off procedure is no longer offered.');
+  await page.locator('[data-learned-source]').click();await page.locator('[data-learned-source]').waitFor({state:'detached'});
+  assert.deepEqual(readAutoSources(join(root,'data')),[]);assert.equal(loadHostConfig(host).packs,null);
 });

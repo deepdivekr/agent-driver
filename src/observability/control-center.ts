@@ -5,6 +5,8 @@ import {randomBytes} from 'node:crypto';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {PackStore,type RuntimeActivity} from '../packs/store.js';
 import {workAutonomy,type HostConfig} from '../interface/config.js';
+import {listProcedures,setProcedureDisabled} from '../work/procedures.js';
+import {applyAutoSources,readAutoSources,forgetAutoSource} from '../packs/auto-sources.js';
 import {readSwarmDashboard} from '../swarm/dashboard.js';
 import {BrowserConnections} from './browser-connections.js';
 import {ControlSettings} from './control-settings.js';
@@ -161,6 +163,20 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     try{
     if(await serveUiAsset(request,response,suffix))return;
     if(rejectStopped())return;
+    if(suffix==='learned/status'){
+      if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
+      applyAutoSources(config);
+      reply(response,200,JSON.stringify({procedures:listProcedures(store,config.project.id),sources:readAutoSources(dirname(config.dbPath),config.environment==='fixture').map(entry=>({id:entry.source.id,url:entry.source.kind==='file'?'':entry.source.url,format:entry.source.kind==='browser'?'':entry.source.format,columns:entry.columns,observed_at:entry.observed_at}))}),'application/json; charset=utf-8');return;
+    }
+    if(suffix==='learned/action'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>4_000)throw Error('LEARNED_REQUEST_TOO_LARGE');}if(rejectStopped())return;
+        const input=z.discriminatedUnion('kind',[z.object({kind:z.literal('procedure'),id:z.string().regex(/^[a-f0-9]{32}$/u),disabled:z.boolean()}).strict(),z.object({kind:z.literal('source'),id:z.string().regex(/^auto_[a-z0-9_]{1,80}$/u)}).strict()]).parse(JSON.parse(body));
+        const changed=input.kind==='procedure'?setProcedureDisabled(store,config.project.id,input.id,input.disabled):forgetAutoSource(config,input.id);
+        if(!changed)throw Error('LEARNED_ITEM_NOT_FOUND');reply(response,200,JSON.stringify({changed:true}),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'LEARNED_REQUEST_INVALID'}),'application/json; charset=utf-8');}return;
+    }
     if(suffix==='delivery/status'||suffix==='work/delivery'&&request.method==='GET'){
       if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
       try{const value=suffix==='delivery/status'?deliverySettings.publicState():results.selection(config.project.id,z.string().uuid().parse(url.searchParams.get('work_id')));reply(response,200,JSON.stringify(value),'application/json; charset=utf-8');}

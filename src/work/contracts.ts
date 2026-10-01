@@ -27,6 +27,8 @@ const workProposalFields=z.object({
   requested_effect:z.enum(['read_only','draft_only','local_file_write','external_effect_requested','unknown']),
   collection_contract:collectionContractSchema.optional(),
   browser:browserPreferenceSchema.optional(),
+  // Plan B3: the planner may pick one verified procedure the host listed for this request. The host checks the id.
+  procedure_selection:z.object({id:z.string().regex(/^[a-f0-9]{32}$/u),fit_reason:sentence.max(300)}).strict().nullable().optional(),
   recurrence:z.object({kind:z.enum(['once','recurring']),rule:sentence.max(300).nullable()}).strict(),
   questions:z.array(workQuestionSchema).max(4),
 }).strict();

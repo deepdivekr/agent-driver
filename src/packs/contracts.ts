@@ -14,8 +14,10 @@ const remote=z.object({url:z.string().url(),parameters:z.array(key).max(20).defa
 const numericColumns=z.array(field).max(100).refine(columns=>new Set(columns).size===columns.length,'duplicate numeric column').optional();
 export const sourceSchema=z.discriminatedUnion('kind',[
   z.object({id:key,kind:z.literal('file'),path:z.string().min(1),format:z.enum(['json','csv']),numeric_columns:numericColumns}).strict(),
-  remote.extend({id:key,kind:z.literal('http'),format:z.enum(['json','csv']),numeric_columns:numericColumns,json_fields:z.array(field).min(1).max(100).refine(fields=>new Set(fields).size===fields.length,'duplicate JSON projection field').optional()}).strict().superRefine((source,context)=>{
+  // json_rows 'features': the rows are the `properties` of a GeoJSON FeatureCollection, projected by json_fields.
+  remote.extend({id:key,kind:z.literal('http'),format:z.enum(['json','csv']),numeric_columns:numericColumns,json_fields:z.array(field).min(1).max(100).refine(fields=>new Set(fields).size===fields.length,'duplicate JSON projection field').optional(),json_rows:z.enum(['features']).optional()}).strict().superRefine((source,context)=>{
     if(source.json_fields&&source.format!=='json')context.addIssue({code:'custom',message:'json_fields requires JSON format'});
+    if(source.json_rows&&(source.format!=='json'||!source.json_fields))context.addIssue({code:'custom',message:'json_rows requires JSON format and json_fields'});
     if(source.json_fields&&source.numeric_columns?.some(column=>!source.json_fields!.includes(column)))context.addIssue({code:'custom',message:'numeric column missing from JSON projection'});
   }),
   remote.extend({id:key,kind:z.literal('browser'),rows:selector,columns:z.record(field,selector),numeric_columns:numericColumns,ready:selector,auth_gate:selector,auth_required:z.boolean().default(true),account_selector:selector,account_text:z.string().min(1)}).strict().superRefine((source,context)=>{

@@ -6,7 +6,7 @@ import {workAutonomy,workDelegation,workPolicyVersion,loadHostConfig,type HostCo
 import {RuntimeApi} from '../interface/api.js';
 import {hashJson,modelForRole,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {applyAutoSources} from '../packs/auto-sources.js';
-import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,similarProcedure,REPLAY_SIMILARITY} from './procedures.js';
+import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,selectedProcedure,similarProcedure,REPLAY_SIMILARITY} from './procedures.js';
 import {allocateWorkModels} from './task-models.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
@@ -156,6 +156,9 @@ function watchDueWait(store:PackStore,row:Row,result:WorkClientResult):number|nu
   }catch{return null;}
 }
 
+/** A step whose arguments carry a date or time belongs to the run that made it (live: a query with a fixed
+ * start and end time). It stays in the guidance but is not replayed. */
+const momentBound=(value:unknown)=>/\d{4}-\d{2}-\d{2}|\b1[5-9]\d{8}(?:\d{3})?\b/u.test(JSON.stringify(value));
 /** Durable admission and bounded retries share the same Work ID and receipts. */
 export class WorkSupervisor {
   private stopped=false;private active=new Map<string,Promise<void>>();private controllers=new Map<string,AbortController>();
@@ -475,10 +478,12 @@ export class WorkSupervisor {
       guard();admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
       const progressBefore=workProgress(checkpoint as WorkClientCheckpoint|null);
       // B2–B4 first slice: a verified earlier run of a similar request is offered as guidance (never as evidence).
-      const offered=similarProcedure(this.store,project,work.prompt);
+      // The planner's selection (B3) wins when it is still offerable; otherwise the closest similar procedure.
+      const chosen=spec.procedure_selection?selectedProcedure(this.store,project,spec.procedure_selection.id,work.prompt):null;
+      const offered=chosen??similarProcedure(this.store,project,work.prompt);
       if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
       const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,...(hostSchedule?{host_schedule:hostSchedule}:{}),...(offered?{verified_procedure:procedureGuidance(offered)}:{}),connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason. If spec.collection_contract exists, use its exact recipe through runtime_pack_run without a new runtime_pack_plan. The host verifies every matching observed source row and actual output in code; do not read source pages just to obtain another model approval of covered checks. Reuse an unchanged same-Work receipt via runtime_pack_status for completion-only recovery; never rewrite a successful artifact just for verification. Remaining semantic checks still need their own evidence.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
-        {tools:toolkit.catalog(),guard,signal:controller.signal,...(offered&&offered.similarity>=REPLAY_SIMILARITY?{replay:offered.steps}:{}),
+        {tools:toolkit.catalog(),guard,signal:controller.signal,...(offered&&(offered.similarity>=REPLAY_SIMILARITY||chosen?.grade==='regular')?{replay:offered.steps.filter(step=>!momentBound(step.arguments))}:{}),
           toolRequestId:(name,args,fallback)=>toolkit!.requestId(name,args,fallback),
           packRequestRecovery:(invocation,prior)=>toolkit!.packRequestRecovery(invocation,prior),
           checkpoint:saveCheckpoint,
