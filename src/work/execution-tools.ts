@@ -732,7 +732,8 @@ export class WorkExecutionTools {
       catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;deduplicated=true;}
       const saved=await readScopedFile(path);requireCondition(saved.equals(bytes),'WORK_RESULT_REQUEST_ID_CONFLICT');
       workActivity(this.store,this.config.project.id,this.workId,'result.saved',`Result saved: ${input.label??this.spec.title} · ${saved.length} bytes`);
-      return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id:requestId,title:input.label??this.spec.title,text:input.text,artifact:{path,sha256:sha(saved),bytes:saved.length,format:input.format},deduplicated,external_delivery:false};
+      // The host parsed the content when it accepted the format; the receipt says so (live: "no JSON parsing result is shown").
+      return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id:requestId,title:input.label??this.spec.title,text:input.text,artifact:{path,sha256:sha(saved),bytes:saved.length,format:input.format},deduplicated,external_delivery:false,...(input.format==='txt'?{}:{format_check:`The host parsed these exact bytes as valid ${input.format.toUpperCase()} before saving.`})};
     }
     if(name==='office_browser_read'||name==='office_web_search'||name==='office_social_search'){
       const explicit=name==='office_browser_read'?this.browserRequest(args):null,social=name==='office_social_search'?this.socialRequest(args):null,search=name==='office_web_search'?this.searchRequest(args):explicit?searchFromUrl(explicit.url):null,url=explicit?explicit.url:social?socialSearchEntry(social):searchEntry(search!);
