@@ -52,13 +52,14 @@ function historicalCheckpoint(x,executor,{runId=x.run,effectState='none'}={}){
 }
 const opens=x=>x.events.filter(event=>event.kind==='open'||event.kind==='navigate');
 
-test('runtime fixture a Work search with the planner\'s generic headless placement starts in the registered Aside and skips headless and guest',async t=>{
+test('runtime fixture a Work search moves observed headless unusual traffic once to Aside with the original query and skips the guest',async t=>{
   const x=await setup(t),tools=x.create(),value=await tools.execute('office_web_search',{query},'current-search'),receipt=await tools.receipt('office_web_search',value,'current-search');
-  assert.deepEqual(opens(x).map(({id,url})=>({id,url})),[{id:aside.id,url:searchUrl(query)}]);
-  assert.ok(!x.events.some(event=>event.id===guest.id||event.id===headless.id),'Headless search is challenged here; the registered Aside is the primary.');
+  assert.deepEqual(opens(x).map(({id,url})=>({id,url})),[{id:headless.id,url:searchUrl(query)},{id:aside.id,url:searchUrl(query)}]);
+  assert.ok(!x.events.some(event=>event.id===guest.id),'The same Google network block must not be repeated in the guest');
   assert.equal(value.executor,aside.id);assert.equal(value.url,searchUrl(query));assert.equal(value.requested_url,searchUrl(query));assert.equal(value.search_access,'unclassified_dom');assert.equal(value.links[0].url,article);
   assert.equal(receipt.status,'succeeded');assert.equal(receipt.effect_state,'none');assert.deepEqual(receipt.evidence_ids,['current-search']);
   const history=workTail(x.store,x.config.project.id,x.work.work_id);
+  assert.ok(history.some(event=>event.kind==='browser.failed'&&event.metadata.reason==='unusual_traffic_environment_block'));
   assert.ok(history.some(event=>event.kind==='source.observed'&&event.metadata.executor===aside.id));
 });
 
@@ -84,7 +85,7 @@ for(const restore of [false,true])test(`runtime contract report-file Work keeps 
   const tools=x.create(),value=await tools.execute('office_web_search',{query},'report-search'),receipt=await tools.receipt('office_web_search',value,'report-search');
   assert.equal(x.work.spec.requested_effect,'local_file_write');assert.equal(value.executor,aside.id);
   assert.equal(value.effect,'read_only');assert.equal(receipt.effect_state,'none');assert.equal(receipt.status,'succeeded');
-  assert.deepEqual(opens(x).map(event=>event.id),[aside.id],restore?'A same-run headless block resumes directly in Aside.':'A report-file Work starts its public read in the registered Aside.');
+  assert.deepEqual(opens(x).map(event=>event.id),restore?[aside.id]:[headless.id,aside.id]);
   assert.ok(!x.events.some(event=>event.id===guest.id));
 });
 
@@ -106,7 +107,7 @@ for(const pinned of [false,true])for(const uncertain of [false,true])test(`runti
 for(const variant of ['foreign-run','uncertain'])test(`runtime contract ${variant} historical data cannot select Aside before a new verified environment observation`,async t=>{
   const x=await setup(t);x.seed(historicalCheckpoint(x,headless.id,variant==='foreign-run'?{runId:randomUUID()}:{effectState:'uncertain'}));const before=x.checkpoint(),tools=x.create();
   const value=await tools.execute('office_web_search',{query},'new-observation');
-  assert.deepEqual(opens(x).map(event=>event.id),[aside.id],'Untrusted history grants no recovery binding; the read simply starts in the registered primary.');assert.equal(value.executor,aside.id);assert.equal(x.checkpoint(),before);
+  assert.deepEqual(opens(x).map(event=>event.id),[headless.id,aside.id]);assert.equal(value.executor,aside.id);assert.equal(x.checkpoint(),before);
 });
 
 test('runtime fixture an explicit headless engine pin retains the observed block and never acquires the personal Aside profile',async t=>{
@@ -141,22 +142,21 @@ test('runtime fixture a scheme-less site in the request is readable and an unlis
   assert.doesNotThrow(()=>tools.validate('office_browser_read',{url:article},'observed-link'),'A link observed on the user site becomes readable.');
 });
 
-// B5 (execution means): with no explicit placement, a public read starts in the
-// user's registered foreground browser (headless search is challenged); a
-// foreground browser that cannot connect falls back to the owned headless one.
-test('runtime fixture a public read defaults to the registered Aside and falls back to headless only when Aside cannot connect',async t=>{
-  const x=await setup(t,{browser:null,prompt:'Read https://example.org/observed-asts-report',observe:(target,url)=>observation(url)}),tools=x.create();
-  const value=await tools.execute('office_browser_read',{url:article},'default-read');
-  assert.equal(value.executor,aside.id,'Aside is the default public read placement.');
-  assert.deepEqual(opens(x).map(({id,url})=>({id,url})),[{id:aside.id,url:article}]);
-  assert.ok(!x.events.some(event=>event.id===headless.id||event.id===guest.id),'No headless or guest browser was started.');
-  const y=await setup(t,{browser:null,prompt:'Read https://example.org/observed-asts-report',observe:(target,url)=>observation(url),probeFail:[aside.id,neo.id]}),fallback=y.create();
-  const recovered=await fallback.execute('office_browser_read',{url:article},'fallback-read');
-  assert.equal(recovered.executor,headless.id,'An unreachable foreground browser falls back to the owned headless browser for the same read.');
-  const pinned=await setup(t,{browser:{environment:'owned_headless',preferred_engine:'playwright'},prompt:'Read https://example.org/observed-asts-report',observe:(target,url)=>observation(url)}),explicit=pinned.create();
-  assert.equal((await explicit.execute('office_browser_read',{url:article},'pinned-read')).executor,headless.id,'An explicit headless engine pin is kept.');
+// B5 ladder: the runtime-owned background browser reads first; a page that refuses it (bot wall, human
+// check) moves the same read once to the Aside the owner registered. A normal page never touches Aside.
+test('runtime fixture a public page that refuses the background browser is reread once in the registered Aside; a normal page stays headless',async t=>{
+  const wall=url=>observation(url,{title:'Just a moment...',text:'Checking your browser before accessing the site.',links:[]});
+  const x=await setup(t,{browser:null,prompt:'Read https://example.org/observed-asts-report',observe:(target,url)=>target.environment==='owned_headless'?wall(url):observation(url)}),tools=x.create();
+  const value=await tools.execute('office_browser_read',{url:article},'walled-read');
+  assert.equal(value.executor,aside.id,'The blocked read was handed to the registered Aside.');assert.equal(value.title,'Observed source results');
+  assert.deepEqual(opens(x).map(({id,url})=>({id,url})),[{id:headless.id,url:article},{id:aside.id,url:article}]);
+  assert.ok(!x.events.some(event=>event.id===guest.id||event.id===neo.id),'No guest or other foreground browser is tried.');
+  const y=await setup(t,{browser:null,prompt:'Read https://example.org/observed-asts-report',observe:(target,url)=>observation(url)}),plain=y.create();
+  assert.equal((await plain.execute('office_browser_read',{url:article},'plain-read')).executor,headless.id);
+  assert.ok(!y.events.some(event=>event.id===aside.id),'A page the background browser can read never opens the owner\'s foreground browser.');
+  const pinned=await setup(t,{browser:{environment:'owned_headless',preferred_engine:'playwright'},prompt:'Read https://example.org/observed-asts-report',observe:(target,url)=>wall(url)}),explicit=pinned.create();
+  assert.equal((await explicit.execute('office_browser_read',{url:article},'pinned-read')).executor,headless.id,'An explicit headless engine pin never acquires the foreground browser.');
 });
-
 
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host
 // reads such public text resources over HTTPS in bounded pages.

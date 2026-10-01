@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {type RuntimeApi} from '../interface/api.js';
 import {tools} from '../interface/catalog.js';
 import {type HostConfig} from '../interface/config.js';
-import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,defaultPublicPlacement,publicForegroundFallback,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
+import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
 import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
 import {type Recipe} from '../packs/contracts.js';
@@ -130,7 +130,6 @@ const bingResultTarget=(value:string)=>{
   }catch{return value;}
 };
 const downloadStarted=(error:unknown)=>error instanceof Error&&/Download is starting/u.test(error.message);
-const genericPublicPlacement=(preference:BrowserPreference|undefined)=>!preference||preference.environment==='owned_headless'&&!preference.preferred_engine;
 const privateHostname=(value:string)=>/^(?:localhost$|.*\.localhost$|127\.|10\.|192\.168\.|169\.254\.|0\.|172\.(?:1[6-9]|2\d|3[01])\.|\[)|\.(?:local|lan|internal)$/iu.test(value);
 function safeSearchQuery(value:string){
   if(/(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\bapikey_[A-Za-z0-9_-]{16,}|\bBearer\s+[A-Za-z0-9._-]{16,}|\b[A-Za-z0-9_]*(?:token|password|secret|api.?key|auth|session|cookie)[A-Za-z0-9_]*\s*[=:]\s*\S+)/iu.test(value))return false;
@@ -528,10 +527,6 @@ export class WorkExecutionTools {
   private socialSites(){return socialIntent(this.prompt,this.spec)?(Object.keys(knownLoginSites) as SocialSearchRequest['site'][]).filter(site=>this.socialTarget(site)!==null):[];}
   /** No explicit placement: a new read prefers the registered Aside; a read
    * already bound by a saved checkpoint for this origin keeps its placement. */
-  private publicPlacement(keys:string[]){
-    const journal=this.store.browserExecutors(),prior=keys.map(key=>journal.checkpoint(this.config.project.id,key)).find(Boolean);
-    return defaultPublicPlacement(this.config,prior,this.prompt);
-  }
   private async textResource(input:z.infer<typeof browserInput>){
     workActivity(this.store,this.config.project.id,this.workId,'source.started','Reading a public text resource over HTTPS.',{tool_name:'office_browser_read',status:'running',target_url:input.url});
     const value=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
@@ -751,13 +746,10 @@ export class WorkExecutionTools {
       const socialSite=(social?.site??(Object.hasOwn(knownLoginSites,parsed.hostname.toLowerCase().replace(/^www\./u,''))?parsed.hostname.toLowerCase().replace(/^www\./u,'') as SocialSearchRequest['site']:null));
       const authTarget=socialSite?this.socialTarget(socialSite):null;
       if(socialSite)requireCondition(authTarget,'WORK_SOCIAL_PROFILE_NOT_READY');
-      // The planner's generic public placement (headless, no engine) is not a
-      // user pin; the registered primary browser decides where a public read
-      // starts. A search already blocked in headless this run keeps its
-      // recorded recovery path.
-      const legacyKey=`work:${this.runId}:${origin}`,originalCheckpointKey=`${legacyKey}:${hashJson({entry_url:url})}`,defaultPlacement=!authTarget&&genericPublicPlacement(this.spec.browser)&&!(search&&this.recoverableSearches.has(searchKey(search)));
-      const placement=defaultPlacement?this.publicPlacement([originalCheckpointKey,legacyKey]):null;
-      const preference:BrowserPreference=authTarget?{environment:authTarget.environment,preferred_engine:authTarget.engine}:placement?placement.preference:this.spec.browser!;
+      // Ladder (plan B5): the runtime-owned background browser first; when it is refused (search challenge,
+      // bot wall) the read moves once to the Aside the owner registered. No foreground browser is used otherwise.
+      const legacyKey=`work:${this.runId}:${origin}`,originalCheckpointKey=`${legacyKey}:${hashJson({entry_url:url})}`;
+      const preference:BrowserPreference=authTarget?{environment:authTarget.environment,preferred_engine:authTarget.engine}:this.spec.browser??{environment:'owned_headless'};
       const recoveryKey=search?searchKey(search):null,explicitAside=!authTarget&&preference.environment==='host_foreground'&&preference.preferred_engine==='aside',explicitAsideRecovery=explicitAside&&Boolean(recoveryKey&&this.recoverableSearches.has(recoveryKey));
       const key=authTarget?`${origin}:${authTarget.id}`:origin,checkpointKey=`${legacyKey}:${hashJson(authTarget?{entry_url:url,profile:authTarget.id}:explicitAside?{entry_url:url,recovery:preference}:{entry_url:url})}`;
       // A broken read-only browser transport may move to another registered
@@ -767,10 +759,10 @@ export class WorkExecutionTools {
       // These three capabilities only read. A Work that also saves its report
       // locally still gets the same safe read recovery; its write capabilities
       // retain their independent delegation, approval and uncertainty fences.
-      const fallback_preferences=!socialLogin?(defaultPlacement&&preference.environment==='host_foreground'?publicForegroundFallback:publicBrowserRecovery(preference)):[];
+      const fallback_preferences=!socialLogin?publicBrowserRecovery(preference):[];
       let browser=this.browsers.get(key);
       if(!browser){
-        const routeConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:placement?.config??this.config;
+        const routeConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:this.config;
         browser=new RoutedBrowser(routeConfig,{profile_key:`work-${this.workId}`,context_id:this.runId,request:this.prompt,preference,fallback_preferences,...(!explicitAsideRecovery&&search&&this.recoverableSearches.has(searchKey(search))?{recover_from_unusual_traffic:this.recoverableSearches.get(searchKey(search))}:{}),ephemeral:true,restore_navigation:'entry_url',guard:this.guard,providers:{llm:this.model},...(this.options.browserFactory?{factory:this.options.browserFactory}:{}),checkpoint:{load:()=>{
           // A user revision may explicitly select the one permitted recovery
           // destination. Keep the old read-only checkpoint intact and validate

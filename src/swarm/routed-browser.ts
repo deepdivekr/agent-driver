@@ -5,7 +5,7 @@ import {type HostConfig,loadHostConfig} from '../interface/config.js';
 import {type PackStore} from '../packs/store.js';
 import {type SwarmRunSnapshot} from './contracts.js';
 import {requireCondition} from '../core/contracts.js';
-import {RoutedBrowser,publicBrowserRecovery,defaultPublicPlacement,publicForegroundFallback,type BrowserRouteProviders} from '../browser/executor-routing.js';
+import {RoutedBrowser,publicBrowserRecovery,type BrowserRouteProviders} from '../browser/executor-routing.js';
 import {browserPreferenceSchema,browserHostCompatible,type BrowserPreference,type BrowserTarget} from '../browser/executor-contracts.js';
 import {type VisualCommand} from './visual-executor.js';
 import {authSites,detectAuthGate,knownLoginSites,readyAuthTargets,setSiteAuth} from './browser-auth.js';
@@ -43,9 +43,7 @@ export class RoutedSwarmBrowser {
       const workBrowser=browserPreferenceSchema.optional().parse((work?.spec as {browser?:unknown}|null)?.browser);
       requireCondition(!workBrowser||!definition.browser||workBrowser.environment===definition.browser.environment,'BROWSER_WORK_ENVIRONMENT_CONFLICT');
       const journal=this.store.browserExecutors(),saved=journal.checkpoint(this.config.project.id,id);
-      const generic=(value:BrowserPreference|undefined)=>!value||value.environment==='owned_headless'&&!value.preferred_engine;
-      const placement=generic(workBrowser)&&generic(definition.browser)?defaultPublicPlacement(this.config,saved,definition.objective):null;
-      let preference:BrowserPreference=placement?placement.preference:(workBrowser??definition.browser)!;
+      let preference:BrowserPreference=workBrowser??definition.browser??{environment:'owned_headless'};
       const socialSites=[...new Set(definition.source_urls.map(value=>new URL(value).hostname.toLowerCase().replace(/^www\./u,'')).filter(site=>Object.hasOwn(knownLoginSites,site)))];
       let authTarget:BrowserTarget|undefined;
       if(socialSites.length){
@@ -58,8 +56,8 @@ export class RoutedSwarmBrowser {
         requireCondition(authTarget,'BROWSER_AUTH_REQUIRED');
         preference={environment:authTarget.environment,preferred_engine:authTarget.engine};
       }
-      const fallback_preferences=socialSites.length?[]:placement&&preference.environment==='host_foreground'?publicForegroundFallback:publicBrowserRecovery(preference);
-      const routingConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:placement?.config??this.config;
+      const fallback_preferences=socialSites.length?[]:publicBrowserRecovery(preference);
+      const routingConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:this.config;
       const guard=()=>{this.lease(run,worker,token);if(authTarget){const states=authSites(this.store,this.config,authTarget);requireCondition(!states.some(site=>site.handoff)&&socialSites.every(site=>states.some(row=>row.site===site&&row.state==='ready')),'BROWSER_AUTH_REQUIRED');}};
       const configured=this.providers(),providers=work?.jev_enabled===false?{...configured,jev:undefined}:configured;
       if(saved){await this.url(saved.url);if(!origins.includes(new URL(saved.url).origin))origins.push(new URL(saved.url).origin);}

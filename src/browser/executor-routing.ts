@@ -40,23 +40,6 @@ export function browserTargets(config:HostConfig):BrowserTarget[]{
   if(vm&&!targets.some(t=>t.environment==='ubuntu_vm'&&t.engine==='playwright')&&!targets.some(t=>t.id==='login-owned-ubuntu-vm'))targets.push(browserTargetSchema.parse({id:'login-owned-ubuntu-vm',engine:'playwright',environment:'ubuntu_vm',platform:'linux',profile_ref:vm.id}));
   return targets;
 }
-/** Default placement for public reads with no explicit preference. A
- * user-registered, host-compatible Aside is the primary browser (headless
- * public search is challenged by unusual-traffic checks); otherwise the
- * runtime-owned headless browser. */
-export function defaultPublicPlacement(config:HostConfig,saved?:BrowserCheckpoint|null,request?:string):{preference:BrowserPreference;config:HostConfig}{
-  const headless={preference:{environment:'owned_headless'} as BrowserPreference,config};
-  const targets=browserTargets(config);
-  if(!targets.some(t=>t.engine==='aside'&&t.environment==='host_foreground'&&browserHostCompatible(t)))return headless;
-  const preference:BrowserPreference={environment:'host_foreground'};
-  // A read already bound by a saved checkpoint keeps its placement.
-  if(saved&&saved.binding!==browserCheckpointBinding(config,{preference,request}))return headless;
-  // Aside is the registered primary; other foreground browsers are not implied.
-  return {preference,config:{...config,browserExecutors:{targets:targets.filter(t=>t.environment!=='host_foreground'||t.engine==='aside')}}};
-}
-/** A foreground default that cannot connect falls back to the owned headless
- * browser for the same read-only operation. */
-export const publicForegroundFallback:BrowserPreference[]=[{environment:'owned_headless'}];
 /** Public, read-only transport recovery moves forward once; private/account
  * work and explicit engine pins never acquire another profile this way. */
 export function publicBrowserRecovery(preference:BrowserPreference={environment:'owned_headless'}):BrowserPreference[]{
@@ -68,6 +51,12 @@ export function publicBrowserRecovery(preference:BrowserPreference={environment:
  * CAPTCHA, a social login limit, or an HTTP permission denial. */
 export function unusualSearchTraffic(requested:string,observed:BrowserObservation){
   try{const request=new URL(requested),page=new URL(observed.url);return request.protocol==='https:'&&request.hostname==='www.google.com'&&request.pathname==='/search'&&page.origin===request.origin&&/^\/sorry(?:\/|$)/u.test(page.pathname)&&/our systems have detected unusual traffic from your computer network/iu.test(observed.text);}catch{return false;}
+}
+/** A page that refuses a background browser (bot wall, human check, access denied) rather than showing
+ * its content. Short pages only, so an article that discusses CAPTCHAs is not mistaken for one. */
+export function accessChallenge(observed:BrowserObservation){
+  if(/^(?:just a moment|attention required|access denied|verif(?:y|ying) you(?:'re| are)|are you a robot|security check|pardon our interruption)/iu.test(observed.title.trim()))return true;
+  return observed.text.length<1500&&/verif(?:y|ying) (?:that )?you(?:'re| are) (?:a )?(?:human|not a (?:ro)?bot)|unusual traffic|checking your browser|enable javascript and cookies to continue|bots use duckduckgo|automated queries|complete the (?:following )?challenge|access denied/iu.test(observed.text);
 }
 export function browserCatalog(config:HostConfig){return browserTargets(config).map(t=>({id:t.id,engine:t.engine,environment:t.environment,profile_ref:t.profile_ref,platform:t.platform,capabilities:['navigate','observe','extract','scroll'],health:'unknown',verified_for_environment:false,foreground_requires_host_registration:true}));}
 export function eligibleBrowserTargets(config:HostConfig,preference:BrowserPreference={environment:'owned_headless'}){
@@ -214,7 +203,7 @@ export class RoutedBrowser {
   }
   private asideRecoveryAllowed(){return !this.options.preference?.preferred_engine&&this.options.fallback_preferences?.some(p=>p.environment==='host_foreground'&&p.preferred_engine==='aside')===true;}
   private async recoverSearchEnvironment(observed:BrowserObservation){
-    if(!this.port||!this.requestedUrl||this.environmentRecovery||this.pendingEffect||!this.asideRecoveryAllowed()||this.port.target.engine!=='playwright'||!['owned_headless','ubuntu_vm'].includes(this.port.target.environment)||!unusualSearchTraffic(this.requestedUrl,observed))return false;
+    if(!this.port||!this.requestedUrl||this.environmentRecovery||this.pendingEffect||!this.asideRecoveryAllowed()||this.port.target.engine!=='playwright'||!['owned_headless','ubuntu_vm'].includes(this.port.target.environment)||!(unusualSearchTraffic(this.requestedUrl,observed)||accessChallenge(observed)))return false;
     const aside=this.remaining.find(t=>t.engine==='aside'&&t.environment==='host_foreground');if(!aside)return false;
     this.options.guard?.();const from=this.port.target.id;
     this.record('failed',this.port.target,performance.now(),'unusual_traffic_environment_block');

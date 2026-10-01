@@ -3,8 +3,8 @@
 ## Product source of truth
 
 Read docs/work-completion-and-autonomy-plan.md before planning or changing this
-repository. Its Part A (restore a path for Work to reach completion) is the current
-authorized scope requested by the user; Part B (autonomy) starts only after Part A.
+repository. Part A (restore a path for Work to reach completion) and Part B
+(autonomy) are both authorized by the owner (2026-10-01); B1 and B5 are in progress.
 docs/custom-pack-refactoring-plan.md remains the background for custom Pack
 contracts; where the two conflict, section 3.4 of the newer plan decides.
 Read docs/work-completion-progress.md for the current checkpoint;
@@ -49,6 +49,16 @@ particular Pack. They are not a new product workstream.
   external writes keep the strict path.
 - Enforce prohibitions in host code, not by repeating them in model instructions.
   Remove an instruction sentence only when a test proves the host rejects it.
+- Authority is the owner's standing delegation (`work.autonomy`, plan B1), not a
+  click per run. Under `delegated`, a Work the owner asked for runs to its result
+  and keeps its own schedule; reads, Office outputs, drafts and public pages need
+  no further approval. Submissions, payments and messages to third parties keep
+  their gates. Questions the plan needs answered go to the owner (ask-first is
+  the default intake); the host never answers them on the owner's behalf.
+- When a means is blocked, switch to the next one the delegation allows before
+  asking a person: another search provider, a directly opened official page, the
+  registered foreground browser, an HTTPS text read. A stop that needs a person
+  must name what only that person can do.
 - Reuse verification procedures and valid bound results; inspect each new run's
   actual outputs. Historical observations are not fresh remote observations.
 - Preserve legacy saved Works, Pack recipes, MCP names, and checkpoint readers.
