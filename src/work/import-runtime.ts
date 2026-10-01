@@ -94,7 +94,7 @@ export class WorkImportRuntime{
   }
   async scan(raw:unknown,progress?:(stage:'scanning'|'analyzing'|'complete',analysisStatus?:ProjectBody['analysis_status'])=>void){
     const input=workImportScanSchema.parse(raw),scope=redactContinuityText(input.scope??'').trim();progress?.('scanning');
-    const scan=await scanProject(input.path);
+    const scan=await scanProject(input.path,scope);
     let analysis:ProjectAnalysis|null=null,analysis_status:ProjectBody['analysis_status']='not_approved';
     const allowed=workModelDataApproved(this.config);
     if(allowed&&scan.evidence.length){
@@ -127,7 +127,7 @@ export class WorkImportRuntime{
       route={kind:'workflow',pack_family:null};
     }else{
       if(!isProjectBody(body))throw Error('WORK_IMPORT_BODY_INVALID');
-      const fresh=await scanProject(body.scan.root);if(fresh.content_sha256!==record.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
+      const fresh=await scanProject(body.scan.root,body.scope??'');if(fresh.content_sha256!==record.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
       const analysis=body.analysis;title=analysis?.title??body.scan.purpose??'프로젝트 가져오기';
       goal=input.goal?.trim()||analysis?.goal||'';
       if(!goal)throw Error('WORK_IMPORT_CONFIRMED_GOAL_REQUIRED');

@@ -1,4 +1,4 @@
-import {lstat,open,readdir,realpath} from 'node:fs/promises';
+import {lstat,open,readdir,readFile,realpath} from 'node:fs/promises';
 import {constants} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {homedir} from 'node:os';
@@ -73,7 +73,14 @@ function recommendation(kind:ProjectKind,found:Set<string>){
   if(kind==='agentic_workflow'||kind==='mixed')return ['기존 실행 코드를 보존하고 Work 단계·완료 증거·실패 재개 지점을 대응시키기','시험 실행으로 기존 결과와 새 Work 결과를 비교한 뒤에만 이전하기'];
   return ['진입점과 실제 실행 로그를 추가 확인한 뒤 자동화 여부를 판정하기'];
 }
-export async function scanProject(rawPath:string):Promise<ProjectScan>{
+/** Words of the owner's import scope that can find its files: quoted names first, then longer words. */
+export function scopeTerms(scope:string):string[]{
+  const quoted=[...scope.matchAll(/["“”'‘’「」『』]([^"“”'‘’「」『』]{2,40})["“”'‘’「」『』]/gu)].map(match=>match[1]!.trim());
+  const stop=/^(?:the|and|only|with|from|into|가져온다|가져와|업무로|옮긴다|건드리지|않는다|기존|등록된|에서|확인해|정리해|봇만|봇을|봇)$/iu;
+  const words=(scope.match(/[\p{L}\p{N}][\p{L}\p{N}._-]{1,}/gu)??[]).map(word=>word.replace(/[._-]+$/u,''));
+  return [...new Set([...quoted,...words].map(term=>term.toLowerCase()).filter(term=>term.length>=2&&!stop.test(term)))].slice(0,24);
+}
+export async function scanProject(rawPath:string,scope=''):Promise<ProjectScan>{
   const network=networkProjectPath(rawPath);if(network&&process.platform!=='win32')return scanNetworkProject(network);
   const input=normalizeProjectPath(rawPath),entry=await lstat(input);
   if(entry.isSymbolicLink()||!entry.isDirectory())throw Error('PROJECT_DIRECTORY_REQUIRED');
@@ -94,8 +101,23 @@ export async function scanProject(rawPath:string):Promise<ProjectScan>{
     }
     if(entries>MAX_ENTRIES)break;
   }
-  candidates.sort((a,b)=>Number(preferred.has(basename(b)))-Number(preferred.has(basename(a)))||Number(implementationExtensions.has(extname(b)))-Number(implementationExtensions.has(extname(a)))||relative(root,a).localeCompare(relative(root,b)));
-  const evidence:ProjectSignalEvidence[]=[],found=new Set<string>(),digest=createHash('sha256'),commands=new Set<string>(),scripts=new Set<string>();let filesRead=0,bytesRead=0,contextChars=0,generalContextChars=0,contextTruncated=false,purpose:string|null=null,readmeExcerpt:string|null=null;
+  // Scope first (live: a large repository's news bot was never read because unrelated files used the budget). A file
+  // is in scope when its path or text contains a scope word; files that share a name stem with those follow
+  // (the scope said "읽을거리", the code is named reading-*).
+  const terms=scopeTerms(scope),relevance=new Map<string,number>();
+  if(terms.length){
+    const stems=new Map<string,number>();let probed=0;
+    for(const path of candidates){
+      const rel=relative(root,path).toLowerCase();let score=terms.filter(term=>rel.includes(term)).length*3;
+      if(probed<1200){const info=await lstat(path).catch(()=>null);
+        if(info?.isFile()&&info.size<=MAX_FILE_BYTES){probed++;const text=(await readFile(path).catch(()=>Buffer.alloc(0))).toString('utf8').toLowerCase();score+=terms.filter(term=>text.includes(term)).length;}}
+      if(score>0){relevance.set(path,score);const stem=basename(path).toLowerCase().match(/^[a-z][a-z0-9]{3,}/u)?.[0]??'';if(stem&&!/^(?:index|readme|package|config|page|route|main|test|types?)$/u.test(stem))stems.set(stem,(stems.get(stem)??0)+score);}
+    }
+    const strong=[...stems].sort((a,b)=>b[1]-a[1]).slice(0,3).map(([stem])=>stem);
+    for(const path of candidates)if(!relevance.has(path)&&strong.some(stem=>basename(path).toLowerCase().startsWith(stem)))relevance.set(path,1);
+  }
+  candidates.sort((a,b)=>(relevance.get(b)??0)-(relevance.get(a)??0)||Number(preferred.has(basename(b)))-Number(preferred.has(basename(a)))||Number(implementationExtensions.has(extname(b)))-Number(implementationExtensions.has(extname(a)))||relative(root,a).localeCompare(relative(root,b)));
+  const evidence:ProjectSignalEvidence[]=[],found=new Set<string>(),digest=createHash('sha256'),commands=new Set<string>(),scripts=new Set<string>();let filesRead=0,bytesRead=0,contextChars=0,generalContextChars=0,contextTruncated=false,scopeEvidence=0,purpose:string|null=null,readmeExcerpt:string|null=null;
   for(const path of candidates){
     if(filesRead>=MAX_FILES||bytesRead>=MAX_BYTES){truncated=true;break;}
     const resolved=await realpath(path).catch(()=>null);if(!resolved||!resolved.startsWith(root+sep))continue;
@@ -115,6 +137,12 @@ export async function scanProject(rawPath:string):Promise<ProjectScan>{
     }
     if(basename(path)==='package.json')try{const parsed=JSON.parse(content) as {description?:unknown;scripts?:Record<string,unknown>};if(purpose===null&&typeof parsed.description==='string')purpose=safeText(parsed.description);for(const name of Object.keys(parsed.scripts??{}).slice(0,20))if(/^[a-z0-9:_-]{1,50}$/iu.test(name))scripts.add(name);}catch{}
     const lines=content.split(/\r?\n/gu);
+    // An in-scope file is evidence in itself: its opening is shown even when no generic signal matches.
+    if(relevance.has(path)&&evidence.length<100&&scopeEvidence<24){
+      const at=Math.max(0,lines.findIndex(line=>terms.some(term=>line.toLowerCase().includes(term)))),context=source==='observed_code'?codeContext(lines,at,Math.min(MAX_CONTEXT_CHARS-contextChars,MAX_CONTEXT_PER_POINT)):undefined;
+      if(context)contextChars+=context.text.length;scopeEvidence++;
+      evidence.push({id:`e${evidence.length+1}`,file,line:at+1,signal:'scope',description:source==='observed_code'?'사용자가 지정한 가져오기 범위에 해당하는 코드':safeText(`범위 관련 문서: ${lines.slice(at,at+6).join(' ').replace(/\s+/gu,' ')}`,400)??'범위 관련 문서',source,...(context?{context}:{})});
+    }
     for(const [index,line]of lines.entries()){
       for(const match of line.matchAll(/\b(?:bot\.command|command|route|handler)\s*\(\s*['"]([a-z0-9_/-]{1,60})['"]/giu))if(commands.size<30)commands.add(match[1]!);
       if(evidence.length>=100){truncated=true;break;}
