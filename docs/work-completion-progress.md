@@ -249,8 +249,64 @@ Baseline: main f077e04 (PR #36). Branch: claude/workflow-validation-issues-u9mil
   2. 감시 소스 등록(P5): 반복 감시는 호스트 등록 소스로만 돈다. 세트 준비 단계에 블로그 소스 등록이 필요하다.
   3. 양식 초안(P6): radio 필드 지원과 `draft_only` 대상 등록이 필요하다.
 
+## Part B 개시 — B5 실행 수단 전환 (2026-10-01, 사용자 승인: Aside 기본, 건별 승인 없음)
+
+사용자가 Aside(Windows 포어그라운드 브라우저, 로그인 세션 등록됨)를 기본 브라우징 경로로 승인했다.
+Part A 잔여(Swarm 수정 루프, 중간 등급, 지시문 축소)보다 완료율을 직접 막는 B5를 먼저 열었다.
+
+### 구현 (6c78266, 3c2e740)
+- 공개 읽기의 기본 배치(`defaultPublicPlacement`, `src/browser/executor-routing.ts`): 호스트 호환 Aside가 등록돼 있으면
+  `host_foreground`에서 시작하고(다른 포어그라운드 브라우저는 제외), 연결 실패 시 owned headless로 대체한다.
+  계획 모델이 항상 넣는 `browser:{environment:'owned_headless'}`(엔진 없음)는 핀이 아닌 기본값으로 본다.
+  같은 실행에서 headless 차단 기록이 있는 검색은 기존 복구 경로(Aside 1회 인계)를 유지한다. Swarm 경로도 같은 규칙.
+- 공개 텍스트 자원(`readTextResource`): CSV/JSON/TXT/XML URL은 브라우저 다운로드로 끝나므로(P2 실측: "Download is starting")
+  호스트가 HTTPS로 읽어 `offset`/`max_bytes` 페이지로 돌려준다(해시·바이트 수 포함, 8MB 한도, 같은 origin 리디렉션만).
+- 읽기 도구가 실행 중에 던진 **typed 거부**(`WorkClientToolInputError`)는 `read_failed` 관측으로 다음 결정에 넘긴다.
+  일반 오류는 기존대로 "결과 불명" 경로(pending 유지)다. 1차 시도에서 모든 대문자 코드를 교정 대상으로 넓혔다가
+  "중단된 읽기" 계약 테스트 9건이 깨져 typed 거부로 좁혔다.
+- 양식 대상 필드 종류에 `radio` 추가(httpbin 양식의 크기 선택).
+- 가벼움 검증 근거 규칙: 보여 준 JSON 그대로 인용한 값(`v24.21.0\nLatest LTS`처럼 이스케이프된 형태)도 근거로 인정하고,
+  검사당 근거 있는 인용 1개면 충분하다(상태·ID 줄만 인용한 검사는 계속 엄격 경로). 지시문에 "상태·ID 필드가 아닌 관측값을
+  인용하라"를 넣었다. run-4 P1 checkpoint 재현: 수정 전 0/1 → 수정 후 2/2 가벼움 판정.
+- Aside 콜드 스타트: 새 origin마다 첫 작업이 MCP 시간 초과(~30초)로 `operation_refused` 1회 → 실행 재시도 뒤 성공하는 패턴이
+  실측에서 반복됐다(4차 P1 3회·P2 7회, P7은 3연속으로 `failed`). 탭 생성·이동이 시간 초과되면 1회 재시도한다(`mcp-executor.ts`).
+- 보류: "모델이 아는 공개 https URL 열기 허용"(진단 ②)은 구현했다가 되돌렸다. 이 세션의 자동 권한 검사가 보안 완화로
+  거부했고, 실제로도 관측 페이지의 주입 문장이 사용자 로그인 브라우저를 임의 URL로 보낼 수 있어 Aside 기본과 결합하면
+  위험이 커진다. 제안: 모델 제안 URL은 owned headless(세션 없음)에서만 열고, Aside는 사용자가 쓴·관측된 URL과 검색에만 쓴다.
+  사용자 결정 뒤 진행한다.
+- 검증: Work·브라우저·Swarm 테스트 892 PASS / 0 FAIL(6c78266), frozen quick suite 1983/1983 PASS(3c2e740).
+  ledger 196 RQ, public boundary PASS.
+
+### 실측 3·4·5차 (Aside 등록, Codex gpt-6.1-sol low)
+- 3차(25a56a5 + Aside 등록만, 기본 배치 수정 전): P1 `succeeded` 159초 — headless Google 차단 → 기존 Aside 1회 인계로 통과.
+  P2는 CSV 피드 URL이 브라우저 다운로드로 끝나 `WORK_CLIENT_EXECUTION_FAILED` 반복. 여기서 중단하고 수정했다.
+- 4차(6c78266, Aside 재시도·가벼움 근거 수정 전):
+
+| ID | 상태 | 검증 | 호출 | 수정 | 시간 | 확인 |
+|---|---|---|---|---|---|---|
+| P1 | succeeded | 가벼움 판단 불가 → 엄격(1차 거부 후 재읽기, 2회) | 16 | 1 | 939초 | v24.21.0 · 2026-09-08 일치 |
+| P2 | succeeded | 가벼움 판단 불가 → 엄격 | 8 | 0 | 942초 | CSV 12행 = 피드 24시간 창 12건 |
+| P3 | succeeded | 코드 | 0 | 0 | 98초 | 정답 일치 |
+| P4 | succeeded | 가벼움 | 1 | 0 | 172초 | 정답 일치 |
+| P5 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 195초 | 기준 기록 저장, 감시 소스 미등록 |
+| P6 | paused · `WORK_CLIENT_WAIT_CONFIGURATION` | — | 0 | 0 | 54초 | 양식 대상 미등록, 입력·제출 0 |
+| P7 | failed · `WORK_CLIENT_EXECUTION_FAILED` | — | 0 | 0 | 146초 | Aside 첫 작업 시간 초과 3연속(환경) |
+
+  완료 4/7(57%). 거짓 성공 0/4, 거짓 거부 0/3. P1·P2의 시간은 Aside 첫 작업 거부(각 ~30초 × 3·7회)와 엄격 검증(6배치+최종)이
+  대부분이었다.
+- 5차(3c2e740, P1·P2·P7만 다시): P1 `succeeded` 238초(가벼움 1회, Aside 거부 0), P2 `succeeded` 341초(가벼움 1회, 거부 1회 남음,
+  CSV 12행 = 피드 12건), P7 `succeeded` 210초(가벼움 1회; Python 3.14.8, Node.js 26.10.0 Current + LTS 24.21.0, 공식 출처·시각 포함).
+  최종 빌드 기준으로 P1~P4·P7은 완료, P5·P6은 연결 미등록으로 보류다(5/7, 71%).
+
+### 남은 것
+- P5 감시 소스·P6 양식 대상(`draft_only`, radio)을 모델이 만들 수 없다. 사용자가 문장에 쓴 공개 URL을 위임 정책 안에서 읽기 전용
+  소스로 자동 등록하는 B1 최소형이 다음 단위다(설정 파일 결속·재결속과 얽혀 별도 설계 필요).
+- Aside는 origin마다 `aside.exe mcp`를 새로 띄워 연결에 ~28초가 든다. 실행 안에서 MCP 연결을 재사용하면 건당 1~2분 줄어든다.
+- 진단 ②(모델 제안 URL, headless 한정)는 사용자 결정 대기.
+- 푸시: 이 WSL에 GitHub 자격 증명 경로가 없어(HTTPS·gh·SSH 키 없음, Windows Git Credential Manager만 발견) 커밋은 로컬에 있다.
+
 ## 다음 행동
 
-브라우저 경로(Aside 우선 또는 VM)는 사용자 결정에 따라 진행하고, 그 뒤 같은 세트로 3차 측정한다.
+B1 최소형(사용자가 쓴 공개 URL의 읽기 전용 소스 자동 등록)으로 P5·P6을 열고, Aside MCP 연결 재사용으로 시간을 줄인 뒤 같은 세트로 다시 잰다.
 공개 세트 준비 단계에 P5 감시 소스와 P6 양식 대상(radio 지원 포함)을 넣을지 사용자 확인이 필요하다.
 Swarm 결과 경로의 수정 루프(A2 잔여)와 중간 등급(A5 잔여)은 그 뒤 다시 판단한다.
