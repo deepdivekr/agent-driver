@@ -90,6 +90,38 @@ export async function detectTable(bytes:Uint8Array,contentType:string,url:string
     return {format,columns,numeric_columns:numeric,...(jsonFields?{json_fields:jsonFields}:{}),rows:result.rows.length};
   }catch{return null;}
 }
+/** The rows of a detected table, read by the same parser a Pack source uses. */
+export async function tableRows(bytes:Uint8Array,table:DetectedTable):Promise<Row[]>{
+  if(table.json_rows==='features')return featureRows(JSON.parse(Buffer.from(bytes).toString('utf8')),table.json_fields!);
+  const rows:Row[]=[];async function* chunks(){yield bytes;}
+  for await(const row of iterateParsedRows(chunks(),table.format,table.json_fields))rows.push(row);
+  return rows;
+}
+const instant=(value:unknown):number|null=>{
+  if(typeof value==='number')return value>1e11&&value<1e13?value:value>1e9&&value<1e10?value*1000:null;
+  if(typeof value!=='string')return null;const text=value.trim();
+  if(/^\d{13}$/u.test(text))return Number(text);if(/^\d{10}$/u.test(text))return Number(text)*1000;
+  if(!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/u.test(text))return null;
+  const parsed=Date.parse(/[zZ]|[+-]\d{2}:?\d{2}$/u.test(text)?text:`${text.replace(' ','T')}Z`);return Number.isFinite(parsed)?parsed:null;
+};
+const numberOf=(value:unknown):number|null=>typeof value==='number'&&Number.isFinite(value)?value:typeof value==='string'&&/^-?\d+(?:\.\d+)?$/u.test(value.trim())?Number(value.trim()):null;
+/** One saved value equals one source value: the same text, the same number, or the same instant written differently. */
+export function sameValue(saved:unknown,source:unknown):boolean{
+  if(String(saved??'').trim()===String(source??'').trim())return true;
+  const a=numberOf(saved),b=numberOf(source);if(a!==null&&b!==null&&a===b)return true;
+  const at=instant(saved),bt=instant(source);return at!==null&&bt!==null&&Math.abs(at-bt)<1000;
+}
+/** Compares every saved row with the complete source table. A saved row is found when each of its non-empty
+ * values equals a value of one source row (column names may differ; at least two values must take part). */
+export function compareSavedRows(saved:readonly Row[],source:readonly Row[]):{saved_rows:number;found:number;missing:number[]}|null{
+  if(!saved.length||!source.length||saved.length*source.length>2_000_000)return null;
+  const sourceValues=source.map(row=>Object.values(row)),missing:number[]=[];let found=0;
+  saved.forEach((row,index)=>{
+    const values=Object.values(row).filter(value=>value!==null&&String(value).trim()!=='');
+    if(values.length>=2&&sourceValues.some(candidates=>values.every(value=>candidates.some(candidate=>sameValue(value,candidate)))))found++;else missing.push(index+1);
+  });
+  return {saved_rows:saved.length,found,missing:missing.slice(0,5)};
+}
 /** Remembers one observed public table. Returns its source id, or null when it is not eligible or the list is full. */
 export function registerAutoSource(config:HostConfig,url:string,table:DetectedTable):{id:string;created:boolean}|null{
   // A URL with a query is one question asked at one moment (live: a fixed start/end time), not a standing table.

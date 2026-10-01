@@ -544,13 +544,18 @@ test('B5: under delegation a public CSV read is remembered as a source; per-run 
   const read=async work=>{
     const x=await fixture(t,{prompt:'Collect the earthquakes feed'}),raw=JSON.parse(await readFile(x.config.path,'utf8'));raw.environment='production';delete raw.fixture_url;raw.work=work;await writeFile(x.config.path,JSON.stringify(raw));
     const value=await x.toolkit.execute('office_browser_read',{url:'https://data.example.org/feeds/quakes.csv'},'read-1');
-    return {value,config:x.config,activity:x.store.hermesState.prepare("SELECT summary FROM office_activity WHERE kind='source.remembered'").all()};
+    return {x,value,config:x.config,activity:x.store.hermesState.prepare("SELECT summary FROM office_activity WHERE kind='source.remembered'").all()};
   };
   const delegated=await read({model_data_approved:true,autonomy:'delegated'});
   assert.match(delegated.value.table.remembered_source_id,/^auto_data_example_org_feeds_quakes_/u);assert.deepEqual(delegated.value.table.columns,['time','mag','place']);assert.equal(delegated.value.table.rows,2);
   assert.equal(delegated.value.body,undefined,'The complete body is not copied into the receipt.');
   assert.equal(delegated.config.packs.sources.at(-1).url,'https://data.example.org/feeds/quakes.csv');assert.equal(delegated.activity.length,1);
+  const savedCheck=async(x,text)=>(await x.toolkit.execute('office_result_draft',{format:'csv',text,label:'quakes'},`save-${text.length}`)).source_row_check;
+  const good=await savedCheck(delegated.x,'시각,규모,위치\n2026-10-01T01:00:00Z,4.6,Offshore\n2026-10-01T02:00:00Z,5.1,Inland\n');
+  assert.deepEqual([good.source,good.source_rows,good.saved_rows,good.saved_rows_found_in_source,good.saved_rows_not_found],['https://data.example.org/feeds/quakes.csv',2,2,2,undefined]);
+  const invented=await savedCheck(delegated.x,'time,mag,place\n2026-10-01T01:00:00Z,4.6,Offshore\n2026-10-01T03:00:00Z,7.7,Nowhere\n');
+  assert.deepEqual([invented.saved_rows_found_in_source,invented.saved_rows_not_found],[1,[2]],'A row that is not in the source is reported, not hidden.');
   for(const work of [{model_data_approved:true,autonomy:'per_run'},{model_data_approved:true,autonomy:'delegated',delegation:{remember_public_sources:false}}]){
-    const kept=await read(work);assert.equal(kept.value.table,undefined);assert.equal(kept.config.packs,null);assert.equal(kept.activity.length,0);
+    const kept=await read(work);assert.equal(kept.value.table.remembered_source_id,undefined);assert.equal(kept.value.table.rows,2,'The table is still recognised for the row comparison.');assert.equal(kept.config.packs,null);assert.equal(kept.activity.length,0);
   }
 });

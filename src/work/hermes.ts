@@ -5,7 +5,7 @@ import {homedir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
-import {type HostConfig} from '../interface/config.js';
+import {workAutonomy,type HostConfig} from '../interface/config.js';
 import {redact} from '../terminal/contracts.js';
 import {requireCondition} from '../core/contracts.js';
 import {HermesAcp,type HermesTransport,type HermesTransportCallbacks} from '../integrations/hermes-acp.js';
@@ -89,10 +89,15 @@ export class HermesWorkRuntime {
     if(input.action==='send'){
       requireCondition(input.request_id&&input.instruction,'HERMES_INSTRUCTION_REQUIRED');requireCondition(input.cost_acknowledged,'HERMES_MODEL_USAGE_CONSENT_REQUIRED');
       requireCondition(clean(input.instruction,4000)===input.instruction,'CREDENTIAL_LIKE_INPUT');
-      requireCondition(!work.paused&&!['reconciliation_required','needs_human'].includes(work.state),'HERMES_WORK_REVIEW_OR_RESUME_REQUIRED');
+      // Plan B7/B1: under delegation the owner's next instruction is itself the review of the last reply, and an
+      // instruction sent while a turn is running waits for that turn instead of being refused. An uncertain
+      // interrupted effect and a pending permission question still need the owner first.
+      const delegated=workAutonomy(this.config)==='delegated',active=this.store.hermesState.prepare("SELECT status FROM hermes_turn WHERE project_id=? AND work_id=? AND status IN ('queued','starting','running','needs_human')").all(project,input.work_id) as Array<{status:string}>;
+      requireCondition(!work.paused&&work.state!=='reconciliation_required'&&(work.state!=='needs_human'||delegated&&!active.some(turn=>turn.status==='needs_human')),'HERMES_WORK_REVIEW_OR_RESUME_REQUIRED');
       this.store.hermesState.exec('BEGIN IMMEDIATE');try{
-        requireCondition(!this.store.hermesState.prepare("SELECT 1 FROM hermes_turn WHERE project_id=? AND work_id=? AND status IN ('queued','starting','running','needs_human')").get(project,input.work_id),'HERMES_TURN_ALREADY_ACTIVE');
-        const id=randomUUID(),at=now();this.store.hermesState.prepare('INSERT INTO hermes_turn(id,project_id,work_id,request_id,instruction,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(id,project,input.work_id,input.request_id,input.instruction,'queued',at,at);touch(this.store,project,input.work_id,'queued');event(this.store,project,input.work_id,id,'queued','Hermes 실행 대기열에 지시를 저장했습니다.');this.store.hermesState.exec('COMMIT');
+        const now_active=this.store.hermesState.prepare("SELECT status FROM hermes_turn WHERE project_id=? AND work_id=? AND status IN ('queued','starting','running','needs_human')").all(project,input.work_id) as Array<{status:string}>;
+        requireCondition(!now_active.length||delegated&&!now_active.some(turn=>turn.status==='queued'||turn.status==='needs_human'),'HERMES_TURN_ALREADY_ACTIVE');
+        const waiting=now_active.length>0,id=randomUUID(),at=now();this.store.hermesState.prepare('INSERT INTO hermes_turn(id,project_id,work_id,request_id,instruction,status,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(id,project,input.work_id,input.request_id,input.instruction,'queued',at,at);if(!waiting)touch(this.store,project,input.work_id,'queued');event(this.store,project,input.work_id,id,'queued',waiting?'진행 중인 지시가 끝나면 이 지시를 이어서 전달합니다.':'Hermes 실행 대기열에 지시를 저장했습니다.');this.store.hermesState.exec('COMMIT');
       }catch(error){this.store.hermesState.exec('ROLLBACK');throw error;}
       this.tick();
     }else if(input.action==='pause'||input.action==='resume'){
@@ -110,15 +115,15 @@ export class HermesWorkRuntime {
     return this.status(input.work_id);
   }
   private cancelPermission(){if(!this.permission)return;const pending=this.permission;this.permission=null;clearTimeout(pending.timer);pending.resolve({outcome:{outcome:'cancelled'}});}
-  tick(){if(this.stopped||this.running)return;this.running=this.dispatch().finally(()=>{this.running=null;});}
+  tick(){if(this.stopped||this.running)return;this.running=this.dispatch().then(ran=>{this.running=null;if(ran)this.tick();},error=>{this.running=null;throw error;});}
   private async dispatch(){
     const project=this.config.project.id;this.store.hermesState.exec('BEGIN IMMEDIATE');let turn:TurnRow|undefined;
     try{
-      if(this.store.hermesState.prepare("SELECT 1 FROM hermes_turn WHERE project_id=? AND status IN ('starting','running','needs_human')").get(project)){this.store.hermesState.exec('COMMIT');return;}
-      turn=this.store.hermesState.prepare("SELECT t.* FROM hermes_turn t JOIN hermes_work w ON w.work_id=t.work_id WHERE t.project_id=? AND t.status='queued' AND w.paused=0 AND NOT EXISTS (SELECT 1 FROM office_work_lifecycle l WHERE l.project_id=t.project_id AND l.work_id=t.work_id) ORDER BY t.created_at,t.id LIMIT 1").get(project) as TurnRow|undefined;
+      if(this.store.hermesState.prepare("SELECT 1 FROM hermes_turn WHERE project_id=? AND status IN ('starting','running','needs_human')").get(project)){this.store.hermesState.exec('COMMIT');return false;}
+      turn=this.store.hermesState.prepare("SELECT t.* FROM hermes_turn t JOIN hermes_work w ON w.work_id=t.work_id WHERE t.project_id=? AND t.status='queued' AND w.paused=0 AND w.state<>'reconciliation_required' AND NOT EXISTS (SELECT 1 FROM office_work_lifecycle l WHERE l.project_id=t.project_id AND l.work_id=t.work_id) ORDER BY t.created_at,t.id LIMIT 1").get(project) as TurnRow|undefined;
       if(turn)this.store.hermesState.prepare("UPDATE hermes_turn SET status='starting',owner=?,updated_at=? WHERE id=? AND status='queued'").run(ownerIdentity(),now(),turn.id);
       this.store.hermesState.exec('COMMIT');
-    }catch(error){this.store.hermesState.exec('ROLLBACK');throw error;}if(!turn)return;
+    }catch(error){this.store.hermesState.exec('ROLLBACK');throw error;}if(!turn)return false;
     this.current=turn;this.replyBuffer='';let promptSent=false;
     try{
       const work=row(this.store,project,turn.work_id),definition=JSON.parse(work.definition) as HermesWorkDefinition;
@@ -156,11 +161,12 @@ export class HermesWorkRuntime {
       const prompt=`Agent Driver가 관리하는 개인 업무입니다. 실제 실행과 스킬 선택은 Hermes가 담당합니다.\n업무: ${clean(definition.title)}\n요청 ID: ${turn.request_id}\n업무 인계 계약:\n${renderContinuityContext(context)}`;
       const result=await transport.request('session/prompt',{sessionId:turn.session_id,prompt:[{type:'text',text:prompt}]},this.options.turn_timeout_ms??600_000);
       const current=this.store.hermesState.prepare('SELECT status FROM hermes_turn WHERE id=?').get(turn.id);
-      if(current?.status==='reconciliation_required')return;
+      if(current?.status==='reconciliation_required')return true;
       if(result?.stopReason==='end_turn')this.finish(turn,'needs_human','HERMES_REPLY_REQUIRES_RESULT_REVIEW','finished');
       else this.finish(turn,'reconciliation_required','HERMES_TURN_NOT_COMPLETED');
     }catch(error){const interrupted=this.store.hermesState.prepare('SELECT status FROM hermes_turn WHERE id=?').get(turn.id)?.status==='reconciliation_required';if(!interrupted)this.finish(turn,promptSent?'reconciliation_required':'failed',error instanceof Error&&/^[A-Z_]+$/u.test(error.message)?error.message:'HERMES_EXECUTION_FAILED');}
     finally{this.cancelPermission();await this.transport?.close();this.transport=null;this.current=null;this.replyBuffer='';}
+    return true;
   }
   private update(turn:TurnRow,params:any){
     if(!turn.session_id||params?.sessionId!==turn.session_id)return;

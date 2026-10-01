@@ -5,15 +5,15 @@ import {workAutonomy,workDelegation,workPolicyVersion,type HostConfig} from '../
 import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
 import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
-import {type Recipe} from '../packs/contracts.js';
+import {type Recipe,type Row} from '../packs/contracts.js';
 import {workActivity} from './activity.js';
-import {detectTable,registerAutoSource} from '../packs/auto-sources.js';
+import {compareSavedRows,detectTable,registerAutoSource,tableRows} from '../packs/auto-sources.js';
 import {workReferenceMap} from './context.js';
 import {type WorkProposal} from './contracts.js';
 import {requireCondition} from '../core/contracts.js';
 import {hashJson,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {WorkClientToolInputError,type WorkClientTool,type WorkClientToolReceipt,type WorkClientInvocation,type WorkClientCheckpoint} from './client-executor.js';
-import {readScopedFile,readScopedTextPage,hashScopedFile,sha,parseCsv} from '../packs/data.js';
+import {readScopedFile,readScopedTextPage,hashScopedFile,sha,parseCsv,parseData} from '../packs/data.js';
 import {declaredSourceContractIssues} from '../packs/source-catalog.js';
 import {PACK_ENGINE_VERSION} from '../packs/runtime.js';
 import {snapshotHash} from '../taskpack/contracts.js';
@@ -290,6 +290,7 @@ export class WorkExecutionTools {
       add(parsed.data.url);for(const link of parsed.data.links)add(link.url);
     }
   }
+  private readonly readTables=new Map<string,Row[]>();
   private folderMovesDelegated(){return workAutonomy(this.config)==='delegated'&&workDelegation(this.config).registered_folder_moves;}
   catalog():WorkClientTool[]{
     const coding=this.spec.route.kind==='pack'&&this.spec.route.pack_family==='coding.orchestrate';
@@ -536,17 +537,20 @@ export class WorkExecutionTools {
     workActivity(this.store,this.config.project.id,this.workId,'source.started','Reading a public text resource over HTTPS.',{tool_name:'office_browser_read',status:'running',target_url:input.url});
     const {body,...value}=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
     this.allowedUrls.add(value.url);
+    // The complete body of a table read stays with this run so a saved result can be compared with all of it.
+    const table=input.offset===0?await detectTable(body(),value.content_type,value.url):null;
+    if(table){try{this.readTables.set(value.url,await tableRows(body(),table));while(this.readTables.size>4)this.readTables.delete(this.readTables.keys().next().value!);}catch{/* Not a table the reader accepts: no comparison is offered. */}}
     // Delegation policy: a public table read completely is remembered as a read-only source for later Works.
     let remembered:{id:string;format:string;columns:string[];rows:number}|null=null;
-    if(input.offset===0&&workAutonomy(this.config)==='delegated'&&workDelegation(this.config).remember_public_sources){
-      const table=await detectTable(body(),value.content_type,value.url),registered=table?registerAutoSource(this.config,value.url,table):null;
-      if(table&&registered){
+    if(table&&workAutonomy(this.config)==='delegated'&&workDelegation(this.config).remember_public_sources){
+      const registered=registerAutoSource(this.config,value.url,table);
+      if(registered){
         remembered={id:registered.id,format:table.format,columns:table.columns.slice(0,40),rows:table.rows};
         if(registered.created)workActivity(this.store,this.config.project.id,this.workId,'source.remembered',`This public ${table.format.toUpperCase()} table (${table.rows} rows) is remembered as source ${registered.id}. A later Work can collect it completely and have its rows checked in code.`,{tool_name:'office_browser_read',status:'succeeded',target_url:value.url});
       }
     }
     workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${value.title} · ${value.url}`,{tool_name:'office_browser_read',status:'succeeded',executor:'host_http',source:{url:safeControlText(value.url,2048),title:safeControlText(value.title,200),observed_at:value.observed_at}});
-    return remembered?{...value,table:{rows:remembered.rows,columns:remembered.columns,remembered_source_id:remembered.id}}:value;
+    return table?{...value,table:{rows:table.rows,columns:table.columns.slice(0,40),...(remembered?{remembered_source_id:remembered.id}:{})}}:value;
   }
   private socialTarget(site:SocialSearchRequest['site']):BrowserTarget|null{
     if(this.blockedSocial.has(site))return null;
@@ -746,8 +750,19 @@ export class WorkExecutionTools {
       catch(error){if((error as NodeJS.ErrnoException).code!=='EEXIST')throw error;deduplicated=true;}
       const saved=await readScopedFile(path);requireCondition(saved.equals(bytes),'WORK_RESULT_REQUEST_ID_CONFLICT');
       workActivity(this.store,this.config.project.id,this.workId,'result.saved',`Result saved: ${input.label??this.spec.title} · ${saved.length} bytes`);
+      // A table saved from a table this run read: the host compares all saved rows with the complete source body
+      // (live: the verifier saw a truncated source receipt and escalated to four more calls).
+      let rowCheck:Record<string,unknown>|null=null;
+      if(input.format!=='txt'&&this.readTables.size){
+        try{
+          const savedRows=parseData(input.text.replace(/^\uFEFF/u,''),input.format);let best:{url:string;rows:number;result:NonNullable<ReturnType<typeof compareSavedRows>>}|null=null;
+          for(const [url,rows] of this.readTables){const result=compareSavedRows(savedRows,rows);if(result&&(!best||result.found>best.result.found))best={url,rows:rows.length,result};}
+          if(best&&best.result.found>0)rowCheck={source:best.url,source_rows:best.rows,saved_rows:best.result.saved_rows,saved_rows_found_in_source:best.result.found,...(best.result.missing.length?{saved_rows_not_found:best.result.missing}:{}),
+            meaning:'Host comparison of every saved row with the complete body of that source read, not the excerpt shown in its receipt. A saved row is found when each of its values equals a value of one source row. It does not decide which source rows the request wanted.'};
+        }catch{/* The saved content is not a flat table: nothing to compare. */}
+      }
       // The host parsed the content when it accepted the format; the receipt says so (live: "no JSON parsing result is shown").
-      return {status:'succeeded',work_id:this.workId,run_id:this.runId,request_id:requestId,title:input.label??this.spec.title,text:input.text,artifact:{path,sha256:sha(saved),bytes:saved.length,format:input.format},deduplicated,external_delivery:false,...(input.format==='txt'?{}:{format_check:`The host parsed these exact bytes as valid ${input.format.toUpperCase()} before saving.`})};
+      return {...(rowCheck?{source_row_check:rowCheck}:{}),status:'succeeded',work_id:this.workId,run_id:this.runId,request_id:requestId,title:input.label??this.spec.title,text:input.text,artifact:{path,sha256:sha(saved),bytes:saved.length,format:input.format},deduplicated,external_delivery:false,...(input.format==='txt'?{}:{format_check:`The host parsed these exact bytes as valid ${input.format.toUpperCase()} before saving.`})};
     }
     if(name==='office_browser_read'||name==='office_web_search'||name==='office_social_search'){
       const explicit=name==='office_browser_read'?this.browserRequest(args):null,social=name==='office_social_search'?this.socialRequest(args):null,search=name==='office_web_search'?this.searchRequest(args):explicit?searchFromUrl(explicit.url):null,url=explicit?explicit.url:social?socialSearchEntry(social):searchEntry(search!);

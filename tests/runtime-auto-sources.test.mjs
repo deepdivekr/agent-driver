@@ -5,7 +5,7 @@ import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {loadHostConfig} from '../dist/interface/config.js';
-import {detectTable,registerAutoSource,readAutoSources} from '../dist/packs/auto-sources.js';
+import {detectTable,registerAutoSource,readAutoSources,compareSavedRows,sameValue,tableRows} from '../dist/packs/auto-sources.js';
 import {connectedSourceCatalog} from '../dist/packs/source-catalog.js';
 import {collectSource} from '../dist/packs/sources.js';
 
@@ -82,4 +82,16 @@ test('Control Center lists learned procedures and remembered sources; the owner 
   assert.equal(similarProcedure(store,'learned',request),null,'A switched-off procedure is no longer offered.');
   await page.locator('[data-learned-source]').click();await page.locator('[data-learned-source]').waitFor({state:'detached'});
   assert.deepEqual(readAutoSources(join(root,'data')),[]);assert.equal(loadHostConfig(host).packs,null);
+});
+
+// Live: a verifier that saw only an excerpt of a 14-row feed could not decide and escalated. The host has the whole body.
+test('saved rows are compared with the complete source table by value, across renamed columns and time formats',async()=>{
+  const geo=JSON.stringify({type:'FeatureCollection',features:[{properties:{mag:4.6,place:'10 km S of Town, Country',time:1790000000000}},{properties:{mag:5.1,place:'Offshore',time:1790000100000}},{properties:{mag:4.5,place:'Inland',time:1790000200000}}]});
+  const table=await detectTable(bytes(geo),'application/geo+json','https://example.org/day.geojson'),source=await tableRows(bytes(geo),table);
+  assert.equal(source.length,3);
+  const iso=ms=>new Date(ms).toISOString();
+  assert.deepEqual(compareSavedRows([{시각:iso(1790000000000),규모:'4.6',위치:'10 km S of Town, Country'},{시각:iso(1790000100000),규모:'5.1',위치:'Offshore'}],source),{saved_rows:2,found:2,missing:[]});
+  assert.deepEqual(compareSavedRows([{시각:iso(1790000000000),규모:'4.6',위치:'Offshore'},{시각:iso(1790000100000),규모:'5.1',위치:'Offshore'},{시각:'',규모:'9.9',위치:''}],source),{saved_rows:3,found:1,missing:[1,3]},'Values taken from two different source rows, and an invented row, are not found.');
+  assert.equal(compareSavedRows([],source),null);
+  assert.ok(sameValue('4.60',4.6));assert.ok(sameValue('2026-09-21 13:33:20','2026-09-21T13:33:20.000Z'));assert.ok(sameValue(1790000000000,iso(1790000000000)));assert.ok(!sameValue('4.6','4.7'));assert.ok(!sameValue('Offshore','Inland'));
 });

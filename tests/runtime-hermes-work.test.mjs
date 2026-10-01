@@ -163,3 +163,25 @@ test('runtime fixture Hermes buffers split secret lines and redacts the final an
   }
  },notify(){},async close(){}})});t.after(()=>runtime.close());send(runtime,x.id);await runtime.drain();assert.match(runtime.status(x.id).hermes.turns[0].reply,/끝/u);assert.doesNotMatch(runtime.status(x.id).hermes.turns[0].reply,/hidden-secret/u);
 });
+
+// Plan B7/B1: under delegation the next instruction needs no review click and may be sent while a turn is running.
+test('B7: a delegated owner sends the next Hermes instruction without a review click, and one sent mid-turn follows that turn',async t=>{
+ const x=await setup(t);await writeFile(x.config.path,JSON.stringify({schema_version:1,project_id:'personal-test',caller_ref:'local-agent',account_ref:'owner',worktree:x.root,data_dir:join(x.root,'data'),environment:'production',work:{model_data_approved:true,autonomy:'delegated'}}));
+ const fake=fakeFactory(),runtime=new HermesWorkRuntime(x.store,x.config,{transport:fake.transport});t.after(()=>runtime.close());
+ send(runtime,x.id);await runtime.drain();assert.equal(runtime.status(x.id).run_status,'needs_human');
+ send(runtime,x.id,{instruction:'이어서 요약해줘'});await until(()=>fake.prompts.length===2);await runtime.drain();
+ assert.equal(runtime.status(x.id).hermes.turns.filter(turn=>turn.status==='finished').length,2,'The last reply did not need a separate review click.');
+ // Mid-turn: the first prompt is held open; the second instruction waits and is delivered after it.
+ const y=await setup(t);await writeFile(y.config.path,JSON.stringify({schema_version:1,project_id:'personal-test',caller_ref:'local-agent',account_ref:'owner',worktree:y.root,data_dir:join(y.root,'data'),environment:'production',work:{model_data_approved:true,autonomy:'delegated'}}));
+ let release;const prompts=[],transport=callbacks=>({async request(method,args){
+   if(method==='initialize')return {protocolVersion:1};if(method==='session/new')return {sessionId:'s-1'};if(method==='session/load')return {};
+   prompts.push(args.prompt[0].text);if(prompts.length===1)await new Promise(resolve=>{release=resolve;});
+   callbacks.update({sessionId:args.sessionId,update:{sessionUpdate:'agent_message_chunk',content:{type:'text',text:'완료\n'}}});return {stopReason:'end_turn'};
+  },notify(){},async close(){}});
+ const held=new HermesWorkRuntime(y.store,y.config,{transport});t.after(()=>held.close());
+ send(held,y.id,{instruction:'첫 번째 지시'});await until(()=>prompts.length===1);
+ send(held,y.id,{instruction:'방향을 바꿔 두 번째 지시'});assert.equal(prompts.length,1,'The running turn is not interrupted.');
+ assert.throws(()=>send(held,y.id,{instruction:'세 번째 지시'}),/HERMES_TURN_ALREADY_ACTIVE/u,'Only one instruction waits.');
+ release();await until(()=>prompts.length===2);await until(()=>held.status(y.id).hermes.turns.filter(turn=>turn.status==='finished').length===2);
+ assert.match(prompts[1],/방향을 바꿔 두 번째 지시/u);
+});
