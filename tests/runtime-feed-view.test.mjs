@@ -24,6 +24,9 @@ test('runtime contract a list that does not fit is shown with shorter entries, n
   const view=listView(JSON.stringify({topic_list:{topics}}),'application/json');
   assert.equal(view.text.split('\n').length,30);assert.ok(Buffer.byteLength(view.text)<=9000);
   const last=JSON.parse(view.text.split('\n').at(-1));assert.equal(last.slug,'topic-29');assert.equal(last.created_at,'2026-10-01T00:00:00Z');assert.equal(last.excerpt,undefined);
+  const wide=Array.from({length:30},(_,index)=>({id:index,title:`Topic ${index} `+'t'.repeat(60),fancy_title:'f'.repeat(90),slug:`topic-${index}-`+'s'.repeat(40),created_at:'2026-10-01T00:00:00Z',last_posted_at:'2026-10-01T02:00:00Z',bumped_at:'2026-10-01T01:00:00Z',image_url:'https://example.org/'+'i'.repeat(80),last_poster_username:'poster-name',author_name:'a'.repeat(40),updated_at:'2026-10-01T03:00:00Z'}));
+  const tight=listView(JSON.stringify({topic_list:{topics:wide}}),'application/json');assert.equal(tight.text.split('\n').length,30);assert.ok(Buffer.byteLength(tight.text)<=9000);
+  assert.deepEqual(Object.keys(JSON.parse(tight.text.split('\n')[29])),['id','title','slug','created_at']);
   const feed='<?xml version="1.0"?><rss><channel>'+Array.from({length:30},(_,index)=>`<item><title>Post ${index}</title><link>https://example.org/${index}</link><pubDate>Thu, 01 Oct 2026 00:00:00 GMT</pubDate><description>${'d'.repeat(900)}</description></item>`).join('')+'</channel></rss>';
   const entries=listView(feed,'application/rss+xml');assert.equal(entries.text.split('\n').length,30);assert.ok(Buffer.byteLength(entries.text)<=9000);assert.equal(JSON.parse(entries.text.split('\n')[29]).link,'https://example.org/29');
 });

@@ -44,6 +44,8 @@ export function listView(body:string,contentType:string,room=9000):{kind:'feed'|
     if(rows?.length){
       let text=lines(rows);
       if(!fits(text))text=lines(rows.map(row=>Object.fromEntries(Object.entries(row).filter(([key])=>/(?:^id$|title|headline|subject|slug|url|link|creat|publish|updat|date|time|author|name)/iu.test(key)).map(([key,value])=>[key,typeof value==='string'?value.slice(0,160):value]))));
+      // Still too long: one identifier, the title, one address and one date per entry.
+      if(!fits(text))text=lines(rows.map(row=>{const first=(pattern:RegExp)=>Object.entries(row).find(([key,value])=>pattern.test(key)&&value!==null&&value!=='');return Object.fromEntries([first(/^id$/iu),first(/title|headline|subject/iu),first(/slug|url|link/iu),first(/creat|publish/iu)??first(/date|time|updat/iu)].filter((entry):entry is [string,string|number|boolean|null]=>Boolean(entry)).map(([key,value])=>[key,typeof value==='string'?value.slice(0,120):value]));}));
       return {kind:'json_list',entries:rows.length,text};
     }
   }catch{/* Not JSON after all. */}}

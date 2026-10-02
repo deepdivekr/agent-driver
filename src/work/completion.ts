@@ -700,7 +700,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const value=object(item.receipt.value),urls=[item.invocation.arguments.url,value?.url,value?.requested_url].filter((url):url is string=>typeof url==='string'&&url.length>8);
       // The host's own state reads (the schedule) are small and are what a check about that state rests on (live: the
       // schedule read was only listed and the check on it could not be decided).
-      return item.invocation.tool_name===controlledTraceTool||['office_result_draft','office_result_read','office_schedule_status'].includes(item.invocation.tool_name)||item.receipt.evidence_ids.some(id=>savedText.includes(id))||savedText.includes(item.invocation.request_id)||urls.some(url=>savedText.includes(url)||savedText.includes(url.replace(/\/$/u,'')));
+      return item.invocation.tool_name===controlledTraceTool||['office_result_draft','office_result_read','office_schedule_status'].includes(item.invocation.tool_name)||item.receipt.evidence_ids.some(id=>savedText.includes(id))||savedText.includes(item.invocation.request_id)||urls.some(url=>savedText.includes(url)||savedText.includes(url.replace(/[?#].*$/u,'').replace(/\/$/u,'')));
     };
     // The claim's own citations are normalised by the host to every receipt, so only the saved result decides.
     // A result that names fewer than two of its reads gives no selection, and everything is shown as before.
@@ -729,10 +729,17 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
     const fast=savedText?options.fastJudgment?.():undefined,settled=new Set<string>();
     if(fast){
       const blocks=savedText.split(/\n\s*\n/u).filter(block=>block.trim().length>40);
-      const pages=assembled.filter(item=>item.page).map(item=>({item,statement:blocks.filter(block=>item.page!.urls.some(url=>block.includes(url)||block.includes(url.replace(/\/$/u,'')))).join('\n\n').slice(0,2400)})).filter(entry=>entry.statement).slice(0,16);
+      // A report item mixes what the page says (a summary) with bookkeeping (links, feed times, receipt IDs), and a
+      // whole item asked at once comes back unknown (live: 0 of 2). Each line is asked by itself: a page is confirmed
+      // when at least one line is supported by it and no line is contradicted or absent from it.
+      const bare=(url:string)=>url.replace(/[?#].*$/u,'').replace(/\/$/u,'');
+      const pages=assembled.filter(item=>item.page).map(item=>({item,lines:blocks.filter(block=>item.page!.urls.some(url=>block.includes(bare(url)))).flatMap(block=>block.split('\n')).map(line=>line.trim()).filter(line=>line.length>12).slice(0,16)})).filter(entry=>entry.lines.length).slice(0,16);
       await guarded();
-      const judged=await Promise.all(pages.map(({item,statement})=>judgeRow({page_text:item.page!.text.slice(0,12000),statement},'statement is what a saved report says about this page. Does page_text say what statement says about the page\'s content? Names, numbers and claims about the content must appear in or follow directly from page_text. Ignore report bookkeeping in statement such as item numbers, feed timestamps and labels.',{supported:'page_text states what the statement says about the content.',not_supported:'The statement says something about the content that page_text does not say, or contradicts it.'},0.9,fast).then(result=>result.decider==='jev'&&result.label==='supported',()=>false)));
-      await guarded();options.onPaidJudgment?.(pages.length);
+      const judged=await Promise.all(pages.map(async({item,lines})=>{
+        const answers=await Promise.all(lines.map(line=>judgeRow({page_text:item.page!.text.slice(0,12000),line},'line is one line of a report item about this page. Is what line says found in page_text?',{supported:'page_text says what the line says.',not_about_page:'The line is report bookkeeping (a label, a feed or collection time, a link, a note about the report itself), not a statement about what the page says.',not_supported:'The line states something about the page content that page_text does not say or contradicts.'},0.9,fast).then(result=>result.decider==='jev'?result.label:'unknown',()=>'unknown')));
+        return answers.includes('supported')&&!answers.includes('not_supported');
+      }));
+      await guarded();options.onPaidJudgment?.(pages.reduce((sum,page)=>sum+page.lines.length,0));
       pages.forEach(({item},index)=>{
         if(!judged[index])return;
         const cut=item.content.indexOf('\n');item.content=item.content.slice(0,Math.max(0,cut)+1+1200);item.truncated=false;
