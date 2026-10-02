@@ -351,7 +351,11 @@ export class WorkSupervisor {
       // the seven days the prompt had named).
       const agreedAnswers=Object.entries(work.answers??{}).slice(0,4).map(([id,answer])=>{const question=(work.questions as Array<{id?:string;prompt?:string;options?:Array<{id?:string;label?:string;meaning?:string}>}>|null)?.find(item=>item.id===id),option=question?.options?.find(item=>item.id===answer);return safeControlText(`${question?.prompt??id} -> ${option?`${option.label}: ${option.meaning??''}`:String(answer)}`,500);});
       const agreedScope=[...(spec.recurrence.kind==='recurring'?['Host rule the owner was told at intake: every run of this recurring collection covers only items published on the run date or the day before it. A longer period named in the prompt does not apply.']:[]),...agreedAnswers.map(item=>`Owner's answer at intake: ${item}`)].join(' ').slice(0,1900);
-      const originalUserRequest={prompt:work.prompt,...userIntake,user_directions:directions,...(agreedScope?{agreed_scope:agreedScope}:{})};
+      // A recurring collection takes the latest items only: published on the run date or the day before it.
+      const zone=row.timezone??Intl.DateTimeFormat().resolvedOptions().timeZone,day=(offset:number)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(Date.now()-offset*86_400_000));
+      const collectionWindow=spec.recurrence.kind==='recurring'?{run_date:day(0),earliest_published_date:day(1),timezone:zone,rule:'Include only items published on run_date or earliest_published_date. The date is the one the feed or list shows for the entry; an item whose own page shows no date keeps the entry\'s date. Leave an item out only when its entry or its own page shows an older date. Take the newest first.'}:null;
+      // The verifier judges dates by the same window the run was given (live: it refused entry dates the rule allows).
+      const originalUserRequest={prompt:work.prompt,...userIntake,user_directions:directions,...(agreedScope?{agreed_scope:agreedScope}:{}),...(collectionWindow?{host_rule:`Collection window: run_date ${collectionWindow.run_date}, earliest_published_date ${collectionWindow.earliest_published_date}, timezone ${collectionWindow.timezone}. ${collectionWindow.rule}`}:{})};
       const saveCheckpoint=(cp:WorkClientCheckpoint|SupervisedSwarmCheckpoint)=>{checkpoint=cp;const encoded=JSON.stringify(cp);requireCondition(Buffer.byteLength(encoded)<=1_000_000,'WORK_CHECKPOINT_TOO_LARGE');db.prepare('UPDATE office_supervisor SET checkpoint=?,updated_at=? WHERE project_id=? AND run_id=? AND owner=?').run(encoded,now(),project,row.run_id,row.owner);};
       guard();let admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
       let completionDenial:{code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED'|'WORK_COMPLETION_BATCH_CONTRADICTS'|'WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL';check_id:string;verdict:'unsupported'|'unknown';reason?:string}|null=null;
@@ -507,9 +511,6 @@ export class WorkSupervisor {
       guard();admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
       const progressBefore=workProgress(checkpoint as WorkClientCheckpoint|null);
       // B2–B4 first slice: a verified earlier run of a similar request is offered as guidance (never as evidence).
-      // A recurring collection takes the latest items only: published on the run date or the day before it.
-      const zone=row.timezone??Intl.DateTimeFormat().resolvedOptions().timeZone,day=(offset:number)=>new Intl.DateTimeFormat('en-CA',{timeZone:zone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(Date.now()-offset*86_400_000));
-      const collectionWindow=spec.recurrence.kind==='recurring'?{run_date:day(0),earliest_published_date:day(1),timezone:zone,rule:'Include only items published on run_date or earliest_published_date. The date is the one the feed or list shows for the entry; an item whose own page shows no date keeps the entry\'s date. Leave an item out only when its entry or its own page shows an older date. Take the newest first.'}:null;
       // The planner's selection (B3) wins when it is still offerable; otherwise the closest similar procedure.
       const chosen=spec.procedure_selection?selectedProcedure(this.store,project,spec.procedure_selection.id,work.prompt):null;
       const offered=chosen??similarProcedure(this.store,project,work.prompt);

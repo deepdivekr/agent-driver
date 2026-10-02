@@ -222,15 +222,16 @@ test('A7: the fast judgment compares the saved result with each page it names; a
   const report='News of 2026-10-01\n\n'+[0,1,2].map(i=>`${i+1}. Post ${i}\nSource: https://example.org/post-${i}\nSummary: Post ${i} says agents improved by ${i+10} percent.`).join('\n\n');
   const pages=[0,1,2].map(i=>page(i,`https://example.org/post-${i}`,`Post ${i} says agents improved by ${i+10} percent.`));
   const saved={...draft(3),receipt:{...draft(3).receipt,value:{...draft(3).receipt.value,text:report}}};
-  const asked=[],jev={async systemOne(request){const record=request.state.record;asked.push(record);const choice=/post-2|Post 2/u.test(record.line)?'unknown':record.line.startsWith('Source:')?'not_about_page':'supported';return {answers:{label:{type:'choice',choice,confidence:.97,probabilities:{supported:.01,not_about_page:.01,not_supported:.005,unknown:.005,[choice]:.97}}}};}};
+  const asked=[],jev={async systemOne(request){const record=request.state.record;asked.push(record);const choice=!record.line||/post-2|Post 2/u.test(record.line)?'unknown':record.line.startsWith('Source:')?'not_about_page':'supported';return {answers:{label:{type:'choice',choice,confidence:.97,probabilities:{supported:.01,not_about_page:.01,not_supported:.005,unknown:.005,[choice]:.97}}}};}};
   const model=fixture(input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:['ev-draft-1'],quotes:[{evidence_id:'ev-draft-1',quote:'Post 1 says agents improved by 11 percent.'}],reason:'The saved report names its posts.'}))}));
   let counted=0;const notes=[],verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,fastJudgment:()=>jev,onPaidJudgment:calls=>{counted+=calls;},progress:event=>notes.push(event.summary)});
   assert.equal(await verify(checks,sealed(t,[...pages,saved]),claimFor(['ev-draft-1'])),true,JSON.stringify(notes));assert.deepEqual(model.kinds,['light']);
-  assert.equal(asked.length,6);assert.equal(counted,6);assert.deepEqual(asked.filter(record=>record.page_text.startsWith('Post 0')).map(record=>record.line),['Source: https://example.org/post-0','Summary: Post 0 says agents improved by 10 percent.'],'Each page is asked about the lines of the item that names it, one line at a time.');
+  const lines=asked.filter(record=>record.line);assert.equal(lines.length,6);assert.equal(counted,asked.length);assert.deepEqual(lines.filter(record=>record.page_text.startsWith('Post 0')).map(record=>record.line),['Source: https://example.org/post-0','Summary: Post 0 says agents improved by 10 percent.'],'Each page is asked about the lines of the item that names it, one line at a time.');
   const shown=id=>model.inputs[0].evidence.find(item=>item.evidence_id===id);
   assert.match(shown('ev-source-0').grounded_by_host,/supported/u);assert.equal(shown('ev-source-0').truncated,false);assert.ok(shown('ev-source-0').content.length<1700);
   assert.equal(shown('ev-source-2').grounded_by_host,undefined,'A page the fast judgment did not confirm is shown as before.');assert.ok(shown('ev-source-2').content.length>5000);
   assert.ok(notes.some(note=>/compared the saved result with 3 pages it names: 2 supported/u.test(note)));
+  assert.ok(asked.some(record=>record.condition),'A page the fast judgment could not confirm does not stop it from answering the checks; only a contradicted page does.');
 });
 
 // Owner direction 2026-10-02: single conditions are yes/no questions; the fast judgment answers them in parallel.
@@ -238,16 +239,16 @@ test('A7: checks the fast judgment answers yes are settled without the verifier 
   const page=(turn,url,body)=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{url},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url,title:`Title ${turn}`,text:body,links:[],provenance:'live_browser_dom',effect:'read_only',observed_at:at(turn)},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
   const report='News of 2026-10-01\n\n1. Post 0\nSource: https://example.org/post-0\nSummary: Post 0 says agents improved by 10 percent.';
   const saved={...draft(1),receipt:{...draft(1).receipt,value:{...draft(1).receipt.value,text:report}}},observed=()=>sealed(t,[page(0,'https://example.org/post-0','Post 0 says agents improved by 10 percent.'),saved]);
-  const jevFor=doubt=>({asked:[],async systemOne(request){const record=request.state.record;this.asked.push(record);const choice=record.page_text?'supported':doubt(record.condition)?'unknown':'yes';const others=record.page_text?{supported:.01,not_about_page:.01,not_supported:.005,unknown:.005}:{yes:.01,no:.01,unknown:.01};return {answers:{label:{type:'choice',choice,confidence:.97,probabilities:{...others,[choice]:.97}}}};}});
+  const jevFor=doubt=>({asked:[],async systemOne(request){const record=request.state.record;this.asked.push(record);const choice=record.page_text?'supported':doubt(request)?'unknown':record.host_steps&&!record.saved_report?'unknown':'yes';const others=record.page_text?{supported:.01,not_about_page:.01,not_supported:.005,unknown:.005}:{yes:.01,no:.01,unknown:.01};return {answers:{label:{type:'choice',choice,confidence:.97,probabilities:{...others,[choice]:.97}}}};}});
   {
     const jev=jevFor(()=>false),model=fixture(()=>{throw Error('The verifier model must not be asked.');}),audits=[],notes=[];let counted=0;
     const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,fastJudgment:()=>jev,onPaidJudgment:calls=>{counted+=calls;},audit:event=>audits.push(event),progress:event=>notes.push(event.summary)});
     assert.equal(await verify(checks,observed(),claimFor(['ev-draft-1'])),true,JSON.stringify(notes));assert.deepEqual(model.kinds,[]);
-    const conditions=jev.asked.filter(record=>record.condition);assert.ok(conditions.length>=checks.length&&conditions.every(record=>record.saved_report===report&&/office_browser_read succeeded https:\/\/example\.org\/post-0/u.test(record.host_steps)));
-    assert.equal(counted,2+conditions.length);assert.ok(audits.some(event=>event.verifier==='fast'&&event.code==='WORK_COMPLETION_FAST_JUDGMENT'&&event.checks.length===conditions.length));
+    const conditions=jev.asked.filter(record=>!record.page_text);assert.ok(conditions.length>=checks.length*3&&conditions.some(record=>record.saved_report===report&&!record.host_steps)&&conditions.some(record=>/office_browser_read succeeded https:\/\/example\.org\/post-0/u.test(record.host_steps)));
+    assert.equal(counted,2+conditions.length);assert.ok(audits.some(event=>event.verifier==='fast'&&event.code==='WORK_COMPLETION_FAST_JUDGMENT'&&event.checks.length===conditions.length/3));
   }
   {
-    const doubted=checks[0].result,jev=jevFor(condition=>condition===doubted);
+    const doubted=checks[0].result,jev=jevFor(request=>JSON.stringify(request).includes(doubted));
     const model=fixture(input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:['ev-draft-1'],quotes:[{evidence_id:'ev-draft-1',quote:'Post 0 says agents improved by 10 percent.'}],reason:'Shown in the saved report.'}))}));
     const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,fastJudgment:()=>jev});
     assert.equal(await verify(checks,observed(),claimFor(['ev-draft-1'])),true);assert.deepEqual(model.kinds,['light']);
