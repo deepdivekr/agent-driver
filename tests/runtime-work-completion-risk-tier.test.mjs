@@ -234,6 +234,18 @@ test('A7: the fast judgment compares the saved result with each page it names; a
   assert.ok(asked.some(record=>record.condition),'A page the fast judgment could not confirm does not stop it from answering the checks; only a contradicted page does.');
 });
 
+// Live: a version stood on one page and its release date on another; each page alone "contradicted" the line.
+test('A7: a report line that names several pages is judged against those pages together',async t=>{
+  const page=(turn,url,body)=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{url},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url,title:`Title ${turn}`,text:body,links:[],provenance:'live_browser_dom',effect:'read_only',observed_at:at(turn)},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
+  const report='The latest LTS is v24.21.0, released on 2026-09-08. (Sources: https://example.org/home · https://example.org/release)';
+  const saved={...draft(2),receipt:{...draft(2).receipt,value:{...draft(2).receipt.value,text:report}}};
+  const jev={async systemOne(request){const record=request.state.record,choice=!record.line?'unknown':record.page_text.includes('v24.21.0')&&record.page_text.includes('2026-09-08')?'supported':'not_supported';return {answers:{label:{type:'choice',choice,confidence:.97,probabilities:record.line?{supported:.01,not_about_page:.01,not_supported:.005,unknown:.005,[choice]:.97}:{yes:.01,no:.01,unknown:.98}}}};}};
+  const model=fixture(input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:['ev-draft-1'],quotes:[{evidence_id:'ev-draft-1',quote:'The latest LTS is v24.21.0'}],reason:'Shown.'}))})),notes=[];
+  const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,fastJudgment:()=>jev,progress:event=>notes.push(event.summary)});
+  assert.equal(await verify(checks,sealed(t,[page(0,'https://example.org/home','Latest LTS: v24.21.0'),page(1,'https://example.org/release','Released 2026-09-08'),saved]),claimFor(['ev-draft-1'])),true,JSON.stringify(notes));
+  assert.ok(notes.some(note=>/with 2 pages it names: 2 supported\./u.test(note)),JSON.stringify(notes));
+});
+
 // Owner direction 2026-10-02: single conditions are yes/no questions; the fast judgment answers them in parallel.
 test('A7: checks the fast judgment answers yes are settled without the verifier model; the rest go to it alone',async t=>{
   const page=(turn,url,body)=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{url},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url,title:`Title ${turn}`,text:body,links:[],provenance:'live_browser_dom',effect:'read_only',observed_at:at(turn)},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});

@@ -733,10 +733,16 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       // whole item asked at once comes back unknown (live: 0 of 2). Each line is asked by itself: a page is confirmed
       // when at least one line is supported by it and no line is contradicted or absent from it.
       const bare=(url:string)=>url.replace(/[?#].*$/u,'').replace(/\/$/u,'');
-      const pages=assembled.filter(item=>item.page).map(item=>({item,lines:blocks.filter(block=>item.page!.urls.some(url=>block.includes(bare(url)))).flatMap(block=>block.split('\n')).map(line=>line.trim()).filter(line=>line.length>12).slice(0,16)})).filter(entry=>entry.lines.length).slice(0,16);
+      // A report item that names several pages is judged against those pages together: what one line says may be
+      // spread over them (live: a version on one page and its release date on another, and each page alone "contradicted" the line).
+      const paged=assembled.filter(item=>item.page),names=(block:string,item:typeof paged[number])=>item.page!.urls.some(url=>block.includes(bare(url)));
+      const pages=paged.map(item=>{
+        const mine=blocks.filter(block=>names(block,item)),together=paged.filter(other=>mine.some(block=>names(block,other)));
+        return {item,text:together.map(other=>other.page!.text.slice(0,Math.floor(12000/together.length))).join('\n\n'),lines:mine.flatMap(block=>block.split('\n')).map(line=>line.trim()).filter(line=>line.length>12).slice(0,16)};
+      }).filter(entry=>entry.lines.length).slice(0,16);
       await guarded();
-      const judged=await Promise.all(pages.map(async({item,lines})=>{
-        const answers=await Promise.all(lines.map(line=>judgeRow({page_text:item.page!.text.slice(0,12000),line},'line is one line of a report item about this page. Is what line says found in page_text?',{supported:'page_text says what the line says.',not_about_page:'The line is report bookkeeping (a label, a feed or collection time, a link, a note about the report itself), not a statement about what the page says.',not_supported:'The line states something about the page content that page_text does not say or contradicts.'},0.9,fast).then(result=>result.decider==='jev'?result.label:'unknown',()=>'unknown')));
+      const judged=await Promise.all(pages.map(async({text,lines})=>{
+        const answers=await Promise.all(lines.map(line=>judgeRow({page_text:text,line},'line is one line of a report item about this page. Is what line says found in page_text?',{supported:'page_text says what the line says.',not_about_page:'The line is report bookkeeping (a label, a feed or collection time, a link, a note about the report itself), not a statement about what the page says.',not_supported:'The line states something about the page content that page_text does not say or contradicts.'},0.9,fast).then(result=>result.decider==='jev'?result.label:'unknown',()=>'unknown')));
         return answers.includes('not_supported')?'contradicted':answers.includes('supported')?'supported':'unconfirmed';
       }));
       await guarded();options.onPaidJudgment?.(pages.reduce((sum,page)=>sum+page.lines.length,0));
