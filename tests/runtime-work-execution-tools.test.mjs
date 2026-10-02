@@ -565,6 +565,6 @@ test('a page receipt keeps its whole text and, of its links, the ones that leave
   const menu=Array.from({length:150},(_,i)=>({text:`Menu ${i}`,url:`https://forum.example.org/c/category-${i}`})),originals=[{text:'Official announcement',url:'https://vendor.example.com/blog/release'},{text:'Paper',url:'https://arxiv.org/abs/2609.40181'}];
   const observed={url:'https://forum.example.org/t/post/1',title:'Post',text:'본문 '.repeat(800)},kept=linksThatFit(observed,[...menu.slice(0,100),...originals,...menu.slice(100)]);
   assert.ok(kept.length<152,'The list is shortened.');assert.ok(originals.every(link=>kept.includes(link)),'The links to the originals stay.');
-  assert.ok(Buffer.byteLength(JSON.stringify({...observed,links:kept}))<=14500);assert.equal(kept.indexOf(originals[0])>kept.indexOf(menu[0]),true,'Page order is kept.');
+  assert.ok(Buffer.byteLength(JSON.stringify({...observed,links:kept}))<=14500);assert.deepEqual(kept.slice(0,2),originals,'In a long list the links that leave the site come first.');
   assert.equal(linksThatFit(observed,menu.slice(0,5)).length,5,'A short list is untouched.');
 });

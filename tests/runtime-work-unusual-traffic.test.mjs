@@ -171,7 +171,7 @@ test('runtime fixture an address that downloads a file that is not text is a rea
 test('runtime fixture a long page is one read: its text is kept whole and the run gets a digest whose quotes the host found in the page',async t=>{
   const body=Array.from({length:400},(_,index)=>`Paragraph ${index} of the long report about launch cadence.`).join('\n')+'\nThe constellation reached 61 satellites on 2026-09-28.';
   const long=url=>observation(url,{text:body});
-  const x=await setup(t,{browser:null,prompt:`Read ${article}`,observe:(target,url)=>long(url),digest:input=>({summary:`Digest of ${input.page.title}: 61 satellites on 2026-09-28.`,quotes:['The constellation reached 61 satellites on 2026-09-28.','A sentence the page never contained.']})}),tools=x.create();
+  const x=await setup(t,{browser:null,prompt:`Read ${article}`,observe:(target,url)=>long(url),digest:input=>({summary:`Digest of ${input.page.title}: 61 satellites on 2026-09-28.`,quotes:['The constellation reached 61 satellites on 2026-09-28.','A sentence the page never contained.'],source_links:[]})}),tools=x.create();
   const value=await tools.execute('office_browser_read',{url:article},'long-read');
   assert.equal(value.rendered.from,'page_digest');assert.equal(value.rendered.text_bytes_total,Buffer.byteLength(body));assert.equal(value.has_more,undefined,'One read covers the page.');
   assert.match(value.text,/^Digest of Observed source results/u);assert.match(value.text,/"The constellation reached 61 satellites on 2026-09-28\."/u);
@@ -180,6 +180,10 @@ test('runtime fixture a long page is one read: its text is kept whole and the ru
   assert.equal(await readFile(join(dirname(x.config.dbPath),'work-pages',x.work.work_id,`${value.rendered.text_sha256}.txt`),'utf8'),body,'The full text stays with the Work.');
   const part=await tools.execute('office_browser_read',{url:article,offset:10000},'raw-part');
   assert.equal(part.rendered,undefined);assert.equal(part.offset,10000);assert.equal(part.text,Buffer.from(body).subarray(10000,20000).toString('utf8'),'The page\'s own text is still readable by offset.');
+  // A post about something published elsewhere: the digest names the original, and only an address the page links to.
+  const original='https://vendor.example.com/blog/launch',post=await setup(t,{browser:null,prompt:`Read ${article}`,observe:(target,url)=>observation(url,{text:body,links:[{text:'Announcement',url:original},{text:'Home',url:'https://example.org/'}]}),digest:input=>{assert.deepEqual(input.links.map(link=>link.url),[original],'The reader is shown the links that leave the site.');return {summary:'A post about the launch.',quotes:[],source_links:[original,'https://invented.example.net/x']};}});
+  const posted=await post.create().execute('office_browser_read',{url:article},'post-read');
+  assert.match(posted.text,/Originals this page links to:\nhttps:\/\/vendor\.example\.com\/blog\/launch/u);assert.doesNotMatch(posted.text,/invented/u);
   const y=await setup(t,{browser:null,prompt:`Read ${article}`,observe:(target,url)=>long(url)}),plain=y.create(),fallback=await plain.execute('office_browser_read',{url:article},'no-reader');
   assert.equal(fallback.has_more,true,'Without a reader the page is read in parts as before.');assert.equal(fallback.rendered,undefined);
 });
@@ -188,7 +192,7 @@ test('runtime fixture a long page is one read: its text is kept whole and the ru
 test('runtime fixture the reads of one decision are opened in order and their digests are written at the same time',async t=>{
   const body='Long page. '+'Sentence about the launch cadence of the constellation. '.repeat(400),second='https://example.org/second-report';
   let running=0,most=0;
-  const digest=async input=>{running++;most=Math.max(most,running);await new Promise(done=>setTimeout(done,120));running--;return {summary:`Digest of ${input.page.url}`,quotes:['Sentence about the launch cadence of the constellation.']};};
+  const digest=async input=>{running++;most=Math.max(most,running);await new Promise(done=>setTimeout(done,120));running--;return {summary:`Digest of ${input.page.url}`,quotes:['Sentence about the launch cadence of the constellation.'],source_links:[]};};
   const x=await setup(t,{browser:null,prompt:`Read ${article} and ${second}`,observe:(target,url)=>observation(url,{text:body,links:[]}),digest}),tools=x.create();
   tools.prepareReads([{tool:'office_browser_read',arguments:{url:article}},{tool:'office_browser_read',arguments:{url:second}}]);
   const first=await tools.execute('office_browser_read',{url:article},'read-1'),next=await tools.execute('office_browser_read',{url:second},'read-2');
