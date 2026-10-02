@@ -1,3 +1,4 @@
+import {ownerMcpReady} from '../integrations/owner-mcp.js';
 import {ownerEnvironmentContext} from '../integrations/client-environment.js';
 import {randomUUID} from 'node:crypto';
 import {resolve} from 'node:path';
@@ -342,6 +343,8 @@ export class WorkSupervisor {
       // A recurring Work the host schedules needs no separate watch connection: every scheduled run rereads the
       // source and compares with the previous saved result. The executor is told so it finishes this run instead of waiting.
       const scheduled=this.schedules.status(row.work_id),hostSchedule=scheduled?.enabled?{enabled:true,definition:scheduled.definition,next_run_at:scheduled.next_run_at,meaning:'The host reruns this Work on this schedule. Each run rereads the source and compares with the previous saved result; no watch connection or registered source is required. Record the current observation, cite office_schedule_status as the evidence that future checks are set, and complete this run. A later scheduled run is not part of this run: never wait for it and never ask for a watch registration.'}:null;
+      // The owner's own MCP servers are looked at once per process; a run waits briefly for that first look.
+      if(workAutonomy(this.config)==='delegated')await ownerMcpReady();
       toolkit=new WorkExecutionTools(this.store,this.config,this.api,row.work_id,row.run_id,spec,work.prompt,guard,model);
       workActivity(this.store,project,row.work_id,'supervisor.started',row.attempts>1?'저장한 체크포인트를 읽고 실행을 이어갑니다.':'연결된 AI와 실행 도구로 업무를 시작합니다.');
       let checkpoint=row.checkpoint==='null'?null:JSON.parse(row.checkpoint) as WorkClientCheckpoint|SupervisedSwarmCheckpoint;

@@ -653,7 +653,7 @@ const RULES:Array<[string,string]>=[
 ['^(Playwright|Aside|Neo|BrowserOS Neo) 실행기 등록 완료 · 새 MCP 연결부터 적용$','$1 registered · applies to new MCP connections'],
 ['^(Playwright|Aside|Neo|BrowserOS Neo) 준비를 완료하지 못했습니다. 설치·실행 상태를 확인하세요.$','Could not prepare $1. Check its installation and running app.'],
 ['^([\\d.]+)초$','$1s'],
-['^기존 환경 확인 · 스킬 (\\d+)개 · MCP (\\d+)개 · 플러그인 (\\d+)개 · 프로젝트 (\\d+)개$','existing setup found · skills $1 · MCP $2 · plugins $3 · projects $4'],['^(.+) MCP 연결$','Connect $1'],['^(.+) 관리$','Manage $1'],['^(.+) 로그인$','Log in to $1'],['^(.+) 다운로드$','Download $1'],
+['^기존 환경 확인 · 스킬 (\\d+)개 · MCP (\\d+)개 · 플러그인 (\\d+)개 · 프로젝트 (\\d+)개$','existing setup found · skills $1 · MCP $2 · plugins $3 · projects $4'],['^쓰던 MCP 서버 확인 · 사용 (.+) · 제외 (.+)$','Your MCP servers checked · used $1 · left out $2'],['^(.+) MCP 연결$','Connect $1'],['^(.+) 관리$','Manage $1'],['^(.+) 로그인$','Log in to $1'],['^(.+) 다운로드$','Download $1'],
 ['^(.+) 기존 로그인 확인됨$','$1: existing sign-in verified'],['^(.+) 설치됨 · 로그인 재확인 필요$','$1: installed · check sign-in again'],['^(.+) 공식 로그인 시작 · 브라우저에서 승인하세요$','$1: sign-in started · approve in your browser'],
 ['^(Playwright|Aside|BrowserOS Neo) 연결 확인$','Check $1 connection'],['^(Aside|BrowserOS Neo) 연결 등록$','Register $1 connection'],['^(Playwright|Aside|BrowserOS Neo) 확인 중…$','Checking $1…'],
 ['^(Playwright|Aside|BrowserOS Neo) 연결됨$','$1 connected'],['^(Playwright|Aside|BrowserOS Neo) 연결 확인 중…$','Checking $1 connection…'],['^(Aside|BrowserOS Neo) 연결 중…$','Connecting $1…'],

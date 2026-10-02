@@ -1,3 +1,4 @@
+import {enableOwnerMcp} from '../integrations/owner-mcp.js';
 import {enableOwnerEnvironment} from '../integrations/client-environment.js';
 import {dirname} from 'node:path';
 import {appendSetupActivity} from './setup-activity.js';
@@ -5,6 +6,8 @@ import {startManagedControlService,validControlUrl} from './control-service.js';
 import {enableConnectionWarmup} from '../observability/control-settings.js';
 // A service process works for the owner of this computer: their standing AI instructions and skills come along.
 enableOwnerEnvironment();
+// The owner's own MCP servers may be used; they are first looked at when a delegated Work needs them.
+enableOwnerMcp();
 enableConnectionWarmup();
 try{
   const path=process.argv[2],previous=process.argv[3];if(!path||previous&&!validControlUrl(previous))throw Error('INVALID_CONNECTION_OPTIONS');

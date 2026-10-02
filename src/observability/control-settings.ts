@@ -15,6 +15,7 @@ import {SetupActivityStream} from '../onboarding/setup-activity.js';
 import {settingsHtml} from './settings-ui.js';
 import {BrowserSetupController} from '../onboarding/browser-setup.js';
 import {workAutonomy} from '../interface/config.js';
+import {ownerMcpEnabled,ownerMcpSnapshot,refreshOwnerMcp} from '../integrations/owner-mcp.js';
 import {clientEnvironment,clientEnvironmentSummary,type ClientEnvironment} from '../integrations/client-environment.js';
 
 async function readBody(request:IncomingMessage){let size=0;const chunks:Buffer[]=[];for await(const chunk of request){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>20_000)throw Error('SETTINGS_INPUT_TOO_LARGE');chunks.push(bytes);}return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;}
@@ -219,7 +220,13 @@ export class ControlSettings{
           const fresh=(body as {force?:unknown}|null)?.force===true||!this.remembered.has('connections');
           if(fresh){this.remembered.delete('models:global');await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');}
           const clients=await this.connections(fresh);if(fresh)await this.recordClientChecks(clients);const found=await this.existingEnvironment(clients,fresh);if(fresh)await this.activity.record('ai','info','AI 클라이언트 상태 확인을 마쳤습니다.');
-          send(200,{clients:clients.map(client=>found.has(client.id)?{...client,environment:found.get(client.id)}:client),checked:fresh?'now':'remembered'});}
+          // The owner's MCP servers are looked at again on an explicit check: which ones Office uses and which it leaves out, and why.
+          if(fresh&&ownerMcpEnabled()&&workAutonomy(this.config)==='delegated'){
+            const looked=await refreshOwnerMcp().catch(()=>null);
+            if(looked)await this.activity.record('ai','info','쓰던 MCP 서버 확인 · 사용 '+(looked.used.map(item=>item.server+'('+item.tools.length+')').join(', ')||'없음')+' · 제외 '+(looked.left_out.map(item=>item.server).join(', ')||'없음'));
+          }
+          const ownerMcp=ownerMcpSnapshot();
+          send(200,{clients:clients.map(client=>found.has(client.id)?{...client,environment:found.get(client.id)}:client),checked:fresh?'now':'remembered',...(ownerMcp?{owner_mcp:{used:ownerMcp.used,left_out:ownerMcp.left_out}}:{})});}
         else if(suffix==='settings/login'){
           const value=body as {client?:unknown;flow?:unknown};
           if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))||!['device','browser'].includes(String(value.flow))){send(400,{error:'INVALID_CLIENT_FLOW'});return true;}
