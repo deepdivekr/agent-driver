@@ -66,6 +66,9 @@ const HOST_EXECUTION_FACTS={
   recurring_collection_window:'A recurring Work that collects new or latest items (news, posts, releases) covers in every run, the first one included, only items published on the run date or the day before it (run date minus one day, in the Work\'s timezone). Never plan, offer or accept a longer period for such a Work; when the request names a longer one, use this window and state that as an assumption. Write the period in the checks as "published on the run date or the day before", not as fixed calendar dates. The executor receives the exact window of each run as collection_window. A one-off Work without a schedule may cover the period it asks for.',
   // Owner direction 2026-10-02: the fast judgment settles a check that is one plain condition; a compound one waits for a model.
   single_condition_checks:'Write each completion check result as one condition that can be answered yes or no by reading the saved result or the host\'s record of the run: one fact per check ("The saved result lists six items.", "Every item has a title, an author, a link to the original and a one-line summary.", "The daily schedule is set."). Split a sentence that joins several conditions into separate checks, up to eight; keep conditions the user did not ask for out.',
+  // Owner direction 2026-10-02: a choice that needs a value comes with its input, and nothing the host already knows is asked.
+  questions_form:'A question is asked only for something the request, answered_questions and the host inputs do not already settle. An option that still needs a value from the owner (which stock, what time, which name) sets detail to a short hint for that value in the language of the request; the host shows an input beside it and returns "<option id>: <typed value>". Offer a concrete value as its own option when the request suggests one. A needed value that is still unknown after the answers is asked again as a question; it is never written as an assumption while the Work is declared ready. answered_questions gives each earlier question with the chosen option, its meaning and any typed value: read the answer in that context.',
+  result_delivery:'The host delivers results itself. result_delivery lists the destinations registered on this host (registered) and the ones chosen for this Work (selected). Never ask who receives the result, which chat, or for an address or token. When the request names a messenger and a destination of that platform is in selected, treat delivery as settled. When one is registered but not selected, or none is registered, say that in assumptions with what the owner can do in the Work\'s delivery settings; do not ask and do not block the Work.',
   public_forms:'A public https form is filled without submission with office_form_draft; its receipt (values read back, submitted:false, no non-GET request) is the draft evidence. No registered form target is required.',
 } as const;
 export async function validateOrCorrectWorkProposal(rawProposal:unknown,mode:WorkMode,answered:boolean,options:{model:StructuredModel;instructions:string;input:unknown;onDiagnostic?:(event:WorkDefinitionDiagnostic)=>void}):Promise<WorkProposal>{
@@ -111,7 +114,9 @@ export async function validateOrCorrectWorkProposal(rawProposal:unknown,mode:Wor
 }
 
 export class WorkRuntime {
-  constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,private readonly capabilities:()=>unknown=()=>({browser_executors:browserCatalog(config)}),private readonly onIntake?:(workId:string,input:z.infer<typeof workStartSchema>,created:boolean)=>void){}
+  constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,private readonly capabilities:()=>unknown=()=>({browser_executors:browserCatalog(config)}),private readonly onIntake?:(workId:string,input:z.infer<typeof workStartSchema>,created:boolean)=>void,
+    /** Where results go is the host's own setting: the registered destinations and the ones chosen for this Work. */
+    private readonly resultDelivery?:(workId:string)=>{registered:Array<{id:string;platform:string;label:string}>;selected:string[]}){}
   planningContext(workId?:string){return {...workPlanningContext(this.store,this.config,this.capabilities()),...(workId?{observed_source_schemas:observedWorkSourceSchemas(this.store,this.config,workId)}:{})};}
   private definitionDiagnostic(workId:string,event:WorkDefinitionDiagnostic){
     if(this.store.hermesState.prepare("SELECT 1 FROM sqlite_master WHERE name='office_activity'").get())workActivity(this.store,this.config.project.id,workId,`definition.${event.kind}`,`Work definition ${event.kind}: ${event.code}`);
@@ -160,7 +165,17 @@ export class WorkRuntime {
       requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
       workActivity(this.store,project,work_id,'definition.started','Analyzing the Work instructions, completion conditions and available capabilities.',{stage_id:'definition',status:'running'});
       const previous=work.spec as WorkProposal|null;
-      const input={work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:previous,user_directions:this.store.workDirections(project,work_id),user_intake:readWorkIntakeOptions(this.store,project,work_id)};
+      // The planner is a fresh call each time. It is given what it asked last time and what the owner answered, and
+      // where results already go, so the next round continues the conversation instead of starting over (live: the
+      // answer "seoul" came back without its question, and the owner was asked who receives a Telegram that was
+      // already connected).
+      // Answering clears the open questions; the plan that asked them still holds them.
+      const asked=((work.spec as {questions?:unknown[]}|null)?.questions??[]) as Array<{id:string;prompt:string;options:Array<{id:string;label:string;meaning:string;detail?:string}>}>;
+      const answered=Object.entries(work.answers as Record<string,string>).map(([id,value])=>{
+        const question=asked.find(item=>item.id===id),option=question?.options.find(item=>value===item.id||value.startsWith(item.id+': '));
+        return {id,question:question?.prompt??null,answer:option?{chosen:option.label,meaning:option.meaning,...(value.length>option.id.length?{typed:value.slice(option.id.length+2)}:{})}:{typed:value}};
+      });
+      const input={work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,...(answered.length?{answered_questions:answered}:{}),previous_spec:previous,user_directions:this.store.workDirections(project,work_id),user_intake:readWorkIntakeOptions(this.store,project,work_id),...(this.resultDelivery?{result_delivery:this.resultDelivery(work_id)}:{})};
       // Shortest path: the same request was planned and verified before. Its plan is used again; no planner call.
       const twin=!previous&&Object.keys(work.answers).length===0&&workAutonomy(this.config)==='delegated'?identicalProcedure(this.store,project,work.prompt):null;
       if(twin){

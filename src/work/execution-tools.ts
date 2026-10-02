@@ -28,7 +28,7 @@ import {mkdir,open,realpath,stat,writeFile} from 'node:fs/promises';
 import {nativeProcessRunner} from '../integrations/subscription-auth.js';
 import {readLocalGitCheckpoint} from '../coding/local-checkpoint.js';
 import {safeControlText} from '../observability/safe-text.js';
-import {knownLoginSites,readyAuthTargets,detectAuthGate} from '../swarm/browser-auth.js';
+import {knownLoginSites,readyAuthTargets,detectAuthGate,authSites,setSiteAuth} from '../swarm/browser-auth.js';
 import {WorkSchedules} from './schedule.js';
 
 /** Potential effect, not a claim that a particular call performed a write.
@@ -621,8 +621,19 @@ export class WorkExecutionTools {
     // that headless profile. Prefer the user's connected Aside profile; a
     // named engine/foreground/guest preference still constrains selection.
     const publicDefault=preference?.environment==='owned_headless'&&!preference.preferred_engine;
-    return readyAuthTargets(this.store,this.config,site).filter(target=>browserHostCompatible(target)&&(!preference||publicDefault||target.environment===preference.environment)&&(!preference?.preferred_engine||target.engine===preference.preferred_engine)).sort((a,b)=>Number(b.engine==='aside'&&b.environment==='host_foreground')-Number(a.engine==='aside'&&a.environment==='host_foreground')||b.priority-a.priority||a.id.localeCompare(b.id))[0]??null;
+    const ready=readyAuthTargets(this.store,this.config,site).filter(target=>browserHostCompatible(target)&&(!preference||publicDefault||target.environment===preference.environment)&&(!preference?.preferred_engine||target.engine===preference.preferred_engine)).sort((a,b)=>Number(b.engine==='aside'&&b.environment==='host_foreground')-Number(a.engine==='aside'&&a.environment==='host_foreground')||b.priority-a.priority||a.id.localeCompare(b.id))[0];
+    if(ready)return ready;
+    // The owner's registered Aside may already be signed in to the site without anyone having pressed "Check sign-in"
+    // (live: X and Reddit were signed in inside Aside and the Work still stopped to ask for a sign-in). Under the
+    // owner's delegation the read goes to that Aside once and the page itself says whether it is signed in; a sign-in
+    // wall is a failed read as before. A site with a recorded limit or challenge, or a sign-in in progress, is not tried.
+    if(workAutonomy(this.config)!=='delegated'||preference?.preferred_engine&&preference.preferred_engine!=='aside'||preference&&!publicDefault&&preference.environment!=='host_foreground')return null;
+    const aside=eligibleBrowserTargets(this.config,{environment:'host_foreground',preferred_engine:'aside'}).find(target=>browserHostCompatible(target));
+    if(!aside||authSites(this.store,this.config,aside).some(row=>row.handoff||row.site===site&&['login_limited','challenge','policy_blocked'].includes(row.state)))return null;
+    this.unconfirmedSocial.add(site);return aside;
   }
+  /** Sites whose sign-in in the registered Aside has not been observed yet in this installation. */
+  private unconfirmedSocial=new Set<string>();
   private socialRequest(raw:unknown){const input=socialSearchInput.parse(raw);requireCondition(socialIntent(this.prompt,this.spec)&&this.socialTarget(input.site),'WORK_SOCIAL_PROFILE_NOT_READY');return input;}
   private browserRequest(raw:unknown){
     const input=browserInput.parse(raw),search=searchFromUrl(input.url);if(search)this.searchRequest(search);
@@ -925,6 +936,11 @@ export class WorkExecutionTools {
           this.blockedSocial.add(socialSite);
           workActivity(this.store,this.config.project.id,this.workId,'search.blocked','The registered social browser did not show a current signed-in page. No other profile was tried.',{tool_name:name,status:'retryable_failure',reason:gate==='challenge'?'WORK_SOCIAL_CHALLENGE':'WORK_SOCIAL_AUTH_NOT_VERIFIED',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{})});
           return {status:'retryable_failure',reason:gate==='challenge'?'WORK_SOCIAL_CHALLENGE':gate==='login_limited'?'WORK_SOCIAL_LOGIN_LIMITED':'WORK_SOCIAL_AUTH_NOT_VERIFIED',requested_url:url,observed_at:observed.observed_at,social_site:socialSite,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',social_access:'not_verified',text:'',links:[]};
+        }
+        // The page showed a signed-in session: remember it, so later runs and the sign-in screen know without a manual check.
+        if(this.unconfirmedSocial.delete(socialSite)&&browser.target){
+          setSiteAuth(this.store,this.config,socialSite,'ready',false,browser.target);
+          workActivity(this.store,this.config.project.id,this.workId,'source.signed_in',`${socialSite} is signed in inside the registered ${browser.target.engine} browser. The sign-in was observed on the page and is remembered.`,{tool_name:name,status:'succeeded',executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment});
         }
       }
       const links=observed.links.filter(link=>{try{const next=new URL(link.url);return !next.username&&!next.password&&!Array.from(next.searchParams.keys()).some(k=>/token|password|secret|api.?key|auth|session|cookie/iu.test(k));}catch{return false;}});

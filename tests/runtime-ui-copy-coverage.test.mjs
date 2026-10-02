@@ -84,3 +84,12 @@ test('display copy: Korean verb endings and the wording the owner fixed',()=>{
   assert.equal(ko.officeText('학습한 절차와 기억한 출처'),'학습한 절차와 기억한 출처');assert.equal(en.officeText('학습한 절차와 기억한 출처'),'Learned procedures and remembered sources');
   assert.ok(sources.every(({text})=>!text.includes('배운 절차')),'The heading says 학습한, not 배운.');
 });
+// Owner direction 2026-10-02: a choice that needs a value ("one stock") comes with its input.
+test('work questions: an option with a value hint shows an input and sends "<option>: <value>"',async()=>{
+  const {workHtml}=await import('../dist/observability/work-ui.js');const page=workHtml('question-test');
+  assert.match(page,/data-detail="'\+esc\(o\.detail\|\|''\)\+'"/u,'Each option carries its value hint.');
+  assert.match(page,/input\.hidden=choice\.value!=='custom'&&!detail/u,'The input appears for a custom answer or an option that needs a value.');
+  assert.match(page,/detail\?choice\+': '\+typed:choice/u,'The typed value is sent with its option.');
+  assert.match(page,/if\(detail&&!typed\)/u,'An option that needs a value cannot be sent without it.');
+  assert.match(page,/question-meaning/u,'The meaning of the chosen option is shown under it.');
+});

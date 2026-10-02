@@ -25,9 +25,9 @@ const observation=(url,patch={})=>({url,title:'Observed source results',text:'Fi
 const unusual=()=>observation('https://www.google.com/sorry/index',{title:'Google',text:'Our systems have detected unusual traffic from your computer network.',links:[]});
 const proposal={title:'ASTS source research',desired_outcome:'Read public ASTS articles and report observed sources.',completion_checks:[{id:'sources',result:'Sources are saved',evidence:'Observed browser receipts'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],browser:{environment:'owned_headless'}};
 
-async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[],download=()=>false,digest=null}={}){
+async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[],download=()=>false,digest=null,workPolicy=null}={}){
   const root=await mkdtemp(join(tmpdir(),'work-unusual-traffic-')),path=join(root,'host.json');
-  await writeFile(path,JSON.stringify({schema_version:1,project_id:'unusual-traffic-fixture',caller_ref:'fixture',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true},browser_executors:{targets:[headless,guest,aside,neo]}}));
+  await writeFile(path,JSON.stringify({schema_version:1,project_id:'unusual-traffic-fixture',caller_ref:'fixture',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true},...(workPolicy?{work:workPolicy}:{}),browser_executors:{targets:[headless,guest,aside,neo]}}));
   const config=loadHostConfig(path),store=new PackStore(config.dbPath);store.registerProject(config.project);initWorkSupervisor(store);
   const spec={...proposal,browser,requested_effect};if(browser===null)delete spec.browser;
   const model={calls:[],async call(purpose,instructions,input,schema){if(schema?.properties?.quotes){model.calls.push(input);if(!digest)throw Error('MODEL_UNAVAILABLE');return digest(input);}return structuredClone(spec);}},runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'unusual-work',prompt}),run=randomUUID(),events=[],instances=[];
@@ -199,6 +199,20 @@ test('runtime fixture the reads of one decision are opened in order and their di
   assert.equal(first.text.split('\n')[0],`Digest of ${article}`);assert.equal(next.text.split('\n')[0],`Digest of ${second}`);assert.equal(most,2,'Both digests were being written at once.');
   assert.deepEqual(opens(x).map(event=>event.url),[article,second],'Each page was opened once, in order.');
   const again=await tools.execute('office_browser_read',{url:article},'read-3');assert.equal(again.rendered.from,'page_digest');assert.equal(opens(x).length,3,'A later read of the same address opens the page again.');
+});
+
+// Live: X and Reddit were signed in inside the owner's Aside and the Work still stopped to ask for a sign-in,
+// because nobody had pressed "Check sign-in" for those sites in this installation.
+test('runtime fixture under delegation a social page is read in the registered Aside and an observed sign-in is remembered',async t=>{
+  const page='https://www.reddit.com/r/ASTSpaceMobile/',request=`ASTS 주식 종목 reddit 반응을 ${page} 에서 확인해줘`;
+  const x=await setup(t,{browser:null,prompt:request,observe:(target,url)=>observation(url,{title:'r/ASTSpaceMobile',text:'Posts from the community.'}),workPolicy:{model_data_approved:true,autonomy:'delegated'}}),tools=x.create();
+  assert.deepEqual(authSites(x.store,x.config,aside).filter(row=>row.site==='reddit.com'),[],'Nothing was recorded for the site before.');
+  const value=await tools.execute('office_browser_read',{url:page},'social-read');
+  assert.equal(value.executor,aside.id);assert.equal(value.social_access,'signed_in_marker_observed');
+  assert.equal(authSites(x.store,x.config,aside).find(row=>row.site==='reddit.com')?.state,'ready','The sign-in the page showed is remembered.');
+  assert.ok(workTail(x.store,x.config.project.id,x.work.work_id).some(row=>row.kind==='source.signed_in'));
+  const strict=await setup(t,{browser:null,prompt:request,observe:(target,url)=>observation(url)}),approved=strict.create();
+  await assert.rejects(approved.execute('office_browser_read',{url:page},'social-read'),error=>/WORK_SOCIAL_PROFILE_NOT_READY/u.test(error.code??error.message),'Without the owner\'s delegation the site still needs a checked sign-in.');
 });
 
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host
