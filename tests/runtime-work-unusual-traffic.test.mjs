@@ -25,7 +25,7 @@ const observation=(url,patch={})=>({url,title:'Observed source results',text:'Fi
 const unusual=()=>observation('https://www.google.com/sorry/index',{title:'Google',text:'Our systems have detected unusual traffic from your computer network.',links:[]});
 const proposal={title:'ASTS source research',desired_outcome:'Read public ASTS articles and report observed sources.',completion_checks:[{id:'sources',result:'Sources are saved',evidence:'Observed browser receipts'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],browser:{environment:'owned_headless'}};
 
-async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[]}={}){
+async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[],download=()=>false}={}){
   const root=await mkdtemp(join(tmpdir(),'work-unusual-traffic-')),path=join(root,'host.json');
   await writeFile(path,JSON.stringify({schema_version:1,project_id:'unusual-traffic-fixture',caller_ref:'fixture',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true},browser_executors:{targets:[headless,guest,aside,neo]}}));
   const config=loadHostConfig(path),store=new PackStore(config.dbPath);store.registerProject(config.project);initWorkSupervisor(store);
@@ -34,7 +34,7 @@ async function setup(t,{browser=proposal.browser,requested_effect=proposal.reque
   const api={async call(name){assert.equal(name,'runtime_pack_catalog');return {families:[{id:'research.search'}],connected:true,models:'off'};}};
   const factory=target=>{
     events.push({kind:'factory',id:target.id,engine:target.engine,environment:target.environment});let current='';
-    return {target,async probe(){events.push({kind:'probe',id:target.id});if(probeFail.includes(target.id))throw Object.assign(Error('spawn ENOENT'),{code:'ENOENT'});},async open(url){current=url;events.push({kind:'open',id:target.id,url});},async navigate(url){current=url;events.push({kind:'navigate',id:target.id,url});},async observe(){events.push({kind:'observe',id:target.id,url:current});return observe(target,current);},async extract(){events.push({kind:'extract',id:target.id});return [{marker:'fixture signed-in marker'}];},async scroll(){assert.fail('Search read must not need scrolling.');},async close(){events.push({kind:'close',id:target.id});}};
+    return {target,async probe(){events.push({kind:'probe',id:target.id});if(probeFail.includes(target.id))throw Object.assign(Error('spawn ENOENT'),{code:'ENOENT'});},async open(url){current=url;events.push({kind:'open',id:target.id,url});if(download(url))throw Error('page.goto: Download is starting');},async navigate(url){current=url;events.push({kind:'navigate',id:target.id,url});},async observe(){events.push({kind:'observe',id:target.id,url:current});return observe(target,current);},async extract(){events.push({kind:'extract',id:target.id});return [{marker:'fixture signed-in marker'}];},async scroll(){assert.fail('Search read must not need scrolling.');},async close(){events.push({kind:'close',id:target.id});}};
   };
   const create=()=>{const tools=new WorkExecutionTools(store,config,api,work.work_id,run,work.spec,work.prompt,()=>{},model,{browserFactory:factory});instances.push(tools);return tools;};
   const seed=checkpoint=>{const stamp=new Date().toISOString();store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET checkpoint=excluded.checkpoint').run(run,config.project.id,work.work_id,work.revision,'paused',JSON.stringify(checkpoint),config.fingerprint,0,stamp,stamp);};
@@ -156,6 +156,15 @@ test('runtime fixture a public page that refuses the background browser is rerea
   assert.ok(!y.events.some(event=>event.id===aside.id),'A page the background browser can read never opens the owner\'s foreground browser.');
   const pinned=await setup(t,{browser:{environment:'owned_headless',preferred_engine:'playwright'},prompt:'Read https://example.org/observed-asts-report',observe:(target,url)=>wall(url)}),explicit=pinned.create();
   assert.equal((await explicit.execute('office_browser_read',{url:article},'pinned-read')).executor,headless.id,'An explicit headless engine pin never acquires the foreground browser.');
+});
+
+// Live: one link in a list of originals was a PDF. The read threw, the run restarted and lost its turn.
+test('runtime fixture an address that downloads a file that is not text is a read the run cannot make, not a failed run',async t=>{
+  const pdf='https://example.org/report.pdf',fetched=globalThis.fetch;t.after(()=>{globalThis.fetch=fetched;});
+  globalThis.fetch=async()=>new Response('%PDF-1.7',{status:200,headers:{'content-type':'application/pdf'}});
+  const x=await setup(t,{browser:null,prompt:`Read ${pdf} and ${article}`,observe:(target,url)=>observation(url),download:url=>url===pdf}),tools=x.create();
+  await assert.rejects(tools.execute('office_browser_read',{url:pdf},'pdf-read'),error=>error.name==='WorkClientToolInputError'&&error.code==='WORK_RESOURCE_NOT_READABLE_TEXT'&&/another page/u.test(error.detail));
+  assert.equal((await tools.execute('office_browser_read',{url:article},'next-read')).title,'Observed source results','The run keeps reading after the file it could not read.');
 });
 
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host

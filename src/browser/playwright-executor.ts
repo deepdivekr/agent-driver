@@ -40,7 +40,9 @@ export class PlaywrightBrowserExecutor implements BrowserPort {
     }
     // Collection/Swarm port never submits a form, posts a record or opens a new uncontrolled window.
     await this.page.route('**/*',route=>['GET','HEAD','OPTIONS'].includes(route.request().method())?route.continue():route.abort('blockedbyclient'));
-    this.page.on('dialog',dialog=>{this.unknownDialog=true;void dialog.dismiss();});this.page.on('popup',page=>{void page.close();});this.page.on('download',download=>{void download.cancel();});
+    // Each of these races the page's own close; a rejection here must not end the process (live: a cancelled download
+    // rejected after its context was closed and the whole runtime exited mid-run).
+    this.page.on('dialog',dialog=>{this.unknownDialog=true;void dialog.dismiss().catch(()=>{});});this.page.on('popup',page=>{void page.close().catch(()=>{});});this.page.on('download',download=>{void download.cancel().catch(()=>{});});
     await this.navigate(url);
   }
   async navigate(url:string){requireCondition(this.page,'BROWSER_TAB_NOT_OPEN');assertPersistentProfileAutomationAllowed(this.config,this.target);await this.page.goto(url,{waitUntil:'domcontentloaded',timeout:15000});}

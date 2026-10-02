@@ -554,6 +554,15 @@ export class WorkExecutionTools {
   private socialSites(){return socialIntent(this.prompt,this.spec)?(Object.keys(knownLoginSites) as SocialSearchRequest['site'][]).filter(site=>this.socialTarget(site)!==null):[];}
   /** No explicit placement: a new read prefers the registered Aside; a read
    * already bound by a saved checkpoint for this origin keeps its placement. */
+  /** An address that starts a download is read as text when it is text. A file that is not (a PDF, an archive) is a
+   * read this run cannot make, not the end of the Work (live: one PDF link restarted a run with fifteen good reads). */
+  private async downloadedText(input:z.infer<typeof browserInput>){
+    try{return await this.textResource(input);}
+    catch(error){
+      if(!(error instanceof Error)||!/^BROWSER_RESOURCE_(?:NOT_TEXT|REDIRECT_ORIGIN|TOO_LARGE)$/u.test(error.message))throw error;
+      throw new WorkClientToolInputError('WORK_RESOURCE_NOT_READABLE_TEXT','This address is a file download, not a page of text, and was not read. Use another page for this fact, or state it as a limit of the result.');
+    }
+  }
   private async textResource(input:z.infer<typeof browserInput>){
     workActivity(this.store,this.config.project.id,this.workId,'source.started','Reading a public text resource over HTTPS.',{tool_name:'office_browser_read',status:'running',target_url:input.url});
     const {body,...read}=await readTextResource(input.url,{offset:input.offset,max_bytes:input.max_bytes});this.guard();
@@ -863,8 +872,8 @@ export class WorkExecutionTools {
           // read; matching entries restore bindings without opening saved.url.
           return legacy.entry_url===url?legacy:null;
         },save:cp=>journal.saveCheckpoint(this.config.project.id,checkpointKey,cp)},event:event=>{journal.append(this.config.project.id,this.runId,event);workActivity(this.store,this.config.project.id,this.workId,`browser.${event.kind}`,`${event.engine} / ${event.environment}${event.from?' ← '+event.from:''}${event.reason?' · '+event.reason:''}`,{status:event.kind,executor:event.target_id,engine:event.engine,environment:event.environment,...(event.reason?{reason:event.reason}:{})});}},[origin]);
-        try{await browser.open(url);this.browsers.set(key,browser);}catch(error){await browser.close();if(explicit&&downloadStarted(error))return this.textResource(explicit);throw error;}
-      }else try{await browser.navigate(url);}catch(error){if(explicit&&downloadStarted(error))return this.textResource(explicit);throw error;}
+        try{await browser.open(url);this.browsers.set(key,browser);}catch(error){await browser.close();if(explicit&&downloadStarted(error))return this.downloadedText(explicit);throw error;}
+      }else try{await browser.navigate(url);}catch(error){if(explicit&&downloadStarted(error))return this.downloadedText(explicit);throw error;}
       const observed=browserObservationSchema.parse(await browser.observe());this.guard();
       // Bing wraps each result in a bing.com/ck/a redirect whose `u` parameter is the base64url target.
       if(search?.provider==='bing')observed.links=observed.links.map(link=>({...link,url:bingResultTarget(link.url)}));assertBrowserUrl(observed.url,[origin],this.config.environment==='fixture');
