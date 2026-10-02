@@ -1,7 +1,10 @@
+import {enableOwnerEnvironment} from '../integrations/client-environment.js';
 import {fileURLToPath} from 'node:url';
 import {acquireMcpProcess,mcpOwner} from './mcp-process.js';
 import {startMcpService} from './mcp-service.js';
 import {mcpServiceVersion} from './mcp-service-manager.js';
+// A service process works for the owner of this computer: their standing AI instructions and skills come along.
+enableOwnerEnvironment();
 const config=process.argv[2]!,port=Number(process.argv[3]);
 let service:Awaited<ReturnType<typeof startMcpService>>|undefined,lease:Awaited<ReturnType<typeof acquireMcpProcess>>|undefined,stopping=false,committed=false;
 let closing:Promise<void>|undefined;

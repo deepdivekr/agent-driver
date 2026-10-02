@@ -49,3 +49,33 @@ export function clientEnvironment(client:'codex'|'claude',environment:NodeJS.Pro
 export function clientEnvironmentSummary(found:ClientEnvironment){
   return `기존 환경 확인 · 스킬 ${found.skills.length}개 · MCP ${found.mcp_servers.length}개 · 플러그인 ${found.plugins.length}개 · 프로젝트 ${found.projects}개`;
 }
+
+/** How the owner already works with their AI apps: the standing instruction files they wrote for those apps
+ * (AGENTS.md, CLAUDE.md) and the skills they keep, each with its own description. This is given to the planner and
+ * the worker as the owner's preferences. It is text the owner already sends to the same AI provider; it never
+ * grants a tool, a permission or a fact. Lines that look like credentials are left out. */
+export interface OwnerEnvironment {instructions:Array<{app:'codex'|'claude';file:string;text:string}>;skills:Array<{app:'codex'|'claude';name:string;description:string}>;}
+const INSTRUCTION_LIMIT=6000,SKILL_LIMIT=30;
+const credentialLine=/(?:\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}|\bapikey_[A-Za-z0-9_-]{16,}|\bgh[pousr]_[A-Za-z0-9]{20,}|\bBearer\s+[A-Za-z0-9._-]{16,}|(?:token|password|secret|api.?key|passwd)\s*[=:]\s*\S{6,})/iu;
+const standing=(path:string)=>text(path).split('\n').filter(line=>!credentialLine.test(line)).join('\n').trim().slice(0,INSTRUCTION_LIMIT);
+function skillDescription(directory:string){
+  const head=text(join(directory,'SKILL.md')).slice(0,4000),front=/^---\n([\s\S]*?)\n---/u.exec(head)?.[1]??'';
+  return (/^description:\s*(.+)$/mu.exec(front)?.[1]??'').replace(/^["']|["']$/gu,'').slice(0,240);
+}
+export function ownerEnvironment(environment:NodeJS.ProcessEnv=process.env,home=environment.HOME||environment.USERPROFILE||(environment===process.env?homedir():join(tmpdir(),'agent-office-no-home'))):OwnerEnvironment{
+  const codex=environment.CODEX_HOME||join(home,'.codex'),claude=environment.CLAUDE_CONFIG_DIR||join(home,'.claude');
+  const instructions=([['codex',join(codex,'AGENTS.md'),'AGENTS.md'],['claude',join(claude,'CLAUDE.md'),'CLAUDE.md']] as const).map(([app,path,file])=>({app,file,text:standing(path)})).filter(item=>item.text);
+  const skills=([['codex',join(codex,'skills')],['claude',join(claude,'skills')]] as const).flatMap(([app,root])=>folders(root).sort().map(entry=>({app,name:name(entry),description:skillDescription(join(root,entry))}))).filter(item=>item.name&&!credentialLine.test(item.description)).slice(0,SKILL_LIMIT);
+  return {instructions,skills};
+}
+/** Only a real service process reads the owner's files. A test or a library use of the runtime gets nothing unless
+ * it asks for it, so no test depends on, or leaks, what is in the developer's own home folder. */
+let ownerEnvironmentSource:(()=>OwnerEnvironment)|null=null;
+export function enableOwnerEnvironment(source:()=>OwnerEnvironment=()=>ownerEnvironment()){ownerEnvironmentSource=source;}
+export function disableOwnerEnvironment(){ownerEnvironmentSource=null;}
+export function ownerEnvironmentContext():{owner_environment?:OwnerEnvironment}{
+  // AGENT_OFFICE_OWNER_ENVIRONMENT=on asks for it in a process that is not one of the service entries.
+  if(!ownerEnvironmentSource&&process.env.AGENT_OFFICE_OWNER_ENVIRONMENT==='on')ownerEnvironmentSource=()=>ownerEnvironment();
+  if(!ownerEnvironmentSource||process.env.AGENT_OFFICE_OWNER_ENVIRONMENT==='off')return {};
+  try{const found=ownerEnvironmentSource();return found.instructions.length||found.skills.length?{owner_environment:found}:{};}catch{return {};}
+}

@@ -52,6 +52,29 @@ test('the planner gets its earlier questions with the answers; an option can ask
   await x.api.call('runtime_work_answer',{work_id:custom.work_id,revision:custom.revision,answers:{stocks:'RKLB와 ASTS 둘 다'}});
   assert.deepEqual(inputs.at(-1).input.answered_questions[0].answer,{typed:'RKLB와 ASTS 둘 다'});
 });
+// Owner direction 2026-10-02: the intake planner keeps one conversation per Work.
+test('every intake round of a Work goes to the same planner session; another Work gets its own',async t=>{
+  const question={id:'scope',prompt:'범위는?',options:[{id:'small',label:'작게',meaning:'작게 한다'},{id:'large',label:'크게',meaning:'크게 한다'}],recommended_id:'small',required:true};
+  const bound=[],unbound=[];
+  const fake={calls:[],async call(purpose){unbound.push(purpose);return proposal();},
+    forWork(context){const session={calls:[],async call(purpose,_instructions,input){bound.push({context,purpose});return proposal(Object.keys(input.answers??{}).length?[]:[question]);}};return session;}};
+  const x=await setup(t,fake);
+  const first=await x.api.call('runtime_work_start',{request_id:'session-a',prompt:'세션 업무 A',intake_mode:'guided'});
+  await x.api.call('runtime_work_answer',{work_id:first.work_id,revision:first.revision,answers:{scope:'small'}});
+  const second=await x.api.call('runtime_work_start',{request_id:'session-b',prompt:'세션 업무 B',intake_mode:'guided'});
+  assert.deepEqual(bound.map(row=>row.context),[{work_id:first.work_id,run_id:first.work_id,actor_id:'intake'},{work_id:first.work_id,run_id:first.work_id,actor_id:'intake'},{work_id:second.work_id,run_id:second.work_id,actor_id:'intake'}]);
+  assert.ok(bound.every(row=>row.purpose==='design'));assert.deepEqual(unbound,[],'The planner call itself never goes to an unbound model.');
+});
+test('the planner receives the owner\'s standing instructions and skills when a service enabled them',async t=>{
+  const {enableOwnerEnvironment,disableOwnerEnvironment}=await import('../dist/integrations/client-environment.js');
+  const inputs=[];const fake={calls:[],async call(_purpose,_instructions,input){inputs.push(input);return proposal();}};
+  const x=await setup(t,fake);
+  await x.api.call('runtime_work_start',{request_id:'owner-env-off',prompt:'환경 없이 등록'});assert.equal(inputs.at(-1).owner_environment,undefined);
+  const owner={instructions:[{app:'claude',file:'CLAUDE.md',text:'All user-facing text: Korean.'}],skills:[{app:'codex',name:'staff-code-review',description:'Use for code review.'}]};
+  enableOwnerEnvironment(()=>owner);t.after(()=>disableOwnerEnvironment());
+  await x.api.call('runtime_work_start',{request_id:'owner-env-on',prompt:'환경과 함께 등록'});
+  assert.deepEqual(inputs.at(-1).owner_environment,owner);assert.match(inputs.at(-1).host_execution_facts.owner_environment,/Neither grants a tool, a permission or a fact/u);
+});
 test('the planner is told where results already go and never asks for a recipient',async t=>{
   const {WorkRuntime}=await import('../dist/work/runtime.js');
   const inputs=[];const fake={calls:[],async call(_purpose,_instructions,input){inputs.push(input);return proposal();}};

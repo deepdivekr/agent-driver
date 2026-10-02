@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {clientEnvironment,clientEnvironmentSummary} from '../dist/integrations/client-environment.js';
+import {clientEnvironment,clientEnvironmentSummary,ownerEnvironment,ownerEnvironmentContext,enableOwnerEnvironment,disableOwnerEnvironment} from '../dist/integrations/client-environment.js';
 
 // Owner direction 2026-10-02: a connected AI app already has an environment; the check finds it instead of
 // treating the installation as empty. Names and counts only.
@@ -25,4 +25,21 @@ test('runtime contract the existing Codex and Claude setup is found by name and 
   const empty=await mkdtemp(join(tmpdir(),'client-environment-empty-'));t.after(()=>rm(empty,{recursive:true,force:true}));
   assert.equal(clientEnvironment('codex',{},empty).found,false);assert.deepEqual(clientEnvironment('claude',{},empty).skills,[]);
   assert.equal(clientEnvironment('codex',{CODEX_HOME:join(home,'.codex')},empty).found,true,'A custom Codex home is followed.');
+});
+
+// Owner direction 2026-10-02: the owner's standing instructions and skills come along to the planner and the worker.
+test('runtime contract the owner\'s instruction files and skill descriptions are read without credential lines, and only when enabled',async t=>{
+  const home=await mkdtemp(join(tmpdir(),'owner-environment-'));t.after(()=>rm(home,{recursive:true,force:true}));
+  await mkdir(join(home,'.codex','skills','staff-code-review'),{recursive:true});await mkdir(join(home,'.claude'),{recursive:true});
+  await writeFile(join(home,'.codex','AGENTS.md'),'# Rules\nAnswer in Korean.\nDEPLOY_TOKEN=fixture-secret-do-not-read\nUse KRW for prices.\n');
+  await writeFile(join(home,'.claude','CLAUDE.md'),'Keep changes small.\n');
+  await writeFile(join(home,'.codex','skills','staff-code-review','SKILL.md'),'---\nname: staff-code-review\ndescription: Use for architecture decisions and code review.\n---\n\n# Body that is not read\n');
+  const found=ownerEnvironment({},home);
+  assert.deepEqual(found.instructions,[{app:'codex',file:'AGENTS.md',text:'# Rules\nAnswer in Korean.\nUse KRW for prices.'},{app:'claude',file:'CLAUDE.md',text:'Keep changes small.'}]);
+  assert.deepEqual(found.skills,[{app:'codex',name:'staff-code-review',description:'Use for architecture decisions and code review.'}]);
+  assert.doesNotMatch(JSON.stringify(found),/fixture-secret|Body that is not read/u);
+  assert.deepEqual(ownerEnvironmentContext(),{},'Nothing is read unless a service process enabled it.');
+  enableOwnerEnvironment(()=>found);t.after(()=>disableOwnerEnvironment());
+  assert.deepEqual(ownerEnvironmentContext(),{owner_environment:found});
+  enableOwnerEnvironment(()=>({instructions:[],skills:[]}));assert.deepEqual(ownerEnvironmentContext(),{},'An empty environment adds nothing to a model call.');
 });

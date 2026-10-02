@@ -1,3 +1,4 @@
+import {ownerEnvironmentContext} from '../integrations/client-environment.js';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
 import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
@@ -69,6 +70,8 @@ const HOST_EXECUTION_FACTS={
   // Owner direction 2026-10-02: a choice that needs a value comes with its input, and nothing the host already knows is asked.
   questions_form:'A question is asked only for something the request, answered_questions and the host inputs do not already settle. An option that still needs a value from the owner (which stock, what time, which name) sets detail to a short hint for that value in the language of the request; the host shows an input beside it and returns "<option id>: <typed value>". Offer a concrete value as its own option when the request suggests one. A needed value that is still unknown after the answers is asked again as a question; it is never written as an assumption while the Work is declared ready. answered_questions gives each earlier question with the chosen option, its meaning and any typed value: read the answer in that context.',
   result_delivery:'The host delivers results itself. result_delivery lists the destinations registered on this host (registered) and the ones chosen for this Work (selected). Never ask who receives the result, which chat, or for an address or token. When the request names a messenger and a destination of that platform is in selected, treat delivery as settled. When one is registered but not selected, or none is registered, say that in assumptions with what the owner can do in the Work\'s delivery settings; do not ask and do not block the Work.',
+  // Owner direction 2026-10-02: the owner's existing AI setup comes along instead of starting from nothing.
+  owner_environment:'owner_environment, when present, is how the owner already works with their AI apps: instructions are the standing instruction files they wrote for those apps, skills are the methods they keep there (name and description). Follow the instructions that apply to this Work (language, tone, formats, conventions, things to avoid) and say in assumptions which one shaped the plan. When a skill\'s description fits the Work, plan the Work the way that skill describes and name the skill in assumptions. Neither grants a tool, a permission or a fact, and neither overrides the request or the host inputs.',
   public_forms:'A public https form is filled without submission with office_form_draft; its receipt (values read back, submitted:false, no non-GET request) is the draft evidence. No registered form target is required.',
 } as const;
 export async function validateOrCorrectWorkProposal(rawProposal:unknown,mode:WorkMode,answered:boolean,options:{model:StructuredModel;instructions:string;input:unknown;onDiagnostic?:(event:WorkDefinitionDiagnostic)=>void}):Promise<WorkProposal>{
@@ -152,7 +155,7 @@ export class WorkRuntime {
     initWorkExecution(this.store);
     const owner=this.store.claimWorkDefinition(project,work_id);
     if(!owner)return this.public(this.store.intakeWork(project,work_id));
-    let definitionBinding:string|null=null;
+    let definitionBinding:string|null=null,planner:StructuredModel=this.model,plannerCallsBefore=0;
     let leaseLost=false;
     const leaseHeartbeat=setInterval(()=>{
       if(leaseLost)return;
@@ -187,10 +190,16 @@ export class WorkRuntime {
         return this.public(defined);
       }
       const candidates=procedureCandidates(this.store,project,work.prompt);
-      const instructions=WORK_DEFINITION_INSTRUCTIONS+'\n'+WORK_PLANNING_CONTEXT_INSTRUCTIONS+'\n'+WORK_CONNECTED_SOURCE_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS+(candidates.length?'\n'+WORK_PROCEDURE_SELECTION_INSTRUCTIONS:''),modelInput={...input,...this.planningContext(),host_execution_facts:HOST_EXECUTION_FACTS,...(candidates.length?{verified_procedure_candidates:candidates}:{})};
+      const instructions=WORK_DEFINITION_INSTRUCTIONS+'\n'+WORK_PLANNING_CONTEXT_INSTRUCTIONS+'\n'+WORK_CONNECTED_SOURCE_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS+(candidates.length?'\n'+WORK_PROCEDURE_SELECTION_INSTRUCTIONS:''),modelInput={...input,...this.planningContext(),...ownerEnvironmentContext(),host_execution_facts:HOST_EXECUTION_FACTS,...(candidates.length?{verified_procedure_candidates:candidates}:{})};
       const schema=z.toJSONSchema(workProposalSchema);
       definitionBinding=hashJson({instructions,input:modelInput,schema});
-      const rawProposal=await this.model.call('design',instructions,modelInput,schema);
+      // The intake planner keeps one conversation per Work (owner direction 2026-10-02): the first round and every
+      // answer round go to the same app session, so a later round continues from what the planner already asked and
+      // decided instead of meeting the Work as a stranger. No process stays running between rounds; the app's own
+      // session is resumed, and a missing or expired one starts fresh from this same input.
+      const bindable=this.model as StructuredModel&{forWork?:(context:{work_id:string;run_id:string;actor_id?:string})=>StructuredModel};
+      planner=typeof bindable.forWork==='function'?bindable.forWork({work_id,run_id:work_id,actor_id:'intake'}):this.model;plannerCallsBefore=planner.calls?.length??0;
+      const rawProposal=await planner.call('design',instructions,modelInput,schema);
       assertWorkConnected(this.store,project,work_id);
       const proposal=await validateOrCorrectWorkProposal(rawProposal,work.mode as WorkMode,Object.keys(work.answers).length>0,{model:this.model,instructions,input:modelInput,onDiagnostic:event=>this.definitionDiagnostic(work_id,event)});
       // The host accepts a selection only among the candidates it listed; anything else is dropped, not an error.
@@ -212,7 +221,7 @@ export class WorkRuntime {
       // responses, credentials or another concurrent Work's telemetry. A
       // generic needs_model UI state must not erase the diagnostic distinction.
       const providerCode=error instanceof Error&&definitionProviderCodes.has(error.message)?error.message:null;
-      const failedCalls=definitionBinding?this.model.calls.filter(call=>call.purpose==='design'&&call.input_sha256===definitionBinding&&call.status==='failed'):[];
+      const failedCalls=definitionBinding?(planner.calls??[]).slice(planner===this.model?0:plannerCallsBefore).filter(call=>call.purpose==='design'&&(planner!==this.model||call.input_sha256===definitionBinding)&&call.status==='failed'):[];
       if(providerCode||failedCalls.length){
         const diagnostic={code:providerCode??'WORK_DEFINITION_PROVIDER_FAILED',calls:failedCalls.map(call=>({provider:call.provider??'unobserved',failure_kind:call.failure_kind??'unobserved',elapsed_ms:call.elapsed_ms}))};
         workActivity(this.store,project,work_id,'definition.model_failure',JSON.stringify(diagnostic),{stage_id:'definition',status:'needs_model',reason:diagnostic.code});
