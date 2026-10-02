@@ -36,7 +36,7 @@ test('runtime fixture scoped project import uses real HTTP/storage, bilingual re
   else assert.match(migrationPrompt,/실행·수정·중지는 하지 마세요/u);
   await page.locator('[data-import-route="workflow"]').click();
   assert.equal(await page.locator('#import-scope').isVisible(),true);
-  assert.equal(await page.locator('label[for="import-scope"]').innerText(),lang==='ko'?'어떤 업무를 가져올까요? · 선택':'What should we import? · optional');
+  assert.equal(await page.locator('label[for="import-scope"]').innerText(),lang==='ko'?'가져올 업무 · 선택':'Work to import · optional');
   if(lang==='en'){
    assert.equal(await page.locator('[data-import-route="hermes"]').innerText(),'Hermes work');
    assert.equal(await page.locator('[data-import-route="remote"]').innerText(),'Remote OpenClaw');

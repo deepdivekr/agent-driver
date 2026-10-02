@@ -66,7 +66,7 @@ test('runtime fixture browser setup desktop/mobile buttons check download consen
   for(const width of [1440,390]){
     let installed=false,probes=0,installs=0;const x=await setup(t,{detectAside:async()=>'/tmp/aside',probe:async target=>{probes++;if(target.engine==='playwright'&&!installed)throw Error('missing');},runner:{async run(){installs++;installed=true;return {code:0,stdout:'',stderr:''};}}}),s=await serverFor(t,x);
     const page=await browser.newPage({viewport:{width,height:980}});const errors=[];page.on('pageerror',error=>errors.push(error.message));await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(s.url);
-    await page.getByRole('heading',{name:'로컬 실행',exact:true}).waitFor();await page.locator('[data-browser=playwright]').waitFor();assert.equal(probes,0);
+    await page.getByRole('heading',{name:"실행 환경",exact:true}).waitFor();await page.locator('[data-browser=playwright]').waitFor();assert.equal(probes,0);
     await page.getByRole('button',{name:'Playwright 연결 확인',exact:true}).click();await page.getByRole('button',{name:'전용 브라우저 다운로드',exact:true}).waitFor();await page.getByRole('button',{name:'전용 브라우저 다운로드',exact:true}).click();await page.locator('[data-browser=playwright] .badge').filter({hasText:'준비됨'}).waitFor();assert.equal(installs,1);
     await page.getByText('다른 브라우저 연결 · 선택',{exact:true}).click();await page.getByRole('button',{name:'Aside 연결 확인',exact:true}).click();await page.getByRole('button',{name:'Aside 연결 등록',exact:true}).waitFor();
     assert.match(await page.locator('[data-browser=aside] .browser-feedback').textContent(),/화면·프로필 사용을 허용/u);

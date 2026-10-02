@@ -1,5 +1,13 @@
 # Public release ledger
 
+## Phase 114
+
+| ID | Requirement |
+|---|---|
+| RQ-903 | Rewrite product-owned Korean and English copy across intake, detail, import, onboarding, connections, settings, logs and results with concise consistent user terms. |
+| RQ-904 | Preserve cost, consent, verification and delivery semantics and original user/model/file content; prevent repeated translation from blocking interaction. |
+| RQ-905 | Verify affected UI, frozen quick regressions, ledger and public boundaries, and the actual localized desktop/mobile Control Center without altering personal work or connection settings. |
+
 ## Phase 113
 
 | ID | Requirement |

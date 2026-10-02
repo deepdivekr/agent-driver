@@ -55,7 +55,7 @@ test('runtime fixture stale browser revision is explained beside the action and 
  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));
  await page.goto(f.url);await ready(page);await page.locator('#browser-alternatives>summary').click();const card=page.locator('[data-browser=aside]');await card.locator('.cact button').click();await ready(page);
  const changed=(await readFile(f.paths.runtimeConfig,'utf8'))+'\n';await writeFile(f.paths.runtimeConfig,changed);await card.locator('.cact button').click();await ready(page);
- assert.equal(await card.getAttribute('data-setup-state'),'unchecked');assert.match(await card.locator('.browser-feedback').textContent(),/설정이 변경됐습니다/u);assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),changed);
+ assert.equal(await card.getAttribute('data-setup-state'),'unchecked');assert.match(await card.locator('.browser-feedback').textContent(),/설정이 변경됐어요/u);assert.equal(await readFile(f.paths.runtimeConfig,'utf8'),changed);
  await card.locator('.cact button').click();await ready(page);assert.equal(await card.getAttribute('data-setup-state'),'permission');
 });
 

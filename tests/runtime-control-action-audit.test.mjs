@@ -69,7 +69,7 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   await x.page.waitForFunction(()=>!document.querySelector('[data-stage-action="resume"]')?.disabled);
   assert.equal((await read()).paused,true);
   assert.equal(calls,2,'Jev configuration and Pause must not add a model call');
-  assert.match(await x.page.locator('#stage-dialog').innerText(),/기존 결과와 증거는 보존합니다/u);
+  assert.match(await x.page.locator('#stage-dialog').innerText(),/기존 결과와 증거는 보존해요/u);
   await x.page.locator('[data-stage-action="resume"]').click();
   await x.page.waitForFunction(async ({base,id})=>(await (await fetch(base+'work/detail?id='+encodeURIComponent(id))).json()).supervisor?.state==='waiting_model',{base:x.server.url,id:workId});
   assert.equal((await read()).paused,false);
@@ -108,7 +108,7 @@ test('runtime fixture settings UI locks startup controls, offers retry after fai
   await x.page.locator('#retry-settings').waitFor();
   assert.equal(await x.page.locator('#connect-computer').isDisabled(),true);
   await x.page.locator('#retry-settings').click();
-  await x.page.getByRole('heading',{name:'로컬 실행',exact:true}).waitFor();
+  await x.page.getByRole('heading',{name:"실행 환경",exact:true}).waitFor();
   assert.equal(await x.page.locator('[data-step="2"]').isEnabled(),true);
   assert.equal(await x.page.locator('#connect-computer').isEnabled(),true);
   assert.equal(await x.page.locator('#retry-settings').isHidden(),true);
@@ -118,7 +118,7 @@ test('runtime fixture settings UI locks startup controls, offers retry after fai
   assert.equal(await help.evaluate(node=>node.open),false);
   await help.locator('summary').click();
   assert.equal(await help.evaluate(node=>node.open),true);
-  assert.ok((await help.innerText()).includes('기본 브라우저는 백그라운드에서 동작해 화면을 방해하지 않습니다.'));
+  assert.ok((await help.innerText()).includes('기본 브라우저는 백그라운드에서 동작해 화면을 방해하지 않아요.'));
   await help.locator('summary').click();
   assert.equal(await help.locator('p').first().isHidden(),true);
 });
@@ -178,10 +178,10 @@ test('runtime fixture site-login UI enables only configured actions, dispatches 
   await x.page.getByRole('button',{name:'로그인 창 열기',exact:true}).click();
   await x.page.getByRole('status').filter({hasText:'VNC 127.0.0.1:45901'}).waitFor();
   await x.page.getByRole('button',{name:'로그인 확인',exact:true}).click();
-  await x.page.getByRole('status').filter({hasText:'로그인 화면에 연결하지 못했습니다. 브라우저 상태와 연결 설정을 확인하세요.'}).waitFor();
+  await x.page.getByRole('status').filter({hasText:"로그인 화면에 연결하지 못했어요. 브라우저 상태와 연결 설정을 확인하세요."}).waitFor();
   assert.equal(await x.page.locator('#lang-toggle').isEnabled(),true);
   await x.page.getByRole('button',{name:'로그인 확인',exact:true}).click();
-  await x.page.getByRole('status').filter({hasText:'로그인 상태를 확인했습니다.'}).waitFor();
+  await x.page.getByRole('status').filter({hasText:"로그인 상태를 확인했어요."}).waitFor();
   await x.page.getByRole('button',{name:'재시도 허용',exact:true}).click();
   await x.page.getByRole('status').filter({hasText:'재시도 허용됨 · 업무에서 재개하세요.'}).waitFor();
   assert.deepEqual(posts.map(p=>p.action),['open','check','check','retry']);

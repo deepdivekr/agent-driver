@@ -74,7 +74,7 @@ test('runtime browser Work execute and event tail work on mobile without losing 
  x.release();await page.waitForFunction(()=>document.getElementById('work-tail-output')?.textContent.includes('supervisor.result'));
  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
  await page.getByRole('button',{name:'언어: 한국어. 영어로 전환'}).click();
- await page.getByRole('heading',{name:'Execution timeline'}).waitFor();
+ await page.getByRole('heading',{name:"Activity"}).waitFor();
  assert.doesNotMatch(await page.locator('.work-tail').innerText(),/[가-힣]/u);
  assert.deepEqual(errors,[]);
 });

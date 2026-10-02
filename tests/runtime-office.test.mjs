@@ -48,7 +48,7 @@ test('minimal Work detail edits a future stage without losing draft, desktop and
     const page=await koPage(browser,{viewport:{width,height:900}}),errors=[];
     page.on('pageerror',error=>errors.push(error.message));
     await page.goto(server.url+'?work=swarm:'+run.run_id);
-    await page.getByRole('heading',{name:'진행 단계'}).waitFor();
+    await page.getByRole('heading',{name:"업무 진행"}).waitFor();
     if(width===1280){
       await page.locator('[data-stage="write"]').click();
       await page.locator('#stage-dialog[open]').waitFor();await page.locator('#stage-instruction').fill('카드뉴스 대신 요약문으로 제공해줘');
@@ -97,10 +97,10 @@ test('minimal Work desk shows live stage truth without visual previews or invent
   await page.locator('.tile').waitFor();
   assert.equal(await page.locator('.tile').count(),1);
   await page.locator('.tile').click();
-  await page.getByRole('heading',{name:'진행 단계'}).waitFor();
-  assert.equal(await page.getByRole('heading',{name:'실행 요약'}).count(),1);
-  assert.equal(await page.getByText('계획의 Pack').count(),1);
-  assert.equal(await page.getByText('Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.').count(),1);
+  await page.getByRole('heading',{name:"업무 진행"}).waitFor();
+  assert.equal(await page.getByRole('heading',{name:"진행 기록"}).count(),1);
+  assert.equal(await page.getByText("사용할 Pack").count(),1);
+  assert.equal(await page.getByText("실행이 끝나도 모든 완료 기준을 충족한 것은 아닐 수 있어요. 결과의 확인 상태를 함께 봐 주세요.").count(),1);
   assert.equal(await page.locator('img,canvas,video').count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
 });
@@ -110,10 +110,10 @@ test('one-line dashboard intake opens the new Work without a preview or horizont
   const server=await startControlCenter(x.config,{workModel:fake}),browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close()});
   const page=await koPage(browser,{viewport:{width:390,height:850}}),errors=[];page.on('pageerror',error=>errors.push(error.message));
   await page.goto(server.url);
-  await page.getByPlaceholder('한 줄로 어떤 업무를 맡길까요?').fill('도쿄 호텔 찾아줘');
+  await page.getByPlaceholder("어떤 업무를 맡길까요?").fill('도쿄 호텔 찾아줘');
   await page.getByRole('button',{name:'업무 시작'}).click();
   await page.getByRole('heading',{name:'도쿄 호텔 검색'}).waitFor();
-  assert.equal(await page.getByText('완료 조건 · 숙소 후보를 확인한다').count(),1);
+  assert.equal(await page.getByText("완료 기준 · 숙소 후보를 확인한다").count(),1);
   assert.equal(await page.locator('img,canvas,video').count(),0);
   assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   assert.deepEqual(errors,[]);
@@ -123,12 +123,12 @@ test('dashboard can retry the same durable Work after a model interruption',asyn
   const x=await setup(t);let calls=0;const fake={calls:[],async call(_purpose,instructions){if(instructions.startsWith('Execute the registered Work'))return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'This fixture stops before external research.',completed_checks:[],wait_reason:'connection'};if(++calls===1)throw Error('model offline');return {title:'복구된 업무',desired_outcome:'자료를 확인한다',completion_checks:[{id:'readback',result:'자료 확인',evidence:'출처와 시각'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[]};}};
   const server=await startControlCenter(x.config,{workModel:fake}),browser=await chromium.launch({headless:true});t.after(async()=>{await browser.close();await server.close()});
   const page=await koPage(browser);await page.goto(server.url);
-  await page.getByPlaceholder('한 줄로 어떤 업무를 맡길까요?').fill('자료 확인해줘');
+  await page.getByPlaceholder("어떤 업무를 맡길까요?").fill('자료 확인해줘');
   await page.getByRole('button',{name:'업무 시작'}).click();
-  await page.getByRole('button',{name:'업무 정의 재시도'}).waitFor();
+  await page.getByRole('button',{name:"업무 다시 분석"}).waitFor();
   const first=await (await fetch(new URL('work/board',server.url))).json();
   assert.equal(first.works.length,1);
-  await page.getByRole('button',{name:'업무 정의 재시도'}).click();
+  await page.getByRole('button',{name:"업무 다시 분석"}).click();
   await page.getByRole('heading',{name:'복구된 업무'}).waitFor();
   const final=await (await fetch(new URL('work/board',server.url))).json();
   assert.equal(final.works.length,1);assert.equal(final.works[0].id,first.works[0].id);

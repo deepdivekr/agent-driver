@@ -1,7 +1,7 @@
 /** Original-runtime connection uses registered bridges and never launches a second bot. */
 export function workAdoptionScript(){return `
 let adoptionBusy=false,adoptionTargets=[],adoptionTargetsWork='',adoptionChoice='',adoptionDraft='',adoptionCost=false,adoptionRequestId=null;
-const adoptionText=(ko,en)=>window.officeLang==='ko'?ko:en;
+const adoptionText=(ko,en)=>window.officeCopy?.(ko,en)??(window.officeLang==='ko'?ko:en);
 function adoptionError(code){const errors={WORK_ADOPTION_TARGET_CHANGED:['연결 상태가 바뀌었습니다. 목록을 다시 확인하세요.','The connection changed. Reload the list.'],WORK_ADOPTION_TARGET_ALREADY_BOUND:['이미 다른 업무에 연결된 실행 환경입니다.','This runtime is already bound to another work.'],WORK_ADOPTION_BINDING_CHANGED:['원본 실행 연결이 변경되었습니다. 연결 설정을 확인하세요.','The original runtime binding changed. Check its configuration.'],WORK_ADOPTION_ACTION_UNSUPPORTED:['이 연결은 해당 제어를 지원하지 않습니다.','This connection does not support that action.'],WORK_REVISION_CONFLICT:['업무 상태가 바뀌었습니다. 최신 상태에서 다시 시도하세요.','The work state changed. Refresh before retrying.']};const text=errors[code];return text?adoptionText(...text):code}
 async function adoptionPost(route,body){const response=await fetch('work/adoption/'+route,{method:'POST',headers:{'content-type':'application/json','x-agent-driver':'human-office'},body:JSON.stringify(body)}),data=await response.json();if(!response.ok)throw Error(adoptionError(data.error||'WORK_ADOPTION_REQUEST_FAILED'));return data}
 function workAdoptionHtml(d){

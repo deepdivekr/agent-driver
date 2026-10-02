@@ -52,7 +52,7 @@ test('delivery onboarding, new Work fields and future-only destination modal use
   await card.locator('[data-target-chat]').fill('123456789');
   await page.locator('#delivery-defaults input[value="'+id+'"]').check();
   await page.locator('#save-delivery').click();
-  await page.getByText('전달 설정을 저장했습니다.',{exact:false}).waitFor();
+  await page.getByText('전달 설정을 저장했어요.',{exact:false}).waitFor();
   assert.equal(posted.settings.length,1);
   assert.equal(posted.settingsHeaders[0],'human-office');
   assert.deepEqual(posted.settings[0].default_target_ids,['app',id]);
@@ -104,7 +104,7 @@ test('delivery onboarding, new Work fields and future-only destination modal use
   await english.getByRole('heading',{name:'Result delivery',exact:true}).waitFor();
   assert.equal(await english.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
   await english.goto(base+'/');
-  await english.getByText('Work instructions',{exact:true}).waitFor();
-  await english.getByText('How to receive the result',{exact:true}).waitFor();
+  await english.getByText("Instructions",{exact:true}).waitFor();
+  await english.getByText("Receive results",{exact:true}).waitFor();
   assert.deepEqual(errors,[]);
 });
