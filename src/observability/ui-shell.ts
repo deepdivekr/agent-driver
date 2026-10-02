@@ -60,8 +60,8 @@ export function sidebarHtml(page:ShellPage){
 <div class="sec">도구</div>
 
 <a class="nav" href="./?import=1" data-nav="import">가져오기</a>
-<a class="nav" id="connections" href="connections"${current('connections')}>사이트 로그인</a>
-<a class="nav" href="settings"${current('settings')}>연결 및 설정</a>
+<a class="nav" href="settings"${page==='connections'?' aria-current="page"':current('settings')}>연결 및 설정</a>
+<a class="nav" id="connections" href="connections" hidden>사이트 로그인</a>
 <div class="sec">업무 처리</div><div class="paths"><span class="pth p-code">코드</span><span class="pth p-jev">Jev</span><span class="pth p-llm">AI</span><span class="pth p-human">사용자</span></div>
 <div class="foot" id="shell-foot">이 컴퓨터에서 실행</div></aside>`;
 }

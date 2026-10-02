@@ -14,6 +14,8 @@ import {apiModelCatalog,claudeModelCatalog,codexModelCatalog,opencodeModelCatalo
 import {SetupActivityStream} from '../onboarding/setup-activity.js';
 import {settingsHtml} from './settings-ui.js';
 import {BrowserSetupController} from '../onboarding/browser-setup.js';
+import {workAutonomy} from '../interface/config.js';
+import {clientEnvironment,clientEnvironmentSummary,type ClientEnvironment} from '../integrations/client-environment.js';
 
 async function readBody(request:IncomingMessage){let size=0;const chunks:Buffer[]=[];for await(const chunk of request){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>20_000)throw Error('SETTINGS_INPUT_TOO_LARGE');chunks.push(bytes);}return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;}
 export class ControlSettings{
@@ -60,6 +62,26 @@ export class ControlSettings{
       const registered=registration?.registration,detail=registration&&!missing?' · '+(registered==='registered'?'MCP 등록됨':registered==='not_registered'?'MCP 등록 필요':registered==='conflict'?'설정 검토 필요':'MCP 등록 미확인'):'';
       await this.activity.record(registrations?'mcp':'ai',client.status==='ready'&&!missing&&(!registration||registered==='registered')?'success':'warning',names[client.id]+': '+result+detail);
     }
+  }
+  /** A connected app is not a fresh installation: the owner already has skills, MCP servers and plugins set up in
+   * it. The check reads where they are and what they are called (never their values) and shows them, and it looks
+   * for the Aside the owner already installed instead of waiting for a click on another screen (live: a new
+   * installation asked the owner to set everything up again and did not find the installed Aside). */
+  private async existingEnvironment(clients:SubscriptionClientConnection[]){
+    const names={codex:'Codex',claude:'Claude Code'} as const,found=new Map<string,ClientEnvironment>();
+    for(const client of clients)if((client.id==='codex'||client.id==='claude')&&client.status==='ready'){
+      const environment=clientEnvironment(client.id,this.environment);if(!environment.found)continue;
+      found.set(client.id,environment);await this.activity.record('ai','info',names[client.id]+': '+clientEnvironmentSummary(environment));
+    }
+    try{
+      // Probing and registering the owner's foreground browser needs the owner's consent. The standing delegation
+      // gives it; without it the owner connects Aside from the Browsers & sign-in tab as before.
+      if(workAutonomy(this.config)==='delegated'&&!this.browsers.view().rows.find(row=>row.engine==='aside')?.registered){
+        const checked=await this.browsers.check('aside');
+        if(checked.rows.find(row=>row.engine==='aside')?.health==='ready'){this.browsers.register('aside',checked.revision,true);await this.activity.record('runtime','success','설치된 Aside를 찾아 실행 도구로 등록했어요 · 새 연결부터 적용');}
+      }
+    }catch{/* Looking for an optional browser never fails the connection check. */}
+    return found;
   }
   private status(scope:ModelScope='global'){
     const saved=readModelSettings(scopedModelSettingsPath(this.path,scope)),global=publicModelSettings(readModelSettings(this.path),this.environment),base=modelScopeBase(this.path,scope,saved?.selection,this.environment);
@@ -165,7 +187,7 @@ export class ControlSettings{
           else await this.activity.record('ai','success',proposedBody.selection?.mode==='api'?'API 모델 설정을 저장했습니다.':'구독 AI 설정을 저장했습니다.');
           send(200,scope==='coding'?this.status(scope):saved);
         }
-        else if(suffix==='settings/refresh'){await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');const clients=await this.auth.connections();await this.recordClientChecks(clients);await this.activity.record('ai','info','AI 클라이언트 상태 확인을 마쳤습니다.');send(200,{clients});}
+        else if(suffix==='settings/refresh'){await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');const clients=await this.auth.connections();await this.recordClientChecks(clients);const found=await this.existingEnvironment(clients);await this.activity.record('ai','info','AI 클라이언트 상태 확인을 마쳤습니다.');send(200,{clients:clients.map(client=>found.has(client.id)?{...client,environment:found.get(client.id)}:client)});}
         else if(suffix==='settings/login'){
           const value=body as {client?:unknown;flow?:unknown};
           if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))||!['device','browser'].includes(String(value.flow))){send(400,{error:'INVALID_CLIENT_FLOW'});return true;}
