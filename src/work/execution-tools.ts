@@ -578,13 +578,16 @@ export class WorkExecutionTools {
       const bytes=Buffer.from(text,'utf8'),hash=sha(bytes),path=join(dirname(this.config.dbPath),'work-pages',this.workId,`${hash}.txt`);
       await mkdir(dirname(path),{recursive:true,mode:0o700});await writeFile(path,bytes,{mode:0o600});
       const shown=bytes.length>DIGEST_INPUT_BYTES?bytes.subarray(0,DIGEST_INPUT_BYTES).toString('utf8'):text;
-      const answer=pageDigestSchema.parse(await modelForRole(this.model,'worker').call('repair',PAGE_DIGEST_INSTRUCTIONS,{request:this.prompt.slice(0,4000),desired_outcome:this.spec.desired_outcome,page:{url,title,text:shown},links:links.slice(0,40).map(link=>({text:link.text.slice(0,120),url:link.url}))},z.toJSONSchema(pageDigestSchema)));
+      const answer=pageDigestSchema.parse(await modelForRole(this.model,'synthesis').call('repair',PAGE_DIGEST_INSTRUCTIONS,{request:this.prompt.slice(0,4000),desired_outcome:this.spec.desired_outcome,page:{url,title,text:shown},links:links.slice(0,40).map(link=>({text:link.text.slice(0,120),url:link.url}))},z.toJSONSchema(pageDigestSchema)));
       const sources=answer.source_links.filter(source=>links.some(link=>link.url===source));
       const flat=(value:string)=>value.replace(/\s+/gu,' ').trim(),whole=flat(text),quotes=answer.quotes.filter(quote=>flat(quote).length>=8&&whole.includes(flat(quote)));
       workActivity(this.store,this.config.project.id,this.workId,'source.digested',`A long page (${bytes.length} bytes) was read whole and handed on as a digest; ${quotes.length} quoted passages were found in the page.`,{tool_name:'office_browser_read',status:'succeeded',target_url:url});
       return {text:[answer.summary,...(sources.length?['','Originals this page links to:',...sources]:[]),...(quotes.length?['','Passages copied from the page:',...quotes.map(quote=>`"${flat(quote)}"`)]:[])].join('\n'),
         rendered:{from:'page_digest',text_bytes_total:bytes.length,text_sha256:hash,digest_covers_bytes:Math.min(bytes.length,DIGEST_INPUT_BYTES),quotes_found_in_page:quotes.length,quotes_not_found:answer.quotes.length-quotes.length,note:'The host read the whole page and kept its full text with this Work. The text shown here is a reader model\'s digest of that page for this request; the host found each quoted passage in the page text. This one read covers the page. A read with an offset above 0 returns the page\'s own text from there.'}};
-    }catch{return null;}
+    }catch(error){
+      workActivity(this.store,this.config.project.id,this.workId,'source.digest_failed',`A long page could not be digested (${error instanceof Error&&/^[A-Z][A-Z0-9_]{2,80}$/u.test(error.message)?error.message:'model call failed'}); it is read in parts instead.`,{tool_name:'office_browser_read',status:'retryable_failure',target_url:url});
+      return null;
+    }
   }
   /** An address that starts a download is read as text when it is text. A file that is not (a PDF, an archive) is a
    * read this run cannot make, not the end of the Work (live: one PDF link restarted a run with fifteen good reads). */

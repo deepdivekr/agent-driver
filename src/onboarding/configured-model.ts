@@ -49,7 +49,9 @@ export class ConfiguredStructuredModel implements StructuredModel{
     // Reusing a native conversation accumulates prior batches/judgments without
     // adding authority or evidence. Keep assignee continuity for actual work,
     // but make the independent verifier checkpoint-only on every provider.
-    if(role==='verifier')return {};
+    // A synthesis call (a page digest) is a one-off read written for the run, not a turn of its conversation; several
+    // run at once, and a shared session refuses all but one (live: digests of long pages failed and fell back to parts).
+    if(role==='verifier'||role==='synthesis')return {};
     const p=this.provenance;
     return p?.work_id&&p.run_id?{session:{root:join(dirname(this.path),'decision-sessions'),work_id:p.work_id,run_id:p.run_id,actor_id:this.actorId??p.stage_id??'supervisor',role}}:{};
   }
