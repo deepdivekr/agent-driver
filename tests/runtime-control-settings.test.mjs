@@ -113,3 +113,28 @@ test('runtime contract existing RuntimeApi observes saved Jev toggles without re
   saveModelSettings(x.path,update(0,{selection:{...selection,jev:'on'},jev_action:'replace',jev_key:secret}),{});await assert.rejects(api.call('runtime_swarm_status',{run_id:'missing'}));assert.equal(api.swarm.providers.decision.id,'typesafe-jev');
   saveModelSettings(x.path,update(1),{});await assert.rejects(api.call('runtime_swarm_status',{run_id:'missing'}));assert.equal(api.swarm.providers.decision,undefined);
 });
+
+// Owner direction 2026-10-02: a connected AI app already has an environment, and the installed Aside is found by
+// the connection check instead of waiting for a click on another screen.
+test('runtime contract the connection check reports the app\'s existing setup and registers a found Aside only under delegation',async t=>{
+  const run=async delegated=>{
+    const x=await setup(t),codexHome=join(x.root,'codex-home');await mkdir(join(codexHome,'skills','staff-code-review'),{recursive:true});
+    await writeFile(join(codexHome,'config.toml'),'model = "gpt-6.1-sol"\n\n[mcp_servers.team-docs]\ncommand = "fixture-secret-do-not-read"\n');
+    if(delegated){const raw=JSON.parse(await readFile(x.paths.runtimeConfig,'utf8'));await writeFile(x.paths.runtimeConfig,JSON.stringify({...raw,work:{model_data_approved:true,autonomy:'delegated'}}));}
+    const config=loadHostConfig(x.paths.runtimeConfig),calls=[];let registered=false;
+    const row=()=>({engine:'aside',registered,health:calls.includes('check')?'ready':'unchecked'});
+    const browsers={view:()=>({revision:'r1',rows:[row()]}),check:async engine=>{calls.push('check');assert.equal(engine,'aside');return {revision:'r1',rows:[row()]};},register:(engine,revision,consent)=>{calls.push('register');assert.deepEqual([engine,revision,consent],['aside','r1',true]);registered=true;return {revision:'r2',rows:[row()]};}};
+    const auth={connections:async()=>[{id:'codex',status:'ready',reason:null},{id:'claude',status:'signed_out',reason:null}],view:()=>({state:'idle'}),start:async()=>({state:'idle'}),close(){}};
+    const settings=new ControlSettings(config,auth,{CODEX_HOME:codexHome},fetch,undefined,undefined,undefined,browsers);let host;
+    const server=createServer((req,res)=>void settings.handle(req,res,req.url.slice(1),host));await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));host='127.0.0.1:'+server.address().port;t.after(async()=>{await settings.close();server.closeAllConnections();await new Promise(resolve=>server.close(resolve));});
+    const response=await fetch('http://'+host+'/settings/refresh',{method:'POST',headers:{origin:'http://'+host,'content-type':'application/json','x-agent-driver':'human-settings'},body:'{}'}),body=await response.json();
+    assert.equal(response.status,200);return {body,calls,log:await readFile(join(dirname(x.paths.runtimeConfig),'setup-activity.jsonl'),'utf8')};
+  };
+  const delegated=await run(true),codex=delegated.body.clients.find(client=>client.id==='codex');
+  assert.deepEqual(codex.environment.skills,['staff-code-review']);assert.deepEqual(codex.environment.mcp_servers,['team-docs']);assert.equal(codex.environment.default_model,'gpt-6.1-sol');
+  assert.equal(delegated.body.clients.find(client=>client.id==='claude').environment,undefined,'An app that is not signed in is not inspected.');
+  assert.doesNotMatch(JSON.stringify(delegated.body)+delegated.log,/fixture-secret/u);assert.match(delegated.log,/Codex: 기존 환경 확인 · 스킬 1개 · MCP 1개/u);
+  assert.deepEqual(delegated.calls,['check','register']);assert.match(delegated.log,/설치된 Aside를 찾아 실행 도구로 등록했어요/u);
+  const perRun=await run(false);assert.deepEqual(perRun.calls,[],'Without the owner\'s delegation the foreground browser is neither probed nor registered.');
+  assert.deepEqual(perRun.body.clients.find(client=>client.id==='codex').environment.skills,['staff-code-review']);
+});

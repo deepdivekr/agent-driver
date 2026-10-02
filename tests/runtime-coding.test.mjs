@@ -63,6 +63,12 @@ test('coding Work binds registered project, persists exact CLI sessions and hand
   assert.equal((await readFile(join(x.repo,'main.txt'),'utf8')),'implemented\n');
   const reviewed=await x.api.call('runtime_coding_step',{run_id:begun.run_id,expected_revision:implemented.revision});
   assert.equal(reviewed.status,'completed');assert.equal(reviewed.stages[1].status,'succeeded');
+  // Live: a correct change with passing tests was refused completion three times because its receipts held only
+  // hashes and the model's summary. What the host itself read from Git is in the receipt.
+  const seen=implemented.stages[0].receipt.host_observed;
+  assert.match(seen.working_tree_diff,/main\.txt/u);assert.match(seen.working_tree_diff,/implemented/u);assert.equal(seen.working_tree_diff_truncated,false);
+  assert.deepEqual(seen.git.commit_created,false);assert.equal(seen.git.head_before_stage,seen.git.head_after_stage);assert.ok(Array.isArray(seen.configured_checks));
+  assert.deepEqual(reviewed.stages[1].receipt.host_observed.git.commit_created,false);assert.equal(reviewed.stages[1].receipt.host_observed.git.head_after_stage,seen.git.head_after_stage);
   assert.equal(reviewed.stages[1].receipt.approved,true);assert.equal(reviewed.completion_verified,false);
   const board=readWorkBoard(x.api.store,x.config),detail=readWorkDetail(x.api.store,x.config,work.work_id);
   assert.equal(board.works[0].run.status,'completed');assert.equal(detail.progress_percent,100);assert.equal(detail.completion_verified,false);
@@ -72,6 +78,15 @@ test('coding Work binds registered project, persists exact CLI sessions and hand
   assert.equal((await x.api.call('runtime_coding_last',{project_ref:'demo'})).found,false);
 });
 
+// Live: the planner named the file an implement stage would edit, and the whole Work stopped for reconciliation
+// before anything had run.
+test('a target the planner writes on an implement or review stage is dropped, not a reason to stop',async t=>{
+  const withTargets={...plan,stages:plan.stages.map(stage=>({...stage,target_path:'main.txt'}))};
+  const x=await setup(t,{selectedPlan:withTargets});
+  const work=await x.api.call('runtime_work_start',{request_id:'coding-targets',prompt:'demo 프로젝트 기능을 구현하고 검토해줘'});
+  const started=await x.api.call('runtime_coding_start',{request_id:'coding-targets',work_id:work.work_id,project_ref:'demo'});
+  assert.equal(started.status,'ready');assert.ok(started.stages.every(stage=>stage.target_path===undefined||stage.target_path===null),JSON.stringify(started.stages.map(stage=>stage.target_path)));
+});
 test('unregistered project and undelegated writes fail before CLI execution',async t=>{
   const x=await setup(t,{write:false}),work=await x.api.call('runtime_work_start',{request_id:'coding-2',prompt:'demo 프로젝트를 구현하고 Claude로 검토해줘'});
   await assert.rejects(x.api.call('runtime_coding_start',{request_id:'coding-2',work_id:work.work_id,project_ref:'other'}),/CODING_PROJECT_NOT_REGISTERED/u);

@@ -14,7 +14,9 @@ export type WorkMode=z.infer<typeof workModeSchema>;
 export const workQuestionSchema=z.object({
   id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),
   prompt:sentence.max(400),
-  options:z.array(z.object({id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),label:sentence.max(120),meaning:sentence.max(300)}).strict()).min(2).max(4),
+  options:z.array(z.object({id:z.string().regex(/^[a-z][a-z0-9_]{0,39}$/u),label:sentence.max(120),meaning:sentence.max(300),
+    // The option needs a value from the user (which stock, what time): the UI shows an input with this hint beside it.
+    detail:sentence.max(80).optional()}).strict()).min(2).max(4),
   recommended_id:z.string().nullable(),
   required:z.boolean(),
 }).strict();

@@ -33,6 +33,57 @@ test('one-line Work is durable before model success and request IDs are idempote
   await assert.rejects(x.api.call('runtime_work_start',{request_id:'bad-key',prompt:'apikey_abcdefghijklmnopqrstuvwxyz'}),/CREDENTIAL_LIKE_INPUT/u);
 });
 
+// Live: the answer "seoul" came back to the planner without its question, a category option ("one stock") had no
+// place for the value, and the owner was asked who receives a Telegram that was already connected.
+test('the planner gets its earlier questions with the answers; an option can ask for a typed value',async t=>{
+  const question={id:'stocks',prompt:'어느 종목을 추적할까요?',options:[{id:'one',label:'한 종목',meaning:'한 종목만 추적한다',detail:'종목명 또는 티커'},{id:'holdings',label:'보유 종목 전체',meaning:'등록된 보유 종목을 모두 추적한다'}],recommended_id:'one',required:true};
+  const inputs=[];const fake={calls:[],async call(_purpose,instructions,input){inputs.push({instructions,input});return proposal(Object.keys(input.answers??{}).length?[]:[question]);}};
+  const x=await setup(t,fake);
+  const guided=await x.api.call('runtime_work_start',{request_id:'guided-stock',prompt:'종목 반응을 매일 알려줘',intake_mode:'guided'});
+  assert.equal(guided.questions[0].options[0].detail,'종목명 또는 티커','The hint for the typed value reaches the UI.');
+  assert.equal(inputs[0].input.answered_questions,undefined);assert.match(JSON.stringify(inputs[0].input.host_execution_facts),/sets detail to a short hint/u);
+  const answered=await x.api.call('runtime_work_answer',{work_id:guided.work_id,revision:guided.revision,answers:{stocks:'one: ASTS'}});
+  assert.equal(answered.status,'ready');
+  assert.deepEqual(inputs[1].input.answered_questions,[{id:'stocks',question:'어느 종목을 추적할까요?',answer:{chosen:'한 종목',meaning:'한 종목만 추적한다',typed:'ASTS'}}]);
+  const plain=await x.api.call('runtime_work_start',{request_id:'guided-stock-2',prompt:'종목 반응을 매주 알려줘',intake_mode:'guided'});
+  await x.api.call('runtime_work_answer',{work_id:plain.work_id,revision:plain.revision,answers:{stocks:'holdings'}});
+  assert.deepEqual(inputs.at(-1).input.answered_questions[0].answer,{chosen:'보유 종목 전체',meaning:'등록된 보유 종목을 모두 추적한다'});
+  const custom=await x.api.call('runtime_work_start',{request_id:'guided-stock-3',prompt:'종목 반응을 매월 알려줘',intake_mode:'guided'});
+  await x.api.call('runtime_work_answer',{work_id:custom.work_id,revision:custom.revision,answers:{stocks:'RKLB와 ASTS 둘 다'}});
+  assert.deepEqual(inputs.at(-1).input.answered_questions[0].answer,{typed:'RKLB와 ASTS 둘 다'});
+});
+// Owner direction 2026-10-02: the intake planner keeps one conversation per Work.
+test('every intake round of a Work goes to the same planner session; another Work gets its own',async t=>{
+  const question={id:'scope',prompt:'범위는?',options:[{id:'small',label:'작게',meaning:'작게 한다'},{id:'large',label:'크게',meaning:'크게 한다'}],recommended_id:'small',required:true};
+  const bound=[],unbound=[];
+  const fake={calls:[],async call(purpose){unbound.push(purpose);return proposal();},
+    forWork(context){const session={calls:[],async call(purpose,_instructions,input){bound.push({context,purpose});return proposal(Object.keys(input.answers??{}).length?[]:[question]);}};return session;}};
+  const x=await setup(t,fake);
+  const first=await x.api.call('runtime_work_start',{request_id:'session-a',prompt:'세션 업무 A',intake_mode:'guided'});
+  await x.api.call('runtime_work_answer',{work_id:first.work_id,revision:first.revision,answers:{scope:'small'}});
+  const second=await x.api.call('runtime_work_start',{request_id:'session-b',prompt:'세션 업무 B',intake_mode:'guided'});
+  assert.deepEqual(bound.map(row=>row.context),[{work_id:first.work_id,run_id:first.work_id,actor_id:'intake'},{work_id:first.work_id,run_id:first.work_id,actor_id:'intake'},{work_id:second.work_id,run_id:second.work_id,actor_id:'intake'}]);
+  assert.ok(bound.every(row=>row.purpose==='design'));assert.deepEqual(unbound,[],'The planner call itself never goes to an unbound model.');
+});
+test('the planner receives the owner\'s standing instructions and skills when a service enabled them',async t=>{
+  const {enableOwnerEnvironment,disableOwnerEnvironment}=await import('../dist/integrations/client-environment.js');
+  const inputs=[];const fake={calls:[],async call(_purpose,_instructions,input){inputs.push(input);return proposal();}};
+  const x=await setup(t,fake);
+  await x.api.call('runtime_work_start',{request_id:'owner-env-off',prompt:'환경 없이 등록'});assert.equal(inputs.at(-1).owner_environment,undefined);
+  const owner={instructions:[{app:'claude',file:'CLAUDE.md',text:'All user-facing text: Korean.'}],skills:[{app:'codex',name:'staff-code-review',description:'Use for code review.'}]};
+  enableOwnerEnvironment(()=>owner);t.after(()=>disableOwnerEnvironment());
+  await x.api.call('runtime_work_start',{request_id:'owner-env-on',prompt:'환경과 함께 등록'});
+  assert.deepEqual(inputs.at(-1).owner_environment,owner);assert.match(inputs.at(-1).host_execution_facts.owner_environment,/Neither grants a tool, a permission or a fact/u);
+});
+test('the planner is told where results already go and never asks for a recipient',async t=>{
+  const {WorkRuntime}=await import('../dist/work/runtime.js');
+  const inputs=[];const fake={calls:[],async call(_purpose,_instructions,input){inputs.push(input);return proposal();}};
+  const x=await setup(t,fake);
+  const runtime=new WorkRuntime(x.api.store,x.config,fake,undefined,undefined,id=>({registered:[{id:'telegram-home',platform:'telegram',label:'내 텔레그램'}],selected:['app','telegram-home']}));
+  await runtime.start({request_id:'delivery-known',prompt:'매일 결과를 텔레그램으로 보내줘'});
+  assert.deepEqual(inputs.at(-1).result_delivery,{registered:[{id:'telegram-home',platform:'telegram',label:'내 텔레그램'}],selected:['app','telegram-home']});
+  assert.match(inputs.at(-1).host_execution_facts.result_delivery,/Never ask who receives the result/u);
+});
 test('quick mode removes optional questions; guided mode persists options and answers',async t=>{
   const question={id:'format',prompt:'결과 형식은?',options:[{id:'summary',label:'요약문',meaning:'글머리표 요약'},{id:'cards',label:'카드뉴스',meaning:'시각 카드 초안'}],recommended_id:'summary',required:false};
   let lastInput=null;const fake={calls:[],async call(_purpose,_instructions,input){lastInput=input;return proposal([question]);}};
