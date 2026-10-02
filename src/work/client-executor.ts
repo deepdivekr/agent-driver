@@ -296,12 +296,18 @@ export function executorView(checkpoint:WorkClientCheckpoint):WorkClientCheckpoi
 // 22 reads leave room in the 32-receipt window for the save, its readback and the reads of a correction (live: a
 // correction's reads pushed cited receipts out and the Work failed on a claim to evidence that was gone).
 const WRAP_UP_READS=16,WRAP_UP_SECONDS=420,READ_LIMIT_BEFORE_RESULT=22,READBACK_TOOLS=new Set(['office_result_read','runtime_pack_status','office_schedule_status','office_pack_source_read']);
-export function runBudget(checkpoint:WorkClientCheckpoint,nowMs=Date.now()):{run_budget?:{reads_done:number;elapsed_seconds:number;wrap_up:true;instruction:string}}{
+export function runBudget(checkpoint:WorkClientCheckpoint,nowMs=Date.now()):{run_budget?:{reads_done:number;reads_left:number;elapsed_seconds:number;wrap_up:boolean;instruction:string}}{
   const dispatched=checkpoint.observations.filter(item=>item.invocation.dispatched&&item.invocation.tool_name!=='office_controlled_run_trace');
-  if(!dispatched.length||dispatched.some(item=>item.receipt.status==='succeeded'&&item.invocation.effect!=='read_only'))return {};
-  const elapsed=Math.max(0,Math.round((nowMs-Date.parse(dispatched[0]!.observed_at))/1000));
-  if(dispatched.length<WRAP_UP_READS&&elapsed<WRAP_UP_SECONDS)return {};
-  return {run_budget:{reads_done:dispatched.length,elapsed_seconds:elapsed,wrap_up:true,instruction:'This run has read enough to answer. Save the result now from what the receipts establish, and state in it which items could not be confirmed. Do not start further exploration; at most one more decision of reads if a requested item has no evidence at all.'}};
+  if(dispatched.some(item=>item.receipt.status==='succeeded'&&item.invocation.effect!=='read_only'))return {};
+  const done=(checkpoint.evicted_observations?.count??0)+dispatched.length,left=Math.max(0,READ_LIMIT_BEFORE_RESULT-done);
+  const elapsed=dispatched.length?Math.max(0,Math.round((nowMs-Date.parse(dispatched[0]!.observed_at))/1000)):0;
+  const wrapUp=dispatched.length>=WRAP_UP_READS||elapsed>=WRAP_UP_SECONDS;
+  // The budget is known from the first turn, so the run spends it in the order the request ranks its items: when
+  // it ends, what was done is a correct shorter answer rather than a scattered one (live: five of nine items were
+  // done out of order and newer candidates were left untouched).
+  return {run_budget:{reads_done:done,reads_left:left,elapsed_seconds:elapsed,wrap_up:wrapUp,instruction:wrapUp
+    ?'This run has read enough to answer. Save the result now from what the receipts establish, and state in it which items could not be confirmed. Do not start further exploration; at most one more decision of reads if a requested item has no evidence at all.'
+    :`This run may make ${left} more reads before it must save its result. Read the lists first, then take the items in the order the request ranks them (newest first unless it says otherwise) and finish each item before starting the next. Batch reads with also_read.`}};
 }
 export class BoundedWorkClientExecutor {
   constructor(readonly model:StructuredModel){}

@@ -430,7 +430,8 @@ test('one decision can ask for several reads; the host runs them all before the 
 test('a run that has read much or long is told to save what is established; a run that already saved is not',()=>{
   const observation=(i,tool='browser_read',effect='read_only')=>({invocation:{request_id:`r-${i}`,turn:i,stage_id:'s',tool_name:tool,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{},evidence_ids:[`e-${i}`],effect_state:'none',retry_safe:true},observed_at:'2026-10-01T00:00:00.000Z'});
   const checkpoint=n=>({format:1,work_id:'w',run_id:'r',binding:'b',turn:n,pending:null,observations:Array.from({length:n},(_,i)=>observation(i)),summary:''}),at=Date.parse('2026-10-01T00:01:00.000Z');
-  assert.deepEqual(runBudget(checkpoint(5),at),{});
+  const early=runBudget(checkpoint(5),at).run_budget;assert.equal(early.wrap_up,false);assert.equal(early.reads_left,17);assert.match(early.instruction,/in the order the request ranks them/u);
+  assert.equal(runBudget(checkpoint(0),at).run_budget.reads_left,22,'The budget is known from the first turn.');
   assert.equal(runBudget(checkpoint(16),at).run_budget.wrap_up,true);assert.equal(runBudget(checkpoint(16),at).run_budget.reads_done,16);
   assert.equal(runBudget(checkpoint(5),Date.parse('2026-10-01T00:08:00.000Z')).run_budget.elapsed_seconds,480);
   const saved=checkpoint(30);saved.observations.push(observation(30,'office_result_draft','local_write'));assert.deepEqual(runBudget(saved,at),{},'Once a result is saved the run is finishing, not exploring.');
