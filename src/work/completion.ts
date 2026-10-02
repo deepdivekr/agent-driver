@@ -186,7 +186,8 @@ interface ObservableEvidence {tool_name:string;observed_at:string;evidence_ids:s
  * draft. This is a label for the verifier, never a removal: the receipt stays
  * in the evidence record. Maps each replaced evidence ID to the replacing one. */
 /** A host-paged text resource read that says more pages exist. */
-const partialTextPage=(value:unknown)=>{const root=object(value);return root?.provenance==='http_text_resource'&&root.has_more===true;};
+// One part of a longer text or page: its receipt says so (has_more) and names where the next part starts.
+const partialTextPage=(value:unknown)=>{const root=object(value);return (root?.provenance==='http_text_resource'||root?.provenance==='live_browser_dom')&&root.has_more===true;};
 export function supersededOutputEvidence(observations:readonly Observation[]):Map<string,string>{
   const identity=(value:unknown)=>{const root=object(value),artifact=object(root?.artifact);return typeof root?.title==='string'&&typeof artifact?.format==='string'?JSON.stringify([root.title,artifact.format]):null;};
   const drafts=observations.filter(item=>item.invocation.tool_name==='office_result_draft'&&item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.receipt.effect_state==='verified'&&item.receipt.evidence_ids.length>0);
