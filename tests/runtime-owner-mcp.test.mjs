@@ -11,7 +11,7 @@ const tool=(name,annotations,description='Looks something up.')=>({name,descript
 const servers={
   docs:[tool('search_docs',{readOnlyHint:true}),tool('resolve-library-id'),tool('create_note',{readOnlyHint:false}),tool('delete_everything',{destructiveHint:true}),tool('get_and_delete')],
   writer:[tool('create_issue'),tool('send_message')],
-  coder:[tool('read_file'),tool('list_dir'),tool('find_symbol'),tool('search_for_pattern')],
+  coder:[tool('read_file'),tool('list_dir'),tool('find_symbol'),tool('search_for_pattern'),tool('find_declaration',{readOnlyHint:true}),tool('activate_project',{readOnlyHint:true}),tool('get_current_config',{readOnlyHint:true})],
 };
 const connectTo=calls=>async launch=>{
   const id=launch.kind==='http'?new URL(launch.url).hostname.split('.')[0]:launch.command;calls.push({id,launch});
