@@ -25,7 +25,7 @@ const observation=(url,patch={})=>({url,title:'Observed source results',text:'Fi
 const unusual=()=>observation('https://www.google.com/sorry/index',{title:'Google',text:'Our systems have detected unusual traffic from your computer network.',links:[]});
 const proposal={title:'ASTS source research',desired_outcome:'Read public ASTS articles and report observed sources.',completion_checks:[{id:'sources',result:'Sources are saved',evidence:'Observed browser receipts'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],browser:{environment:'owned_headless'}};
 
-async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[],download=()=>false,digest=null,workPolicy=null}={}){
+async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[],download=()=>false,digest=null,workPolicy=null,marker=true}={}){
   const root=await mkdtemp(join(tmpdir(),'work-unusual-traffic-')),path=join(root,'host.json');
   await writeFile(path,JSON.stringify({schema_version:1,project_id:'unusual-traffic-fixture',caller_ref:'fixture',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true},...(workPolicy?{work:workPolicy}:{}),browser_executors:{targets:[headless,guest,aside,neo]}}));
   const config=loadHostConfig(path),store=new PackStore(config.dbPath);store.registerProject(config.project);initWorkSupervisor(store);
@@ -34,7 +34,7 @@ async function setup(t,{browser=proposal.browser,requested_effect=proposal.reque
   const api={async call(name){assert.equal(name,'runtime_pack_catalog');return {families:[{id:'research.search'}],connected:true,models:'off'};}};
   const factory=target=>{
     events.push({kind:'factory',id:target.id,engine:target.engine,environment:target.environment});let current='';
-    return {target,async probe(){events.push({kind:'probe',id:target.id});if(probeFail.includes(target.id))throw Object.assign(Error('spawn ENOENT'),{code:'ENOENT'});},async open(url){current=url;events.push({kind:'open',id:target.id,url});if(download(url))throw Error('page.goto: Download is starting');},async navigate(url){current=url;events.push({kind:'navigate',id:target.id,url});},async observe(){events.push({kind:'observe',id:target.id,url:current});return observe(target,current);},async extract(){events.push({kind:'extract',id:target.id});return [{marker:'fixture signed-in marker'}];},async scroll(){assert.fail('Search read must not need scrolling.');},async close(){events.push({kind:'close',id:target.id});}};
+    return {target,async probe(){events.push({kind:'probe',id:target.id});if(probeFail.includes(target.id))throw Object.assign(Error('spawn ENOENT'),{code:'ENOENT'});},async open(url){current=url;events.push({kind:'open',id:target.id,url});if(download(url))throw Error('page.goto: Download is starting');},async navigate(url){current=url;events.push({kind:'navigate',id:target.id,url});},async observe(){events.push({kind:'observe',id:target.id,url:current});return observe(target,current);},async extract(){events.push({kind:'extract',id:target.id});return marker?[{marker:'fixture signed-in marker'}]:[];},async scroll(){assert.fail('Search read must not need scrolling.');},async close(){events.push({kind:'close',id:target.id});}};
   };
   const create=()=>{const tools=new WorkExecutionTools(store,config,api,work.work_id,run,work.spec,work.prompt,()=>{},model,{browserFactory:factory});instances.push(tools);return tools;};
   const seed=checkpoint=>{const stamp=new Date().toISOString();store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET checkpoint=excluded.checkpoint').run(run,config.project.id,work.work_id,work.revision,'paused',JSON.stringify(checkpoint),config.fingerprint,0,stamp,stamp);};
@@ -213,6 +213,20 @@ test('runtime fixture under delegation a social page is read in the registered A
   assert.ok(workTail(x.store,x.config.project.id,x.work.work_id).some(row=>row.kind==='source.signed_in'));
   const strict=await setup(t,{browser:null,prompt:request,observe:(target,url)=>observation(url)}),approved=strict.create();
   await assert.rejects(approved.execute('office_browser_read',{url:page},'social-read'),error=>/WORK_SOCIAL_PROFILE_NOT_READY/u.test(error.code??error.message),'Without the owner\'s delegation the site still needs a checked sign-in.');
+});
+
+// Live (2026-10-03): X was signed in but its posts had not been drawn yet, and Reddit, signed in inside Aside, did
+// not show the account menu this host looks for. The owner was asked to sign in again to both.
+test('runtime fixture a social page is given time to draw its posts, and a page that shows posts is a read without the account marker',async t=>{
+  const page='https://www.reddit.com/r/ASTSpaceMobile/',request=`ASTS 주식 종목 reddit 반응을 ${page} 에서 확인해줘`;
+  const posts=Array.from({length:8},(_,index)=>({text:`Post ${index}`,url:`https://www.reddit.com/r/ASTSpaceMobile/comments/${index}/`}));
+  let looks=0;
+  const x=await setup(t,{browser:null,prompt:request,workPolicy:{model_data_approved:true,autonomy:'delegated'},marker:false,observe:(target,url)=>{looks++;return looks<3?observation(url,{title:'Reddit',text:'Loading',links:[]}):observation(url,{title:'r/ASTSpaceMobile',text:'Retail investors discuss the latest launch. '.repeat(20),links:posts});}});
+  const factory=x.create();
+  // The fixture browser shows the posts on the third look and never the account menu.
+  const value=await factory.execute('office_browser_read',{url:page},'social-late');
+  assert.ok(looks>=3,'The page was looked at again while it was still drawing.');assert.equal(value.social_access,'content_observed');assert.equal(value.links.length,8);
+  assert.equal((await factory.receipt('office_browser_read',value,'social-late')).status,'succeeded');
 });
 
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host
