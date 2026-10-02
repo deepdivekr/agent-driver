@@ -47,12 +47,12 @@ test('runtime unit empty steps distinguish queued, live model work, unobserved a
   for(const language of ['ko','en']){
     const x=context(language),cases=[
       [{supervisor:{state:'queued',live:false}},/요청했어요|Execution requested/u],
-      [{supervisor:{state:'running',live:true},activity:[{kind:'model.started'}]},/AI.*정하는 중|AI is choosing/u],
+      [{supervisor:{state:'running',live:true},activity:[{kind:'model.started'}]},/AI.*정하는 중|AI chooses/u],
       [{supervisor:{state:'running',live:true},activity:[{kind:'model.result'}]},/실행 중|Execution is active/u],
-      [{supervisor:{state:'running',live:false},execution:{live:false}},/확인되지|not been confirmed/u],
+      [{supervisor:{state:'running',live:false},execution:{live:false}},/확인되지|is not confirmed/u],
       [{supervisor:{state:'paused',live:false},activity:[{kind:'model.started'}]},/멈춘 이유|why it stopped/u],
       [{supervisor:{state:'retry_wait',live:false}},/멈춘 이유|why it stopped/u],
-      [{display_status:'defining',execution:{live:true}},/AI가 업무를 분석|AI is analyzing/u]
+      [{display_status:'defining',execution:{live:true}},/AI가 업무를 분석|AI analyzes/u]
     ];
     for(const [data,expected] of cases){x.data=data;const text=vm.runInNewContext('window.officeText(emptyStageMessage(data))',x);assert.match(text,expected);assert.doesNotMatch(text,/업무 시작을 누르면|Press Start work/u);if(language==='en')assert.doesNotMatch(text,/[가-힣]/u);}
     x.data={display_status:'ready',execution_action:{can_execute:true}};assert.match(vm.runInNewContext('window.officeText(emptyStageMessage(data))',x),/업무 시작을 누르면|Press Start work/u);
@@ -98,7 +98,7 @@ test('runtime unit observed search challenge is localized and retryable tool act
     const x=context(language),nodes={'work-tail-output':{textContent:'',scrollHeight:0,scrollTop:0,clientHeight:0},'work-timeline':{dataset:{},innerHTML:''},'work-worker-summary':{},'work-tail-state':{},'work-tail-last':{},back:{}};
     x.labels={retryable_failure:'재시도 대기',paused:'일시정지됨'};x.row={kind:'search.blocked',summary:'The public search provider returned an observed access challenge. No login, challenge bypass or browser replay was attempted.',created_at:at,metadata:{status:'retryable_failure',reason:'WORK_SEARCH_PROVIDER_CHALLENGE'}};
     x.detail={id:'11111111-1111-4111-8111-111111111111',title:'Search challenge',goal:'Find source-grounded research.',work_status:'ready',display_status:'paused',spec:null,supervisor:{kind:'client',state:'paused',live:false},execution:{live:false,active_workers:0},activity:[x.row,{kind:'tool.result',summary:'A challenge page is not an article.',created_at:at,metadata:{tool_name:'office_web_search',status:'retryable_failure'}}],stages:[{id:'query',label:'자료 조회',objective:'office_web_search',status:'retryable_failure',verified:false,executor:'client',attempts:1,owner:null}],verified_steps:0,total_steps:1,progress_percent:null,runs:[],completion_verified:false,completion_note:'도구 기록은 업무 완료와 다릅니다.'};
-    x.document.getElementById=id=>nodes[id]??null;x.tailConnectionState='live';const caption=vm.runInNewContext('activitySummary(row)',x);assert.match(caption,language==='ko'?/자료를 가져오지 못했어요/u:/no research material was retrieved/u);assert.match(caption,language==='ko'?/추가 확인을 요구/u:/requested additional verification/u);assert.doesNotMatch(caption,/WORK_SEARCH_PROVIDER_CHALLENGE/u);if(language==='en')assert.doesNotMatch(caption,/[가-힣]/u);
+    x.document.getElementById=id=>nodes[id]??null;x.tailConnectionState='live';const caption=vm.runInNewContext('activitySummary(row)',x);assert.match(caption,language==='ko'?/자료를 가져오지 못했어요/u:/no research material was retrieved/u);assert.match(caption,language==='ko'?/추가 확인을 요구/u:/requested additional confirmation/u);assert.doesNotMatch(caption,/WORK_SEARCH_PROVIDER_CHALLENGE/u);if(language==='en')assert.doesNotMatch(caption,/[가-힣]/u);
     vm.runInNewContext(paint+'\npaintWorkTail()',x);assert.equal((nodes['work-timeline'].innerHTML.match(/timeline-failure/gu)||[]).length,2);assert.doesNotMatch(nodes['work-timeline'].innerHTML,/timeline-success|업무 실행 성공|Work execution succeeded/u);assert.ok(nodes['work-tail-output'].textContent.includes(caption));assert.match(nodes['work-timeline'].innerHTML,/재시도 대기|Retry pending/u);
     x.app={innerHTML:'',querySelectorAll:()=>[]};x.updateConnection=()=>{};x.showBoard=()=>{};x.liveStageHtml=()=>'';x.fileWorkPanel=()=>'';x.editing=null;x.attention=status=>status==='retryable_failure';vm.runInNewContext(body+'\nrenderDetailBody()',x);assert.match(x.app.innerHTML,/data-verified="false"/u);assert.match(x.app.innerHTML,/class="step t-hu /u);assert.doesNotMatch(x.app.innerHTML,/class="step t-done|aria-valuenow="100"/u);assert.equal(x.detail.completion_verified,false);
   }

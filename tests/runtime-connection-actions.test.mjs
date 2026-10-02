@@ -64,7 +64,7 @@ test('runtime fixture AI setup installs a missing client and refreshes its compl
   const card=page.locator('#client-opencode');assert.equal(await card.locator('.cact button').count(),1);assert.equal(await card.locator('.cact button').textContent(),'Install');
   const popupPromise=context.waitForEvent('page');await card.locator('.cact button').click();const popup=await popupPromise;await popup.waitForURL('https://auth.openai.com/codex/device');
   await page.locator('#refresh-clients:enabled').waitFor();assert.deepEqual(f.calls,['install:opencode','login:opencode']);
-  assert.equal(await card.locator('.cact button').count(),1);assert.equal(await card.locator('.cact button').textContent(),'Log in');
+  assert.equal(await card.locator('.cact button').count(),1);assert.equal(await card.locator('.cact button').textContent(),'Sign in');
   f.signedIn.add('opencode');f.flows.set('opencode',{client_id:'opencode',state:'completed',reason:'fixture_approved',credentials_exposed:false});
   await card.locator('[data-manage-client=opencode]').waitFor();assert.equal(await card.locator('.badge').textContent(),'Connected');
   assert.equal(await card.locator('.login-action').count(),0);assert.equal(await readFile(f.config.path,'utf8'),before,'Completing login does not save or switch models');

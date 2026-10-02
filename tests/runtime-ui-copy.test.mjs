@@ -38,7 +38,7 @@ test('display copy: verification, permissions, delivery uncertainty and API cost
   assert.match(ko('Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.'),/모든 완료 기준.*아닐 수/u);
   assert.match(en('Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.'),/may not meet every/u);
   assert.match(ko('저장됨 · 발송 연결 미확인'),/전송 확인 전/u);
-  assert.match(en('저장됨 · 발송 연결 미확인'),/not verified/u);
+  assert.match(en('저장됨 · 발송 연결 미확인'),/not confirmed/u);
   assert.match(ko('전송 여부가 불확실합니다. 메신저에서 수신 여부를 확인하세요.'),/불확실.*수신 여부/u);
   assert.match(ko('Jev API 비용 가능성을 확인하고 연결에 동의합니다'),/API 비용.*동의/u);
   assert.match(ko('구독 한도를 소진해도 유료 API로 자동 전환하지 않습니다.'),/자동 전환하지 않아요/u);
