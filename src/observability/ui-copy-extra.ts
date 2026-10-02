@@ -226,6 +226,7 @@ export const extraSourceCopy: Record<string, string> = {
   'run not started': 'Not started', 'read-only': 'Read only', 'draft only': 'Draft only',
   'change after approval': 'Changes need approval',
   '설치된 Aside를 찾아 실행 도구로 등록했어요 · 새 연결부터 적용': 'Found the installed Aside and registered it as an execution tool · applies to new connections',
+  '사용 중인 Neo를 찾아 실행 도구로 등록했어요 · 새 연결부터 적용': 'Found the Neo you use and registered it as an execution tool · applies to new connections',
   '브라우저·로그인': 'Browsers & sign-in', '브라우저와 로그인 환경': 'Browsers and sign-in', '← 브라우저·로그인 설정': '← Browser and sign-in settings',
   // Hermes, remote server and remaining Work texts that had no registered wording (found by the coverage test).
   'Hermes가 실행하고 Driver에서 관리합니다. 원본 대화·예약·인증은 그대로 둡니다.': 'Hermes runs the work and Driver manages it. Original chats, schedules and sign-ins stay as they are.',

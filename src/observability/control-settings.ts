@@ -76,9 +76,12 @@ export class ControlSettings{
     try{
       // Probing and registering the owner's foreground browser needs the owner's consent. The standing delegation
       // gives it; without it the owner connects Aside from the Browsers & sign-in tab as before.
-      if(workAutonomy(this.config)==='delegated'&&!this.browsers.view().rows.find(row=>row.engine==='aside')?.registered){
-        const checked=await this.browsers.check('aside');
-        if(checked.rows.find(row=>row.engine==='aside')?.health==='ready'){this.browsers.register('aside',checked.revision,true);await this.activity.record('runtime','success','설치된 Aside를 찾아 실행 도구로 등록했어요 · 새 연결부터 적용');}
+      // Aside is always looked for; Neo only when one of the owner's apps already has it as an MCP server.
+      const engines=['aside',...([...found.values()].some(environment=>environment.browser_hints.includes('neo'))?['neo'] as const:[])] as const;
+      if(workAutonomy(this.config)==='delegated')for(const engine of engines){
+        if(this.browsers.view().rows.find(row=>row.engine===engine)?.registered)continue;
+        const checked=await this.browsers.check(engine);
+        if(checked.rows.find(row=>row.engine===engine)?.health==='ready'){this.browsers.register(engine,checked.revision,true);await this.activity.record('runtime','success',engine==='aside'?'설치된 Aside를 찾아 실행 도구로 등록했어요 · 새 연결부터 적용':'사용 중인 Neo를 찾아 실행 도구로 등록했어요 · 새 연결부터 적용');}
       }
     }catch{/* Looking for an optional browser never fails the connection check. */}
     return found;
