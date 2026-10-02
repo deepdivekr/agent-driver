@@ -141,6 +141,8 @@ export interface WorkClientHooks {
   packRequestRecovery?:(invocation:WorkClientInvocation,prior:WorkClientCheckpoint['observations'])=>{state:'observe_success'|'pending';run_id:string}|null|Promise<{state:'observe_success'|'pending';run_id:string}|null>;
   /** Pure host preflight. Typed input rejection is correctable; scope/approval denial never is. */
   validateTool?:(name:string,args:Record<string,unknown>,context:{request_id:string;work_id:string;run_id:string;stage_id:string})=>void|Promise<void>;
+  /** The reads a decision asked for, told to the host before they are dispatched one by one. */
+  prepareReads?:(reads:ReadonlyArray<{tool:string;arguments:Record<string,unknown>}>)=>void;
   executeTool:(name:string,args:Record<string,unknown>,context:{request_id:string;work_id:string;run_id:string;stage_id:string;signal?:AbortSignal})=>Promise<WorkClientToolReceipt>;
   checkpoint:(value:WorkClientCheckpoint)=>void|Promise<void>;
   progress?:(event:WorkClientProgress)=>void|Promise<void>;
@@ -530,6 +532,7 @@ export class BoundedWorkClientExecutor {
           const extraTool=tools.find(item=>item.name===extra.tool_name&&item.effect==='read_only');if(!extraTool||queuedReads.length>=6)continue;
           try{const parsed:unknown=JSON.parse(extra.arguments_json);if(parsed&&typeof parsed==='object'&&!Array.isArray(parsed))queuedReads.push({tool:extraTool.name,arguments:parsed as Record<string,unknown>});}catch{/* An unparsable extra read is skipped; the model can ask again. */}
         }
+        if(!replayed&&!scriptedComplete&&decision.action==='tool'&&queuedReads.length&&decision.tool_name){try{const first:unknown=JSON.parse(decision.arguments_json??'null');if(first&&typeof first==='object'&&!Array.isArray(first))hooks.prepareReads?.([{tool:decision.tool_name,arguments:first as Record<string,unknown>},...queuedReads]);}catch{/* The decision's own arguments are validated below. */}}
         const accepted=replayed||scriptedComplete?undefined:model.calls.at(-1);
         checkpoint={...checkpoint,summary:safeControlText(decision.summary,4000)};
         const decisionStage=semantic?(decision.action==='complete'?'completion.verify':decision.stage_id??stage):stage;

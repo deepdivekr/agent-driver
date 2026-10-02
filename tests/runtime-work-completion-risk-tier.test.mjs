@@ -216,6 +216,45 @@ test('A7: a page read is shown with its links before its text',async t=>{
 });
 
 // Live: a news digest that read sixty pages went to twenty-seven strict batches and nine minutes without a decision.
+// Live: twenty pages shortened to fit one call left the verifier unable to compare summaries with their articles.
+test('A7: the fast judgment compares the saved result with each page it names; a supported page is shown short and marked',async t=>{
+  const page=(turn,url,body)=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{url},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url,title:`Title ${turn}`,text:body+' '+'filler '.repeat(900),links:[],provenance:'live_browser_dom',effect:'read_only',observed_at:at(turn)},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
+  const report='News of 2026-10-01\n\n'+[0,1,2].map(i=>`${i+1}. Post ${i}\nSource: https://example.org/post-${i}\nSummary: Post ${i} says agents improved by ${i+10} percent.`).join('\n\n');
+  const pages=[0,1,2].map(i=>page(i,`https://example.org/post-${i}`,`Post ${i} says agents improved by ${i+10} percent.`));
+  const saved={...draft(3),receipt:{...draft(3).receipt,value:{...draft(3).receipt.value,text:report}}};
+  const asked=[],jev={async systemOne(request){const record=request.state.record;asked.push(record);const choice=record.statement.includes('post-2')?'unknown':'supported';return {answers:{label:{type:'choice',choice,confidence:.97,probabilities:{supported:.01,not_supported:.01,unknown:.01,[choice]:.97}}}};}};
+  const model=fixture(input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:['ev-draft-1'],quotes:[{evidence_id:'ev-draft-1',quote:'Post 1 says agents improved by 11 percent.'}],reason:'The saved report names its posts.'}))}));
+  let counted=0;const notes=[],verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,fastJudgment:()=>jev,onPaidJudgment:calls=>{counted+=calls;},progress:event=>notes.push(event.summary)});
+  assert.equal(await verify(checks,sealed(t,[...pages,saved]),claimFor(['ev-draft-1'])),true,JSON.stringify(notes));assert.deepEqual(model.kinds,['light']);
+  assert.equal(asked.length,3);assert.equal(counted,3);assert.match(asked[0].statement,/Summary: Post 0 says/u);assert.doesNotMatch(asked[0].statement,/Post 1 says/u,'Each page is asked only about the block that names it.');
+  const shown=id=>model.inputs[0].evidence.find(item=>item.evidence_id===id);
+  assert.match(shown('ev-source-0').grounded_by_host,/supported/u);assert.equal(shown('ev-source-0').truncated,false);assert.ok(shown('ev-source-0').content.length<1700);
+  assert.equal(shown('ev-source-2').grounded_by_host,undefined,'A page the fast judgment did not confirm is shown as before.');assert.ok(shown('ev-source-2').content.length>5000);
+  assert.ok(notes.some(note=>/compared the saved result with 3 pages it names: 2 supported/u.test(note)));
+});
+
+// Owner direction 2026-10-02: single conditions are yes/no questions; the fast judgment answers them in parallel.
+test('A7: checks the fast judgment answers yes are settled without the verifier model; the rest go to it alone',async t=>{
+  const page=(turn,url,body)=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{url},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url,title:`Title ${turn}`,text:body,links:[],provenance:'live_browser_dom',effect:'read_only',observed_at:at(turn)},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn)});
+  const report='News of 2026-10-01\n\n1. Post 0\nSource: https://example.org/post-0\nSummary: Post 0 says agents improved by 10 percent.';
+  const saved={...draft(1),receipt:{...draft(1).receipt,value:{...draft(1).receipt.value,text:report}}},observed=()=>sealed(t,[page(0,'https://example.org/post-0','Post 0 says agents improved by 10 percent.'),saved]);
+  const jevFor=doubt=>({asked:[],async systemOne(request){const record=request.state.record;this.asked.push(record);const choice=record.page_text?'supported':doubt(record.condition)?'unknown':'yes';const others=record.page_text?{supported:.01,not_supported:.01,unknown:.01}:{yes:.01,no:.01,unknown:.01};return {answers:{label:{type:'choice',choice,confidence:.97,probabilities:{...others,[choice]:.97}}}};}});
+  {
+    const jev=jevFor(()=>false),model=fixture(()=>{throw Error('The verifier model must not be asked.');}),audits=[],notes=[];let counted=0;
+    const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,fastJudgment:()=>jev,onPaidJudgment:calls=>{counted+=calls;},audit:event=>audits.push(event),progress:event=>notes.push(event.summary)});
+    assert.equal(await verify(checks,observed(),claimFor(['ev-draft-1'])),true,JSON.stringify(notes));assert.deepEqual(model.kinds,[]);
+    const conditions=jev.asked.filter(record=>record.condition);assert.ok(conditions.length>=checks.length&&conditions.every(record=>record.saved_report===report&&/office_browser_read succeeded https:\/\/example\.org\/post-0/u.test(record.host_steps)));
+    assert.equal(counted,1+conditions.length);assert.ok(audits.some(event=>event.verifier==='fast'&&event.code==='WORK_COMPLETION_FAST_JUDGMENT'&&event.checks.length===conditions.length));
+  }
+  {
+    const doubted=checks[0].result,jev=jevFor(condition=>condition===doubted);
+    const model=fixture(input=>({checks:input.checks.map(check=>({id:check.id,verdict:'supported',evidence_ids:['ev-draft-1'],quotes:[{evidence_id:'ev-draft-1',quote:'Post 0 says agents improved by 10 percent.'}],reason:'Shown in the saved report.'}))}));
+    const verify=createWorkCompletionVerifier(model,{literalRefMode:true,originalUserRequest,fastJudgment:()=>jev});
+    assert.equal(await verify(checks,observed(),claimFor(['ev-draft-1'])),true);assert.deepEqual(model.kinds,['light']);
+    assert.deepEqual(model.inputs[0].checks.map(check=>check.id),[checks[0].id],'Only the check the fast judgment left open reaches the verifier model.');
+  }
+});
+
 test('A5: a wide run shows the verifier the reads its saved result rests on and lists the others; one light call decides',async t=>{
   const page=(turn,url,body)=>({invocation:{request_id:`source-${turn}`,turn,stage_id:'collect',tool_name:'office_browser_read',arguments:{url},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{url,title:`Title ${turn}`,text:body+' '+'filler '.repeat(900)},evidence_ids:[`ev-source-${turn}`],effect_state:'none',retry_safe:true},observed_at:at(turn%60)});
   // A long digest that names twelve of its sources, saved and read back in full.

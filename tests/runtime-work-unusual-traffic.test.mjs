@@ -184,6 +184,19 @@ test('runtime fixture a long page is one read: its text is kept whole and the ru
   assert.equal(fallback.has_more,true,'Without a reader the page is read in parts as before.');assert.equal(fallback.rendered,undefined);
 });
 
+// Live: nine long pages digested one after another took 225 seconds.
+test('runtime fixture the reads of one decision are opened in order and their digests are written at the same time',async t=>{
+  const body='Long page. '+'Sentence about the launch cadence of the constellation. '.repeat(400),second='https://example.org/second-report';
+  let running=0,most=0;
+  const digest=async input=>{running++;most=Math.max(most,running);await new Promise(done=>setTimeout(done,120));running--;return {summary:`Digest of ${input.page.url}`,quotes:['Sentence about the launch cadence of the constellation.']};};
+  const x=await setup(t,{browser:null,prompt:`Read ${article} and ${second}`,observe:(target,url)=>observation(url,{text:body,links:[]}),digest}),tools=x.create();
+  tools.prepareReads([{tool:'office_browser_read',arguments:{url:article}},{tool:'office_browser_read',arguments:{url:second}}]);
+  const first=await tools.execute('office_browser_read',{url:article},'read-1'),next=await tools.execute('office_browser_read',{url:second},'read-2');
+  assert.equal(first.text.split('\n')[0],`Digest of ${article}`);assert.equal(next.text.split('\n')[0],`Digest of ${second}`);assert.equal(most,2,'Both digests were being written at once.');
+  assert.deepEqual(opens(x).map(event=>event.url),[article,second],'Each page was opened once, in order.');
+  const again=await tools.execute('office_browser_read',{url:article},'read-3');assert.equal(again.rendered.from,'page_digest');assert.equal(opens(x).length,3,'A later read of the same address opens the page again.');
+});
+
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host
 // reads such public text resources over HTTPS in bounded pages.
 test('runtime contract a public text resource is read over HTTPS in pages with its hash, never through a browser download',async t=>{
