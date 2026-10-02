@@ -122,7 +122,7 @@ test('runtime fixture prelogin exposes an existing guest login hold without clea
   assert.equal(await card.getByRole('button',{name:'로그인 마침',exact:true}).isEnabled(),true);
   assert.deepEqual(posts,[]);
   await card.getByRole('button',{name:'로그인 마침',exact:true}).click();
-  await page.getByRole('status').filter({hasText:'로그인 대기를 해제했습니다.'}).waitFor();
+  await page.getByRole('status').filter({hasText:'로그인 대기를 해제했어요.'}).waitFor();
   assert.equal(posts[0].path,'/connections/finish/google.com/ubuntu');
   assert.deepEqual(errors,[]);
 });

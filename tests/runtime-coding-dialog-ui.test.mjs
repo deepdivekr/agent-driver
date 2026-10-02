@@ -120,11 +120,11 @@ test('desktop and mobile Work conversation preserves full reply and sends only a
     await page.locator('.tile').click();
     await page.getByText('Codex 답변').waitFor();
     assert.equal(await page.locator('.coding-answer pre').first().textContent(),reply);
-    assert.equal(await page.getByText('상위 에이전트 조언').count(),1);
+    assert.equal(await page.getByText("다음 작업 제안").count(),1);
     assert.equal(calls.length,0);
     await page.locator('#coding-followup').fill('기존 변경의 테스트를 검증해줘');
     await page.getByRole('button',{name:'Codex에 지시 보내기'}).click();
-    await page.getByText('이전 지시의 결과를 기다리는 중입니다.').waitFor();
+    await page.getByText("이전 지시의 결과를 기다리는 중이에요.").waitFor();
     assert.equal(calls.length,1);
     assert.equal(calls[0].dialog_id,'dialog-1');
     assert.equal(calls[0].expected_revision,5);

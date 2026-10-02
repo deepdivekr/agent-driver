@@ -42,10 +42,14 @@ async function compactButtons(locator){
   // The live stream can replace a resolved node; wait for the current controls
   // rather than treating a render boundary as missing product actions.
   await locator.first().waitFor({state:'visible'});
-  const values=await locator.evaluateAll(items=>items.filter(b=>b.checkVisibility()).map(button=>{
+  let values=[];
+  for(let attempt=0;attempt<3&&!values.length;attempt++){
+  await locator.first().waitFor({state:'visible'});
+  values=await locator.evaluateAll(items=>items.filter(b=>b.checkVisibility()).map(button=>{
     const range=document.createRange();range.selectNodeContents(button);const rect=button.getBoundingClientRect(),style=getComputedStyle(button);
     return {text:button.textContent.trim(),width:rect.width,height:rect.height,extra:rect.width-range.getBoundingClientRect().width-parseFloat(style.paddingLeft)-parseFloat(style.paddingRight)-parseFloat(style.borderLeftWidth)-parseFloat(style.borderRightWidth),align:style.textAlign};
   }));
+  }
   assert.ok(values.length>0,'No visible buttons: '+locator.toString());
   assert.ok(values.every(b=>b.height>=36&&b.align==='center'),JSON.stringify(values));
   assert.ok(values.every(b=>Math.abs(b.extra)<2),JSON.stringify(values));
@@ -106,7 +110,7 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     assert.equal(await page.locator('#mcp-clients .client>p').count(),0,'Client descriptions must not clutter the connection list');
     await page.locator('#windows-bridge>summary').click();
     assert.ok(await page.locator('#windows-bridge-help').isVisible());
-    assert.match(await page.locator('#windows-bridge-help').textContent(),lang==='ko'?/건너뛰어도 됩니다/u:/Skip it if you connected a WSL app/u);assert.match(await page.locator('#windows-bridge').innerText(),lang==='ko'?/터미널이나 채팅에 입력하는 명령이 아닙니다/u:/not commands for a terminal or chat/u);
+    assert.match(await page.locator('#windows-bridge-help').textContent(),lang==='ko'?/건너뛰어도 돼요/u:/Skip it if you connected a WSL app/u);assert.match(await page.locator('#windows-bridge').innerText(),lang==='ko'?/터미널이나 채팅에 입력하는 명령이 아니에요/u:/not commands for a terminal or chat/u);
     assert.equal(buttons.filter(b=>b.text===(lang==='ko'?'연결':'Connect')).length,2,'Only the two signed-in clients should offer registration');
     assert.equal(await page.locator('#mcp-clients [data-client=opencode] .cact button').count(),1,'Log in first; do not offer registration alongside it');
     assert.equal(await page.getByText(lang==='ko'?'MCP 연결':'Connect MCP',{exact:true}).count(),0);
@@ -132,8 +136,8 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     assert.equal(selectedCodexModel,'gpt-6.1-sol','The requested first-run default remains visible even before account access is verified');
     assert.equal(selectedCodexEffort,'low');
     const catalogState=await page.locator('#catalog-state').textContent();
-    if(lang==='en'){assert.doesNotMatch(catalogState,/[\uac00-\ud7a3]/u,'English AI settings must not retain Korean catalog status fragments');assert.match(catalogState,/new default Codex model is not in this account catalog/u);}
-    else{assert.match(catalogState,/현재 확인/u);assert.match(catalogState,/새 기본 Codex 모델은 현재 계정 목록에 없습니다/u);}
+    if(lang==='en'){assert.doesNotMatch(catalogState,/[\uac00-\ud7a3]/u,'English AI settings must not retain Korean catalog status fragments');assert.match(catalogState,/new default Codex model is not in this account’s model list/u);}
+    else{assert.match(catalogState,/확인한 모델/u);assert.match(catalogState,/새 기본 Codex 모델이 현재 목록에 없어요/u);}
     await page.locator('#client-codex [data-manage-client=codex]').click();
     await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
     assert.equal(await page.locator('#codex-model').inputValue(),selectedCodexModel,'Manage must focus the existing model setting without changing it');
@@ -210,7 +214,7 @@ test('runtime fixture fresh catalog refresh confirms listed 6.1 Sol/low, saves i
   t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
   assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6.1-sol');assert.equal(await page.locator('#codex-reasoning').inputValue(),'low');
   await page.locator('#refresh-clients').click();await settled(page,'refresh-clients');assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6.1-sol');
-  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:"저장했어요."}).waitFor();
   const saved=readModelSettings(modelSettingsPath(f.config));assert.equal(saved.selection.client_models.codex,'gpt-6.1-sol');assert.equal(saved.selection.codex_reasoning_effort,'low');
   const requests=[],runner={async run(request){requests.push(request);return request.args.join(' ')==='login status'?{code:0,stdout:'Logged in using ChatGPT',stderr:''}:{code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:'{"ok":true}'}})+'\n',stderr:''};}};
   const model=new ConfiguredStructuredModel(modelSettingsPath(f.config),{AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex'}, {subscription:options=>new SubscriptionAwareStructuredModel({...options,runner}),api:()=>{throw Error('PAID_API_NOT_ALLOWED');}});
@@ -221,11 +225,11 @@ test('runtime fixture fresh catalog refresh confirms listed 6.1 Sol/low, saves i
 test('runtime fixture a saved model absent from the account list stays visible and blocks only active Codex saves',async t=>{
   const f=await fixture(t,{savedCodexModel:'gpt-6-sol',savedCodexEffort:'high',catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'}]}),browser=await chromium.launch({headless:true});
   t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
-  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');assert.match(await page.locator('#catalog-state').textContent(),/이 계정에서 쓸 수 없습니다/u);
-  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'다시 선택하세요.'}).waitFor();assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
-  await page.locator('#client').selectOption('claude');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');assert.match(await page.locator('#catalog-state').textContent(),/저장한 Codex 모델이 현재 목록에 없어요/u);
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'다시 선택해 주세요.'}).waitFor();assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
+  await page.locator('#client').selectOption('claude');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:"저장했어요."}).waitFor();
   assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client,'claude');assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
-  await page.locator('#client').selectOption('codex');await page.locator('#codex-model').selectOption('gpt-5.6-sol');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
+  await page.locator('#client').selectOption('codex');await page.locator('#codex-model').selectOption('gpt-5.6-sol');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:"저장했어요."}).waitFor();
   assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-5.6-sol');
 });
 
@@ -233,9 +237,9 @@ test('runtime fixture English catalog warning and unsupported-model save error s
   const f=await fixture(t,{savedCodexModel:'gpt-6-sol',catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'}]}),browser=await chromium.launch({headless:true});
   t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','en'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
   assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');
-  assert.match(await page.locator('#codex-model option:checked').textContent(),/Not in current account catalog/u);
-  assert.match(await page.locator('#catalog-state').textContent(),/The saved Codex model is not in the current account catalog/u);
+  assert.match(await page.locator('#codex-model option:checked').textContent(),/Not in this account’s model list/u);
+  assert.match(await page.locator('#catalog-state').textContent(),/The saved Codex model is not in this account’s model list/u);
   assert.doesNotMatch(await page.locator('#catalog-state').textContent(),/[\uac00-\ud7a3]/u);
-  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'Select a listed model.'}).waitFor();
+  await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'Choose another model from the list.'}).waitFor();
   assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
 });

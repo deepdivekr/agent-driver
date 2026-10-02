@@ -50,20 +50,20 @@ export type ShellPage='work'|'settings'|'connections';
 /** Sidebar links are plain anchors so every view is one click away and pages stay independent. */
 export function sidebarHtml(page:ShellPage){
   const current=(value:ShellPage)=>page===value?' aria-current="page"':'';
-  return `<aside class="side" aria-label="메뉴"><div class="brand">agent-office<i aria-hidden="true"></i></div><div class="brand-sub">local mcp · stdio</div>
-<div class="sec">work</div>
+  return `<aside class="side" aria-label="메뉴"><div class="brand">agent-office<i aria-hidden="true"></i></div><div class="brand-sub">로컬 연결 · MCP</div>
+<div class="sec">업무</div>
 <a class="nav" href="./?view=all" data-view="all">전체<span class="n" data-count="all"></span></a>
 <a class="nav" href="./?view=attention" data-view="attention">확인 필요<span class="n warn" data-count="attention"></span></a>
 <a class="nav" href="./?view=active" data-view="active">진행 중<span class="n" data-count="active"></span></a>
 <a class="nav" href="./?view=waiting" data-view="waiting">대기<span class="n" data-count="waiting"></span></a>
 <a class="nav" href="./?view=done" data-view="done">종료된 업무<span class="n" data-count="done"></span></a>
-<div class="sec">tools</div>
+<div class="sec">도구</div>
 
 <a class="nav" href="./?import=1" data-nav="import">가져오기</a>
 <a class="nav" id="connections" href="connections"${current('connections')}>사이트 로그인</a>
 <a class="nav" href="settings"${current('settings')}>연결 및 설정</a>
-<div class="sec">decision plane</div><div class="paths"><span class="pth p-code">code</span><span class="pth p-jev">jev</span><span class="pth p-llm">llm</span><span class="pth p-human">human</span></div>
-<div class="foot" id="shell-foot">127.0.0.1 · no cloud relay</div></aside>`;
+<div class="sec">업무 처리</div><div class="paths"><span class="pth p-code">코드</span><span class="pth p-jev">Jev</span><span class="pth p-llm">AI</span><span class="pth p-human">사용자</span></div>
+<div class="foot" id="shell-foot">이 컴퓨터에서 실행</div></aside>`;
 }
 const usFlag='<svg viewBox="0 0 20 14" aria-hidden="true"><rect width="20" height="14" fill="#fff"/><path d="M0 1h20M0 3.2h20M0 5.4h20M0 7.6h20M0 9.8h20M0 12h20" stroke="#b22234" stroke-width="1.1"/><rect width="8.6" height="7.6" fill="#3c3b6e"/></svg>';
 const krFlag='<svg viewBox="0 0 20 14" aria-hidden="true"><rect width="20" height="14" fill="#fff"/><circle cx="10" cy="7" r="3" fill="#0047a0"/><path d="M7 7a3 3 0 0 1 6 0a1.5 1.5 0 0 1-3 0a1.5 1.5 0 0 0-3 0z" fill="#cd2e3a"/><g stroke="#000" stroke-width=".7"><path d="M3.2 3.4l1.6-1.1M3.6 4l1.6-1.1M4 4.6l1.6-1.1M14.4 11.5l1.6-1.1M14.8 12.1l1.6-1.1M15.2 12.7l1.6-1.1M14.4 2.5l1.6 1.1M14 3.1l1.6 1.1M3.2 10.6l1.6 1.1M3.6 10l1.6 1.1"/></g></svg>';

@@ -90,7 +90,7 @@ test('runtime fixture confirmation tags render on board, list, detail and site l
     assert.equal(await page.getByRole('button',{name:lang==='ko'?'재시도 허용':'Allow retry',exact:true}).isDisabled(),true);
     assert.equal(await page.getByRole('button',{name:lang==='ko'?'로그인 창 열기':'Open login window',exact:true}).isEnabled(),true);
     assert.equal(await page.getByRole('button',{name:lang==='ko'?'로그인 확인':'Check login',exact:true}).isEnabled(),true);
-    await page.getByText(lang==='ko'?'로그인이나 사용자 확인이 끝날 때까지 해당 worker는 대기합니다.':'The worker waits until login or user confirmation is complete.',{exact:true}).waitFor();
+    await page.getByText(lang==='ko'?'로그인이나 사용자 확인이 끝날 때까지 해당 에이전트는 대기해요.':'The worker waits until login or user confirmation is complete.',{exact:true}).waitFor();
     assert.doesNotMatch(await page.locator('body').innerText(),/사람 확인 필요|Needs a person/u);
     assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);
     assert.deepEqual(errors,[]);assert.deepEqual(writes,[]);

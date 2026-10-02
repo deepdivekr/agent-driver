@@ -40,7 +40,7 @@ test('runtime fixture setup checks stream localized historical/live outcomes and
    assert.equal(await page.locator('#refresh-mcp').isDisabled(),true);
    hold=false;releaseCheck();await page.waitForFunction(()=>!document.querySelector('#refresh-mcp').disabled);
    const tail=await page.locator('#setup-log').textContent();
-   for(const result of ['Codex: Login verified · MCP not registered','Claude Code: Login needed','OpenCode: Not confirmed','Cursor: Log in again','Hermes: Not installed'])assert.ok(tail.includes(result),result);
+   for(const result of ['Codex: Login verified · Connection needed','Claude Code: Login needed','OpenCode: Not confirmed','Cursor: Log in again','Hermes: Not installed'])assert.ok(tail.includes(result),result);
    assert.doesNotMatch(tail,/[가-힣]/u);assert.doesNotMatch(await page.locator('#tail-last').textContent(),/[가-힣]/u);
    fail=true;await page.locator('#refresh-mcp').click();await page.waitForFunction(()=>document.querySelector('#tail-last').textContent.includes('Could not check connections'));
    assert.doesNotMatch(await page.locator('#setup-log').textContent(),/private-raw/u);fail=false;
@@ -58,7 +58,7 @@ test('runtime fixture setup checks stream localized historical/live outcomes and
    await page.reload();await page.waitForFunction(()=>!document.querySelector('[data-step="0"]').disabled);
    assert.doesNotMatch(await page.locator('#setup-log').textContent(),/[가-힣]/u,'Historical reload must stay English');
    await page.locator('#lang-toggle').click();await page.waitForFunction(()=>document.documentElement.lang==='ko'&&!document.querySelector('[data-step="0"]').disabled);
-   assert.match(await page.locator('#setup-log').textContent(),/Aside 연결 점검 통과 · 2.4초/u,'Stored source history remains Korean');
+   assert.match(await page.locator('#setup-log').textContent(),/Aside 연결 확인 완료 · 2.4초/u,'Display copy is reviewed without rewriting stored source history');
    await page.locator('[data-step="1"]').click();await page.waitForFunction(()=>!document.querySelector('#browser-setup-refresh').disabled);await page.locator('#browser-alternatives>summary').click();
    probeReady=false;await page.locator('[data-browser=neo] .cact button').click();await page.waitForFunction(()=>document.querySelector('#tail-last').textContent.includes('연결 실패'));
    assert.match(await page.locator('#setup-log').textContent(),/확인 필요/u);
@@ -79,10 +79,22 @@ test('Control Center renders English by default and the flag button switches to 
   await page.goto(server.url);
   await page.getByRole('button',{name:'Start work',exact:true}).waitFor();
   assert.equal(await page.evaluate(()=>document.documentElement.lang),'en');
-  assert.equal(await page.getByPlaceholder('What should the agent do? One line is enough.').count(),1);
+  assert.equal(await page.getByPlaceholder('What would you like done?').count(),1);
   const hangul=/[가-힣]/u;
   assert.doesNotMatch(await page.locator('aside').innerText(),hangul);
   assert.doesNotMatch(await page.locator('#intake').innerText(),hangul);
+  // A phrase used as a user title/filename must stay verbatim even when it is also a UI label.
+  await page.evaluate(()=>{
+    const probe=document.createElement('section');probe.id='user-copy-probe';probe.setAttribute('data-i18n-skip','');
+    probe.innerHTML='<span title="실행기">실행기</span><input placeholder="완료 조건"><textarea>Work · 완료 조건</textarea>';
+    document.querySelector('main').append(probe);
+  });
+  assert.equal(await page.locator('#user-copy-probe span').innerText(),'실행기');
+  assert.equal(await page.locator('#user-copy-probe span').getAttribute('title'),'실행기');
+  assert.equal(await page.locator('#user-copy-probe input').getAttribute('placeholder'),'완료 조건');
+  assert.equal(await page.locator('#user-copy-probe textarea').inputValue(),'Work · 완료 조건');
+  await page.getByPlaceholder('What would you like done?').fill('업무 제목 원문');
+  assert.equal(await page.locator('#prompt').inputValue(),'업무 제목 원문','Translation observer must settle and leave editing responsive');
   assert.equal(await page.locator('#lang-toggle [data-lang-code]').textContent(),'EN');
   await page.evaluate(()=>{
     const probe=document.createElement('section');probe.id='plan-translation-probe';
