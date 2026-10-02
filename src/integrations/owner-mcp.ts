@@ -15,8 +15,10 @@ import {environmentHomes,type EnvironmentHome} from './client-environment.js';
  * - of an answering server only tools that read are offered. A tool reads when the server says so
  *   (readOnlyHint) or, without a hint, when its name is a plain read verb and carries no write verb. Everything else
  *   is left out, so no call through this path changes anything outside Office;
- * - a tool that reads files, folders or code on this computer is left out too: Office has its own folder permissions,
- *   and a server's file tool would read around them (live: a code-analysis server offered read_file and list_dir).
+ * - a server with any tool that reads files, folders or code on this computer is left out as a whole: Office has its
+ *   own folder permissions, a server's file tool would read around them, and its other tools work on the same local
+ *   project (live: a code-analysis server offered read_file, and after those were dropped it still offered
+ *   find_declaration, activate_project and onboarding, which change its own project state).
  * A server's command, arguments and environment are read from the owner's own configuration when it is started and
  * are never stored, logged or shown. */
 export interface OwnerMcpTool {name:string;server:string;tool:string;description:string;input_schema:Record<string,unknown>;}
@@ -28,7 +30,7 @@ const TOOLS_PER_SERVER=6,SERVERS=8,RESULT_BYTES=10_000;
 const covered=/(?:^|[^a-z])(?:agent[-_ ]?(?:driver|office)|aside|neo|browser(?:os)?|chrome|openchrome|playwright|puppeteer|selenium)(?:[^a-z]|$)/iu;
 const runsCode=/(?:repl|(?:^|[^a-z])cua(?:[^a-z]|$)|computer|shell|terminal|desktop|exec|sandbox)/iu;
 const readVerb=/^(?:get|list|search|read|find|query|resolve|fetch|lookup|describe|show|check)(?:[-_A-Z]|$)/u,writeVerb=/(?:create|update|delete|write|send|post|remove|insert|upload|execute|install|edit|apply|commit|push|merge|cancel|set(?:[-_A-Z]|$)|run(?:[-_A-Z]|$))/iu;
-const localFiles=/(?:file|dir(?:ectory)?|folder|path|symbol|pattern|memory|workspace|repo)/iu;
+const localFiles=/(?:file|dir(?:ectory)?|folder|path|symbol|pattern|memor(?:y|ies)|workspace|repo|project|declaration|implementation|onboarding)/iu;
 const text=(path:string)=>{try{return statSync(path).size>4_000_000?'':readFileSync(path,'utf8').replace(/\r\n/gu,'\n');}catch{return '';}};
 const identity=(value:string)=>value.toLowerCase().replace(/[^a-z0-9]+/gu,'_').replace(/^_+|_+$/gu,'').slice(0,24);
 const strings=(value:unknown)=>Array.isArray(value)&&value.every(item=>typeof item==='string')?value as string[]:[];
@@ -96,8 +98,9 @@ export function refreshOwnerMcp(environment:NodeJS.ProcessEnv=process.env,depend
       try{
         connection=await connect(server.launch,environment);
         const listed=await connection.client.listTools(undefined,{timeout:10_000});
-        const reading=listed.tools.filter(reads),tools=reading.filter(tool=>!localFiles.test(tool.name)).filter(tool=>/^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/u.test(tool.name)&&Buffer.byteLength(JSON.stringify(tool.inputSchema??{}))<=4000).slice(0,TOOLS_PER_SERVER);
-        if(!tools.length)return leave(reading.some(tool=>localFiles.test(tool.name))?'reads_local_files':'no_read_tool');
+        if(listed.tools.some(tool=>localFiles.test(tool.name)))return leave('reads_local_files');
+        const reading=listed.tools.filter(reads),tools=reading.filter(tool=>/^[A-Za-z0-9][A-Za-z0-9._-]{0,60}$/u.test(tool.name)&&Buffer.byteLength(JSON.stringify(tool.inputSchema??{}))<=4000).slice(0,TOOLS_PER_SERVER);
+        if(!tools.length)return leave('no_read_tool');
         kept.set(server.id,server);next.used.push({server:server.id,tools:tools.map(tool=>tool.name)});
         for(const tool of tools)next.tools.push({name:`owner_${server.id}_${identity(tool.name)}`.slice(0,60),server:server.id,tool:tool.name,description:`From the owner's MCP server "${server.id}" (read-only). ${String(tool.description??'').replace(/\s+/gu,' ').slice(0,300)}`,input_schema:(tool.inputSchema??{type:'object'}) as Record<string,unknown>});
       }catch{leave('not_reachable');}
