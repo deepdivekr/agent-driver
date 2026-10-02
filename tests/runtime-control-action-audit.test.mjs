@@ -108,7 +108,7 @@ test('runtime fixture settings UI locks startup controls, offers retry after fai
   await x.page.locator('#retry-settings').waitFor();
   assert.equal(await x.page.locator('#connect-computer').isDisabled(),true);
   await x.page.locator('#retry-settings').click();
-  await x.page.getByRole('heading',{name:"실행 환경",exact:true}).waitFor();
+  await x.page.getByRole('heading',{name:"브라우저와 로그인 환경",exact:true}).waitFor();
   assert.equal(await x.page.locator('[data-step="2"]').isEnabled(),true);
   assert.equal(await x.page.locator('#connect-computer').isEnabled(),true);
   assert.equal(await x.page.locator('#retry-settings').isHidden(),true);

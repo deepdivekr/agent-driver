@@ -1,5 +1,5 @@
 import {existsSync,readFileSync,readdirSync,statSync} from 'node:fs';
-import {homedir} from 'node:os';
+import {homedir,tmpdir} from 'node:os';
 import {join} from 'node:path';
 
 /** What a connected AI app already has on this computer: where its settings live and the names of its skills,
@@ -25,7 +25,8 @@ const text=(path:string)=>{try{const size=statSync(path).size;return size>4_000_
 const hints=(servers:string[])=>(['aside','neo'] as const).filter(engine=>servers.some(server=>new RegExp(`(?:^|[^a-z])${engine}(?:[^a-z]|$)`,'iu').test(server)));
 const tilde=(path:string,home:string)=>path.startsWith(home)?'~'+path.slice(home.length):path;
 
-export function clientEnvironment(client:'codex'|'claude',environment:NodeJS.ProcessEnv=process.env,home=homedir()):ClientEnvironment{
+// An injected environment without a home directory (a test, a restricted service) never falls back to the real one.
+export function clientEnvironment(client:'codex'|'claude',environment:NodeJS.ProcessEnv=process.env,home=environment.HOME||environment.USERPROFILE||(environment===process.env?homedir():join(tmpdir(),'agent-office-no-home'))):ClientEnvironment{
   if(client==='codex'){
     const root=environment.CODEX_HOME||join(home,'.codex'),config=text(join(root,'config.toml'));
     // Section headers and two top-level keys are all that is read from the TOML.

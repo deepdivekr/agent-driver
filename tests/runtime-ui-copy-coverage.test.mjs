@@ -93,3 +93,7 @@ test('work questions: an option with a value hint shows an input and sends "<opt
   assert.match(page,/if\(detail&&!typed\)/u,'An option that needs a value cannot be sent without it.');
   assert.match(page,/question-meaning/u,'The meaning of the chosen option is shown under it.');
 });
+test('display copy: the existing-setup line of the connection check is shown in English too',()=>{
+  assert.equal(en.officeText('Codex: 기존 환경 확인 · 스킬 14개 · MCP 0개 · 플러그인 0개 · 프로젝트 190개'),'Codex: existing setup found · skills 14 · MCP 0 · plugins 0 · projects 190');
+  assert.equal(ko.officeText('Codex: 기존 환경 확인 · 스킬 14개 · MCP 0개 · 플러그인 0개 · 프로젝트 190개'),'Codex: 기존 환경 확인 · 스킬 14개 · MCP 0개 · 플러그인 0개 · 프로젝트 190개');
+});
