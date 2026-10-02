@@ -108,6 +108,17 @@ export async function draftPublicForm(input:z.infer<typeof formDraftInput>){
     return {status:'succeeded',url:entryUrl,title:await page.title(),fields,filled:fields.length,submitted:false,non_get_requests:blocked,navigated_away:false,screenshot_sha256:sha(screenshot),screenshot_bytes:screenshot.length,provenance:'owned_headless_form_draft',executor:'playwright',effect:'draft_only',observed_at:new Date().toISOString(),note:'The draft existed only in this runtime-owned page, which is now closed. No request other than GET could leave the page.'};
   }finally{await browser.close().catch(()=>{});}
 }
+/** The links kept beside a page's whole text. Links that leave the site come first: on a post that cites its
+ * source they are the originals, while the first links of a page are its menus (live: the menus were kept, the link
+ * to the original was dropped, and the run spent five reads finding it again). */
+export function linksThatFit<T extends {url:string}>(observed:{url:string;[key:string]:unknown},links:readonly T[],room=14500):T[]{
+  let origin='';try{origin=new URL(observed.url).origin;}catch{/* Keep page order. */}
+  const outside=(link:T)=>{try{return new URL(link.url).origin!==origin;}catch{return false;}};
+  const ranked=origin?[...links.filter(outside),...links.filter(link=>!outside(link))]:[...links],kept=[...ranked];
+  while(kept.length>8&&Buffer.byteLength(JSON.stringify({...observed,links:kept}))>room)kept.length=Math.max(8,Math.floor(kept.length*0.8));
+  // Shown in page order again, so the list still reads like the page.
+  const keep=new Set(kept);return links.filter(link=>keep.has(link));
+}
 // One read returns at most this much text. A receipt larger than the checkpoint keeps is cut in the middle, and
 // verification cannot judge a cut receipt (live: a 28 KB page compacted to 14 KB, "ends mid-link"). The rest of a
 // page is read with the next offset.
@@ -876,17 +887,14 @@ export class WorkExecutionTools {
         // A page's text is what a result rests on; its link list is navigation. The receipt keeps the text whole and as
         // many links as fit beside it (live: 120 links stayed and the article body was cut to a third, so neither the
         // executor nor verification saw the article). More links are read with office_browser_links.
-        const fitted=[...links];
-        const fits=()=>Buffer.byteLength(JSON.stringify({...observed,links:fitted}))<=14500;
-        while(fitted.length>8&&!fits())fitted.length=Math.max(8,Math.floor(fitted.length*0.8));
+        const fitted=linksThatFit(observed,links);
         return {...observed,links:fitted,...(fitted.length<links.length?{links_not_shown:links.length-fitted.length}:{}),omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',search_provider:search.provider,search_access:'challenge_observed',status:'retryable_failure',reason:'WORK_SEARCH_PROVIDER_CHALLENGE',...(unusualSearchTraffic(url,observed)?(this.foregroundBrowser()?{next_action:browser.target?.engine==='aside'?'user_browser_confirmation':'connect_aside',environment_block:true,provider_change_allowed:false}:{next_action:'search_with_bing_or_open_a_known_official_page',environment_block:true,provider_change_allowed:true}):{})};
       }
       this.allowedUrls.add(new URL(observed.url).href);
       for(const link of links){try{const next=assertBrowserUrl(link.url,[new URL(link.url).origin],this.config.environment==='fixture');if(this.allowedUrls.has(next.href)||next.origin===origin||next.protocol==='https:'&&!privateHostname(next.hostname))this.allowedUrls.add(next.href);}catch{}}
       workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${observed.title} · ${observed.url}`,{tool_name:name,status:'succeeded',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{}),source:{url:safeControlText(observed.url,2048),title:safeControlText(observed.title,200),observed_at:observed.observed_at}});
       // Never rewrite observed hrefs or fill absent links with model guesses.
-      const fittedLinks=[...links];
-      while(fittedLinks.length>8&&Buffer.byteLength(JSON.stringify({...observed,links:fittedLinks}))>14500)fittedLinks.length=Math.max(8,Math.floor(fittedLinks.length*0.8));
+      const fittedLinks=linksThatFit(observed,links);
       return {...observed,links:fittedLinks,...(fittedLinks.length<links.length?{links_not_shown:links.length-fittedLinks.length}:{}),omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',...(socialSite?{social_site:socialSite,social_access:'signed_in_marker_observed'}:{}),...(search?{search_provider:search.provider,search_access:'unclassified_dom'}:{})};
     }
     requireCondition(this.catalog().some(t=>t.name===name),'WORK_TOOL_NOT_AVAILABLE');

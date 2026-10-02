@@ -10,7 +10,7 @@ import {prepareLocalConnection} from '../dist/onboarding/connection.js';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {PackStore} from '../dist/packs/store.js';
 import {FamilyRuntime} from '../dist/packs/runtime.js';
-import {WorkExecutionTools} from '../dist/work/execution-tools.js';
+import {WorkExecutionTools,linksThatFit} from '../dist/work/execution-tools.js';
 import {BoundedWorkClientExecutor,WorkClientToolInputError,WORK_CLIENT_EXECUTION_INSTRUCTIONS} from '../dist/work/client-executor.js';
 import {initialWorkPlan} from '../dist/work/plan.js';
 import {initWorkExecution} from '../dist/work/activity.js';
@@ -558,4 +558,13 @@ test('B5: under delegation a public CSV read is remembered as a source; per-run 
   for(const work of [{model_data_approved:true,autonomy:'per_run'},{model_data_approved:true,autonomy:'delegated',delegation:{remember_public_sources:false}}]){
     const kept=await read(work);assert.equal(kept.value.table.remembered_source_id,undefined);assert.equal(kept.value.table.rows,2,'The table is still recognised for the row comparison.');assert.equal(kept.config.packs,null);assert.equal(kept.activity.length,0);
   }
+});
+
+// Live: a community post kept its 100 menu links and lost the link to the original it cites.
+test('a page receipt keeps its whole text and, of its links, the ones that leave the site first',()=>{
+  const menu=Array.from({length:150},(_,i)=>({text:`Menu ${i}`,url:`https://forum.example.org/c/category-${i}`})),originals=[{text:'Official announcement',url:'https://vendor.example.com/blog/release'},{text:'Paper',url:'https://arxiv.org/abs/2609.40181'}];
+  const observed={url:'https://forum.example.org/t/post/1',title:'Post',text:'본문 '.repeat(800)},kept=linksThatFit(observed,[...menu.slice(0,100),...originals,...menu.slice(100)]);
+  assert.ok(kept.length<152,'The list is shortened.');assert.ok(originals.every(link=>kept.includes(link)),'The links to the originals stay.');
+  assert.ok(Buffer.byteLength(JSON.stringify({...observed,links:kept}))<=14500);assert.equal(kept.indexOf(originals[0])>kept.indexOf(menu[0]),true,'Page order is kept.');
+  assert.equal(linksThatFit(observed,menu.slice(0,5)).length,5,'A short list is untouched.');
 });
