@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {type RuntimeApi} from '../interface/api.js';
 import {tools} from '../interface/catalog.js';
 import {workAutonomy,workDelegation,workPolicyVersion,type HostConfig} from '../interface/config.js';
-import {RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
+import {accessChallenge,RoutedBrowser,browserCatalog,browserTargets,eligibleBrowserTargets,assertBrowserUrl,validateBrowserCheckpoint,browserCheckpointBinding,publicBrowserRecovery,unusualSearchTraffic,type BrowserRouteOptions} from '../browser/executor-routing.js';
 import {browserHostCompatible,browserObservationSchema,type BrowserTarget,type BrowserPreference} from '../browser/executor-contracts.js';
 import {type PackStore} from '../packs/store.js';
 import {type Recipe,type Row} from '../packs/contracts.js';
@@ -885,6 +885,12 @@ export class WorkExecutionTools {
       while(pageEnd<pageBytes.length&&pageEnd>pageStart&&(pageBytes[pageEnd]!&0xC0)===0x80)pageEnd--;
       observed.text=pageBytes.subarray(pageStart,pageEnd).toString('utf8');
       const paging=pageBytes.length>pageEnd-pageStart?{text_bytes_total:pageBytes.length,offset:pageStart,next_offset:pageEnd<pageBytes.length?pageEnd:null,has_more:pageEnd<pageBytes.length}:{};
+      // A bot wall or an empty interstitial is not the page (live: "Just a moment...", no text, no links, recorded as a
+      // successful read and then refused by verification as unusable material). It is a failed read the run works around.
+      if(explicit&&!search&&(accessChallenge(observed)||observed.text.trim().length<40&&links.length===0)){
+        workActivity(this.store,this.config.project.id,this.workId,'source.blocked','The page answered with an access check instead of its content. Nothing was bypassed.',{tool_name:name,status:'retryable_failure',reason:'WORK_PAGE_ACCESS_CHALLENGE',target_url:url});
+        return {status:'retryable_failure',reason:'WORK_PAGE_ACCESS_CHALLENGE',requested_url:url,url:observed.url,title:observed.title,observed_at:observed.observed_at,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',page_access:'challenge_observed',next_action:'Use another source for this item, or state in the result that its page could not be read.'};
+      }
       if(search&&observedSearchChallenge(search,observed)){
         this.blockedSearches.add(searchKey(search));
         if(unusualSearchTraffic(url,observed))this.environmentBlockedQueries.add(search.query);
@@ -994,7 +1000,8 @@ export class WorkExecutionTools {
     let state=String(data?.status??data?.run_status??'succeeded'),status:WorkClientToolReceipt['status']='succeeded';
     const challengedSearch=['office_web_search','office_browser_read'].includes(name)&&data?.provenance==='live_browser_dom'&&data.effect==='read_only'&&data.search_access==='challenge_observed'&&state==='retryable_failure';
     const socialBlocked=['office_social_search','office_browser_read'].includes(name)&&data?.provenance==='live_browser_dom'&&data.effect==='read_only'&&data.social_access==='not_verified'&&state==='retryable_failure';
-    if(challengedSearch||socialBlocked)status='retryable_failure';
+    const pageBlocked=name==='office_browser_read'&&data?.page_access==='challenge_observed'&&state==='retryable_failure';
+    if(challengedSearch||socialBlocked||pageBlocked)status='retryable_failure';
     if(!readOnly){
       if(name==='runtime_files_request'&&!data?.root_id)state='waiting_approval';
       if(name==='runtime_files_propose'&&data?.state==='preview')state='waiting_approval';

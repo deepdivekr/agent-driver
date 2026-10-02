@@ -705,10 +705,10 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const value=object(item.receipt.value),trace=item.invocation.tool_name===controlledTraceTool;
       const result=['office_result_draft','office_result_read'].includes(item.invocation.tool_name)&&typeof value?.text==='string';
       // The saved file's identity (request ID, hash, bytes, read cursor) precedes its text so a save check can be decided.
-      // A page read is shown with its address, title and first links before its text, so a check about a link the
-      // page listed is not lost to truncation (live: "the truncated browser record does not show the URL").
+      // A page read is shown with its address, title and first links, then its text, then the remaining links: a
+      // shortened view loses links, not the article (live: "cut in the link list before the body and author").
       const pageRead=!result&&!trace&&value?.provenance==='live_browser_dom'&&Array.isArray(value.links)&&typeof value.text==='string';
-      const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):result?`${JSON.stringify({...value,text:undefined})}\n${value!.text as string}`:pageRead?`${JSON.stringify({url:value!.url,title:value!.title,requested_url:value!.requested_url,observed_at:value!.observed_at,links:(value!.links as unknown[]).slice(0,25)})}\n${JSON.stringify({...value,links:undefined,url:undefined,title:undefined,requested_url:undefined,observed_at:undefined})}`:JSON.stringify(item.receipt.value);
+      const full=trace?(Array.isArray(value?.statements)?(value!.statements as string[]).join('\n'):''):result?`${JSON.stringify({...value,text:undefined})}\n${value!.text as string}`:pageRead?`${JSON.stringify({url:value!.url,title:value!.title,requested_url:value!.requested_url,observed_at:value!.observed_at,links:(value!.links as unknown[]).slice(0,6)})}\n${value!.text as string}\n${JSON.stringify({...value,text:undefined,links:(value!.links as unknown[]).slice(6,25),url:undefined,title:undefined,requested_url:undefined,observed_at:undefined})}`:JSON.stringify(item.receipt.value);
       // A text resource read (a CSV/JSON feed) is the source data itself; truncating it at 3000 characters left
       // the judgment unable to compare rows (live), so it gets the same room as a result file.
       // In a wide run the pages the result names are its sources (an article a summary rests on): they are shown
