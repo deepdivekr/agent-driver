@@ -796,7 +796,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
   };
   if(!options.originalUserRequest)return options.collectionResolver?async()=>false:verify;
   return async(checks,observations,claim)=>{
-    const original=z.object({prompt:z.string().min(1).max(8000),completion_condition:z.string().max(2000).nullable(),delivery_target_ids:z.array(identifier).max(10).nullable(),user_directions:z.array(z.object({run_id:identifier,step_id:identifier,instruction:z.string().min(1).max(4000),created_at:z.string().datetime({offset:true})}).strict()).max(20).optional()}).strict().safeParse(options.originalUserRequest);
+    const original=z.object({prompt:z.string().min(1).max(8000),completion_condition:z.string().max(2000).nullable(),delivery_target_ids:z.array(identifier).max(10).nullable(),user_directions:z.array(z.object({run_id:identifier,step_id:identifier,instruction:z.string().min(1).max(4000),created_at:z.string().datetime({offset:true})}).strict()).max(20).optional(),agreed_scope:z.string().max(2000).optional()}).strict().safeParse(options.originalUserRequest);
     if(!original.success)return false;
     if(options.collectionResolver){
       // A first-interpretation collection contract is host-sealed, not a

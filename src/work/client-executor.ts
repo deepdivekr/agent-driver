@@ -307,7 +307,7 @@ export function runBudget(checkpoint:WorkClientCheckpoint,nowMs=Date.now()):{run
   // done out of order and newer candidates were left untouched).
   return {run_budget:{reads_done:done,reads_left:left,elapsed_seconds:elapsed,wrap_up:wrapUp,instruction:wrapUp
     ?'This run has read enough to answer. Save the result now from what the receipts establish, and state in it which items could not be confirmed. Do not start further exploration; at most one more decision of reads if a requested item has no evidence at all.'
-    :`This run may make ${left} more reads before it must save its result. Read the lists first, then take the items in the order the request ranks them (newest first unless it says otherwise) and finish each item before starting the next. Batch reads with also_read.`}};
+    :`This run may make ${left} more reads before it must save its result. Read all lists in one decision. Then work through the items in the order the request ranks them (newest first unless it says otherwise), several items per decision with also_read, and do not skip ahead to lower-ranked items.`}};
 }
 export class BoundedWorkClientExecutor {
   constructor(readonly model:StructuredModel){}

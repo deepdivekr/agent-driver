@@ -345,7 +345,13 @@ export class WorkSupervisor {
       workActivity(this.store,project,row.work_id,'supervisor.started',row.attempts>1?'저장한 체크포인트를 읽고 실행을 이어갑니다.':'연결된 AI와 실행 도구로 업무를 시작합니다.');
       let checkpoint=row.checkpoint==='null'?null:JSON.parse(row.checkpoint) as WorkClientCheckpoint|SupervisedSwarmCheckpoint;
       const directions=this.store.workDirections(project,row.work_id),userIntake=readWorkIntakeOptions(this.store,project,row.work_id);
-      const originalUserRequest={prompt:work.prompt,...userIntake,user_directions:directions};
+      // The request the owner agreed to is the prompt plus what intake settled: the scope the owner chose when
+      // asked, and the host's rule for a recurring collection. Verification judges against that, not against a
+      // wider wording in the prompt (live: a result within the agreed two-day window was rejected for not covering
+      // the seven days the prompt had named).
+      const agreedAnswers=Object.entries(work.answers??{}).slice(0,4).map(([id,answer])=>{const question=(work.questions as Array<{id?:string;prompt?:string;options?:Array<{id?:string;label?:string;meaning?:string}>}>|null)?.find(item=>item.id===id),option=question?.options?.find(item=>item.id===answer);return safeControlText(`${question?.prompt??id} -> ${option?`${option.label}: ${option.meaning??''}`:String(answer)}`,500);});
+      const agreedScope=[...(spec.recurrence.kind==='recurring'?['Host rule the owner was told at intake: every run of this recurring collection covers only items published on the run date or the day before it. A longer period named in the prompt does not apply.']:[]),...agreedAnswers.map(item=>`Owner's answer at intake: ${item}`)].join(' ').slice(0,1900);
+      const originalUserRequest={prompt:work.prompt,...userIntake,user_directions:directions,...(agreedScope?{agreed_scope:agreedScope}:{})};
       const saveCheckpoint=(cp:WorkClientCheckpoint|SupervisedSwarmCheckpoint)=>{checkpoint=cp;const encoded=JSON.stringify(cp);requireCondition(Buffer.byteLength(encoded)<=1_000_000,'WORK_CHECKPOINT_TOO_LARGE');db.prepare('UPDATE office_supervisor SET checkpoint=?,updated_at=? WHERE project_id=? AND run_id=? AND owner=?').run(encoded,now(),project,row.run_id,row.owner);};
       guard();let admissionCheckpoint=captureWorkRunAdmissionCheckpoint(this.store,project,{work_id:row.work_id,run_id:row.run_id,owner:row.owner!});
       let completionDenial:{code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED'|'WORK_COMPLETION_BATCH_CONTRADICTS'|'WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL';check_id:string;verdict:'unsupported'|'unknown';reason?:string}|null=null;
