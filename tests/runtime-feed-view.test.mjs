@@ -17,3 +17,13 @@ test('a JSON document is shown as its largest list of objects, short scalar fiel
   const view=listView(JSON.stringify(discourse),'application/json; charset=utf-8');assert.equal(view.kind,'json_list');assert.equal(view.text.split('\n').length,3);
   assert.equal(listView('plain text','text/plain'),null);
 });
+
+// Live: 13 of 30 forum topics were shown and verification refused the list as incomplete.
+test('runtime contract a list that does not fit is shown with shorter entries, never fewer',()=>{
+  const topics=Array.from({length:30},(_,index)=>({id:index,title:`Topic ${index} `+'t'.repeat(80),slug:`topic-${index}`,created_at:'2026-10-01T00:00:00Z',excerpt:'e'.repeat(280),views:index,pinned:false,image_url:null,last_poster_username:'poster',category_id:14,bumped_at:'2026-10-01T01:00:00Z'}));
+  const view=listView(JSON.stringify({topic_list:{topics}}),'application/json');
+  assert.equal(view.text.split('\n').length,30);assert.ok(Buffer.byteLength(view.text)<=9000);
+  const last=JSON.parse(view.text.split('\n').at(-1));assert.equal(last.slug,'topic-29');assert.equal(last.created_at,'2026-10-01T00:00:00Z');assert.equal(last.excerpt,undefined);
+  const feed='<?xml version="1.0"?><rss><channel>'+Array.from({length:30},(_,index)=>`<item><title>Post ${index}</title><link>https://example.org/${index}</link><pubDate>Thu, 01 Oct 2026 00:00:00 GMT</pubDate><description>${'d'.repeat(900)}</description></item>`).join('')+'</channel></rss>';
+  const entries=listView(feed,'application/rss+xml');assert.equal(entries.text.split('\n').length,30);assert.ok(Buffer.byteLength(entries.text)<=9000);assert.equal(JSON.parse(entries.text.split('\n')[29]).link,'https://example.org/29');
+});

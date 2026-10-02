@@ -1,8 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {mkdtemp,writeFile,rm} from 'node:fs/promises';
+import {mkdtemp,writeFile,readFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
-import {join} from 'node:path';
+import {join,dirname} from 'node:path';
 import {randomUUID} from 'node:crypto';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {PackStore} from '../dist/packs/store.js';
@@ -25,12 +25,12 @@ const observation=(url,patch={})=>({url,title:'Observed source results',text:'Fi
 const unusual=()=>observation('https://www.google.com/sorry/index',{title:'Google',text:'Our systems have detected unusual traffic from your computer network.',links:[]});
 const proposal={title:'ASTS source research',desired_outcome:'Read public ASTS articles and report observed sources.',completion_checks:[{id:'sources',result:'Sources are saved',evidence:'Observed browser receipts'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'once',rule:null},questions:[],browser:{environment:'owned_headless'}};
 
-async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[],download=()=>false}={}){
+async function setup(t,{browser=proposal.browser,requested_effect=proposal.requested_effect,prompt='Research ASTS articles',observe=(target,url)=>target.environment==='owned_headless'?unusual():observation(url),probeFail=[],download=()=>false,digest=null}={}){
   const root=await mkdtemp(join(tmpdir(),'work-unusual-traffic-')),path=join(root,'host.json');
   await writeFile(path,JSON.stringify({schema_version:1,project_id:'unusual-traffic-fixture',caller_ref:'fixture',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true},browser_executors:{targets:[headless,guest,aside,neo]}}));
   const config=loadHostConfig(path),store=new PackStore(config.dbPath);store.registerProject(config.project);initWorkSupervisor(store);
   const spec={...proposal,browser,requested_effect};if(browser===null)delete spec.browser;
-  const model={calls:[],async call(){return structuredClone(spec);}},runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'unusual-work',prompt}),run=randomUUID(),events=[],instances=[];
+  const model={calls:[],async call(purpose,instructions,input,schema){if(schema?.properties?.quotes){model.calls.push(input);if(!digest)throw Error('MODEL_UNAVAILABLE');return digest(input);}return structuredClone(spec);}},runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'unusual-work',prompt}),run=randomUUID(),events=[],instances=[];
   const api={async call(name){assert.equal(name,'runtime_pack_catalog');return {families:[{id:'research.search'}],connected:true,models:'off'};}};
   const factory=target=>{
     events.push({kind:'factory',id:target.id,engine:target.engine,environment:target.environment});let current='';
@@ -40,7 +40,7 @@ async function setup(t,{browser=proposal.browser,requested_effect=proposal.reque
   const seed=checkpoint=>{const stamp=new Date().toISOString();store.hermesState.prepare('INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,checkpoint,config_hash,model_revision,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(run_id) DO UPDATE SET checkpoint=excluded.checkpoint').run(run,config.project.id,work.work_id,work.revision,'paused',JSON.stringify(checkpoint),config.fingerprint,0,stamp,stamp);};
   const checkpoint=()=>store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(run)?.checkpoint??null;
   t.after(async()=>{for(const tools of instances)await tools.close();store.close();await rm(root,{recursive:true,force:true});});
-  return {config,store,work,run,events,create,seed,checkpoint};
+  return {config,store,work,run,events,create,seed,checkpoint,model};
 }
 
 // This is an explicit historical contract fixture, not a native browser receipt.
@@ -165,6 +165,23 @@ test('runtime fixture an address that downloads a file that is not text is a rea
   const x=await setup(t,{browser:null,prompt:`Read ${pdf} and ${article}`,observe:(target,url)=>observation(url),download:url=>url===pdf}),tools=x.create();
   await assert.rejects(tools.execute('office_browser_read',{url:pdf},'pdf-read'),error=>error.name==='WorkClientToolInputError'&&error.code==='WORK_RESOURCE_NOT_READABLE_TEXT'&&/another page/u.test(error.detail));
   assert.equal((await tools.execute('office_browser_read',{url:article},'next-read')).title,'Observed source results','The run keeps reading after the file it could not read.');
+});
+
+// A long article used to cost one read per 10 KB. The host now reads it whole, keeps the text and hands on a digest.
+test('runtime fixture a long page is one read: its text is kept whole and the run gets a digest whose quotes the host found in the page',async t=>{
+  const body=Array.from({length:400},(_,index)=>`Paragraph ${index} of the long report about launch cadence.`).join('\n')+'\nThe constellation reached 61 satellites on 2026-09-28.';
+  const long=url=>observation(url,{text:body});
+  const x=await setup(t,{browser:null,prompt:`Read ${article}`,observe:(target,url)=>long(url),digest:input=>({summary:`Digest of ${input.page.title}: 61 satellites on 2026-09-28.`,quotes:['The constellation reached 61 satellites on 2026-09-28.','A sentence the page never contained.']})}),tools=x.create();
+  const value=await tools.execute('office_browser_read',{url:article},'long-read');
+  assert.equal(value.rendered.from,'page_digest');assert.equal(value.rendered.text_bytes_total,Buffer.byteLength(body));assert.equal(value.has_more,undefined,'One read covers the page.');
+  assert.match(value.text,/^Digest of Observed source results/u);assert.match(value.text,/"The constellation reached 61 satellites on 2026-09-28\."/u);
+  assert.doesNotMatch(value.text,/never contained/u,'A quote the page does not contain is dropped by code.');assert.deepEqual([value.rendered.quotes_found_in_page,value.rendered.quotes_not_found],[1,1]);
+  assert.equal(x.model.calls[0].page.text,body,'The reader model saw the whole page.');
+  assert.equal(await readFile(join(dirname(x.config.dbPath),'work-pages',x.work.work_id,`${value.rendered.text_sha256}.txt`),'utf8'),body,'The full text stays with the Work.');
+  const part=await tools.execute('office_browser_read',{url:article,offset:10000},'raw-part');
+  assert.equal(part.rendered,undefined);assert.equal(part.offset,10000);assert.equal(part.text,Buffer.from(body).subarray(10000,20000).toString('utf8'),'The page\'s own text is still readable by offset.');
+  const y=await setup(t,{browser:null,prompt:`Read ${article}`,observe:(target,url)=>long(url)}),plain=y.create(),fallback=await plain.execute('office_browser_read',{url:article},'no-reader');
+  assert.equal(fallback.has_more,true,'Without a reader the page is read in parts as before.');assert.equal(fallback.rendered,undefined);
 });
 
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host

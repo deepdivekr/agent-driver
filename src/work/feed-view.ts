@@ -29,10 +29,23 @@ export function jsonListRows(document:unknown,limit=60):Array<Record<string,stri
   visit(document,0);if(!best)return null;
   return (best as Array<Record<string,unknown>>).slice(0,limit).map(item=>Object.fromEntries(Object.entries(item).filter(([key,value])=>!/(?:password|token|secret|api.?key|cookie|session)/iu.test(key)&&(value===null||typeof value==='number'||typeof value==='boolean'||typeof value==='string'&&value.length<=300)).slice(0,14)) as Record<string,string|number|boolean|null>);
 }
-/** The entry view of a body that does not fit one page, or null when the body is neither a feed nor a JSON list. */
-export function listView(body:string,contentType:string):{kind:'feed'|'json_list';text:string;entries:number}|null{
-  const type=contentType.toLowerCase();
-  if(/xml|rss|atom/u.test(type)||/^\s*<\?xml/u.test(body)){const entries=feedEntries(body);if(entries?.length)return {kind:'feed',entries:entries.length,text:entries.map(entry=>JSON.stringify(entry)).join('\n')};}
-  if(/json/u.test(type)){try{const rows=jsonListRows(JSON.parse(body));if(rows?.length)return {kind:'json_list',entries:rows.length,text:rows.map(row=>JSON.stringify(row)).join('\n')};}catch{/* Not JSON after all. */}}
+/** The entry view of a body that does not fit one page, or null when the body is neither a feed nor a JSON list.
+ * When the entries do not fit `room` they are shown shorter rather than fewer: a list cut after 13 of 30 entries is
+ * incomplete evidence of what the list holds (live: verification refused it), a list of 30 titles and dates is not. */
+export function listView(body:string,contentType:string,room=9000):{kind:'feed'|'json_list';text:string;entries:number}|null{
+  const type=contentType.toLowerCase(),fits=(text:string)=>Buffer.byteLength(text)<=room;
+  const lines=(rows:object[])=>rows.map(row=>JSON.stringify(row)).join('\n');
+  if(/xml|rss|atom/u.test(type)||/^\s*<\?xml/u.test(body)){
+    const entries=feedEntries(body);
+    if(entries?.length){let text=lines(entries);for(const keep of [200,0]){if(fits(text))break;text=lines(entries.map(entry=>({...entry,summary:entry.summary.slice(0,keep)})));}return {kind:'feed',entries:entries.length,text};}
+  }
+  if(/json/u.test(type)){try{
+    const rows=jsonListRows(JSON.parse(body));
+    if(rows?.length){
+      let text=lines(rows);
+      if(!fits(text))text=lines(rows.map(row=>Object.fromEntries(Object.entries(row).filter(([key])=>/(?:^id$|title|headline|subject|slug|url|link|creat|publish|updat|date|time|author|name)/iu.test(key)).map(([key,value])=>[key,typeof value==='string'?value.slice(0,160):value]))));
+      return {kind:'json_list',entries:rows.length,text};
+    }
+  }catch{/* Not JSON after all. */}}
   return null;
 }
