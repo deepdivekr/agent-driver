@@ -94,7 +94,7 @@ test('runtime unit nested UI regex captures translate recursively while unknown 
   assert.equal(text('Claude Code: 다음 단계: 단계 2'),'Claude Code: Next stage: Step 2');
   assert.equal(text('지침 변경 · 가져온 계획 · 단계 4'),'Instruction changed · Imported plan · Step 4');
   assert.equal(text('다음 단계: 계획 단계 · 대기'),'Next stage: Planned stage · Queued');
-  assert.equal(text('현재 확인: Codex 5개 · Claude Code: 로그인 필요'),'Checked: Codex 5 · Claude Code: Login needed');
+  assert.equal(text('현재 확인: Codex 5개 · Claude Code: 로그인 필요'),'Checked: Codex 5 · Claude Code: Sign-in needed');
   assert.equal(text('다음 단계: 사용자 비용 $1'),'Next stage: 사용자 비용 $1');
   assert.equal(text('사용자가 입력한 뉴스 요청'),'사용자가 입력한 뉴스 요청');
   assert.equal(translator('ko')('Claude Code: 다음 단계: 단계 2'),'Claude Code: 다음 단계: 단계 2');

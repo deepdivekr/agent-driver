@@ -21,7 +21,7 @@ test('runtime fixture semantic stage activity is labeled as dated history withou
   ]};
   for(const [lang,expected,historyLabel,pendingLabel] of [
     ['ko','단계 실행 보고 · 이후 검증 완료','최근 활동 기록','업무 단계 실행 보고 · 독립 검증 대기'],
-    ['en','Stage execution reported · later verified','Recent activity history','Stage execution reported · independent verification pending']
+    ['en','Stage execution reported · later confirmed','Recent activity history','Stage execution reported · independent verification pending']
   ]){
     const page=await browser.newPage({viewport:{width:390,height:844}});
     await page.addInitScript(value=>localStorage.setItem('office-lang',value),lang);
@@ -36,11 +36,11 @@ test('runtime fixture semantic stage activity is labeled as dated history withou
     assert.equal(rendered.timelineLabel,pendingLabel,'Global timeline retains event-time wording');
     assert.deepEqual(rendered.times,stage.activities.map(row=>row.created_at).reverse());
     assert.equal(rendered.overflow,false);
-    assert.match(rendered.stageStatus,lang==='ko'?/검증 완료/u:/Verified/u);
+    assert.match(rendered.stageStatus,lang==='ko'?/검증 완료/u:/Confirmed/u);
     if(lang==='en'){
       const unverified=await page.evaluate(value=>stageCardHtml({...value,status:'execution_completed',verified:false},0),stage);
       assert.match(unverified,/Stage execution reported · independent verification pending/u);
-      assert.doesNotMatch(unverified,/later verified/u);
+      assert.doesNotMatch(unverified,/later confirmed/u);
       await mkdir('tests/evidence/phase111',{recursive:true});
       await page.screenshot({path:'tests/evidence/phase111/stage-history-mobile.png',fullPage:true});
     }

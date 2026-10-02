@@ -186,12 +186,12 @@ test('runtime unit supervisor UI uses actual activity for motion, distinguishes 
  const context={document:{documentElement:{lang:'en'},readyState:'loading',addEventListener(){},getElementById:id=>id==='stage-dialog'?dialog:null},localStorage:{getItem:()=> 'en'},window:{},app:{addEventListener(){}},esc:value=>String(value).replace(/[&<>"']/gu,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char])),labels:{running:'Running',waiting_auth:'Sign-in required',awaiting_review:'Review completion',paused:'Paused'},tone:()=>'',encodeURIComponent,Date,Intl};
  vm.runInNewContext(i18nScript+dependencies+fragment+workResultsScript,context);
  context.sample={supervisor:{state:'running',live:true,can_pause:true,can_resume:false,can_edit:true},activity:[{kind:'model.started',created_at:'2026-09-29T05:00:00Z'}],stages:[]};
- const running=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(running,/data-busy="true"/);assert.match(running,/AI is choosing/);assert.doesNotMatch(running,/data-supervisor-action|[가-힣]/u);
+ const running=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(running,/data-busy="true"/);assert.match(running,/AI chooses/);assert.doesNotMatch(running,/data-supervisor-action|[가-힣]/u);
  vm.runInNewContext("detail=sample;modalStageId='next';renderStageDialog()",context);assert.match(dialog.innerHTML,/data-stage-action="edit"/);assert.match(dialog.innerHTML,/지침 저장/u);
  context.sample.activity=[{kind:'model.result'}];assert.match(vm.runInNewContext('liveStageHtml(sample)',context),/data-busy="false"/);
  context.sample.supervisor.live=false;assert.equal(vm.runInNewContext('liveStageHtml(sample)',context),'');
  context.sample.supervisor={state:'waiting_auth',live:false,reason:'BROWSER_AUTH_REQUIRED',can_pause:false,can_resume:true,can_edit:true};
- const waiting=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(waiting,/Complete authentication in Site login/);assert.doesNotMatch(waiting,/data-busy="true"|data-supervisor-action|[가-힣]/u);
+ const waiting=vm.runInNewContext('supervisorHtml(sample)',context);assert.match(waiting,/Complete authentication in Site sign-in/);assert.doesNotMatch(waiting,/data-busy="true"|data-supervisor-action|[가-힣]/u);
  vm.runInNewContext('renderStageDialog()',context);assert.match(dialog.innerHTML,/data-stage-action="resume"/);
  context.sample.schedule={state:'enabled',owner:'office',next_run_at:'2026-09-30T11:00:00Z',timezone:'Asia/Seoul'};
  const combined=vm.runInNewContext('scheduleHtml(sample)+workResultsHtml(sample)',context);assert.equal((combined.match(/class="panel work-schedule"/gu)||[]).length,1);assert.match(combined,/Asia\/Seoul/);assert.match(combined,/Next run/);
