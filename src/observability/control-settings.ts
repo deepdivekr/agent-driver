@@ -127,7 +127,7 @@ export class ControlSettings{
         else if(suffix==='settings/bootstrap')send(200,{...this.bootstrap.view(),connections:await this.connections()});
         else if(suffix==='settings/browsers')send(200,this.browsers.view());
         else if(suffix==='settings/maintenance/status')send(200,this.maintenance.view());
-        else if(suffix==='settings/models')send(200,await this.models(new URL(request.url??'','http://localhost').searchParams.get('fresh')==='1'));
+        else if(suffix==='settings/models')send(200,await this.models());
         else if(suffix==='settings/activity'){this.activity.attach(response);return true;}
         else if(suffix==='settings/flows')send(200,{flows:['codex','claude','opencode','cursor','hermes'].map(id=>this.auth.view(id as 'codex'|'claude'|'opencode'|'cursor'|'hermes'))});
         else send(404,{error:'NOT_FOUND'});return true;
@@ -217,7 +217,7 @@ export class ControlSettings{
         else if(suffix==='settings/refresh'){
           // Opening the tab shows the last check; pressing the check button (force) or having none yet asks the apps.
           const fresh=(body as {force?:unknown}|null)?.force===true||!this.remembered.has('connections');
-          if(fresh)await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');
+          if(fresh){this.remembered.delete('models:global');await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');}
           const clients=await this.connections(fresh);if(fresh)await this.recordClientChecks(clients);const found=await this.existingEnvironment(clients,fresh);if(fresh)await this.activity.record('ai','info','AI 클라이언트 상태 확인을 마쳤습니다.');
           send(200,{clients:clients.map(client=>found.has(client.id)?{...client,environment:found.get(client.id)}:client),checked:fresh?'now':'remembered'});}
         else if(suffix==='settings/login'){
