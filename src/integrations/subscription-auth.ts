@@ -46,11 +46,16 @@ const executableEnvironment=()=>{
 };
 export const nativeProcessRunner:SafeProcessRunner={run(request){
   return new Promise((resolve,reject)=>{
-    const child=spawn(request.executable,request.args,{cwd:request.cwd,env:{...executableEnvironment(),...(request.login_browser==='ui'?{NO_OPEN_BROWSER:'1'}:{})},shell:false,windowsHide:true,stdio:['pipe','pipe','pipe'],signal:request.signal});
+    // Own process group: a CLI wrapper (npm `codex`) starts the real binary as its
+    // child, and stopping only the wrapper left that binary running after a timeout.
+    const group=process.platform!=='win32';
+    const child=spawn(request.executable,request.args,{cwd:request.cwd,env:{...executableEnvironment(),...(request.login_browser==='ui'?{NO_OPEN_BROWSER:'1'}:{})},shell:false,windowsHide:true,detached:group,stdio:['pipe','pipe','pipe'],signal:request.signal});
+    const stop=()=>{try{if(group&&child.pid)process.kill(-child.pid,'SIGKILL');else child.kill('SIGKILL');}catch{child.kill('SIGKILL');}};
+    request.signal?.addEventListener('abort',stop,{once:true});
     let stdout='',stderr='',settled=false;
     let timer:NodeJS.Timeout;
-    const fail=(error:Error)=>{if(!settled){settled=true;clearTimeout(timer);child.kill('SIGKILL');reject(error);}};
-    const append=(current:string,chunk:string)=>{const next=current+chunk;if(Buffer.byteLength(next)>(request.output_limit_bytes??outputLimit)){child.kill('SIGKILL');throw Error('CLIENT_OUTPUT_TOO_LARGE');}return next;};
+    const fail=(error:Error)=>{if(!settled){settled=true;clearTimeout(timer);stop();reject(error);}};
+    const append=(current:string,chunk:string)=>{const next=current+chunk;if(Buffer.byteLength(next)>(request.output_limit_bytes??outputLimit)){stop();throw Error('CLIENT_OUTPUT_TOO_LARGE');}return next;};
     // Node's streaming decoder carries an incomplete UTF-8 code point across chunks.
     // Per-chunk Buffer#toString corrupts Korean and other multibyte CLI answers.
     child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
@@ -58,7 +63,7 @@ export const nativeProcessRunner:SafeProcessRunner={run(request){
     child.stderr.on('data',(chunk:string)=>{try{stderr=append(stderr,chunk);request.onStderr?.(chunk);}catch(error){fail(error as Error);}});
     child.once('error',fail);
     child.once('close',code=>{if(!settled){settled=true;clearTimeout(timer);resolve({code,stdout,stderr});}});
-    timer=setTimeout(()=>{child.kill('SIGKILL');fail(Error('CLIENT_TIMEOUT'));},request.timeout_ms);
+    timer=setTimeout(()=>{stop();fail(Error('CLIENT_TIMEOUT'));},request.timeout_ms);
     child.stdin.end(request.stdin);
   });
 }};

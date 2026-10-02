@@ -124,5 +124,9 @@ for(const [boundary,mutate] of Object.entries(mutations))test(`runtime contract 
 });
 
 test('runtime contract the executor policy distinguishes Google environment recovery from other challenges',()=>{
-  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/host alone may move the original public headless\/VM query once/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/never replace it with Bing\/DuckDuckGo or change the query/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/Other login\/CAPTCHA\/access challenges forbid/u);
+  // A6: the Google environment-block route is host-only and its provider/query
+  // rules live in the office_web_search description; WORK_SEARCH_ENVIRONMENT_BLOCKED
+  // and WORK_SEARCH_PROVIDER_BLOCKED refuse substitutions and repeats
+  // (runtime-work-unusual-traffic, runtime-work-search-provider). The prompt keeps the general rule.
+  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/Never solve or bypass a login, CAPTCHA or access challenge/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/if the requested service is essential, keep it and wait/u);
 });

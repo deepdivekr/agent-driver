@@ -68,7 +68,7 @@ test('replanned same-ID stage exposes only exact current-binding evidence while 
   assert.deepEqual(context.stages[0].eligible_evidence_ids,[]);assert.equal(context.stages[0].stale_same_id_receipt_count,1);
   assert.equal(context.stages[1].state,'blocked');assert.deepEqual(context.allowed_action_stage_ids,['collect']);
   assert.match(context.warning,/same-ID receipt with a different current stage binding cannot support/u);
-  assert.match(next.model.calls[0].instructions,/CURRENT exact stage binding/u);
+  assert.match(next.model.calls[0].instructions,/successful receipts under the current stage binding/u);
 });
 
 test('a completed stage cannot be dispatched again after its execution claim',async()=>{
@@ -95,9 +95,9 @@ test('same-decision stage claim correction keeps a valid prerequisite and routes
   assert.deepEqual(repair.stage_transition.allowed_tool_stage_ids_after_claims,['compare']);
   assert.deepEqual(result.checkpoint.stage_reports.map(report=>report.stage_id),['collect','compare']);
 
-  const dropped=fixture([decision('tool','collect'),decision('tool','collect',[claim]),decision('tool','compare')]);
+  const dropped=fixture([decision('tool','collect'),decision('tool','collect',[claim]),decision('tool','compare'),{action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'Wait for configuration.',completed_checks:[],wait_reason:'configuration',completed_stages:[]}]);
   const rejected=await dropped.executor.execute(request(),dropped.hooks);
-  assert.equal(rejected.status,'failed');assert.equal(rejected.reason,'WORK_CLIENT_DECISION_CORRECTION_FAILED');
+  assert.equal(rejected.status,'paused','A failed correction is not dispatched; the next valid decision continues.');
   assert.deepEqual(dropped.executions.map(item=>item.stage_id),['collect']);
   assert.ok(dropped.events.some(event=>event.validation?.issues.some(issue=>issue.message==='WORK_CLIENT_STAGE_DEPENDENCY_PENDING')));
 });

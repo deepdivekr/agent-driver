@@ -75,7 +75,8 @@ export async function prepareLocalConnection(root=connectionRoot()){
 export async function setWorkModelDataApproval(configPath:string,approved:boolean,now=new Date()){
   const current=JSON.parse(readFileSync(configPath,'utf8')) as Record<string,unknown>;
   requireCondition(current&&typeof current==='object'&&!Array.isArray(current)&&current.schema_version===1,'RUNTIME_CONFIG_INVALID');
-  const next={...current,work:approved?{model_data_approved:true,approved_at:now.toISOString()}:{model_data_approved:false}};
+  const previous=current.work as {autonomy?:unknown;delegation?:unknown}|undefined,autonomy=previous?.autonomy==='per_run'?'per_run':'delegated',delegation=previous?.delegation===undefined?{}:{delegation:previous.delegation};
+  const next={...current,work:approved?{model_data_approved:true,approved_at:now.toISOString(),autonomy,...delegation}:{model_data_approved:false,autonomy,...delegation}};
   await writePrivateJson(configPath,next);return next.work;
 }
 export function readLocalConnection(root=connectionRoot()):LocalConnectionState|null {

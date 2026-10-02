@@ -42,9 +42,12 @@ test('repeated host-bound write keeps its original verified receipt and invokes 
   const result=await new BoundedWorkClientExecutor(model([choose,choose,complete])).execute(request,hooks);
   assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);
   assert.equal(hooks.events.filter(event=>event.kind==='execute').length,1);assert.equal(hooks.events.filter(event=>event.kind==='validate').length,2);
-  assert.equal(result.checkpoint.turn,2);assert.equal(result.checkpoint.observations.length,1);
+  assert.equal(result.checkpoint.turn,2);assert.equal(result.checkpoint.observations.length,2,'The reuse is recorded as a not-dispatched note, one observation per turn.');
   assert.deepEqual(result.checkpoint.observations[0].receipt,writeReceipt);
   assert.equal(result.checkpoint.observations[0].invocation.turn,0);
+  const note=result.checkpoint.observations[1];
+  assert.equal(note.invocation.dispatched,false);assert.notEqual(note.invocation.request_id,'custom-cycle-stable-id');
+  assert.equal(note.receipt.value.error,'WORK_CLIENT_TOOL_RECEIPT_REUSED');assert.deepEqual(note.receipt.evidence_ids,[]);
 });
 
 test('a stable identity cannot authorize different arguments or replay a failed observed operation',async()=>{
@@ -69,11 +72,14 @@ test('invalid host request identities fail before preflight, saved pending or di
 });
 
 test('completion repair cannot invoke a read under a previously dispatched stable identity',async()=>{
+  const wait={action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'Wait for configuration.',completed_checks:[],wait_reason:'configuration'};
   const hooks=host({toolRequestId:()=> 'reused-read-id',async verifyCompletion(){return {verified:false,repair:{code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED',check_id:'source',verdict:'unknown'}};}});
-  const result=await new BoundedWorkClientExecutor(model([choose,complete,choose])).execute({...request,max_turns:6},hooks);
-  assert.equal(result.status,'awaiting_review');assert.equal(result.reason,'WORK_CLIENT_COMPLETION_REPAIR_REPLAY_FORBIDDEN');
-  assert.equal(result.completion_verified,false);assert.equal(hooks.events.filter(event=>event.kind==='execute').length,1);
-  assert.equal(result.checkpoint.observations.length,1);
+  const result=await new BoundedWorkClientExecutor(model([choose,complete,choose,wait])).execute({...request,max_turns:6},hooks);
+  assert.equal(result.status,'paused');assert.equal(result.completion_verified,false);assert.equal(hooks.events.filter(event=>event.kind==='execute').length,1);
+  const [original,refused]=result.checkpoint.observations;
+  assert.equal(result.checkpoint.observations.length,2);assert.equal(original.invocation.request_id,'reused-read-id');
+  assert.equal(refused.invocation.dispatched,false);assert.notEqual(refused.invocation.request_id,'reused-read-id','A refusal never reuses the dispatched identity.');
+  assert.equal(refused.receipt.value.error,'WORK_CLIENT_COMPLETION_REPAIR_REPLAY_FORBIDDEN');
 });
 
 test('saved pending recovery reconciles the original stable identity without resolving or dispatching a new one',async()=>{

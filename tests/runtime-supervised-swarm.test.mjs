@@ -138,6 +138,34 @@ test('runtime fixture business-stage direction resets all bound workers and depe
   await assert.rejects(executeSupervisedSwarm(x.api,x.model,{...request,checkpoint:next.checkpoint,...unknown},x.hooks),/SWARM_DIRECTION_STAGE_NOT_FOUND/u);
 });
 
+// Plan B6: a replan that revises an existing stage continues in the same run instead of stopping for review.
+test('B6: a revised business stage reruns only its workers and dependents in the same run; added stages still need review',async t=>{
+  const steps=[
+    {id:'collect',goal:'Read two sources.',observable_outcome:'Two source claims are observed.',depends_on:[],effect:'read_only'},
+    {id:'other',goal:'Read another source.',observable_outcome:'An independent source claim is observed.',depends_on:[],effect:'read_only'},
+    {id:'compose',goal:'Synthesize claims.',observable_outcome:'Source-backed synthesis is read back.',depends_on:['collect','other'],effect:'read_only'},
+    {id:'report',goal:'Save report.',observable_outcome:'Report file is saved and read back.',depends_on:['compose'],effect:'local_write'},
+  ];
+  const plan=semanticPlan(steps),all=draft().workers;
+  const workers=[{...all[0],work_stage_id:'collect'},{...all[1],work_stage_id:'collect'},{...all[2],work_stage_id:'other'},{...all.at(-1),depends_on:['source-1','source-2','source-3'],work_stage_id:'compose'}];
+  const x=await setup(t,{plan:{summary:'Bound source and synthesis workers.',work_output_stage_id:'report',workers}});
+  const request={work_id:x.work.work_id,request_id:'stage-revision',goal,plan};
+  const first=await executeSupervisedSwarm(x.api,x.model,request,x.hooks),before=structuredClone(x.api.store.swarmRun(x.api.config.project.id,first.run_id).snapshot);
+  assert.equal(first.status,'succeeded');
+  const revised=semanticPlan(steps.map(step=>step.id==='collect'?{...step,goal:'Read two sources and note their publication dates.',observable_outcome:'Two source claims and their dates are observed.'}:step));
+  const next=await executeSupervisedSwarm(x.api,x.model,{...request,plan:revised,checkpoint:first.checkpoint},x.hooks),after=x.api.store.swarmRun(x.api.config.project.id,first.run_id).snapshot;
+  assert.equal(next.status,'succeeded');assert.equal(next.run_id,first.run_id,'The same run continues.');
+  assert.deepEqual(after.workers['source-3'],before.workers['source-3'],'A stage that was not revised keeps its verified worker.');
+  const rebase=x.api.store.swarmActivities(x.api.config.project.id,0,500,first.run_id).find(event=>event.kind==='work.direction_rebased');
+  assert.deepEqual(new Set(rebase.body.reset_workers),new Set(['source-1','source-2','final']));
+  assert.equal(x.reads.filter(read=>read.worker==='source-3').length,2,'The unaffected source is not read again.');
+  assert.ok(x.events.some(event=>/Revised stage collect continue/u.test(event.summary)));
+  const again=await executeSupervisedSwarm(x.api,x.model,{...request,plan:revised,checkpoint:next.checkpoint},x.hooks);
+  assert.equal(again.status,'succeeded');assert.equal(x.api.store.swarmActivities(x.api.config.project.id,0,500,first.run_id).filter(event=>event.kind==='work.direction_rebased').length,1,'Reopening does not rebase again.');
+  const added=semanticPlan([...steps.slice(0,3),{id:'translate',goal:'Translate the synthesis.',observable_outcome:'A translated synthesis exists.',depends_on:['compose'],effect:'read_only'},{...steps[3],depends_on:['translate']}]);
+  await assert.rejects(executeSupervisedSwarm(x.api,x.model,{...request,plan:added,checkpoint:again.checkpoint},x.hooks),/SWARM_DIRECTION_REQUIRES_REVIEW/u,'A stage without workers cannot be continued by keeping workers.');
+});
+
 // Fixture equivalent of a persisted, explicitly approved UI edit; no private bot or outbound effect.
 function saveDirection(x,runId,stepId,instruction){
   const project=x.api.config.project.id,work=x.api.store.intakeWork(project,x.work.work_id),revision=work.revision+1,at=new Date().toISOString(),direction={run_id:runId,step_id:stepId,instruction,created_at:at};

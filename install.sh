@@ -99,7 +99,7 @@ if [[ -e "$INSTALL_DIR" ]]; then
   git -C "$INSTALL_DIR" checkout --quiet --detach FETCH_HEAD
 else
   say "Agent Office 내려받기"
-  git clone --quiet --filter=blob:none --depth 1 --branch "$REPOSITORY_REF" --single-branch "$REPOSITORY_URL" "$INSTALL_DIR"
+  git -c advice.detachedHead=false clone --quiet --filter=blob:none --depth 1 --branch "$REPOSITORY_REF" --single-branch "$REPOSITORY_URL" "$INSTALL_DIR" 2> >(grep -v "filtering not recognized by server" >&2)
   [[ -d "$INSTALL_DIR/.git" ]] || fail "저장소를 내려받지 못했습니다."
   printf 'format=1\nrepository=%s\n' "$REPOSITORY_URL" > "$INSTALL_DIR/.git/agent-driver-managed"
 fi

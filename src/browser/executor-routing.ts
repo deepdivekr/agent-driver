@@ -52,6 +52,14 @@ export function publicBrowserRecovery(preference:BrowserPreference={environment:
 export function unusualSearchTraffic(requested:string,observed:BrowserObservation){
   try{const request=new URL(requested),page=new URL(observed.url);return request.protocol==='https:'&&request.hostname==='www.google.com'&&request.pathname==='/search'&&page.origin===request.origin&&/^\/sorry(?:\/|$)/u.test(page.pathname)&&/our systems have detected unusual traffic from your computer network/iu.test(observed.text);}catch{return false;}
 }
+/** A page that refuses an automated background browser (bot wall, human check) instead of showing its
+ * content. Sign-in pages and permission denials are access control, not a browser block: they never move a
+ * read to the owner's signed-in browser. Short pages only, so an article about CAPTCHAs is not mistaken for one. */
+export function accessChallenge(observed:BrowserObservation){
+  if(/sign in|log in|로그인/iu.test(observed.title)||/permission|권한/iu.test(observed.text.slice(0,400)))return false;
+  if(/^(?:just a moment|attention required|verif(?:y|ying) you(?:'re| are)|are you a robot|security check|pardon our interruption)/iu.test(observed.title.trim()))return true;
+  return observed.text.length<1500&&/verif(?:y|ying) (?:that )?you(?:'re| are) (?:a )?(?:human|not a (?:ro)?bot)|unusual traffic|checking your browser|enable javascript and cookies to continue|bots use duckduckgo|automated queries|complete the (?:following )?challenge/iu.test(observed.text);
+}
 export function browserCatalog(config:HostConfig){return browserTargets(config).map(t=>({id:t.id,engine:t.engine,environment:t.environment,profile_ref:t.profile_ref,platform:t.platform,capabilities:['navigate','observe','extract','scroll'],health:'unknown',verified_for_environment:false,foreground_requires_host_registration:true}));}
 export function eligibleBrowserTargets(config:HostConfig,preference:BrowserPreference={environment:'owned_headless'}){
   return browserTargets(config).filter(t=>t.environment===preference.environment&&browserHostCompatible(t)&&(!preference.preferred_engine||t.engine===preference.preferred_engine))
@@ -197,7 +205,7 @@ export class RoutedBrowser {
   }
   private asideRecoveryAllowed(){return !this.options.preference?.preferred_engine&&this.options.fallback_preferences?.some(p=>p.environment==='host_foreground'&&p.preferred_engine==='aside')===true;}
   private async recoverSearchEnvironment(observed:BrowserObservation){
-    if(!this.port||!this.requestedUrl||this.environmentRecovery||this.pendingEffect||!this.asideRecoveryAllowed()||this.port.target.engine!=='playwright'||!['owned_headless','ubuntu_vm'].includes(this.port.target.environment)||!unusualSearchTraffic(this.requestedUrl,observed))return false;
+    if(!this.port||!this.requestedUrl||this.environmentRecovery||this.pendingEffect||!this.asideRecoveryAllowed()||this.port.target.engine!=='playwright'||!['owned_headless','ubuntu_vm'].includes(this.port.target.environment)||!(unusualSearchTraffic(this.requestedUrl,observed)||accessChallenge(observed)))return false;
     const aside=this.remaining.find(t=>t.engine==='aside'&&t.environment==='host_foreground');if(!aside)return false;
     this.options.guard?.();const from=this.port.target.id;
     this.record('failed',this.port.target,performance.now(),'unusual_traffic_environment_block');

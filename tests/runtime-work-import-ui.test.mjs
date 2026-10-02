@@ -19,7 +19,7 @@ test('Work board exposes three import routes and does not activate on preview',(
   assert.match(html,/work\/import\/coding\/start/u);
   assert.match(html,/work\/import\/coding\/step/u);
   assert.match(html,/다음 단계 실행/u);
-  assert.match(html,/README 요약·비밀값을 가린 코드 일부·근거 위치를 해당 모델에 보낼 수 있습니다/u);
+  assert.match(html,/README 요약과 비밀값을 가린 코드 일부를 AI에 보냅니다/u);
   assert.match(html,/기존 봇 유지 · 관제 연결 준비/u);
   assert.match(html,/실행되거나 일정이 켜지지 않습니다/u);
   assert.match(html,/가져온 계획/u);
@@ -67,7 +67,7 @@ test('project scan preview reads analyzed goal and steps, and renders string unk
   assert.match(preview.innerHTML,/Reply is delivered/u);
   assert.match(preview.innerHTML,/trigger\.timezone/u);
   assert.doesNotMatch(preview.innerHTML,/undefined · undefined/u);
-  assert.match(preview.innerHTML,/원본 실행 연결을 별도로 확인/u);
+  assert.match(preview.innerHTML,/원본 실행 환경과 연결해야/u);
   assert.match(preview.innerHTML,/maxlength="500"/u);
 });
 
@@ -94,9 +94,9 @@ test('Jev point and its reason use readable, escaped text in both import preview
   assert.equal((preview.innerHTML.match(/id="import-cost"/gu)||[]).length,1);
   assert.match(preview.innerHTML,/왜 Jev일까요\? 메시지마다 표현이 달라져/u);
   assert.match(preview.innerHTML,/근거: agent\.py:5/u);
-  assert.match(preview.innerHTML,/속도·비용 개선은 미측정/u);
-  assert.match(preview.innerHTML,/자동으로 삽입되지는 않습니다/u);
-  assert.match(preview.innerHTML,/API 비용이 발생할 수 있습니다/u);
+  assert.match(preview.innerHTML,/실제 개선 폭은 측정하지 않았습니다/u);
+  assert.match(preview.innerHTML,/원본 코드는 바뀌지 않습니다/u);
+  assert.match(preview.innerHTML,/API 비용이 들 수 있습니다/u);
   assert.match(preview.innerHTML,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
   assert.doesNotMatch(preview.innerHTML,/<script>alert\(1\)<\/script>/u);
   const helper=script.slice(script.indexOf('function renderJevRecommendations'),script.indexOf('function setImportRoute'));
@@ -108,7 +108,7 @@ test('Jev point and its reason use readable, escaped text in both import preview
   vm.runInNewContext(helper+workFileScript()+taskModelUiScript+analysisHelpers+detailFragment+'\nrenderDetailBody();',detailContext);
   assert.match(app.innerHTML,/새 메시지가 긴급한지 판단<\/b> · 예\/아니오 확인/u);
   assert.match(app.innerHTML,/왜 Jev일까요\? 메시지마다 표현이 달라져/u);
-  assert.match(app.innerHTML,/코드 분석을 바탕으로 한 예상입니다/u);
+  assert.match(app.innerHTML,/코드 분석에 따른 예상/u);
   assert.match(app.innerHTML,/&lt;script&gt;alert\(1\)&lt;\/script&gt;/u);
   assert.match(app.innerHTML,/id="jev-toggle" disabled/u);
   assert.doesNotMatch(app.innerHTML,/<script>alert\(1\)<\/script>/u);

@@ -109,6 +109,18 @@ export function parseData(text:string,format:'json'|'csv'):Row[]{
 /** Parse a complete JSON array or CSV document one row at a time. The total
  * file/row count has no arbitrary cap; the existing field schema still applies.
  * A consumer must drain the iterator before accepting its observations. */
+/** Rows of a GeoJSON FeatureCollection: each feature's `properties`, projected to the declared fields. */
+export function featureRows(document:unknown,fields:readonly string[]):Row[]{
+  const collection=document as {type?:unknown;features?:unknown};
+  requireCondition(collection!==null&&typeof collection==='object'&&collection.type==='FeatureCollection'&&Array.isArray(collection.features)&&collection.features.length<=MAX_ROWS,'SOURCE_ROWS_REQUIRED');
+  return (collection.features as unknown[]).map(feature=>{
+    const properties=(feature as {properties?:unknown}|null)?.properties;
+    requireCondition(properties!==null&&typeof properties==='object'&&!Array.isArray(properties),'SOURCE_ROW_REQUIRED');
+    const projection:Record<string,unknown>={};
+    for(const name of fields){requireCondition(Object.hasOwn(properties as object,name),'SOURCE_PROJECTION_FIELD_MISSING');projection[name]=(properties as Record<string,unknown>)[name];}
+    return rowSchema.parse(projection);
+  });
+}
 export async function* iterateParsedRows(chunks:AsyncIterable<Uint8Array>,format:'json'|'csv',jsonFields?:readonly string[],onCsvHeader?:(header:readonly string[])=>void):AsyncGenerator<Row>{
   const decoder=new TextDecoder('utf-8',{fatal:true,ignoreBOM:true});
   async function* textChunks(){for await(const chunk of chunks)yield decoder.decode(chunk,{stream:true});const tail=decoder.decode();if(tail)yield tail;}

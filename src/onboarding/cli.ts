@@ -1,4 +1,4 @@
-import {connectionRoot,readLocalConnection} from './connection.js';
+import {approveNonInterferingConnection,connectionRoot,readLocalConnection} from './connection.js';
 import {ensureControlService,openControlUrl} from './control-service.js';
 import {requireCondition} from '../core/contracts.js';
 import {appendSetupActivity} from './setup-activity.js';
@@ -13,6 +13,10 @@ export async function runOnboardingCli(args:readonly string[]){
     const root=rootFrom(args.slice(1));await appendSetupActivity(root,'setup','running','$ agent-office connect');
     await appendSetupActivity(root,'setup','success','WSL/Linux 실행 환경과 Agent Office 설치를 확인했습니다.');
     const service=await ensureControlService(root);await appendSetupActivity(root,'setup','success',service.reused?'기존 관제센터에 다시 연결했습니다.':'로컬 관제센터를 시작했습니다.');
+    // Running connect is the owner choosing the default non-interfering mode (own workspace and background
+    // browser, no desktop access, files only by explicit transfer). Recording it here lets `agent-office mcp`
+    // work right after install instead of failing until one more click (clean-install check, 2026-10-01).
+    if(!readLocalConnection(root)){await approveNonInterferingConnection(root);await appendSetupActivity(root,'runtime','success','기본 실행 모드로 이 컴퓨터를 연결했습니다. 화면과 파일은 건드리지 않습니다.');}
     const opened=await openControlUrl(service.url);
     console.log(JSON.stringify({status:'control_center_ready',url:service.url+'settings',browser_opened:opened,pid:service.pid,reused:service.reused,mcp_command:'agent-office mcp',connection:readLocalConnection(rootFrom(args.slice(1)))?'connected':'awaiting_local_approval'}));return true;
   }

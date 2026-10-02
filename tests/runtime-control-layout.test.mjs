@@ -106,7 +106,7 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     assert.equal(await page.locator('#mcp-clients .client>p').count(),0,'Client descriptions must not clutter the connection list');
     await page.locator('#windows-bridge>summary').click();
     assert.ok(await page.locator('#windows-bridge-help').isVisible());
-    assert.match(await page.locator('#windows-bridge-help').textContent(),lang==='ko'?/건너뛰어도 됩니다/u:/Skip it if you connected a WSL app/u);assert.match(await page.locator('#windows-bridge').innerText(),lang==='ko'?/터미널이나 채팅에 실행하는 명령이 아닙니다/u:/not a command to run in PowerShell/u);
+    assert.match(await page.locator('#windows-bridge-help').textContent(),lang==='ko'?/건너뛰어도 됩니다/u:/Skip it if you connected a WSL app/u);assert.match(await page.locator('#windows-bridge').innerText(),lang==='ko'?/터미널이나 채팅에 입력하는 명령이 아닙니다/u:/not commands for a terminal or chat/u);
     assert.equal(buttons.filter(b=>b.text===(lang==='ko'?'연결':'Connect')).length,2,'Only the two signed-in clients should offer registration');
     assert.equal(await page.locator('#mcp-clients [data-client=opencode] .cact button').count(),1,'Log in first; do not offer registration alongside it');
     assert.equal(await page.getByText(lang==='ko'?'MCP 연결':'Connect MCP',{exact:true}).count(),0);
@@ -221,7 +221,7 @@ test('runtime fixture fresh catalog refresh confirms listed 6.1 Sol/low, saves i
 test('runtime fixture a saved model absent from the account list stays visible and blocks only active Codex saves',async t=>{
   const f=await fixture(t,{savedCodexModel:'gpt-6-sol',savedCodexEffort:'high',catalogModels:[{id:'gpt-5.6-sol',label:'GPT-5.6-Sol'}]}),browser=await chromium.launch({headless:true});
   t.after(()=>browser.close());const page=await browser.newPage();await page.addInitScript(()=>localStorage.setItem('office-lang','ko'));await page.goto(f.url);await page.locator('[data-step="2"]').click();await settled(page,'refresh-clients');
-  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');assert.match(await page.locator('#catalog-state').textContent(),/현재 계정 지원 목록에 없습니다/u);
+  assert.equal(await page.locator('#codex-model').inputValue(),'gpt-6-sol');assert.match(await page.locator('#catalog-state').textContent(),/이 계정에서 쓸 수 없습니다/u);
   await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'다시 선택하세요.'}).waitFor();assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');
   await page.locator('#client').selectOption('claude');await page.locator('#save-model').click();await page.locator('#notice').filter({hasText:'저장했습니다.'}).waitFor();
   assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client,'claude');assert.equal(readModelSettings(modelSettingsPath(f.config)).selection.client_models.codex,'gpt-6-sol');

@@ -27,13 +27,18 @@ export type ResultDeliveryChannel='telegram'|'slack'|'discord'|'email'|'chat'|'f
 export interface ResultDeliveryConnector {id:string;channel:ResultDeliveryChannel;send(input:{result:WorkResult;target_alias:string;idempotency_key:string}):Promise<{status:'delivered';receipt_id:string}|{status:'failed';effect_state:'not_dispatched'|'uncertain';reason:string}>;}
 export interface WorkResultArtifact {id:string;label:string;sha256:string;bytes:number|null;media_type:string|null;download_available:boolean;}
 export interface WorkResultDelivery {id:string;channel:'app'|ResultDeliveryChannel;authority:'office'|'original_runtime';status:'available'|'unobserved'|'pending'|'sending'|'delivered'|'failed'|'reconciliation_required';target_alias:string|null;connector_id:string|null;revision:number;attempts:number;reason:string|null;receipt_id:string|null;updated_at:string;can_retry:boolean;}
-export interface WorkResult {id:string;project_id:string;work_id:string;run_id:string;source_kind:SourceKind;work_revision:number|null;source_status:string;verification:'verified'|'reported'|'unverified';summary:string;text:string;artifacts:WorkResultArtifact[];sources:Array<z.infer<typeof sourceSchema>>;content_sha256:string;created_at:string;work_completion_verified:boolean;deliveries:WorkResultDelivery[];}
+export interface WorkResult {id:string;project_id:string;work_id:string;run_id:string;source_kind:SourceKind;work_revision:number|null;source_status:string;verification:'verified'|'reported'|'unverified';summary:string;text:string;artifacts:WorkResultArtifact[];sources:Array<z.infer<typeof sourceSchema>>;content_sha256:string;created_at:string;work_completion_verified:boolean;work_title:string;deliveries:WorkResultDelivery[];}
 type ResultRow={id:string;project_id:string;work_id:string;run_id:string;source_kind:SourceKind;work_revision:number|null;source_status:string;verification:WorkResult['verification'];body:string;content_sha256:string;created_at:string};
 type DeliveryRow={id:string;result_id:string;project_id:string;work_id:string;channel:WorkResultDelivery['channel'];authority:WorkResultDelivery['authority'];status:WorkResultDelivery['status'];target_alias:string|null;connector_id:string|null;target_fingerprint:string|null;revision:number;attempts:number;reason:string|null;receipt_id:string|null;updated_at:string};
 type PolicyRow={revision:number;target_ids:string};
 const sha=(value:string|Buffer)=>createHash('sha256').update(value).digest('hex');
 const at=()=>new Date().toISOString();
 const terminal=new Set(['succeeded','completed','finished','failed','cancelled','partial_evidence','needs_review','watching','aborted']);
+/** Plan B1 notification level, for messages to the owner's own messenger. `results`: verified completions only.
+ * `results_and_owner` (default): also a stop only the owner can resolve. `all`: every recorded outcome. */
+export type NotifyLevel='results'|'results_and_owner'|'all';
+export const ownerNeededStates=new Set(['waiting_auth','waiting_approval','awaiting_review','reconciliation_required','failed','waiting_connection','needs_review']);
+export const notifies=(level:NotifyLevel,status:string,verified:boolean)=>verified||level==='all'||level==='results_and_owner'&&ownerNeededStates.has(status);
 const partialClientStates=new Set(['awaiting_review','waiting_auth','waiting_approval','waiting_model','waiting_connection','paused','retry_wait','reconciliation_required']);
 const safe=(value:string,max=24000)=>safeControlText(value,max).replace(/\b(?:password|passwd|api[_ -]?key|access[_ -]?token|refresh[_ -]?token|client[_ -]?secret|cookie|authorization)["']?\s*[:=]\s*(?:"[^"\n]*"|'[^'\n]*'|[^\s,;]*)/giu,'[REDACTED]').replace(/\bBearer\s+[^\s,;]+/giu,'Bearer [REDACTED]').replace(/\b\d{7,}:[A-Za-z0-9_-]{25,}\b/gu,'[REDACTED]');
 function safeUrl(raw:string){try{const url=new URL(raw);if(!['http:','https:'].includes(url.protocol))return undefined;url.username='';url.password='';url.search='';url.hash='';return safe(url.toString(),2000);}catch{return undefined;}}
@@ -44,7 +49,7 @@ const table=(store:PackStore,name:string)=>Boolean(store.hermesState.prepare("SE
 /** Work outputs are durable receipts. Publishing one never marks the Work complete. */
 export class WorkResults {
   private readonly connectors:Map<string,ResultDeliveryConnector>;
-  constructor(readonly store:PackStore,connectors:ResultDeliveryConnector[]=[],readonly settings?:WorkDeliverySettings){
+  constructor(readonly store:PackStore,connectors:ResultDeliveryConnector[]=[],readonly settings?:WorkDeliverySettings,private readonly notifyLevel:()=>NotifyLevel=()=>'results'){
     this.connectors=new Map(connectors.map(connector=>[connector.id,connector]));
     requireCondition(this.connectors.size===connectors.length,'RESULT_CONNECTOR_DUPLICATE');
     store.hermesState.exec(`CREATE TABLE IF NOT EXISTS office_result(id TEXT PRIMARY KEY,project_id TEXT NOT NULL,work_id TEXT NOT NULL REFERENCES office_work(id),run_id TEXT NOT NULL,source_kind TEXT NOT NULL,work_revision INTEGER,source_status TEXT NOT NULL,verification TEXT NOT NULL,result_key TEXT NOT NULL,body TEXT NOT NULL,content_sha256 TEXT NOT NULL,created_at TEXT NOT NULL,UNIQUE(project_id,work_id,source_kind,run_id,result_key,content_sha256));
@@ -143,7 +148,9 @@ export class WorkResults {
       id=randomUUID();const time=at();db.prepare('INSERT INTO office_result VALUES(?,?,?,?,?,?,?,?,?,?,?,?)').run(id,project,input.work_id,input.run_id,input.source_kind,input.work_revision,origin.status,origin.verification,input.result_key,JSON.stringify(body),contentHash,time);
       db.prepare('INSERT INTO office_result_delivery(id,result_id,project_id,work_id,channel,authority,status,updated_at) VALUES(?,?,?,?,?,?,?,?)').run(randomUUID(),id,project,input.work_id,'app','office','available',time);
       const imported=this.importedDelivery(project,input.work_id);if(imported)db.prepare('INSERT INTO office_result_delivery(id,result_id,project_id,work_id,channel,authority,status,target_alias,updated_at) VALUES(?,?,?,?,?,?,?,?,?)').run(randomUUID(),id,project,input.work_id,imported.channel,'original_runtime','unobserved',imported.target,time);
-      if(body.completion_verified===true&&!imported&&workImportExecutionOwner(this.store,project,input.work_id)!=='original_runtime'&&this.settings){const policy=db.prepare('SELECT target_ids FROM office_work_delivery_policy WHERE project_id=? AND work_id=?').get(project,input.work_id);if(policy)this.addPending(project,input.work_id,id,JSON.parse(String(policy.target_ids)) as string[]);}
+      // A run the executor paused to wait for a connection or setting is a stop only the owner can resolve; a pause the owner made is not.
+      const waitReason=input.source_kind==='client'&&origin.status==='paused'&&table(this.store,'office_supervisor')?String(db.prepare('SELECT reason FROM office_supervisor WHERE run_id=?').get(input.run_id)?.reason??''):'';
+      if(notifies(this.notifyLevel(),waitReason.startsWith('WORK_CLIENT_WAIT_')?'waiting_connection':origin.status,body.completion_verified===true)&&!imported&&workImportExecutionOwner(this.store,project,input.work_id)!=='original_runtime'&&this.settings){const policy=db.prepare('SELECT target_ids FROM office_work_delivery_policy WHERE project_id=? AND work_id=?').get(project,input.work_id);if(policy)this.addPending(project,input.work_id,id,JSON.parse(String(policy.target_ids)) as string[]);}
       db.prepare('UPDATE office_work SET updated_at=? WHERE project_id=? AND id=?').run(time,project,input.work_id);db.exec('RELEASE office_result_record');
     }catch(error){db.exec('ROLLBACK TO office_result_record; RELEASE office_result_record');throw error;}
     return this.get(project,input.work_id,id);
@@ -158,7 +165,7 @@ export class WorkResults {
     const body=JSON.parse(row.body) as {summary:string;text:string;completion_verified?:boolean;artifacts:Array<WorkResultArtifact&{path:string}>;sources:WorkResult['sources']};
     const connected=readWorkLifecycle(this.store,project,workId).state==='connected';
     const deliveries=(this.store.hermesState.prepare('SELECT * FROM office_result_delivery WHERE project_id=? AND work_id=? AND result_id=? ORDER BY rowid').all(project,workId,resultId) as DeliveryRow[]).map(delivery=>({id:delivery.id,channel:delivery.channel,authority:delivery.authority,status:delivery.status,target_alias:delivery.target_alias,connector_id:delivery.connector_id,revision:delivery.revision,attempts:delivery.attempts,reason:delivery.reason,receipt_id:delivery.receipt_id,updated_at:delivery.updated_at,can_retry:connected&&delivery.status==='failed'&&delivery.authority==='office'&&delivery.connector_id!==null&&delivery.reason!=='DELIVERY_SELECTION_CHANGED'&&(delivery.target_fingerprint===null?this.connectors.has(delivery.connector_id):this.settings?.fingerprint(delivery.connector_id)===delivery.target_fingerprint)}));
-    return {id:row.id,project_id:project,work_id:workId,run_id:row.run_id,source_kind:row.source_kind,work_revision:row.work_revision,source_status:row.source_status,verification:row.verification,summary:body.summary,text:body.text,artifacts:body.artifacts.map(artifact=>({id:artifact.id,label:artifact.label,sha256:artifact.sha256,bytes:artifact.bytes,media_type:artifact.media_type,download_available:isAbsolute(artifact.path)})),sources:body.sources,content_sha256:row.content_sha256,created_at:row.created_at,work_completion_verified:body.completion_verified===true,deliveries};
+    return {id:row.id,project_id:project,work_id:workId,run_id:row.run_id,source_kind:row.source_kind,work_revision:row.work_revision,source_status:row.source_status,verification:row.verification,work_title:String((this.store.officeWorkById(project,workId) as {title?:unknown}|null)?.title??''),summary:body.summary,text:body.text,artifacts:body.artifacts.map(artifact=>({id:artifact.id,label:artifact.label,sha256:artifact.sha256,bytes:artifact.bytes,media_type:artifact.media_type,download_available:isAbsolute(artifact.path)})),sources:body.sources,content_sha256:row.content_sha256,created_at:row.created_at,work_completion_verified:body.completion_verified===true,deliveries};
   }
   /** Read persisted output only. This does not call a model, rerun a Pack, or send a message. */
   capture(project:string,workId:string):WorkResult[]{
@@ -190,12 +197,14 @@ export class WorkResults {
         if(depth>4||visited++>400)return;
         if(Array.isArray(raw)){for(const value of raw.slice(0,32))collect(value,observedAt,depth+1);return;}
         const value=object(raw);
-        if(typeof value.url==='string'&&safeUrl(value.url)&&sources.length<32&&!seen.has('url:'+safeUrl(value.url))){seen.add('url:'+safeUrl(value.url));sources.push({label:safe(String(value.title??value.url),300),url:safeUrl(value.url)!,...(observedAt?{observed_at:observedAt}:{})});}
+        if(typeof value.url==='string'&&safeUrl(value.url)&&sources.length<32&&!seen.has('url:'+safeUrl(value.url))){seen.add('url:'+safeUrl(value.url));sources.push({label:safe(String(value.title||value.url),300)||'source',url:safeUrl(value.url)!,...(observedAt?{observed_at:observedAt}:{})});}
         if(typeof value.path==='string'&&typeof value.sha256==='string'&&digest.safeParse(value.sha256).success&&isAbsolute(value.path)&&artifacts.length<20&&!seen.has('artifact:'+value.path)){seen.add('artifact:'+value.path);artifacts.push({label:basename(value.path),path:value.path,sha256:value.sha256,...(typeof value.bytes==='number'&&Number.isInteger(value.bytes)&&value.bytes>=0?{bytes:value.bytes}:{})});}
         for(const child of Object.values(value))if(child&&typeof child==='object')collect(child,observedAt,depth+1);
       };
       for(const raw of observations.slice(-64)){const observation=object(raw),receipt=object(observation.receipt);if(['succeeded','completed','ok'].includes(String(receipt.status)))collect(receipt.value,typeof observation.observed_at==='string'?observation.observed_at:undefined);}
-      this.record(project,{work_id:workId,run_id:String(row.run_id),source_kind:'client',work_revision:Number(row.work_revision),summary:safe(String(output.summary??`client · ${row.state}`),4000)||`client · ${row.state}`,text:safe(String(output.text??output.summary??'')),sources,artifacts});
+      // The result is what was saved, not only the executor's sentence about it: the last saved Office result is the text.
+      let savedText='';for(const raw of observations){const observation=object(raw),invocation=object(observation.invocation),receipt=object(observation.receipt),value=object(receipt.value);if(invocation.tool_name==='office_result_draft'&&receipt.status==='succeeded'&&typeof value.text==='string')savedText=value.text;}
+      this.record(project,{work_id:workId,run_id:String(row.run_id),source_kind:'client',work_revision:Number(row.work_revision),summary:safe(String(output.summary??`client · ${row.state}`),4000)||`client · ${row.state}`,text:safe(savedText||String(output.text??output.summary??'')),sources,artifacts});
     }
     if(table(this.store,'hermes_turn'))for(const turn of this.store.hermesState.prepare("SELECT id,reply FROM hermes_turn WHERE project_id=? AND work_id=? AND status='finished' AND reply<>'' ORDER BY created_at DESC LIMIT 10").all(project,workId))this.record(project,{work_id:workId,run_id:String(turn.id),source_kind:'hermes',work_revision:revision,summary:safe(String(turn.reply).split('\n')[0]??'Hermes reply',4000)||'Hermes reply',text:String(turn.reply)});
     if(table(this.store,'office_remote_work')){
@@ -251,7 +260,7 @@ export class WorkResults {
     const delivered:WorkResult[]=[];
     for(const row of rows){
       if(!canDispatch()||readWorkLifecycle(this.store,project,workId).state!=='connected'||this.store.intakeWorkOptional(project,workId)?.paused)break;
-      const body=object(JSON.parse(String(row.body)));if(body.completion_verified!==true)continue;
+      // A pending row exists only for an outcome the notification level admitted when it was recorded.
       if(!row.connector_id||!row.target_fingerprint||this.settings?.fingerprint(String(row.connector_id))!==row.target_fingerprint){
         this.store.hermesState.prepare("UPDATE office_result_delivery SET status='failed',reason='DELIVERY_TARGET_CHANGED',revision=revision+1,updated_at=? WHERE id=? AND status='pending'").run(at(),String(row.id));
         this.activity(project,workId,'delivery.failed','Delivery destination changed before sending.');continue;
@@ -267,7 +276,7 @@ export class WorkResults {
   pendingWorkIds(project:string,limit=20):string[]{
     requireCondition(Number.isInteger(limit)&&limit>=1&&limit<=100,'RESULT_DELIVERY_LIMIT_INVALID');
     this.reconcileInterrupted();
-    return this.store.hermesState.prepare("SELECT DISTINCT d.work_id FROM office_result_delivery d JOIN office_result r ON r.id=d.result_id LEFT JOIN office_work_lifecycle l ON l.work_id=d.work_id LEFT JOIN office_intake i ON i.work_id=d.work_id WHERE d.project_id=? AND d.authority='office' AND d.status='pending' AND d.target_fingerprint IS NOT NULL AND json_extract(r.body,'$.completion_verified')=1 AND l.work_id IS NULL AND COALESCE(i.paused,0)=0 ORDER BY r.created_at LIMIT ?").all(project,limit).map(row=>String(row.work_id));
+    return this.store.hermesState.prepare("SELECT DISTINCT d.work_id FROM office_result_delivery d JOIN office_result r ON r.id=d.result_id LEFT JOIN office_work_lifecycle l ON l.work_id=d.work_id LEFT JOIN office_intake i ON i.work_id=d.work_id WHERE d.project_id=? AND d.authority='office' AND d.status='pending' AND d.target_fingerprint IS NOT NULL AND l.work_id IS NULL AND COALESCE(i.paused,0)=0 ORDER BY r.created_at LIMIT ?").all(project,limit).map(row=>String(row.work_id));
   }
   /** Download only a recorded file inside explicitly delegated roots, with independent readback. */
   async readArtifact(project:string,workId:string,resultId:string,artifactId:string,roots:string[]){

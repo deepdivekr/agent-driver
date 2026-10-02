@@ -9,11 +9,13 @@ import {hashJson} from '../taskpack/adaptive-spec.js';
 
 /** Read at invocation start, never mutate process.env or an already-running model call. */
 export class ConfiguredStructuredModel implements StructuredModel{
-  readonly calls:ModelCall[]=[];
+  private log:ModelCall[]=[];
+  /** Role views of one binding share its call log, so a run counts every role's calls. */
+  get calls(){return this.log;}
   sampling?:McpSamplingStructuredModel;
   constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel;taskCandidates?:(env:NodeJS.ProcessEnv)=>Promise<TaskModelCandidate[]>}={},readonly onHandoff?:(event:ClientRouteEvent)=>void,readonly scope:ModelScope='global',readonly provenance?:ReturnType<typeof handoffContext>,readonly role?:ModelRole,private readonly taskModels?:TaskModelBinding,private readonly actorId?:string){}
   forScope(scope:ModelScope){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,scope,this.provenance,this.role,this.taskModels,this.actorId);if(this.sampling)model.sampling=this.sampling;return model;}
-  forRole(role:ModelRole){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,this.scope,this.provenance,role,this.taskModels,this.actorId);if(this.sampling)model.sampling=this.sampling;return model;}
+  forRole(role:ModelRole){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,this.scope,this.provenance,role,this.taskModels,this.actorId);model.log=this.log;if(this.sampling)model.sampling=this.sampling;return model;}
   /** Bind all successor calls to the same Work/run even if a capability input omits IDs. */
   forWork(context:{work_id:string;run_id:string;stage_id?:string;actor_id?:string},scope:ModelScope=this.scope){
     const binding=handoffContext(context);

@@ -9,7 +9,7 @@ import {type SwarmPlan,type SwarmRunSnapshot,type SwarmWorkerReport,swarmWorkerR
 import {RoutedSwarmBrowser} from '../swarm/routed-browser.js';
 import {requireCondition} from '../core/contracts.js';
 import {safeControlText} from '../observability/safe-text.js';
-import {boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientInvocation,type WorkClientProgress,type WorkClientRequest,type WorkClientToolReceipt} from './client-executor.js';
+import {appendWorkObservation,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientInvocation,type WorkClientProgress,type WorkClientRequest,type WorkClientToolReceipt} from './client-executor.js';
 import {type WorkPlan} from './plan.js';
 import {acceptStageClaims,businessSteps,currentStageReports,stageBinding,stageClaimSchema,stageReportSchema} from './stages.js';
 
@@ -195,13 +195,24 @@ export async function executeSupervisedSwarm(api:RuntimeApi,model:StructuredMode
   requireCondition(workBinding?.id===request.work_id,'SWARM_SUPERVISED_WORK_SCOPE_MISMATCH');
   checkpoint??={format:1,kind:'swarm',run_id:runId,work_id:request.work_id,workers:{},completed_workers:[],work_revision:revision,...(stages.length?{work_stage_contracts:Object.fromEntries(stages.map(step=>[step.id,stageBinding(step)]))}:{}),direction_binding:createdRun?directionBinding:null,applied_directions:createdRun?directions.map(direction=>hashJson(direction)):[],final_observations:[],stage_reports:[],stage_assessment_binding:null,peak_active_workers:null};
   const cp=checkpoint,previousWorkRevision=cp.work_revision,started=Date.now(),ownedVisual=!api.visual;
+  // Plan B6: a host-validated replan that revised existing stages does not stop the run. The revised stages reach
+  // their workers through the same rebase as a user direction: those workers and their dependents run again,
+  // every other verified worker is kept. Added or removed stages have no workers to keep and still need review.
+  let stageDirections:SupervisedSwarmDirection[]=[],revisedContracts:Record<string,string>|null=null;
   if(stages.length){
     const saved=cp.work_stage_contracts,current=Object.fromEntries(stages.map(step=>[step.id,stageBinding(step)]));
-    requireCondition(saved&&hashJson(saved)===hashJson(current),'SWARM_DIRECTION_REQUIRES_REVIEW');
     const persisted=snapshot(api,runId);
-    requireCondition(persisted.plan.workers.every(worker=>worker.work_stage_id&&byStage.has(worker.work_stage_id))&&persisted.plan.work_output_stage_id&&byStage.has(persisted.plan.work_output_stage_id),'SWARM_DIRECTION_REQUIRES_REVIEW');
+    requireCondition(saved&&persisted.plan.workers.every(worker=>worker.work_stage_id&&byStage.has(worker.work_stage_id))&&persisted.plan.work_output_stage_id&&byStage.has(persisted.plan.work_output_stage_id),'SWARM_DIRECTION_REQUIRES_REVIEW');
+    if(hashJson(saved)!==hashJson(current)){
+      const revised=stages.filter(step=>saved[step.id]!==undefined&&saved[step.id]!==current[step.id]);
+      requireCondition(revised.length>0&&stages.every(step=>saved[step.id]!==undefined)&&Object.keys(saved).every(stageId=>byStage.has(stageId))
+        &&revised.every(step=>step.id===persisted.plan.work_output_stage_id||persisted.plan.workers.some(worker=>worker.work_stage_id===step.id)),'SWARM_DIRECTION_REQUIRES_REVIEW');
+      stageDirections=revised.map(step=>({run_id:runId!,step_id:step.id,instruction:safeControlText(`This stage was revised. Goal: ${step.goal} Observable outcome: ${step.observable_outcome??'as stated in the goal'}`,4000),created_at:new Date(0).toISOString()}));
+      revisedContracts=current;
+    }
   }
-  await rebaseSwarm(api,model,request,cp,directions,revision,directionBinding,hooks);
+  await rebaseSwarm(api,model,request,cp,[...directions,...stageDirections],revision,directionBinding,hooks);
+  if(revisedContracts){cp.work_stage_contracts=revisedContracts;await hooks.progress?.({kind:'model.result',turn:0,stage_id:'swarm.rebase',summary:`Revised stage${stageDirections.length===1?'':'s'} ${stageDirections.map(direction=>direction.step_id).join(', ')} continue in the same run; verified work of the other stages is kept.`});}
   await recoverDerivationBudget(api,request,cp,previousWorkRevision,hooks);
   cp.completed_workers=Object.values(snapshot(api,runId).workers).filter(worker=>worker.status==='succeeded'&&worker.result?.readback?.verified&&worker.quality?.accepted).map(worker=>worker.id);
   const visual:SwarmVisualAdapter=api.visual??new RoutedSwarmBrowser(api.store,api.config,()=>({llm:model}));
@@ -258,7 +269,7 @@ export async function executeSupervisedSwarm(api:RuntimeApi,model:StructuredMode
         await readSources();requireCondition(observed.size>0&&[...observed.keys()].every(url=>readbacks.has(url)),'UNOBSERVED_EVIDENCE_SPAN');
         receipt={status:'succeeded',value:boundWorkToolValue({sources:[...observed.values()].map(source=>({...source,text:source.text.slice(0,8000)}))}),evidence_ids:[`sources-${workerId}`],effect_state:'none',retry_safe:true};
       }
-      workerCheckpoint={...workerCheckpoint,pending:null,turn:invocation.turn+1,observations:[...workerCheckpoint.observations,{invocation,receipt,observed_at:new Date().toISOString()}].slice(-32),summary:`Independently observed ${derived?'predecessor evidence':'delegated sources'}.`};
+      workerCheckpoint={...appendWorkObservation(workerCheckpoint,{invocation,receipt,observed_at:new Date().toISOString()}),pending:null,turn:invocation.turn+1,summary:`Independently observed ${derived?'predecessor evidence':'delegated sources'}.`};
       // Completed effects survive a pause/revision arriving during the awaited read.
       await saveWorker();await progress({kind:'tool.result',worker_id:workerId,turn:invocation.turn,stage_id:workStageId,...(workStageBinding?{stage_binding:workStageBinding}:{}),tool_name:tool.name,summary:`${tool.name}: succeeded`});await guard();
       const derivedEvidence=derived?predecessorEvidence():null,upstream=derivedEvidence?.predecessors??[],availableCards=upstream.flatMap(item=>item.report.fact_cards);

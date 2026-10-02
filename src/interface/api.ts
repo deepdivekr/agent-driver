@@ -18,7 +18,7 @@ import {ScopedFiles} from '../terminal/scoped-files.js';
 import {liveness,type ProcessIdentity} from '../supervisor/identity.js';
 import {ensureSupervisor} from '../supervisor/manager.js';
 import {requireCondition} from '../core/contracts.js';
-import {loadHostConfig,type HostConfig} from './config.js';
+import {workAutonomy,workDelegation,loadHostConfig,type HostConfig} from './config.js';
 import {codingManifest,draftManifest,terminalManifest,startRequest,tools} from './catalog.js';
 import {intake} from './intake.js';
 import {resourceHealth} from '../resources/configured.js';
@@ -105,7 +105,7 @@ export class RuntimeApi{
   constructor(readonly config:HostConfig,readonly options:RuntimeApiOptions={}){
     this.workflowCompatibility=new WorkflowCompatibility(config);
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
-    this.workResults=new WorkResults(this.store,[],WorkDeliverySettings.fromConfig(config));
+    this.workResults=new WorkResults(this.store,[],WorkDeliverySettings.fromConfig(config),()=>workDelegation(config).notify);
     this.files=this.store.localFileExplorer(config.project.id,dirname(config.dbPath));
     this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
     const windowsDriver=options.windows?.driver??(config.windowsExecutor?(config.windowsExecutor.kind==='cua-desktop'?new CuaDesktopDriver(config.windowsExecutor,this.store.desktopState):new CuaFieldDriver(config.windowsExecutor,this.store.desktopState)):undefined);
@@ -288,13 +288,18 @@ export class RuntimeApi{
         case 'runtime_work_start':{
           const input=workStartSchema.parse(args),targetIds=input.delivery_target_ids??this.workResults.settings!.publicState().default_target_ids;
           requireCondition(targetIds.every(id=>id==='app'||this.workResults.settings?.target(id)),'RESULT_DELIVERY_TARGET_UNAVAILABLE');
-          return this.work.start(input);
+          const started=await this.work.start(input);
+          // Delegated autonomy (plan B1): a Work the owner's agent submits runs to its result in the same call;
+          // no second runtime_work_execute round trip. Per-run installs keep the two-step admission.
+          if(workAutonomy(this.config)!=='delegated'||started.definition_status!=='ready'||started.paused)return started;
+          try{const admission=(await this.supervisedWork()).start(started.work_id,started.revision,true,undefined,false);return {...this.work.status({work_id:started.work_id}),admission:{requested:true,...admission},autonomy:'delegated'};}
+          catch(error){return {...started,admission:{requested:true,accepted:false,reason:error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'WORK_EXECUTION_REQUEST_FAILED'},autonomy:'delegated'};}
         }
         case 'runtime_work_define':return this.work.define(args);
         case 'runtime_work_answer':return this.work.answer(args);
         case 'runtime_work_execute':{
           const input=workExecuteSchema.parse(args);requireCondition(input.executor==='client','WORK_EXECUTOR_CHANGED');
-          requireCondition(input.cost_acknowledged,'WORK_MODEL_USAGE_CONSENT_REQUIRED');
+          requireCondition(input.cost_acknowledged||workAutonomy(this.config)==='delegated','WORK_MODEL_USAGE_CONSENT_REQUIRED');
           requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');
           // Invalid admission must not allocate a timer or awaken another queued Work.
           const work=this.store.intakeWork(this.config.project.id,input.work_id);
@@ -304,7 +309,7 @@ export class RuntimeApi{
           requireCondition(work.revision===input.revision,'WORK_REVISION_CONFLICT');
           requireCondition(!work.paused&&work.spec&&['ready','running'].includes(work.status),'WORK_NOT_READY');
           requireCondition(workImportExecutionOwner(this.store,this.config.project.id,input.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
-          const supervisor=await this.supervisedWork();return supervisor.start(input.work_id,input.revision,input.cost_acknowledged,input.timezone,input.current_run_only);
+          const supervisor=await this.supervisedWork();return supervisor.start(input.work_id,input.revision,input.cost_acknowledged||workAutonomy(this.config)==='delegated',input.timezone,input.current_run_only);
         }
         case 'runtime_work_control':{
           const input=workControlSchema.parse(args);requireCondition(loadHostConfig(this.config.path).fingerprint===this.config.fingerprint,'CONFIG_CHANGED');

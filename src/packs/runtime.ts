@@ -1,10 +1,11 @@
 import {dirname,join} from 'node:path';
 import {z} from 'zod';
 import {requireCondition} from '../core/contracts.js';
-import {loadHostConfig,type HostConfig} from '../interface/config.js';
+import {loadHostConfig,workDelegation,workModelDataApproved,type HostConfig} from '../interface/config.js';
 import {BASE_PACK_CATALOG} from '../taskpacks/base-pack-catalog.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {optionalTypeSafeTransportFromHostEnvironment,type JevSystemOneTransport} from '../taskpack/typesafe-jev.js';
+import {paidJudgmentsToday,countPaidJudgment} from './paid-judgments.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {structuredModelFromEnvironment} from '../integrations/model-provider.js';
 import {packTools,recipeSchema,type Recipe,type MutationRecipe,type Row,type Source} from './contracts.js';
@@ -147,6 +148,7 @@ export class FamilyRuntime {
     if(saved&&saved.label!=='unknown')return saved;
     this.assertCustomRun(run,'runtime_pack_run');
     const decision=await judgeRow(row,question,labels,providers.policy.confidence,providers.jev,providers.llm,providers.plane,`${run.id}:${snapshotHash(row)}`);
+    if(providers.jev)this.countPaidJudgment();
     this.store.assertPackExecution(this.config.project.id,run.id,owner);
     requireCondition(decision.failure_reason!=='provider_unavailable','PACK_MODEL_UNAVAILABLE');
     requireCondition(decision.failure_reason!=='provider_invalid','PACK_MODEL_INVALID');
@@ -166,10 +168,16 @@ export class FamilyRuntime {
     throw Error('PACK_EXPORT_READBACK_MISMATCH');
   }
   private async decisionProviders(run:PackRun|null,workId?:string,catalog:DecisionCatalog=ROW_DECISION_CATALOG){
-    const policy=this.config.packs??{models:'off',confidence:.9,model_data_approved:false,decision_shadow:{provider:'off',sample_rate:0}},saved=readModelSettings(modelSettingsPath(this.config)),environment=effectiveModelEnvironment(saved);let jev=this.providers.jev,llm=this.providers.llm;
+    const configured=this.config.packs??{models:'off' as const,confidence:.9,model_data_approved:false,decision_shadow:{provider:'off' as const,sample_rate:0}},saved=readModelSettings(modelSettingsPath(this.config)),environment=effectiveModelEnvironment(saved);let jev=this.providers.jev,llm=this.providers.llm;
     const office=run?this.store.officeWork(this.config.project.id,'pack',run.id) as {id:string}|null:workId?{id:workId}:null;
+    // Default (owner direction 2026-10-02): a Work the owner allowed to use AI gets judgments without separate Pack
+    // configuration. Jev decides first when its key is present and the model settings do not switch it off; the
+    // configured AI is the fallback. An install without that consent, or a run outside a Work, keeps `off`.
+    const policy=configured.models==='off'&&office&&workModelDataApproved(this.config)?{...configured,models:'jev_llm' as const,model_data_approved:true}:configured;
     const boundWork=office?this.store.intakeWorkOptional(this.config.project.id,office.id):null;
-    const workJevEnabled=boundWork?.jev_enabled??null,jevPermitted=workJevEnabled!==false&&saved?.selection.jev!=='off';
+    // The owner's daily budget for the paid judgment API (plan B1/B4). Past it the configured AI decides.
+    const budgetOpen=this.paidJudgmentsToday()<workDelegation(this.config).paid_judgment_daily_calls;
+    const workJevEnabled=boundWork?.jev_enabled??null,jevPermitted=workJevEnabled!==false&&saved?.selection.jev!=='off'&&budgetOpen;
     if(policy.models!=='off'){
       requireCondition(policy.model_data_approved,'MODEL_DATA_APPROVAL_REQUIRED');
       if(jevPermitted&&!jev)jev=optionalTypeSafeTransportFromHostEnvironment(environment).transport??undefined;
@@ -180,15 +188,19 @@ export class FamilyRuntime {
     const semantic=catalog.id===SEMANTIC_DECISION_CATALOG.id,fallback=semantic?semanticDecisionProfile(policy.confidence):rowDecisionProfile(policy.confidence),registry=new DecisionProfileRegistry(join(dirname(this.config.dbPath),'decisions','registry')),profile=jev?(await registry.resolve(catalog,this.config.environment==='fixture'?'fixture':'production',fallback)).profile:fallback;
     const plane=jev?new DecisionPlane({catalog,profile,primary:{id:'typesafe-jev',systemOne:(request,settings)=>jev!.systemOne(request,settings)},...(shadow?{shadow}:{}),journal:new FileDecisionJournal(join(dirname(this.config.dbPath),'decisions',semantic?'semantic.jsonl':'family.jsonl')),shadow_sample_rate:shadow?(this.providers.shadowJev?.systemOne?0.1:policy.decision_shadow.sample_rate):0}):undefined;
     const binding=snapshotHash({settings_revision:saved?.revision??0,selection:saved?.selection??null,model:environment.AGENT_DRIVER_API_MODEL??null,client:environment.AGENT_DRIVER_LLM_CLIENT??null,provider:environment.AGENT_DRIVER_API_PROVIDER??null,profile,models:policy.models,work_jev_enabled:workJevEnabled});
-    return {jev,llm,policy,plane,binding,workJevEnabled,settingsRevision:saved?.revision??0};
+    return {jev,llm,policy,plane,binding,workJevEnabled,budgetOpen,settingsRevision:saved?.revision??0};
   }
   private async refreshDecisionProviders(run:PackRun,previous:Awaited<ReturnType<FamilyRuntime['decisionProviders']>>){
     const office=this.store.officeWork(this.config.project.id,'pack',run.id) as {id:string}|null;
     const enabled=office?this.store.intakeWorkOptional(this.config.project.id,office.id)?.jev_enabled??null:null;
     // A Work toggle affects the next row. An already-started model request keeps its original provider.
     const settingsRevision=readModelSettings(modelSettingsPath(this.config))?.revision??0;
-    return enabled===previous.workJevEnabled&&settingsRevision===previous.settingsRevision?previous:this.decisionProviders(run);
+    const budgetOpen=this.paidJudgmentsToday()<workDelegation(this.config).paid_judgment_daily_calls;
+    if(previous.jev&&!budgetOpen)this.store.recordRuntimeActivity(this.config.project.id,'pack',run.id,null,'judgment.budget_reached','The daily budget of paid judgments is used; the configured AI decides the remaining rows.',null);
+    return enabled===previous.workJevEnabled&&settingsRevision===previous.settingsRevision&&budgetOpen===previous.budgetOpen?previous:this.decisionProviders(run);
   }
+  private paidJudgmentsToday():number{return paidJudgmentsToday(this.store,this.config.project.id);}
+  private countPaidJudgment(){countPaidJudgment(this.store,this.config.project.id);}
   async context(raw:unknown){
     const input=workContextSchema.parse(raw);
     if(!input.selection)return workContext(this.store,this.config.project.id,input);

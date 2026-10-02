@@ -1,18 +1,19 @@
 import {join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import {requireCondition} from '../core/contracts.js';
+import '../core/network.js';
 import {OwnedPersistentPage} from '../taskpack/owned-playwright.js';
 import {snapshotHash} from '../taskpack/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {type Source,type Row,type Recipe,rowSchema} from './contracts.js';
-import {scopedFileChunks,responseChunks,iterateParsedRows,MAX_ROWS} from './data.js';
+import {scopedFileChunks,responseChunks,iterateParsedRows,featureRows,MAX_ROWS,MAX_BYTES} from './data.js';
 import {RoutedBrowser,type BrowserRouteOptions} from '../browser/executor-routing.js';
 
 export interface SourceNormalization {
   version:1;kind:'declared_numeric_columns';columns:string[];
   raw_rows_sha256:string;normalized_rows_sha256:string;
 }
-export interface SourceEvidence {source_id:string;request_sha256:string;content_sha256:string;observed_at:string;rows:number;elapsed_ms:number;executor:string;projection_fields?:string[];csv_header?:string[];http_status?:number;response_bytes?:number;response_shape?:'array';normalization?:SourceNormalization;}
+export interface SourceEvidence {source_id:string;request_sha256:string;content_sha256:string;observed_at:string;rows:number;elapsed_ms:number;executor:string;projection_fields?:string[];csv_header?:string[];http_status?:number;response_bytes?:number;response_shape?:'array'|'feature_collection';normalization?:SourceNormalization;}
 
 /** Convert only host-declared columns, with no blank, locale, ID or infinity
  * guessing. Unsafe integers cannot retain an exact identity in a JS number. */
@@ -75,12 +76,15 @@ export async function collectSource(source:Source,parameters:Record<string,strin
       requireCondition(!source.json_fields||source.format==='json','SOURCE_PROJECTION_REQUIRES_JSON');
       const digest=createHash('sha256');let responseBytes=0;rows=[];
       async function* observed(){for await(const chunk of responseChunks(response)){digest.update(chunk);responseBytes+=chunk.length;yield chunk;}}
-      for await(const row of iterateParsedRows(observed(),source.format,source.json_fields,observeCsvHeader))rows.push(row);
+      if(source.json_rows==='features'){
+        const parts:Uint8Array[]=[];for await(const chunk of observed()){requireCondition(responseBytes<=MAX_BYTES,'SOURCE_TOO_LARGE');parts.push(chunk);}
+        rows=featureRows(JSON.parse(new TextDecoder('utf-8',{fatal:true}).decode(Buffer.concat(parts))),source.json_fields!);
+      }else for await(const row of iterateParsedRows(observed(),source.format,source.json_fields,observeCsvHeader))rows.push(row);
       contentHash=digest.digest('hex');
       httpEvidence={http_status:response.status,response_bytes:responseBytes};
       // A successful JSON parse above validates the original top-level array,
       // not an agent assertion. Never retrofit this into historical receipts.
-      if(source.format==='json')httpEvidence.response_shape='array';
+      if(source.format==='json')httpEvidence.response_shape=source.json_rows==='features'?'feature_collection':'array';
     }else if(config.browserExecutors||routeOptions?.preference||routeOptions?.fallback_preferences?.length){
       const browser=new RoutedBrowser(config,{profile_key:source.id,context_id:randomUUID(),...routeOptions},[url.origin]);
       try{

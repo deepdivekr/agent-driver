@@ -94,7 +94,7 @@ export class WorkImportRuntime{
   }
   async scan(raw:unknown,progress?:(stage:'scanning'|'analyzing'|'complete',analysisStatus?:ProjectBody['analysis_status'])=>void){
     const input=workImportScanSchema.parse(raw),scope=redactContinuityText(input.scope??'').trim();progress?.('scanning');
-    const scan=await scanProject(input.path);
+    const scan=await scanProject(input.path,scope);
     let analysis:ProjectAnalysis|null=null,analysis_status:ProjectBody['analysis_status']='not_approved';
     const allowed=workModelDataApproved(this.config);
     if(allowed&&scan.evidence.length){
@@ -106,7 +106,13 @@ export class WorkImportRuntime{
     }else if(allowed)analysis_status='unsupported_evidence';
     const body:ProjectBody={...(scope?{scope}:{}),scan,analysis,analysis_status},record=this.store.createWorkImport(this.config.project.id,'project',body,scan.content_sha256);
     progress?.('complete',analysis_status);
-    return {import_id:record.id,kind:'project',preview:{...scan,...(scope?{scope}:{}),analysis,analysis_status,jev_recommendations:projectJevRecommendations(body),jev:{enabled:false,optional:true,cost_notice:'Jev API를 연결해 사용하면 호출 비용이 발생할 수 있습니다. 지금 스캔에는 Jev를 사용하지 않았습니다.'}},activation:false,execution:false,next_action:'review_analysis_and_choose_jev_then_accept'};
+    // A scanned project stays owned by its original runtime. When the owner wants Office to do the task instead,
+    // this is the request to start as an ordinary new Work: the analysed task plus the public addresses it reads.
+    // Nothing of the project is executed, and its code, schedule and data are not touched.
+    // The analysis speaks about the original bot; the request says plainly that Office does the task itself (live: the
+    // planner asked which existing bot to bind).
+    const officePrompt=analysis?.prompt?cleanedOneLine(`${analysis.prompt} (이 업무는 Agent Office가 직접 수행한다. 원본 봇의 실행 환경·일정·전달 설정은 사용하지 않고 변경하지도 않는다. 결과는 Office 결과 파일로 저장한다.)${scan.public_urls?.length?` 사용할 공개 주소: ${scan.public_urls.slice(0,12).join(' , ')}`:''}`,4000):null;
+    return {import_id:record.id,kind:'project',...(officePrompt?{office_prompt:officePrompt}:{}),preview:{...scan,...(scope?{scope}:{}),analysis,analysis_status,jev_recommendations:projectJevRecommendations(body),jev:{enabled:false,optional:true,cost_notice:'Jev API를 연결해 사용하면 호출 비용이 발생할 수 있습니다. 지금 스캔에는 Jev를 사용하지 않았습니다.'}},activation:false,execution:false,next_action:'review_analysis_and_choose_jev_then_accept'};
   }
   status(raw:unknown){const {import_id}=z.object({import_id:id}).strict().parse(raw);const record=this.store.workImport(this.config.project.id,import_id);return {import_id:record.id,kind:record.kind,status:record.status,preview:record.body,accepted_work_id:record.accepted_work_id};}
   async accept(raw:unknown){
@@ -127,7 +133,7 @@ export class WorkImportRuntime{
       route={kind:'workflow',pack_family:null};
     }else{
       if(!isProjectBody(body))throw Error('WORK_IMPORT_BODY_INVALID');
-      const fresh=await scanProject(body.scan.root);if(fresh.content_sha256!==record.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
+      const fresh=await scanProject(body.scan.root,body.scope??'');if(fresh.content_sha256!==record.source_digest)throw Error('WORK_IMPORT_SOURCE_CHANGED_RESCAN');
       const analysis=body.analysis;title=analysis?.title??body.scan.purpose??'프로젝트 가져오기';
       goal=input.goal?.trim()||analysis?.goal||'';
       if(!goal)throw Error('WORK_IMPORT_CONFIRMED_GOAL_REQUIRED');

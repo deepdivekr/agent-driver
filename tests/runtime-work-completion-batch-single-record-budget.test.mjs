@@ -27,10 +27,34 @@ test('runtime fixture: one indivisible nine-row receipt keeps every original lea
   assert.deepEqual(item,before,'The entire receipt is retained without truncation or mutation.');
 });
 
-test('runtime fixture: a receipt beyond the separate 40KB hard ceiling fails before any model call or evidence trimming',async()=>{
-  const item=observation({result:{rows:rows(45,9)}}),before=structuredClone(item),audits=[],provider={calls:[],async call(_purpose,_instructions,input){this.calls.push(Buffer.byteLength(JSON.stringify(input)));throw Error('MODEL_MUST_NOT_BE_CALLED');}};
-  const largerRequest={...originalUserRequest,completion_condition:originalUserRequest.completion_condition+'Read back and compare every requested field, never a sample. '.repeat(10)};
-  const overflowChecks=checks.map(check=>({...check,evidence:check.evidence+' Match every original field to its exact source-row identity before treating a read-back result as complete. '.repeat(35)}));
+const largerRequest={...originalUserRequest,completion_condition:originalUserRequest.completion_condition+'Read back and compare every requested field, never a sample. '.repeat(10)};
+const overflowChecks=checks.map(check=>({...check,evidence:check.evidence+' Match every original field to its exact source-row identity before treating a read-back result as complete. '.repeat(35)}));
+
+test('runtime fixture: a table receipt whose per-cell listing exceeds the 40KB ceiling is indexed by rows instead of failing, with every cell still citable',async()=>{
+  const item=observation({result:{rows:rows(45,9)}}),before=structuredClone(item),inputs=[],audits=[],provider={calls:[],async call(purpose,_instructions,input){
+    inputs.push(structuredClone(input));this.calls.push({purpose,provider:'fixture',model:'fixture',status:'accepted'});
+    if(input.eligible_pairs){
+      const table=input.literal_leaf_manifest[0].tables?.[0];assert.ok(table,'The oversized table is indexed instead of listed per cell.');
+      return {findings:input.eligible_pairs.map(pair=>({...pair,relation:'supports',quote_refs:[{quote_ref:`${table.ref_prefix}.8.44`,part:0}],reason:'An exact original cell was observed.'}))};
+    }
+    return {checks:input.checks.map(check=>({id:check.id,verdict:'unknown',evidence_ids:[],evidence_quote_refs:[],reason:'One cited cell cannot prove every requested original row.'}))};
+  }};
+  const verify=createWorkCompletionVerifier(provider,{literalRefMode:true,originalUserRequest:largerRequest,audit:event=>audits.push(event)});
+  assert.ok(Buffer.byteLength(JSON.stringify(item.receipt.value))<=16000);
+  assert.equal(await verify(overflowChecks,[item],claim),false,'Indexing makes judgment possible; it never turns one cell into completion.');
+  const batch=inputs.find(input=>input.eligible_pairs);assert.ok(batch);assert.ok(Buffer.byteLength(JSON.stringify(batch))<=40000-2048);
+  const manifest=batch.literal_leaf_manifest[0];
+  assert.deepEqual({path:manifest.tables[0].path,columns:manifest.tables[0].columns.length,rows:manifest.tables[0].rows},{path:'$/result/rows',columns:45,rows:9});
+  assert.equal(manifest.leaf_paths.length,0,'Indexed cells are not listed again.');
+  assert.ok(audits.some(event=>event.code==='WORK_COMPLETION_BATCH_INSPECTED'),JSON.stringify(audits.map(event=>event.code)));
+  assert.ok(audits.some(event=>event.code==='WORK_COMPLETION_CHECK_NOT_SUPPORTED'));
+  assert.equal(audits.some(event=>event.code==='WORK_COMPLETION_EVIDENCE_BUDGET_EXCEEDED'),false);
+  assert.deepEqual(item,before,'The entire receipt is retained without truncation or mutation.');
+});
+
+test('runtime fixture: a non-table receipt beyond the separate 40KB hard ceiling still fails before any model call or evidence trimming',async()=>{
+  const fields=Object.fromEntries(Array.from({length:560},(_,index)=>[`field_${index}`,`value-${index}`]));
+  const item=observation({result:{fields}}),before=structuredClone(item),audits=[],provider={calls:[],async call(_purpose,_instructions,input){this.calls.push(Buffer.byteLength(JSON.stringify(input)));throw Error('MODEL_MUST_NOT_BE_CALLED');}};
   const verify=createWorkCompletionVerifier(provider,{literalRefMode:true,originalUserRequest:largerRequest,audit:event=>audits.push(event)});
   assert.ok(Buffer.byteLength(JSON.stringify(item.receipt.value))<=16000);
   assert.equal(await verify(overflowChecks,[item],claim),false);

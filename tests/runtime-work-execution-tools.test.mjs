@@ -10,7 +10,7 @@ import {prepareLocalConnection} from '../dist/onboarding/connection.js';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {PackStore} from '../dist/packs/store.js';
 import {FamilyRuntime} from '../dist/packs/runtime.js';
-import {WorkExecutionTools} from '../dist/work/execution-tools.js';
+import {WorkExecutionTools,linksThatFit} from '../dist/work/execution-tools.js';
 import {BoundedWorkClientExecutor,WorkClientToolInputError,WORK_CLIENT_EXECUTION_INSTRUCTIONS} from '../dist/work/client-executor.js';
 import {initialWorkPlan} from '../dist/work/plan.js';
 import {initWorkExecution} from '../dist/work/activity.js';
@@ -48,7 +48,7 @@ test('runtime contract missing Pack policy and unregistered sources are rejected
  const empty=await fixture(t,{packs:{sources:[],targets:[],models:'off'}});
  assert.throws(()=>empty.toolkit.validate('runtime_pack_run',{recipe},'no-source'),error=>error instanceof WorkClientToolInputError&&error.code==='WORK_PACK_SOURCE_NOT_CONNECTED');
  assert.deepEqual(empty.calls,[]);assert.deepEqual(empty.store.officeRuns(empty.config.project.id,empty.work.id),[]);
- assert.match(absent.toolkit.catalog().find(tool=>tool.name==='office_web_search').description,/Never replace that query with Bing or DuckDuckGo/u);
+ assert.match(absent.toolkit.catalog().find(tool=>tool.name==='office_web_search').description,/provider_change_allowed=true search with bing or open a known official page/u);
 });
 test('runtime contract registered Pack file source is not treated as an ungranted user folder',async t=>{
  const source={id:'nyc311_file',kind:'file',path:join(tmpdir(),'registered-pack-source.json'),format:'json'};
@@ -354,7 +354,8 @@ for(const boundary of ['foreign_work','other_run','arbitrary_request','changed_r
 test('runtime fixture repeated failed quality read cannot dispatch or create an unbounded retry loop',async t=>{
  const x=await qualityReadFixture(t);let modelCalls=0,effects=0;
  const result=await new BoundedWorkClientExecutor({calls:[],async call(){modelCalls++;return {action:'tool',stage_id:'read-old',tool_name:'office_result_read',arguments_json:JSON.stringify({request_id:x.canonical}),summary:'Try the same rejected quality read.',completed_checks:[],wait_reason:null};}}).execute({work_id:x.work.id,run_id:x.toolkit.runId,prompt:x.work.prompt,completion_checks:x.spec.completion_checks,checkpoint:x.checkpoint,max_turns:4},{tools:x.toolkit.catalog(),checkpoint:x.save,validateTool:async(name,args,context)=>{await x.toolkit.validate(name,args,context.request_id);},executeTool:async()=>{effects++;throw Error('Rejected input must not dispatch.');}});
- assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_REPEATED_INVALID_TOOL_INPUT');assert.equal(modelCalls,2);assert.equal(effects,0);assert.equal(result.checkpoint.pending,null);assert.equal(x.calls.length,1);assert.equal(await readFile(x.source,'utf8'),x.original);
+ assert.equal(result.status,'retryable_failure');assert.equal(result.reason,'WORK_CLIENT_TURN_BUDGET_REACHED');assert.equal(modelCalls,4,'Bounded by the run attempt turn budget.');assert.equal(effects,0);
+ assert.ok(result.checkpoint.observations.every(item=>!item.invocation.dispatched||item.invocation.request_id===x.canonical),'No rejected read was dispatched.');assert.equal(result.checkpoint.pending,null);assert.equal(x.calls.length,1);assert.equal(await readFile(x.source,'utf8'),x.original);
 });
 
 test('runtime native registered file Pack receipts contain actual before/after hashes without exposing original contents and retain them after resume',async t=>{
@@ -506,4 +507,64 @@ test('runtime contract Work field preflight reports declared schema before dispa
  assert.throws(()=>x.toolkit.validate('runtime_pack_run',{recipe:watch},'typo'),error=>{assert.equal(error.code,'PACK_DECLARED_SOURCE_FIELD_MISSING');assert.match(error.detail,/first_released/u);assert.doesNotMatch(error.detail,/session_cookie/u);return true;});
  assert.equal(x.calls.length,0);assert.equal(x.store.officeRuns(x.config.project.id,x.work.id).length,0);
  assert.equal(x.toolkit.validate('runtime_pack_run',{recipe:{...watch,comparison_fields:['first_released']}},'corrected').recipe.comparison_fields[0],'first_released');
+});
+
+// Plan B1, effect type "registered folder write". The owner granted this folder with move permission; under
+// delegation the host-validated, reversible plan is applied without a click and is verified as a local write.
+test('B1: a move plan in a folder granted with move permission is applied under delegation, recorded with the policy version, and undoable',async t=>{
+  const {utimes}=await import('node:fs/promises'),{existsSync}=await import('node:fs');
+  const run=async(work,grantMove)=>{
+    const x=await fixture(t),raw=JSON.parse(await readFile(x.config.path,'utf8'));raw.work=work;await writeFile(x.config.path,JSON.stringify(raw));
+    const folder=join(dirname(dirname(x.config.path)),`Inbox-${randomUUID().slice(0,8)}`);await mkdir(folder);await writeFile(join(folder,'memo.txt'),'memo');await utimes(join(folder,'memo.txt'),new Date('2024-01-01'),new Date('2024-01-01'));
+    const files=x.store.localFileExplorer(x.config.project.id,dirname(x.config.dbPath)),access=files.request({work_id:x.work.id,purpose:'Sort the inbox',allow_move:true});
+    files.grantRequest({work_id:x.work.id,request_id:access.id,path:folder,allow_move:grantMove});
+    const root=files.roots()[0],scan=files.scan({root_id:root.id,work_id:x.work.id});
+    const api={files,async call(name,args){return files.call(name,args);}},toolkit=new WorkExecutionTools(x.store,x.config,api,x.work.id,randomUUID(),x.toolkit.spec,'Sort the inbox',()=>{},{async call(){throw Error('unused');}});
+    t.after(()=>toolkit.close());
+    const args={scan_id:scan.id,moves:[{file_id:scan.files.find(file=>file.path==='memo.txt').id,to:'sorted/memo.txt',reason:'Sort by type',evidence_ids:['path']}]};
+    const value=await toolkit.execute('runtime_files_propose',args,'move-1'),receipt=await toolkit.receipt('runtime_files_propose',value,'move-1');
+    return {x,files,folder,value,receipt,effect:toolkit.catalog().find(item=>item.name==='runtime_files_propose').effect};
+  };
+  const delegated=await run({model_data_approved:true,autonomy:'delegated'},true);
+  assert.equal(delegated.value.state,'done');assert.equal(delegated.value.applied_by,'delegation_policy');assert.match(delegated.value.policy_version,/^[a-f0-9]{12}$/u);
+  assert.equal(delegated.receipt.status,'succeeded');assert.equal(delegated.effect,'local_write','The applied plan is verified as a local write, not as a draft.');
+  assert.ok(existsSync(join(delegated.folder,'sorted','memo.txt'))&&!existsSync(join(delegated.folder,'memo.txt')));
+  delegated.files.apply({plan_id:delegated.value.id},true);assert.ok(existsSync(join(delegated.folder,'memo.txt')),'The owner can undo it.');
+  for(const [label,work,grantMove] of [['per-run install',{model_data_approved:true,autonomy:'per_run'},true],['policy switched off',{model_data_approved:true,autonomy:'delegated',delegation:{registered_folder_moves:false}},true],['folder granted read-only',{model_data_approved:true,autonomy:'delegated'},false]]){
+    const kept=await run(work,grantMove).catch(error=>({error}));
+    if(kept.error){assert.equal(grantMove,false,label);continue;}
+    assert.equal(kept.value.state,'preview',label);assert.equal(kept.receipt.status,'waiting_approval',label);assert.ok(existsSync(join(kept.folder,'memo.txt')),label);
+  }
+});
+
+test('B5: under delegation a public CSV read is remembered as a source; per-run installs and a switched-off policy remember nothing',async t=>{
+  const csv='time,mag,place\n2026-10-01T01:00:00Z,4.6,Offshore\n2026-10-01T02:00:00Z,5.1,Inland\n',original=globalThis.fetch;
+  globalThis.fetch=async()=>{const response=new Response(csv,{status:200,headers:{'content-type':'text/csv'}});Object.defineProperty(response,'url',{value:'https://data.example.org/feeds/quakes.csv'});return response;};
+  t.after(()=>{globalThis.fetch=original;});
+  const read=async work=>{
+    const x=await fixture(t,{prompt:'Collect the earthquakes feed'}),raw=JSON.parse(await readFile(x.config.path,'utf8'));raw.environment='production';delete raw.fixture_url;raw.work=work;await writeFile(x.config.path,JSON.stringify(raw));
+    const value=await x.toolkit.execute('office_browser_read',{url:'https://data.example.org/feeds/quakes.csv'},'read-1');
+    return {x,value,config:x.config,activity:x.store.hermesState.prepare("SELECT summary FROM office_activity WHERE kind='source.remembered'").all()};
+  };
+  const delegated=await read({model_data_approved:true,autonomy:'delegated'});
+  assert.match(delegated.value.table.remembered_source_id,/^auto_data_example_org_feeds_quakes_/u);assert.deepEqual(delegated.value.table.columns,['time','mag','place']);assert.equal(delegated.value.table.rows,2);
+  assert.equal(delegated.value.body,undefined,'The complete body is not copied into the receipt.');
+  assert.equal(delegated.config.packs.sources.at(-1).url,'https://data.example.org/feeds/quakes.csv');assert.equal(delegated.activity.length,1);
+  const savedCheck=async(x,text)=>(await x.toolkit.execute('office_result_draft',{format:'csv',text,label:'quakes'},`save-${text.length}`)).source_row_check;
+  const good=await savedCheck(delegated.x,'시각,규모,위치\n2026-10-01T01:00:00Z,4.6,Offshore\n2026-10-01T02:00:00Z,5.1,Inland\n');
+  assert.deepEqual([good.source,good.source_rows,good.saved_rows,good.saved_rows_found_in_source,good.saved_rows_not_found],['https://data.example.org/feeds/quakes.csv',2,2,2,undefined]);
+  const invented=await savedCheck(delegated.x,'time,mag,place\n2026-10-01T01:00:00Z,4.6,Offshore\n2026-10-01T03:00:00Z,7.7,Nowhere\n');
+  assert.deepEqual([invented.saved_rows_found_in_source,invented.saved_rows_not_found],[1,[2]],'A row that is not in the source is reported, not hidden.');
+  for(const work of [{model_data_approved:true,autonomy:'per_run'},{model_data_approved:true,autonomy:'delegated',delegation:{remember_public_sources:false}}]){
+    const kept=await read(work);assert.equal(kept.value.table.remembered_source_id,undefined);assert.equal(kept.value.table.rows,2,'The table is still recognised for the row comparison.');assert.equal(kept.config.packs,null);assert.equal(kept.activity.length,0);
+  }
+});
+
+// Live: a community post kept its 100 menu links and lost the link to the original it cites.
+test('a page receipt keeps its whole text and, of its links, the ones that leave the site first',()=>{
+  const menu=Array.from({length:150},(_,i)=>({text:`Menu ${i}`,url:`https://forum.example.org/c/category-${i}`})),originals=[{text:'Official announcement',url:'https://vendor.example.com/blog/release'},{text:'Paper',url:'https://arxiv.org/abs/2609.40181'}];
+  const observed={url:'https://forum.example.org/t/post/1',title:'Post',text:'본문 '.repeat(800)},kept=linksThatFit(observed,[...menu.slice(0,100),...originals,...menu.slice(100)]);
+  assert.ok(kept.length<152,'The list is shortened.');assert.ok(originals.every(link=>kept.includes(link)),'The links to the originals stay.');
+  assert.ok(Buffer.byteLength(JSON.stringify({...observed,links:kept}))<=14500);assert.deepEqual(kept.slice(0,2),originals,'In a long list the links that leave the site come first.');
+  assert.equal(linksThatFit(observed,menu.slice(0,5)).length,5,'A short list is untouched.');
 });

@@ -24,7 +24,7 @@ test('runtime unit unsupported app response schema is actionable in Korean and E
     for(const code of ['CLIENT_SCHEMA_INVALID','CLIENT_OUTPUT_SCHEMA_UNSUPPORTED']){
       x.reason=code;x.data={definition_status:'needs_model',reason:code};
       const cause=vm.runInNewContext('executionReason(reason)',x),intake=vm.runInNewContext('admissionMessage(data)',x);
-      assert.equal(intake,cause);assert.match(cause,language==='ko'?/응답 형식.*앱 수정/u:/response schema.*app is fixed/u);
+      assert.equal(intake,cause);assert.match(cause,language==='ko'?/요청 형식.*앱을 업데이트/u:/unsupported format.*update the app/u);
       assert.doesNotMatch(cause,/CLIENT_|로그인 필요|login again|quota exhausted/u);
       if(language==='en')assert.doesNotMatch(cause,/[가-힣]/u);
     }
@@ -47,16 +47,16 @@ test('runtime unit empty steps distinguish queued, live model work, unobserved a
   for(const language of ['ko','en']){
     const x=context(language),cases=[
       [{supervisor:{state:'queued',live:false}},/접수|queued/u],
-      [{supervisor:{state:'running',live:true},activity:[{kind:'model.started'}]},/AI.*판단|AI is choosing/u],
+      [{supervisor:{state:'running',live:true},activity:[{kind:'model.started'}]},/AI.*정하는 중|AI is choosing/u],
       [{supervisor:{state:'running',live:true},activity:[{kind:'model.result'}]},/실행 중|Execution is active/u],
       [{supervisor:{state:'running',live:false},execution:{live:false}},/관측되지|not yet been observed/u],
-      [{supervisor:{state:'paused',live:false},activity:[{kind:'model.started'}]},/중단 사유|interruption reason/u],
-      [{supervisor:{state:'retry_wait',live:false}},/중단 사유|interruption reason/u],
+      [{supervisor:{state:'paused',live:false},activity:[{kind:'model.started'}]},/멈춘 이유|why it stopped/u],
+      [{supervisor:{state:'retry_wait',live:false}},/멈춘 이유|why it stopped/u],
       [{display_status:'defining',execution:{live:true}},/업무 분석 중|Work analysis is active/u]
     ];
-    for(const [data,expected] of cases){x.data=data;const text=vm.runInNewContext('window.officeText(emptyStageMessage(data))',x);assert.match(text,expected);assert.doesNotMatch(text,/위의 업무 시작|Select Start work/u);if(language==='en')assert.doesNotMatch(text,/[가-힣]/u);}
-    x.data={display_status:'ready',execution_action:{can_execute:true}};assert.match(vm.runInNewContext('window.officeText(emptyStageMessage(data))',x),/위의 업무 시작|Select Start work/u);
-    x.data.runtime_configuration={state:'failed'};assert.doesNotMatch(vm.runInNewContext('window.officeText(emptyStageMessage(data))',x),/위의 업무 시작|Select Start work/u);
+    for(const [data,expected] of cases){x.data=data;const text=vm.runInNewContext('window.officeText(emptyStageMessage(data))',x);assert.match(text,expected);assert.doesNotMatch(text,/업무 시작을 누르면|Press Start Work/u);if(language==='en')assert.doesNotMatch(text,/[가-힣]/u);}
+    x.data={display_status:'ready',execution_action:{can_execute:true}};assert.match(vm.runInNewContext('window.officeText(emptyStageMessage(data))',x),/업무 시작을 누르면|Press Start Work/u);
+    x.data.runtime_configuration={state:'failed'};assert.doesNotMatch(vm.runInNewContext('window.officeText(emptyStageMessage(data))',x),/업무 시작을 누르면|Press Start Work/u);
   }
   assert.match(script,/emptyStageMessage\(d\)/u,'the actual empty-stage markup uses the state-aware helper');
 });

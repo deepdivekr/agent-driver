@@ -4,7 +4,9 @@ import {dirname} from 'node:path';
 import {randomBytes} from 'node:crypto';
 import {createServer,type IncomingMessage,type ServerResponse} from 'node:http';
 import {PackStore,type RuntimeActivity} from '../packs/store.js';
-import {type HostConfig} from '../interface/config.js';
+import {workAutonomy,workDelegation,type HostConfig} from '../interface/config.js';
+import {listProcedures,setProcedureDisabled} from '../work/procedures.js';
+import {applyAutoSources,readAutoSources,forgetAutoSource} from '../packs/auto-sources.js';
 import {readSwarmDashboard} from '../swarm/dashboard.js';
 import {BrowserConnections} from './browser-connections.js';
 import {ControlSettings} from './control-settings.js';
@@ -127,7 +129,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const migrations=new HermesMigrationRuntime(store,config);
   const remoteOffice=new RemoteOffice(store,config,options.remote);
   const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>store.recordClientHandoff(config.project.id,event));
-  const deliverySettings=WorkDeliverySettings.fromConfig(config),results=new WorkResults(store,[],deliverySettings);
+  const deliverySettings=WorkDeliverySettings.fromConfig(config),results=new WorkResults(store,[],deliverySettings,()=>workDelegation(config).notify);
   const deliveryJobs=new Map<string,Promise<void>>();
   const deliverOutput=(id:string)=>{if(stopped||reloading||deliveryJobs.has(id))return;const job=results.dispatchPending(config.project.id,id,()=>runtimeReady()).then(()=>undefined).catch(()=>{if(!stopped)workActivity(store,config.project.id,id,'delivery.blocked','Result delivery requires checking its stored connection or receipt.',{stage_id:'delivery',status:'blocked',reason:'RESULT_DELIVERY_UNAVAILABLE'});}).finally(()=>deliveryJobs.delete(id));deliveryJobs.set(id,job);};
   const workRuntime=new WorkRuntime(store,config,workModel,undefined,(id,input,created)=>{if(created)results.setSelection(config.project.id,id,{revision:0,target_ids:input.delivery_target_ids??deliverySettings.publicState().default_target_ids});}),imports=new WorkImportRuntime(store,config,workModel),codingRuntime=new CodingRuntime(store,config,workModel,options.coding),codingDialog=new CodingDialogRuntime(store,config,workModel,options.coding);
@@ -147,7 +149,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     const previous=supervisorStatus(store,config.project.id,work.work_id,config);
     if(previous)return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,accepted:false,deduplicated:true,state:previous.state,run_id:previous.run_id,reason:previous.reason}};
     if(work.definition_status!=='ready'||work.paused){const reason=work.reason??(work.paused?'WORK_PAUSED':work.definition_status==='awaiting_details'?'WORK_DETAILS_REQUIRED':work.definition_status==='defining'?'WORK_DEFINITION_IN_PROGRESS':'WORK_DEFINITION_REQUIRED');workActivity(store,config.project.id,work.work_id,'dispatch.waiting',`Work start is waiting: ${reason}`,{stage_id:'admission',status:work.definition_status,reason});return {...work,admission:{requested:true,accepted:false,deduplicated:false,state:work.definition_status,reason}};}
-    try{const route=workDispatchOptions(store,config,work.work_id),admission=dispatcher.start({work_id:work.work_id,revision:work.revision,executor:route.executor??'client',cost_acknowledged:intent.cost_acknowledged,current_run_only:true,...(intent.timezone?{timezone:intent.timezone}:{})});return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,...admission}};}
+    try{const route=workDispatchOptions(store,config,work.work_id),admission=dispatcher.start({work_id:work.work_id,revision:work.revision,executor:route.executor??'client',cost_acknowledged:intent.cost_acknowledged,current_run_only:workAutonomy(config)!=='delegated',...(intent.timezone?{timezone:intent.timezone}:{})});return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,...admission}};}
     catch(error){const reason=error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'WORK_EXECUTION_REQUEST_FAILED';return {...workRuntime.status({work_id:work.work_id}),admission:{requested:true,accepted:false,deduplicated:false,state:'blocked',reason}};}
   };
   const server=createServer(async (request:IncomingMessage,response:ServerResponse)=>{
@@ -161,6 +163,20 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     try{
     if(await serveUiAsset(request,response,suffix))return;
     if(rejectStopped())return;
+    if(suffix==='learned/status'){
+      if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
+      applyAutoSources(config);
+      reply(response,200,JSON.stringify({procedures:listProcedures(store,config.project.id),sources:readAutoSources(dirname(config.dbPath),config.environment==='fixture').map(entry=>({id:entry.source.id,url:entry.source.kind==='file'?'':entry.source.url,format:entry.source.kind==='browser'?'':entry.source.format,columns:entry.columns,observed_at:entry.observed_at}))}),'application/json; charset=utf-8');return;
+    }
+    if(suffix==='learned/action'){
+      if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
+      if(request.headers.origin!==`http://${host}`||request.headers['x-agent-driver']!=='human-office'||request.headers['sec-fetch-site']==='cross-site'||!String(request.headers['content-type']??'').startsWith('application/json')){reply(response,403,'forbidden');return;}
+      try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>4_000)throw Error('LEARNED_REQUEST_TOO_LARGE');}if(rejectStopped())return;
+        const input=z.discriminatedUnion('kind',[z.object({kind:z.literal('procedure'),id:z.string().regex(/^[a-f0-9]{32}$/u),disabled:z.boolean()}).strict(),z.object({kind:z.literal('source'),id:z.string().regex(/^auto_[a-z0-9_]{1,80}$/u)}).strict()]).parse(JSON.parse(body));
+        const changed=input.kind==='procedure'?setProcedureDisabled(store,config.project.id,input.id,input.disabled):forgetAutoSource(config,input.id);
+        if(!changed)throw Error('LEARNED_ITEM_NOT_FOUND');reply(response,200,JSON.stringify({changed:true}),'application/json; charset=utf-8');
+      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error&&/^[A-Z][A-Z0-9_]{1,100}$/u.test(error.message)?error.message:'LEARNED_REQUEST_INVALID'}),'application/json; charset=utf-8');}return;
+    }
     if(suffix==='delivery/status'||suffix==='work/delivery'&&request.method==='GET'){
       if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
       try{const value=suffix==='delivery/status'?deliverySettings.publicState():results.selection(config.project.id,z.string().uuid().parse(url.searchParams.get('work_id')));reply(response,200,JSON.stringify(value),'application/json; charset=utf-8');}
@@ -321,7 +337,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         if(input.delivery_target_ids?.some(id=>id!=='app'&&!deliverySettings.target(id)))throw Error('DELIVERY_TARGET_NOT_CONFIGURED');
         if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
         const intent={execute,cost_acknowledged,...(timezone?{timezone}:{})};
-        const recordStart=(work:ReturnType<WorkRuntime['status']>)=>{if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The user requested this Work run using the configured AI allowance. Future recurring runs and external changes remain separately gated.',{stage_id:'admission',status:'requested'});};
+        const recordStart=(work:ReturnType<WorkRuntime['status']>)=>{if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The owner requested this Work run using the configured AI allowance. External submissions remain separately gated.',{stage_id:'admission',status:'requested'});};
         if(request.headers.accept==='application/x-ndjson'){
           response.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8',...headers()});const send=(event:unknown)=>{if(!response.destroyed)response.write(JSON.stringify(event)+'\n');};
           try{const work=await workRuntime.start(input,registered=>{recordStart(registered);send({type:'registered',work:registered});});if(stopped||reloading||options.reloadStatus?.().state==='reloading')throw Error(stopped?'CONTROL_CENTER_CLOSING':'CONTROL_CENTER_RELOADING');send({type:'result',result:finishIntake(work,intent)});}
@@ -350,7 +366,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         if(execute&&!cost_acknowledged)throw Error('WORK_MODEL_USAGE_CONSENT_REQUIRED');
         if(Object.values(input.answers).some(value=>/\b(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|apikey_[A-Za-z0-9_-]{16,})/u.test(value)))throw Error('CREDENTIAL_LIKE_INPUT');
         const work=await workRuntime.answer(input);if(rejectStopped())return;
-        if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The user requested this Work run using the configured AI allowance. Future recurring runs and external changes remain separately gated.',{stage_id:'admission',status:'requested'});
+        if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The owner requested this Work run using the configured AI allowance. External submissions remain separately gated.',{stage_id:'admission',status:'requested'});
         const result=finishIntake(work,{execute,cost_acknowledged,...(timezone?{timezone}:{})});
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
       }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_ANSWER_FAILED'}),'application/json; charset=utf-8');}return;

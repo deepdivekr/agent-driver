@@ -151,10 +151,11 @@ for(const scheduled of [false,true])test(`${scheduled?'scheduled':'manual'} cust
   if(scheduled){advance(125_000);await delay(20);assert.equal(slots(x).length,1);assert.equal(x.api.store.intakeWorks(x.config.project.id).length,2);}
 });
 
-test('a failed scheduled decision holds its slot for explicit retry and resumes the same supervisor before another cycle',async t=>{
+test('an unusable scheduled decision is retried without effect, holds its slot, and resumes the same supervisor before another cycle',async t=>{
   const x=await fixture(t),advance=await configure(t,x);x.model.invalidDecision=true;advance(65_000);
-  const slot=await until(()=>slots(x)[0]),child=slot.execution_work_id,failed=await terminal(x)(child);
-  assert.equal(failed.state,'failed');assert.equal(failed.reason,'WORK_CLIENT_DECISION_CORRECTION_FAILED');
+  const slot=await until(()=>slots(x)[0]),child=slot.execution_work_id;
+  const failed=await until(()=>{const status=supervisorStatus(x.api.store,x.config.project.id,child);return status?.state==='retry_wait'&&status.reason==='WORK_CLIENT_DECISION_OUTPUT_UNUSABLE'?status:null;});
+  assert.equal(failed.state,'retry_wait','Unusable model output is retried later, not a terminal Work failure.');
   assert.deepEqual(x.api.store.officeRuns(x.config.project.id,child),[]);
   advance(125_000);await delay(20);assert.equal(slots(x).length,1);assert.equal(slots(x)[0].state,'started');
   x.model.invalidDecision=false;

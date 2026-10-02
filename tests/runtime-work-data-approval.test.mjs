@@ -17,7 +17,7 @@ test('fresh onboarding config asks for AI data consent, then defines Work after 
   const first=await api.call('runtime_work_start',{request_id:'news',prompt:'이번 주 AI 에이전트 뉴스 5건 표로 정리해줘'});
   assert.equal(first.status,'needs_model');assert.equal(first.reason,'MODEL_DATA_APPROVAL_REQUIRED');assert.equal(calls,0);
   const work=await setWorkModelDataApproval(paths.runtimeConfig,true,new Date('2026-09-24T00:00:00Z'));
-  assert.deepEqual(work,{model_data_approved:true,approved_at:'2026-09-24T00:00:00.000Z'});
+  assert.deepEqual(work,{model_data_approved:true,approved_at:'2026-09-24T00:00:00.000Z',autonomy:'delegated'},'A new approval also records the standing delegation (B1).');
   const saved=JSON.parse(await readFile(paths.runtimeConfig,'utf8'));
   assert.equal(saved.project_id,'agent-driver-local');assert.deepEqual(saved.work,work);
   assert.equal(loadHostConfig(paths.runtimeConfig).fingerprint,config.fingerprint,'consent must not invalidate bound runs');

@@ -100,16 +100,50 @@ For a specific recurring task, save an independently verified Work as a named
 custom Pack version. Each new cycle reuses its procedure and verifies fresh
 output. [Custom Pack operation](docs/custom-pack-operation.md)
 
+### Try these first
+
+These seven requests are the public acceptance set. On 2026-10-01 they all completed without a
+click in between, with Codex as the subscription model, both with the background browser alone and
+with Aside connected ([record](docs/work-completion-acceptance-set.md)). Each took 1.5–3 minutes.
+
+- `Find the current Node.js LTS version and its release date on the official site and save a one-line summary`
+- `Save earthquakes of magnitude 4.5+ from the USGS public feed for the past 24 hours as CSV with time, magnitude and place`
+- `Check the latest post on the nodejs.org blog once and keep watching for new posts`
+- `Fill the form at httpbin.org/forms/post with name Kim and size Medium as a draft; do not submit`
+- `Find the latest stable Python and Node.js versions on their official sites and save them as JSON`
+
+How it behaves by default:
+
+- **Small MCP surface.** `agent-office mcp` lists 10 Work tools (about 2k tokens) instead of all 114 (about 29k).
+  Every other tool keeps its name and stays callable; `agent-office mcp --all-tools` lists them all.
+- **Works right after install.** `agent-office connect` records the default non-interfering mode, so MCP starts
+  without another click. The first Work asks once for permission to send its text to your AI.
+
+- **Ask first.** The Work form asks the conditions that matter before it starts. Uncheck it for a quick run.
+- **Runs to the result.** After you allow AI use once, a Work you start runs to its result and keeps its own
+  schedule (`work.autonomy: delegated`). Submissions, payments and messages to other people still ask you.
+- **Browser.** A background browser reads first and never takes over your screen. Official pages are opened
+  directly; public search uses the provider that answers a background browser. If a site refuses it and you
+  connected Aside, the same read moves there once.
+- **Nothing is submitted by a draft.** A form draft is filled in a private page that can only read; it is closed afterwards.
+- **Gets faster with use.** A Work that passed verification leaves its procedure behind; a similar request reuses
+  it and repeats its reads without model turns. A public table that was read (CSV, JSON, GeoJSON) is remembered as a
+  source, so the next collection is checked row by row in code. Both are listed on the first screen, where you can
+  turn a procedure off or forget a source. Each new Work is still verified on its own.
+- **What the delegation covers.** `work.delegation` in the host file: `daily_scheduled_runs` (50),
+  `registered_folder_moves` (on: a reversible move plan inside a folder you granted for moving is applied without
+  a click) and `remember_public_sources` (on).
+
 ### From request to result
 
 The detail page groups source visits and tool activity under outcome-based work stages. A finished tool call is not a verified result.
 
-1. **Start work** with one request. The detail opens immediately while AI defines the work and starts its current run using your configured AI allowance.
+1. **Start work** with one request. The detail opens immediately while AI analyzes the work, asks what matters, and runs it using your selected AI allowance.
 2. **Follow** the readable execution timeline: the chosen Pack, observed sources, actual workers, and any wait or handoff reason.
 3. **Adjust** a stage by clicking it. Its dialog offers pause, new instructions, and resume at the supported execution boundary.
 4. **Read the result** in the app, with sources and downloads. A saved result is not marked complete until its completion checks pass.
 
-Missing connections or required choices appear in the detail. Future schedules, external changes, and original-runtime controls keep their own approval boundaries. MCP registration and importing an existing bot do not start a duplicate run.
+Missing connections or required choices appear in the detail. External changes and original-runtime controls keep their own approval boundaries. MCP registration and importing an existing bot do not start a duplicate run.
 
 New Work returns results in the app by default. Select multiple saved messenger destinations to receive verified output there too. Click the final delivery stage to change unsent output and future deliveries. [Delivery setup and limits](docs/work-delivery.md)
 

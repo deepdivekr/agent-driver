@@ -74,7 +74,7 @@ test('runtime fixture Work UI: delayed consent appears, blocked Jev stays disabl
   await x.page.waitForFunction(async ({base,id})=>(await (await fetch(base+'work/detail?id='+encodeURIComponent(id))).json()).supervisor?.state==='waiting_model',{base:x.server.url,id:workId});
   assert.equal((await read()).paused,false);
   assert.equal((await read()).supervisor.state,'waiting_model');
-  assert.equal((await read()).supervisor.current_run_only,true);
+  assert.equal((await read()).supervisor.current_run_only,false,'The UI approval delegates (B1): the run is not limited to this one execution.');
   await x.page.locator('#stage-close').click();
   await x.page.locator('#back').click();
   await x.page.locator('[data-layout="list"]').click();
@@ -118,7 +118,7 @@ test('runtime fixture settings UI locks startup controls, offers retry after fai
   assert.equal(await help.evaluate(node=>node.open),false);
   await help.locator('summary').click();
   assert.equal(await help.evaluate(node=>node.open),true);
-  assert.ok((await help.innerText()).includes('기본 전용 브라우저는 내 화면을 빼앗지 않습니다.'));
+  assert.ok((await help.innerText()).includes('기본 브라우저는 백그라운드에서 동작해 화면을 방해하지 않습니다.'));
   await help.locator('summary').click();
   assert.equal(await help.locator('p').first().isHidden(),true);
 });

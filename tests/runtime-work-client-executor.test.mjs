@@ -6,7 +6,7 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import {DatabaseSync} from 'node:sqlite';
 import {z} from 'zod';
-import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS} from '../dist/work/client-executor.js';
+import {BoundedWorkClientExecutor,WorkClientToolInputError,workClientDecisionSchema,WORK_CLIENT_EXECUTION_INSTRUCTIONS,executorView,runBudget} from '../dist/work/client-executor.js';
 import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
 import {SubscriptionAwareStructuredModel} from '../dist/integrations/subscription-auth.js';
 import {saveModelSettings,scopedModelSettingsPath} from '../dist/onboarding/model-settings.js';
@@ -18,13 +18,14 @@ const writeTool={name:'send_message',description:'Send one separately approved m
 const choose=(name='browser_read',args={url:'https://example.test/news'})=>({action:'tool',stage_id:'collect',tool_name:name,arguments_json:JSON.stringify(args),summary:'Read the delegated source.',completed_checks:[],wait_reason:null});
 const done=(ids=['source-1'])=>({action:'complete',stage_id:'report',tool_name:null,arguments_json:null,summary:'Observed source title: Physical AI.',completed_checks:[{id:'source',evidence_ids:ids}],wait_reason:null});
 const receipt={status:'succeeded',value:{title:'Physical AI'},evidence_ids:['source-1'],effect_state:'none',retry_safe:true};
+const waitConfiguration={action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'Wait for configuration.',completed_checks:[],wait_reason:'configuration'};
 function model(queue){return {calls:[],inputs:[],async call(purpose,instructions,input){this.inputs.push(structuredClone(input));const next=queue.shift();if(next instanceof Error)throw next;this.calls.push({purpose,provider:'fixture',model:'fixture-decision',elapsed_ms:1,input_sha256:'a'.repeat(64),status:'accepted',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved'});return next;}};}
 function hooks(overrides={}){const saved=[],events=[],executions=[];return {saved,events,executions,tools:[readTool],async checkpoint(value){saved.push(structuredClone(value));},async progress(event){events.push(event);},async executeTool(name,args,context){executions.push({name,args,context});return receipt;},async verifyCompletion(_checks,observations){return observations.at(-1).receipt.value.title==='Physical AI';},...overrides};}
 const selection={mode:'subscription',client:'codex',client_models:{codex:'saved-codex',claude:'saved-claude',opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'saved-api',api_base_url:'',reasoning:'low',jev:'off'};
 async function fixture(t){const root=await mkdtemp(join(tmpdir(),'office-client-'));t.after(()=>rm(root,{recursive:true,force:true}));return join(root,'models.json');}
 
 test('bounded client decisions execute real host callbacks and need observed evidence plus host verification',async()=>{
-  const provider=model([choose(),done()]),originalCall=provider.call.bind(provider);provider.call=async(...args)=>{assert.match(args[1],/action=complete proposes independent host verification/u);assert.match(args[1],/Actual requested result receipts and readback must exist/u);return originalCall(...args);};
+  const provider=model([choose(),done()]),originalCall=provider.call.bind(provider);provider.call=async(...args)=>{assert.match(args[1],/Propose complete once the requested result receipts and readbacks exist/u);assert.match(args[1],/The host then verifies independently and sets completion itself/u);return originalCall(...args);};
   const host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
   assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);assert.equal(host.executions.length,1);
   assert.deepEqual(provider.inputs[0].completion_gate,{phase:'pre_verification',complete_action:'proposal_for_independent_host_verification',final_flag:'set_by_host_after_verification',closed_trace:'generated_by_host_at_complete_cutpoint',evidence_role:'control_metadata_not_result_evidence',business_receipts:'required_before_complete_proposal'});
@@ -53,22 +54,27 @@ test('completion field correction preserves already observed receipts and still 
   assert.equal(result.status,'succeeded');assert.equal(host.executions.length,1);assert.equal(provider.inputs.length,3);assert.equal(provider.inputs[2].original_input.checkpoint.observations.length,1);assert.deepEqual(provider.inputs[2].original_input.checkpoint.observations[0].receipt,receipt);assert.equal(result.checkpoint.observations.length,1);assert.equal(result.completion_verified,true);
 });
 
-test('output correction never turns unknown completion evidence into proof or retries a valid but unsupported completion',async()=>{
-  const provider=model([choose(),{...done(['invented']),tool_name:'browser_read'},done(['invented'])]);let verifications=0;const host=hooks({async verifyCompletion(){verifications++;return true;}}),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
-  assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING');assert.equal(result.completion_verified,false);assert.equal(host.executions.length,1);assert.equal(provider.inputs.length,3);assert.equal(verifications,0);
-  const valid=model([done(['invented'])]),empty=hooks(),unsupported=await new BoundedWorkClientExecutor(valid).execute(request,empty);assert.equal(unsupported.status,'failed');assert.equal(unsupported.reason,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING');assert.equal(valid.inputs.length,1);assert.equal(empty.executions.length,0);
+test('output correction never turns unknown completion evidence into proof: an invented ID only points the verifier at observed receipts',async()=>{
+  const provider=model([choose(),{...done(['invented']),tool_name:'browser_read'},done(['invented'])]),claims=[];const host=hooks({async verifyCompletion(_checks,_observations,claim){claims.push(claim);return false;}}),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'awaiting_review');assert.equal(result.completion_verified,false);assert.equal(host.executions.length,1);assert.equal(provider.inputs.length,3);
+  assert.equal(claims.length,1);assert.deepEqual(claims[0].completed_checks,[{id:'source',evidence_ids:['source-1']}],'The invented ID is never passed on as evidence.');
+  const valid=model([done(['invented']),waitConfiguration]),empty=hooks(),unsupported=await new BoundedWorkClientExecutor(valid).execute(request,empty);
+  assert.equal(unsupported.status,'paused');assert.equal(unsupported.completion_verified,false);assert.equal(empty.executions.length,0);
+  assert.equal(unsupported.checkpoint.observations[0].receipt.value.error,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING','Completion without any receipt is refused before verification.');
 });
 
-test('a second invalid decision output fails without dispatch and a later invalid output cannot reset the single correction budget',async()=>{
-  const bad={...choose(),wait_reason:'approval'},provider=model([bad,bad,choose()]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
-  assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_DECISION_CORRECTION_FAILED');assert.equal(provider.inputs.length,2);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.pending,null);assert.equal(result.checkpoint.observations.length,0);
-  const later=model([bad,choose(),{...done(),tool_name:'browser_read'},done()]),preserved=hooks(),failed=await new BoundedWorkClientExecutor(later).execute(request,preserved);assert.equal(failed.status,'failed');assert.equal(failed.reason,'WORK_CLIENT_DECISION_CORRECTION_BUDGET_EXCEEDED');assert.equal(later.inputs.length,3);assert.equal(later.inputs.filter(input=>input.validation_error).length,1);assert.equal(preserved.executions.length,1);assert.equal(failed.checkpoint.observations.length,1);assert.deepEqual(failed.checkpoint.observations[0].receipt,receipt);
+test('invalid decision outputs never dispatch, a failed correction continues with a fresh decision, and the correction budget is bounded',async()=>{
+  const bad={...choose(),wait_reason:'approval'},provider=model([bad,bad,choose(),done()]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'succeeded');assert.equal(provider.inputs.length,4);assert.equal(host.executions.length,1,'Only the valid decision dispatched.');assert.equal(result.checkpoint.observations.length,1);
+  const endless=model(Array.from({length:12},()=>bad)),none=hooks(),exhausted=await new BoundedWorkClientExecutor(endless).execute(request,none);
+  assert.equal(exhausted.status,'retryable_failure');assert.equal(exhausted.reason,'WORK_CLIENT_DECISION_OUTPUT_UNUSABLE');assert.equal(none.executions.length,0);assert.equal(exhausted.checkpoint.pending,null);assert.equal(exhausted.checkpoint.observations.length,0);
+  assert.equal(endless.inputs.filter(input=>input.validation_error).length,3,'Three corrections per run attempt.');
 });
 
 test('decision correction records bounded safe schema paths and output digests without leaking model text or dispatching tools',async()=>{
   const secret='sk-proj-abcdefghijklmnopqrstu',bad={...choose(),wait_reason:'approval',[secret]:'private model text'};
-  const provider=model([bad,bad]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
-  assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_DECISION_CORRECTION_FAILED');assert.equal(host.executions.length,0);
+  const provider=model([bad,bad,waitConfiguration]),host=hooks(),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'paused');assert.equal(host.executions.length,0);
   const events=host.events.filter(event=>event.validation),diagnostics=events.map(event=>event.validation);
   assert.deepEqual(diagnostics.map(item=>item.code),['WORK_CLIENT_DECISION_OUTPUT_INVALID','WORK_CLIENT_DECISION_CORRECTION_FAILED']);
   assert.deepEqual(events.map(event=>event.reason),diagnostics.map(item=>item.code));
@@ -99,8 +105,10 @@ test('format correction does not reset the operation budget or admit another mod
 });
 
 test('a model cannot mark Work complete with invented receipt IDs or without using a host capability',async()=>{
-  const host=hooks();assert.equal((await new BoundedWorkClientExecutor(model([done()])).execute(request,host)).status,'failed');assert.equal(host.executions.length,0);
-  const other=hooks(),result=await new BoundedWorkClientExecutor(model([choose(),done(['invented'])])).execute(request,other);assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING');
+  const host=hooks(),refused=await new BoundedWorkClientExecutor(model([done(),waitConfiguration])).execute(request,host);
+  assert.equal(refused.status,'paused');assert.equal(refused.completion_verified,false);assert.equal(host.executions.length,0);assert.equal(refused.checkpoint.observations[0].receipt.value.error,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING');
+  const claims=[],other=hooks({async verifyCompletion(_checks,observations,claim){claims.push(claim);return observations.at(-1).receipt.value.title==='Physical AI';}}),result=await new BoundedWorkClientExecutor(model([choose(),done(['invented'])])).execute(request,other);
+  assert.equal(result.status,'succeeded','Only the independent verifier, judging the observed receipt, completes the Work.');assert.deepEqual(claims[0].completed_checks[0].evidence_ids,['source-1']);
 });
 
 test('an observed result without a verifier is awaiting review, not verified success',async()=>{
@@ -126,7 +134,7 @@ for(const code of ['PACK_LOCAL_RECORD_IDENTITY_NOT_UNIQUE','PACK_LOCAL_RECORD_RE
   assert.equal(result.status,'retryable_failure');assert.equal(result.reason,code);
   assert.equal(result.checkpoint.pending,null);assert.equal(result.checkpoint.observations.length,1);
   const observed=result.checkpoint.observations[0];assert.equal(observed.invocation.dispatched,true);assert.equal(observed.receipt.value.status,'read_failed');assert.equal(observed.receipt.value.error,code);assert.equal(observed.receipt.value.result_observation,'error_returned');assert.equal(observed.receipt.effect_state,'none');assert.deepEqual(observed.receipt.evidence_ids,[]);
-  assert.equal(host.saved.at(-1).pending,null);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/historical runtime_pack_local_record_inspect read_interrupted.*newly validated read-only inspect/u);
+  assert.equal(host.saved.at(-1).pending,null);
 });
 test('a saved read retry is preflighted without falsifying its prior dispatched history, then corrected with fresh evidence',async()=>{
   const initial=await interruptedRead(),provider=model([choose('browser_read',{url:'https://example.test/verified'}),done()]),host=hooks({validateTool(_name,args){if(args.url==='https://example.test/news')throw new WorkClientToolInputError('WORK_RESULT_QUALITY_NOT_VERIFIED','Correct the known failed source check before trying to read that output.');}});
@@ -136,9 +144,11 @@ test('a saved read retry is preflighted without falsifying its prior dispatched 
   assert.ok(host.events.some(event=>event.kind==='tool.result'&&event.summary.includes('saved read not retried')));assert.equal(provider.inputs[0].checkpoint.observations[0].invocation.dispatched,true);
 });
 test('a rejected saved read cannot be retried blindly by the next model turn',async()=>{
-  const initial=await interruptedRead(),provider=model([choose(),choose('browser_read',{url:'https://example.test/unused'})]),host=hooks({validateTool(){throw new WorkClientToolInputError('WORK_RESULT_QUALITY_NOT_VERIFIED','Use a newly verified result instead.');}});
+  const initial=await interruptedRead(),provider=model([choose(),choose('browser_read',{url:'https://example.test/unused'}),waitConfiguration]),host=hooks({validateTool(){throw new WorkClientToolInputError('WORK_RESULT_QUALITY_NOT_VERIFIED','Use a newly verified result instead.');}});
   const result=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:initial.checkpoint},host);
-  assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_REPEATED_INVALID_TOOL_INPUT');assert.equal(provider.inputs.length,1);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.observations[0].invocation.dispatched,true);assert.equal(result.checkpoint.observations[0].receipt.value.status,'read_retry_rejected');assert.equal(result.checkpoint.observations[1].invocation.dispatched,false);assert.equal(result.checkpoint.pending,null);
+  assert.equal(result.status,'paused');assert.equal(provider.inputs.length,3);assert.equal(host.executions.length,0);
+  assert.equal(provider.inputs[1].tools.some(tool=>tool.name==='browser_read'),false,'The repeatedly rejected read is set aside instead of retried blindly.');
+  assert.equal(result.checkpoint.observations[2].receipt.value.issues[0].code,'WORK_CLIENT_TOOL_NOT_AVAILABLE');assert.equal(result.checkpoint.observations[0].invocation.dispatched,true);assert.equal(result.checkpoint.observations[0].receipt.value.status,'read_retry_rejected');assert.equal(result.checkpoint.observations[1].invocation.dispatched,false);assert.equal(result.checkpoint.pending,null);
 });
 test('saved read preflight retains scope and approval denial without a model correction or replay',async()=>{
   for(const [reason,status] of [['WORK_TOOL_SCOPE_MISMATCH','failed'],['HUMAN_APPROVAL_REQUIRED','waiting_approval']]){
@@ -243,8 +253,9 @@ test('an already retryable no-effect read keeps its original status in the faile
 
 test('a normalized metadata failure cannot support completion or trigger an automatic replay after checkpoint resume',async()=>{
   const first=hooks({async executeTool(){return oversizedReceipt();}}),initial=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,max_turns:1},first);
-  let verifications=0;const impossible=hooks({async verifyCompletion(){verifications++;return true;}}),rejected=await new BoundedWorkClientExecutor(model([done()])).execute({...request,checkpoint:initial.checkpoint,resume_wait:true},impossible);
-  assert.equal(rejected.status,'failed');assert.equal(rejected.reason,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING');assert.equal(rejected.completion_verified,false);assert.equal(verifications,0);assert.equal(impossible.executions.length,0);assert.deepEqual(rejected.checkpoint.observations,initial.checkpoint.observations);
+  let verifications=0;const impossible=hooks({async verifyCompletion(){verifications++;return true;}}),rejected=await new BoundedWorkClientExecutor(model([done(),waitAfterMetadata])).execute({...request,checkpoint:initial.checkpoint,resume_wait:true},impossible);
+  assert.equal(rejected.status,'paused');assert.equal(rejected.completion_verified,false);assert.equal(verifications,0);assert.equal(impossible.executions.length,0);
+  assert.deepEqual(rejected.checkpoint.observations.slice(0,initial.checkpoint.observations.length),initial.checkpoint.observations);assert.equal(rejected.checkpoint.observations.at(-1).receipt.value.error,'WORK_CLIENT_COMPLETION_EVIDENCE_MISSING');
   const provider=model([waitAfterMetadata]),passive=hooks(),waited=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:initial.checkpoint,resume_wait:true},passive);assert.equal(waited.status,'paused');assert.equal(passive.executions.length,0);assert.equal(provider.inputs[0].checkpoint.turn,1);assertMetadataFailure(provider.inputs[0].checkpoint.observations[0]);
 });
 
@@ -287,9 +298,11 @@ test('invalid write arguments are rejected before dispatch without fabricating a
 });
 
 test('repeating the same rejected input cannot become a blind dispatch or an unbounded correction loop',async()=>{
-  const provider=model([choose('send_message',{text:12}),choose('send_message',{text:12}),choose('send_message',{text:'unused'})]),host=hooks({tools:[writeTool],validateTool(){throw new WorkClientToolInputError('UNKNOWN_TARGET','Choose a target that was observed.');}});
+  const provider=model([choose('send_message',{text:12}),choose('send_message',{text:12}),choose('send_message',{text:'unused'}),waitConfiguration]),host=hooks({tools:[writeTool],validateTool(){throw new WorkClientToolInputError('UNKNOWN_TARGET','Choose a target that was observed.');}});
   const result=await new BoundedWorkClientExecutor(provider).execute(request,host);
-  assert.equal(result.status,'failed');assert.equal(result.reason,'WORK_CLIENT_REPEATED_INVALID_TOOL_INPUT');assert.equal(provider.inputs.length,2);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.pending,null);
+  assert.equal(result.status,'paused');assert.equal(provider.inputs.length,4);assert.equal(host.executions.length,0);assert.equal(result.checkpoint.pending,null);
+  assert.deepEqual(provider.inputs[2].tools,[],'The capability that rejected the same input twice is no longer offered.');
+  assert.equal(result.checkpoint.observations[2].receipt.value.issues[0].code,'WORK_CLIENT_TOOL_NOT_AVAILABLE');
   assert.ok(result.checkpoint.observations.every(item=>item.invocation.dispatched===false&&item.receipt.value.status==='not_dispatched'));
 });
 
@@ -297,12 +310,12 @@ test('an explicit resumed read may use identical arguments after the host capabi
   const blocked=hooks({validateTool(){throw new WorkClientToolInputError('BROWSER_NO_AVAILABLE_EXECUTOR','The registered read-only connection needs repair.');}});
   const first=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,max_turns:1},blocked);
   assert.equal(first.checkpoint.pending,null);assert.equal(first.checkpoint.observations.length,1);assert.equal(first.checkpoint.observations[0].invocation.dispatched,false);assert.equal(blocked.executions.length,0);
-  const unchanged=hooks({validateTool:blocked.validateTool}),stillBlocked=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,checkpoint:first.checkpoint,resume_wait:true},unchanged);
-  assert.equal(stillBlocked.status,'failed');assert.equal(stillBlocked.reason,'WORK_CLIENT_REPEATED_INVALID_TOOL_INPUT');assert.equal(unchanged.executions.length,0);
+  const unchanged=hooks({validateTool:blocked.validateTool}),stillModel=model([choose(),waitConfiguration]),stillBlocked=await new BoundedWorkClientExecutor(stillModel).execute({...request,checkpoint:first.checkpoint,resume_wait:true},unchanged);
+  assert.equal(stillBlocked.status,'paused');assert.equal(unchanged.executions.length,0);assert.equal(stillModel.inputs[1].tools.length,0,'The unchanged rejection sets the read aside for this attempt.');
   let validations=0;const fixed=hooks({validateTool(){validations++;}}),provider=model([choose(),done()]);
   const resumed=await new BoundedWorkClientExecutor(provider).execute({...request,checkpoint:first.checkpoint,resume_wait:true,context:{user_directions:[{instruction:'The registered browser connection was corrected. Retry the same read-only source.'}]}},fixed);
   assert.equal(resumed.status,'succeeded');assert.equal(validations,1);assert.equal(fixed.executions.length,1);assert.deepEqual(fixed.executions[0].args,first.checkpoint.observations[0].invocation.arguments);assert.deepEqual(resumed.checkpoint.observations[0],first.checkpoint.observations[0]);assert.equal(resumed.checkpoint.observations[1].receipt.status,'succeeded');assert.equal(resumed.checkpoint.observations[1].invocation.dispatched,true);
-  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/Do not repeat unchanged invalid input under unchanged constraints/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/one newly validated read-only attempt/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/does not bypass a permission\/login\/challenge denial/u);assert.doesNotMatch(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/never repeat the exact rejected input/u);
+  assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/one newly validated read-only attempt/u);assert.match(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/host validation still decides/u);assert.doesNotMatch(WORK_CLIENT_EXECUTION_INSTRUCTIONS,/never repeat the exact rejected input/u);
 });
 
 test('malformed tool JSON and unavailable capabilities can be corrected before any host invocation',async()=>{
@@ -328,7 +341,7 @@ test('a validation-looking exception after write dispatch remains uncertain and 
 test('checkpoint identity, capability catalog and runtime guard prevent stale or unavailable execution',async()=>{
   const initial=await new BoundedWorkClientExecutor(model([choose()])).execute({...request,max_turns:1},hooks());
   await assert.rejects(new BoundedWorkClientExecutor(model([])).execute({...request,run_id:'other-run',checkpoint:initial.checkpoint},hooks()),/CHECKPOINT_MISMATCH/);
-  const host=hooks(),result=await new BoundedWorkClientExecutor(model([choose('hidden_shell',{command:'rm -rf /'})])).execute(request,host);assert.equal(result.status,'failed');assert.equal(host.executions.length,0);
+  const host=hooks(),result=await new BoundedWorkClientExecutor(model([choose('hidden_shell',{command:'rm -rf /'}),waitConfiguration])).execute(request,host);assert.equal(result.status,'paused');assert.equal(host.executions.length,0);assert.equal(result.checkpoint.observations[0].receipt.value.issues[0].code,'WORK_CLIENT_TOOL_NOT_AVAILABLE');
   const closed=hooks({async guard(){throw Error('WORK_PAUSED');}});assert.equal((await new BoundedWorkClientExecutor(model([])).execute(request,closed)).status,'paused');
 });
 
@@ -354,4 +367,83 @@ test('subscription exhaustion never consumes an ambient paid API key',async t=>{
   const path=await fixture(t);saveModelSettings(path,{revision:0,onboarding_step:2,selection},{});let paid=0;
   const configured=new ConfiguredStructuredModel(path,{OPENAI_API_KEY:'fixture-not-real-paid-key-12345'}, {api:()=>({calls:[],async call(){paid++;return done();}}),subscription:()=>({calls:[],async call(){throw Error('STRUCTURED_MODEL_UNAVAILABLE');}})});
   const result=await new BoundedWorkClientExecutor(configured).execute(request,hooks());assert.equal(result.status,'waiting_model');assert.equal(paid,0);
+});
+
+// Plan B4, replay. Live: guidance alone did not shorten a repeated request (6 model turns both times). The read
+// steps of a verified procedure are proposed by the host in place of model turns; everything after is the normal loop.
+test('B4: verified read steps are replayed without a model turn; writes, unknown tools and already observed reads are not',async()=>{
+  const replay=[{tool:'browser_read',arguments:{url:'https://example.test/news'}},{tool:'send_message',arguments:{text:'hi'}},{tool:'gone_tool',arguments:{}},{tool:'browser_read',arguments:{url:'https://example.test/news'}}];
+  const provider=model([done()]),host=hooks({tools:[readTool,writeTool],replay}),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'succeeded');assert.equal(result.completion_verified,true);
+  assert.deepEqual(host.executions.map(item=>[item.name,item.args]),[['browser_read',{url:'https://example.test/news'}]],'One read is dispatched through the normal tool path; the write and the duplicate are never proposed.');
+  assert.equal(provider.calls.length,1,'The model is asked only for the decision after the replayed read.');
+  assert.deepEqual(host.events.filter(event=>['procedure.replayed','model.started'].includes(event.kind)).map(event=>event.kind),['procedure.replayed','model.started']);
+  const plain=model([choose(),done()]);await new BoundedWorkClientExecutor(plain).execute(request,hooks());assert.equal(plain.calls.length,2,'Without a procedure the same Work takes two model turns.');
+  // A replayed read that fails is an ordinary failed observation; the model continues from it.
+  const failing=model([choose('browser_read',{url:'https://example.test/other'}),done()]);let n=0;
+  const recovered=await new BoundedWorkClientExecutor(failing).execute(request,hooks({replay:[replay[0]],async executeTool(){return n++===0?{status:'retryable_failure',value:{error:'TIMEOUT'},evidence_ids:[],effect_state:'none',retry_safe:true}:receipt;}}));
+  assert.equal(recovered.status,'succeeded');assert.equal(failing.calls.length,2);
+});
+
+// Recorded runs: a saved result was read back next almost every time. The host does it without a model turn.
+test('B4: a saved result is read back by the host without a model turn; a failed readback goes to the model',async()=>{
+  const draftTool={name:'office_result_draft',description:'Save a result.',input_schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},effect:'local_write'};
+  const readTool2={name:'office_result_read',description:'Read a saved result.',input_schema:{type:'object',properties:{request_id:{type:'string'}},required:['request_id'],additionalProperties:false},effect:'read_only'};
+  const save={action:'tool',stage_id:'report',tool_name:'office_result_draft',arguments_json:JSON.stringify({text:'Physical AI'}),summary:'Save the result.',completed_checks:[],wait_reason:null};
+  const run=async readStatus=>{
+    const provider=model([choose(),save,done(),done()]),executed=[];
+    const host=hooks({tools:[readTool,draftTool,readTool2],async executeTool(name,args,context){executed.push([name,args]);
+      if(name==='office_result_read')return {status:readStatus,value:{title:'Physical AI'},evidence_ids:readStatus==='succeeded'?['readback-1']:[],effect_state:'none',retry_safe:true};
+      return name==='office_result_draft'?{status:'succeeded',value:{title:'Physical AI'},evidence_ids:['draft-1'],effect_state:'verified',retry_safe:false}:receipt;}});
+    const result=await new BoundedWorkClientExecutor(provider).execute(request,host);return {result,provider,executed,host};
+  };
+  const ok=await run('succeeded');
+  assert.equal(ok.result.status,'succeeded');assert.deepEqual(ok.executed.map(item=>item[0]),['browser_read','office_result_draft','office_result_read']);
+  assert.equal(ok.executed[2][1].request_id,ok.result.checkpoint.observations.find(item=>item.invocation.tool_name==='office_result_draft').invocation.request_id,'The readback names the draft it follows.');
+  assert.equal(ok.provider.calls.length,3,'Read, save, complete: the readback took no model turn.');
+  const failed=await run('retryable_failure');
+  assert.equal(failed.executed.filter(item=>item[0]==='office_result_read').length,1,'A failed readback is not repeated by the host.');
+});
+
+// Live: after thirty page reads every executor turn carried all thirty pages again and took two minutes.
+test('the executor sees recent receipts in full and only the opening of long text in older ones; the checkpoint keeps everything',()=>{
+  const observation=i=>({invocation:{request_id:`r-${i}`,turn:i,stage_id:'s',tool_name:'browser_read',arguments:{url:`https://example.test/${i}`},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{title:`Page ${i}`,text:'x'.repeat(12000),links:[{url:'https://example.test/a',text:'a'}]},evidence_ids:[`e-${i}`],effect_state:'none',retry_safe:true},observed_at:'2026-10-01T00:00:00.000Z'});
+  const checkpoint={format:1,work_id:'w',run_id:'r',binding:'b',turn:10,pending:null,observations:Array.from({length:20},(_,i)=>observation(i)),summary:''},view=executorView(checkpoint);
+  assert.equal(checkpoint.observations[0].receipt.value.text.length,12000,'The saved checkpoint is untouched.');
+  assert.ok(view.observations[0].receipt.value.text.length<2600);assert.match(view.observations[0].receipt.value.text,/9600 more characters were read/u);assert.equal(view.observations[0].receipt.value.title,'Page 0');
+  assert.deepEqual(view.observations[0].receipt.evidence_ids,['e-0']);assert.equal(view.observations.at(-1).receipt.value.text.length,12000,'The latest receipts are complete.');
+  assert.ok(JSON.stringify(view).length<JSON.stringify(checkpoint).length/2);
+  assert.equal(executorView({...checkpoint,observations:checkpoint.observations.slice(0,3)}).observations[0].receipt.value.text.length,12000);
+});
+
+// Live: one page per model turn made a ten-article task take ten turns, each carrying everything read so far.
+test('one decision can ask for several reads; the host runs them all before the next model turn, and only reads',async()=>{
+  const many={...choose('browser_read',{url:'https://example.test/1'}),also_read:[{tool_name:'browser_read',arguments_json:JSON.stringify({url:'https://example.test/2'})},{tool_name:'send_message',arguments_json:JSON.stringify({text:'hi'})},{tool_name:'browser_read',arguments_json:'not json'},{tool_name:'browser_read',arguments_json:JSON.stringify({url:'https://example.test/3'})}]};
+  const provider=model([many,done()]),host=hooks({tools:[readTool,writeTool]}),result=await new BoundedWorkClientExecutor(provider).execute(request,host);
+  assert.equal(result.status,'succeeded');
+  assert.deepEqual(host.executions.map(item=>[item.name,item.args.url]),[['browser_read','https://example.test/1'],['browser_read','https://example.test/2'],['browser_read','https://example.test/3']],'Three reads, in order; the write and the unparsable entry are not run.');
+  assert.equal(provider.calls.length,2,'Three reads cost one model turn.');
+  assert.equal(result.checkpoint.observations.filter(item=>item.invocation.dispatched).length,3);
+});
+
+// Live: a wide news task made ninety reads in twenty minutes and never saved a result.
+test('a run that has read much or long is told to save what is established; a run that already saved is not',()=>{
+  const observation=(i,tool='browser_read',effect='read_only')=>({invocation:{request_id:`r-${i}`,turn:i,stage_id:'s',tool_name:tool,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{},evidence_ids:[`e-${i}`],effect_state:'none',retry_safe:true},observed_at:'2026-10-01T00:00:00.000Z'});
+  const checkpoint=n=>({format:1,work_id:'w',run_id:'r',binding:'b',turn:n,pending:null,observations:Array.from({length:n},(_,i)=>observation(i)),summary:''}),at=Date.parse('2026-10-01T00:01:00.000Z');
+  const early=runBudget(checkpoint(5),at).run_budget;assert.equal(early.wrap_up,false);assert.equal(early.reads_left,19);assert.match(early.instruction,/in the order the request ranks them/u);
+  assert.equal(runBudget(checkpoint(0),at).run_budget.reads_left,24,'The budget is known from the first turn.');
+  assert.equal(runBudget(checkpoint(20),at).run_budget.wrap_up,true);assert.equal(runBudget(checkpoint(20),at).run_budget.reads_done,20);
+  assert.equal(runBudget(checkpoint(5),Date.parse('2026-10-01T00:08:00.000Z')).run_budget.elapsed_seconds,480);
+  const saved=checkpoint(30);saved.observations.push(observation(30,'office_result_draft','local_write'));assert.deepEqual(runBudget(saved,at),{},'Once a result is saved the run is finishing, not exploring.');
+});
+
+// The checkpoint keeps 32 receipts and verification can only judge what is kept: a run stops reading at 30 until it saves.
+test('a run without a saved result is refused a read past the limit and continues after it saves',async()=>{
+  const draftTool={name:'office_result_draft',description:'Save a result.',input_schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},effect:'local_write'};
+  const queue=[...Array.from({length:25},(_,i)=>choose('browser_read',{url:`https://example.test/${i}`})),{action:'tool',stage_id:'report',tool_name:'office_result_draft',arguments_json:JSON.stringify({text:'Physical AI'}),summary:'Save.',completed_checks:[],wait_reason:null},done(['draft-1'])];
+  const provider=model(queue),executed=[],host=hooks({tools:[readTool,draftTool],async executeTool(name,args){executed.push(name+(args.url?args.url.slice(-3):''));return name==='office_result_draft'?{status:'succeeded',value:{title:'Physical AI'},evidence_ids:['draft-1'],effect_state:'verified',retry_safe:false}:{...receipt,evidence_ids:[`source-${executed.length}`]};},async verifyCompletion(){return true;}});
+  const result=await new BoundedWorkClientExecutor(provider).execute({...request,max_turns:40},host);
+  assert.equal(result.status,'succeeded');assert.equal(executed.filter(name=>name.startsWith('browser_read')).length,24,'The 25th read is not dispatched.');
+  const refused=result.checkpoint.observations.find(item=>!item.invocation.dispatched&&JSON.stringify(item.receipt.value).includes('WORK_CLIENT_READ_BUDGET_REACHED'));assert.ok(refused,'The refusal is an observation the model can act on.');
+  assert.equal(executed.at(-1),'office_result_draft');
 });

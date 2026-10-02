@@ -9,6 +9,10 @@ Current baseline: e0a8e0790b64ff663fa87f5d894b415a1d6f1843.
 Current branch: fix/main-work-reliability.
 Original refactor baseline: 0b11f1850a2afa846f191ce356aa4f486284b41f (refactor/custom-pack-reliability).
 
+> 2026-10-01 이후 현재 작업 기준은 [Work 완료 경로 복구 및 자율 운영 계획](work-completion-and-autonomy-plan.md)이다.
+> 이 문서는 커스텀 Pack 계약의 배경으로 남는다. 두 문서가 충돌하면 새 계획서 3.4의
+> 조항 표가 우선한다. 아래 본문의 해당 조항에는 “대체됨”을 표시했다.
+
 이 문서는 제품 방향, 구현 범위, 수용 기준의 기준 문서다.
 진행 상태와 실제 검증 결과는 custom-pack-refactoring-progress.md에 기록한다.
 최종 검증 수치와 입력 해시는 custom-pack-refactoring-validation.json에 저장한다.
@@ -129,7 +133,9 @@ Office의 10/250개 동시 Work 부하 시험으로 해석하지 않는다.
 ### R3. 실행과 복구
 
 - 알려진 no-effect read-only 관측은 bounded repair에서 새로 읽을 수 있다.
-- local/external 쓰기, unknown/uncertain 효과는 반복하지 않는다.
+- ~~local/external 쓰기, unknown/uncertain 효과는 반복하지 않는다.~~
+  (대체됨: 새 계획서 3.2 조건부 복구. Office 산출물은 새 요청 ID로 다시 쓰거나
+  멱등 처리하고, 외부 쓰기는 반영 여부 확인 후에만 재시도한다.)
 - Swarm의 기존 verifiedWorkflowAnswer가 증명하는 정상 진행은 코드로
   결정하고, 실제 예외 판단/재계획은 기존 경로를 유지한다.
 - 스케줄 due/실제 두 관측/변경 없음의 기존 watch 기능을 유지한다.
@@ -247,3 +253,4 @@ do not claim infinite capacity or constant-memory end-to-end processing.
 - 압축 이후에도 새 마켓플레이스/플랫폼 작업으로 범위를 넓히지 않는다.
 - 개선 측정은 모델 호출/검증 시간/불필요한 재실행/사람의 보정 횟수다.
   fixture PASS와 실제 업무 PASS를 구분한다.
+  (보강: 새 계획서 A7. 실제 모델 기준 완료율과 거짓 거부율을 필수 지표로 한다.)

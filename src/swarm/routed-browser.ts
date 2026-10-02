@@ -42,6 +42,7 @@ export class RoutedSwarmBrowser {
       const office=this.store.officeWork(this.config.project.id,'swarm',run) as {id:string}|null,work=office?this.store.intakeWorkOptional(this.config.project.id,office.id):null;
       const workBrowser=browserPreferenceSchema.optional().parse((work?.spec as {browser?:unknown}|null)?.browser);
       requireCondition(!workBrowser||!definition.browser||workBrowser.environment===definition.browser.environment,'BROWSER_WORK_ENVIRONMENT_CONFLICT');
+      const journal=this.store.browserExecutors(),saved=journal.checkpoint(this.config.project.id,id);
       let preference:BrowserPreference=workBrowser??definition.browser??{environment:'owned_headless'};
       const socialSites=[...new Set(definition.source_urls.map(value=>new URL(value).hostname.toLowerCase().replace(/^www\./u,'')).filter(site=>Object.hasOwn(knownLoginSites,site)))];
       let authTarget:BrowserTarget|undefined;
@@ -59,7 +60,6 @@ export class RoutedSwarmBrowser {
       const routingConfig=authTarget?{...this.config,browserExecutors:{targets:[authTarget]}}:this.config;
       const guard=()=>{this.lease(run,worker,token);if(authTarget){const states=authSites(this.store,this.config,authTarget);requireCondition(!states.some(site=>site.handoff)&&socialSites.every(site=>states.some(row=>row.site===site&&row.state==='ready')),'BROWSER_AUTH_REQUIRED');}};
       const configured=this.providers(),providers=work?.jev_enabled===false?{...configured,jev:undefined}:configured;
-      const journal=this.store.browserExecutors(),saved=journal.checkpoint(this.config.project.id,id);
       if(saved){await this.url(saved.url);if(!origins.includes(new URL(saved.url).origin))origins.push(new URL(saved.url).origin);}
       const browser=new RoutedBrowser(routingConfig,{profile_key:`${run}-${worker}`,ephemeral:true,context_id:id,request:definition.objective,preference,fallback_preferences,providers,guard,checkpoint:{load:()=>journal.checkpoint(this.config.project.id,id),save:value=>journal.saveCheckpoint(this.config.project.id,id,value)},event:event=>{journal.append(this.config.project.id,id,event);}},origins);
       const slot:Slot={id:`browser-${randomUUID()}`,browser,lease:token,links:new Set(definition.source_urls.map(key)),origins,steps:0,busy:false};
