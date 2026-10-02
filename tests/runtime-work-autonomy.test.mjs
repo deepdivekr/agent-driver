@@ -152,11 +152,12 @@ test('B1: a due scheduled run waits at the daily limit with one note, and starts
   const root=await mkdtemp(join(tmpdir(),'work-budget-')),host=join(root,'host.json');await writeFile(join(root,'source.json'),JSON.stringify([{id:'one',title:'Observed source',value:23}]));
   const base={schema_version:1,project_id:'budget',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[{id:'records',kind:'file',path:'source.json',format:'json'}],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}};
   await writeFile(host,JSON.stringify({...base,work:{model_data_approved:true,autonomy:'delegated',delegation:{daily_scheduled_runs:0}}}));
-  const calls=[],model={calls,async call(purpose,instructions,input){
+  const windows=[],calls=[],model={calls,async call(purpose,instructions,input){
     calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture',duration_ms:0});
     if(instructions.startsWith('Define one durable'))return proposal;
     if(instructions.startsWith('Normalize the user'))return {kind:'daily',timezone:'UTC',hour:20,minute:0};
     if(instructions.startsWith('Execute the registered Work')){
+      windows.push(input.context.collection_window);
       const result=input.checkpoint.observations.find(o=>o.invocation.tool_name==='runtime_pack_run');
       return result?{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Observed source: 23',completed_checks:input.completion_checks.map(c=>({id:c.id,evidence_ids:result.receipt.evidence_ids})),wait_reason:null}
         :{action:'tool',stage_id:'collect',tool_name:'runtime_pack_run',arguments_json:JSON.stringify({work_id:input.work_id,request_id:'placeholder',recipe}),summary:'Read the source.',completed_checks:[],wait_reason:null};
@@ -174,6 +175,9 @@ test('B1: a due scheduled run waits at the daily limit with one note, and starts
   const until=async(check,label)=>{for(let i=0;i<300;i++){if(check())return;await new Promise(resolve=>setTimeout(resolve,50));}assert.fail(`${label}: ${JSON.stringify(runs())}`);};
   const work=store.intakeWork(config.project.id,started.work_id);
   supervisor.start(started.work_id,work.revision,true,'UTC',false);await until(()=>runs()[0]==='succeeded','first run');
+  // A recurring collection takes the latest items only: each run is told its window, the run date and the day before.
+  const today=new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()),yesterday=new Intl.DateTimeFormat('en-CA',{timeZone:'UTC',year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date(Date.now()-86_400_000));
+  assert.deepEqual([windows[0].run_date,windows[0].earliest_published_date,windows[0].timezone],[today,yesterday,'UTC']);
   const schedule=db.prepare('SELECT state,next_run_ms FROM office_work_schedule WHERE work_id=?').get(started.work_id);
   assert.equal(schedule?.state,'enabled','The delegated recurring Work keeps its own schedule.');
   db.prepare('UPDATE office_work_schedule SET next_run_ms=?,anchor_ms=? WHERE work_id=?').run(Date.now()-48*3600_000,Date.now()-48*3600_000,started.work_id);
