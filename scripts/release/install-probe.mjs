@@ -52,7 +52,8 @@ const {Client}=await load('node_modules/@modelcontextprotocol/sdk/dist/esm/clien
 const {StdioClientTransport}=await load('node_modules/@modelcontextprotocol/sdk/dist/esm/client/stdio.js');
 const {stopMcpService}=await load('dist/interface/mcp-service-manager.js');
 const client=new Client({name:'release-install-probe',version:'1'});
-const transport=new StdioClientTransport({command:process.execPath,args:[join(installed,'dist/cli.js'),'mcp'],env:{...process.env,AGENT_DRIVER_CONNECTION_ROOT:stateRoot},stderr:'pipe'});
+const transport=new StdioClientTransport({command:process.execPath,// The default listing is the compact Work surface; this probe checks the whole one.
+  args:[join(installed,'dist/cli.js'),'mcp','--all-tools'],env:{...process.env,AGENT_DRIVER_CONNECTION_ROOT:stateRoot},stderr:'pipe'});
 try{
   await client.connect(transport);
   assert.equal(client.getServerVersion().version,expectedVersion);
