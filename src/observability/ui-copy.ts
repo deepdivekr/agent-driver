@@ -254,6 +254,8 @@ function koreanDescription(source: string): string {
     .replace(/합니다/gu, '해요').replace(/됩니다/gu, '돼요')
     .replace(/있습니다/gu, '있어요').replace(/없습니다/gu, '없어요')
     .replace(/않습니다/gu, '않아요').replace(/아닙니다/gu, '아니에요')
+    // Verbs that end in -입니다 are not the copula: 쌓입니다 is 쌓여요, never 쌓이에요.
+    .replace(/쓰입니다/gu, '쓰여요').replace(/움직입니다/gu, '움직여요').replace(/([쌓붙높])입니다/gu, '$1여요').replace(/(^|\s)보입니다/gu, '$1보여요')
     .replace(/([가-힣])입니다/gu, (_,last: string) => last + ((last.charCodeAt(0)-0xac00)%28===0?'예요':'이에요'))
     .replace(/보냅니다/gu, '보내요').replace(/남습니다/gu, '남아요')
     .replace(/넘깁니다/gu, '넘겨요').replace(/남깁니다/gu, '남겨요')
@@ -261,7 +263,7 @@ function koreanDescription(source: string): string {
     .replace(/막습니다/gu, '막아요').replace(/바꿉니다/gu, '바꿔요')
     .replace(/바뀝니다/gu, '바뀌어요').replace(/켭니다/gu, '켜요')
     .replace(/맡습니다/gu, '맡아요').replace(/둡니다/gu, '둬요').replace(/따릅니다/gu, '따라요')
-    .replace(/씁니다/gu, '사용해요').replace(/쓰입니다/gu, '사용해요')
+    .replace(/씁니다/gu, '사용해요')
     .replace(/듭니다/gu, '들어요').replace(/읽습니다/gu, '읽어요')
     .replace(/부릅니다/gu, '불러요').replace(/사라집니다/gu, '사라져요');
 }
@@ -272,15 +274,46 @@ function englishDescription(source: string): string {
   return /^[A-Z]/u.test(source) ? result.charAt(0).toUpperCase() + result.slice(1) : result;
 }
 
+/** English display copy follows the writing rules of ASD-STE100 (Simplified Technical English) most of the way:
+ * one word for one thing, approved plain verbs, simple tenses, one instruction in a sentence. The rules run on the
+ * finished English of every registered phrase, reviewed or generated, so the wording stays the same everywhere.
+ * Each rule leaves its own result unchanged, so the pass is safe to run twice. */
+const ING: Record<string, string> = {analyzing: 'analyzes', choosing: 'chooses', organizing: 'organizes', processing: 'processes', planning: 'plans',
+  continuing: 'continues', waiting: 'waits', checking: 'checks', reading: 'reads', preparing: 'prepares', starting: 'starts',
+  loading: 'loads', saving: 'saves', sending: 'sends', connecting: 'connects', collecting: 'collects', writing: 'writes', using: 'uses'};
+export function plainEnglish(source: string): string {
+  const keepCase = (from: string, to: string) => /^[A-Z]/u.test(from) ? to.charAt(0).toUpperCase() + to.slice(1) : to;
+  return source
+    // One word for one thing: the noun is "sign-in", the verb is "sign in".
+    .replace(/\b[Ll]og in to\b/gu, match => keepCase(match, 'sign in to')).replace(/\b[Ll]og in\b/gu, match => keepCase(match, 'sign in'))
+    .replace(/\b[Ll]ogins\b/gu, match => keepCase(match, 'sign-ins')).replace(/\b[Ll]ogin\b/gu, match => keepCase(match, 'sign-in'))
+    // Plain verbs.
+    .replace(/\b[Uu]nverified\b/gu, match => keepCase(match, 'unconfirmed')).replace(/\b[Vv]erified\b/gu, match => keepCase(match, 'confirmed'))
+    .replace(/\b[Vv]erification\b/gu, match => keepCase(match, 'confirmation')).replace(/\b[Vv]erifying\b/gu, match => keepCase(match, 'checking'))
+    .replace(/\b[Vv]erif(y|ies)\b/gu, (match, end: string) => keepCase(match, end === 'y' ? 'check' : 'checks'))
+    .replace(/\b(You|you|We|we|I|It|it|user|owner|AI) selected\b/gu, '$1 chose').replace(/\b[Ss]elected\b/gu, match => keepCase(match, 'chosen')).replace(/\b[Ss]elect(s?)\b/gu, (match, end: string) => keepCase(match, 'choose' + end))
+    .replace(/\b(is|are|not|the|a|no|any|every|each) required\b/gu, '$1 necessary').replace(/\b[Rr]equired\b/gu, match => keepCase(match, 'needed'))
+    .replace(/\b[Rr]equire(s?)\b/gu, (match, end: string) => keepCase(match, 'need' + end))
+    .replace(/\b(is|are) (not )?retained\b/gu, '$1 $2kept').replace(/\b[Rr]etain(s?)\b/gu, (match, end: string) => keepCase(match, 'keep' + end))
+    .replace(/\b[Rr]emain(s?)\b/gu, (match, end: string) => keepCase(match, 'stay' + end))
+    .replace(/\bmay (?:require|need) /gu, 'sometimes need ').replace(/\bmay (?!not\b)/gu, 'can ')
+    // Simple tenses instead of perfect and progressive forms.
+    .replace(/\b(has|have) (not |never |already )?been ([a-z]+(?:ed|en|wn|pt|nt|ut|un|et))\b/gu, (_, verb: string, adverb: string | undefined, participle: string) => (verb === 'has' ? 'is ' : 'are ') + (adverb === 'already ' ? '' : adverb ?? '') + participle)
+    .replace(/\bwhile work is running\b/gu, 'while work runs')
+    .replace(/\b(is|are) (still |now |already )?([a-z]+ing)\b/gu, (match, verb: string, _adverb: string | undefined, form: string) => {
+      const simple = ING[form]; return simple ? (verb === 'are' ? simple.replace(/(?:es|s)$/u, form === 'analyzing' || form === 'processing' || form === 'organizing' ? 'e' : '') : simple) : match; })
+    // One instruction in a sentence.
+    .replace(/^((?:[A-Z][a-z]+)(?: [^.,;]+)?), then ([a-z])/u, (_, first: string, next: string) => first + '. Then ' + next);
+}
 /** Legacy Korean and English messages remain valid keys, including persisted setup logs.
  * Aliases are idempotent, so a MutationObserver cannot rewrite the same node forever. */
 export function buildCopyCatalog(source: Record<string, string>): {ko: Record<string, string>; en: Record<string, string>} {
   const ko: Record<string, string> = {}, en: Record<string, string> = {};
   for (const [key, originalEnglish] of Object.entries(source)) {
     const copy = reviewedCopy[key] ?? [koreanDescription(key), englishDescription(originalEnglish)];
-    ko[key] = copy[0]; en[key] = copy[1];
+    ko[key] = copy[0]; en[key] = plainEnglish(copy[1]);
   }
-  for (const [key, copy] of Object.entries(reviewedCopy)) { ko[key] = copy[0]; en[key] = copy[1]; }
+  for (const [key, copy] of Object.entries(reviewedCopy)) { ko[key] = copy[0]; en[key] = plainEnglish(copy[1]); }
   // Canonical display phrases must never be transformed again. Preserve original keys first.
   const canonicalKorean = new Set(Object.values(ko)), canonicalEnglish = new Set(Object.values(en));
   for (const [key, originalEnglish] of Object.entries(source)) {

@@ -58,3 +58,29 @@ test('display copy coverage: a label followed by a name is not read as a "manage
   assert.equal(en.officeText('Hermes 실행 · Driver 관리'),'Runs in Hermes · managed in Driver');
   assert.equal(en.officeText('결과 확인 · 다음 지시 준비'),'Check result · prepare next instruction');
 });
+// Owner direction 2026-10-02: English follows ASD-STE100 (Simplified Technical English) most of the way.
+test('display copy: English uses one word for one thing, plain verbs and simple tenses',async()=>{
+  const {controlCenterCopy}=await import('../dist/observability/i18n.js'),{plainEnglish}=await import('../dist/observability/ui-copy.js');
+  const shown=[...new Set(Object.values(controlCenterCopy.en))].filter(value=>!hangul.test(value));
+  const left=shown.filter(value=>/\b(?:log in|login|logins|verify|verifies|verified|unverified|verification|select|selects|selected|require|requires|required|retain|retains|remain|remains)\b/iu.test(value)||/\b(?:has|have) (?:not |never |already )?been [a-z]+ed\b/u.test(value)||/\bmay (?!not\b)/u.test(value));
+  assert.deepEqual(left,[]);
+  for(const value of shown)assert.equal(plainEnglish(value),value,'The rules leave their own result unchanged: '+value);
+  for(const [written,expected] of [
+    ['Log in to Codex','Sign in to Codex'],['Site login needed','Site sign-in needed'],
+    ['Access has not been verified for this account.','Access is not confirmed for this account.'],
+    ['Select Start work to execute.','Choose Start work to execute.'],['You selected Hermes.','You chose Hermes.'],
+    ['Leave blank to inherit the selected model.','Leave blank to inherit the chosen model.'],
+    ['Work analysis requires permission.','Work analysis needs permission.'],['Check the required settings.','Check the necessary settings.'],
+    ['The AI is choosing the next step.','The AI chooses the next step.'],['Progress has been saved.','Progress is saved.'],
+    ['Auto may override it.','Auto can override it.'],['A finished run may not meet every criterion.','A finished run may not meet every criterion.'],
+    ['Check the connection, then start the work.','Check the connection. Then start the work.'],
+    ['Check that the app is running and connected.','Check that the app is running and connected.'],
+  ])assert.equal(plainEnglish(written),expected);
+  assert.equal(en.officeText('Codex 로그인'),'Sign in to Codex');
+});
+test('display copy: Korean verb endings and the wording the owner fixed',()=>{
+  assert.equal(ko.officeText('아직 없습니다. 업무가 검증을 통과하면 여기에 쌓입니다.'),'아직 없어요. 업무가 검증을 통과하면 여기에 쌓여요.');
+  assert.equal(ko.officeText('Jev는 정해진 판단 지점에서만 쓰입니다. 꺼도 AI와 코드로 진행합니다.'),'Jev는 정해진 판단 지점에서만 쓰여요. 꺼도 AI와 코드로 진행해요.');
+  assert.equal(ko.officeText('학습한 절차와 기억한 출처'),'학습한 절차와 기억한 출처');assert.equal(en.officeText('학습한 절차와 기억한 출처'),'Learned procedures and remembered sources');
+  assert.ok(sources.every(({text})=>!text.includes('배운 절차')),'The heading says 학습한, not 배운.');
+});

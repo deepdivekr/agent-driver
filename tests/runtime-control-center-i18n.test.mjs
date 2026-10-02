@@ -29,7 +29,7 @@ test('runtime fixture setup checks stream localized historical/live outcomes and
   try{
    await page.goto('http://'+host+'/settings');await page.waitForFunction(()=>!document.querySelector('#refresh-mcp').disabled);
    await page.locator('.terminal>summary').click();
-   await page.waitForFunction(()=>document.querySelector('#setup-log').textContent.includes('Aside connection verified · 2.4s'));
+   await page.waitForFunction(()=>document.querySelector('#setup-log').textContent.includes('Aside connection confirmed · 2.4s'));
    assert.doesNotMatch(await page.locator('#setup-log').textContent(),/[가-힣]/u);
    await page.locator('#windows-bridge>summary').click();
    assert.match(await page.locator('#windows-bridge-help').innerText(),/Skip it if you connected a WSL app/u);
@@ -40,7 +40,7 @@ test('runtime fixture setup checks stream localized historical/live outcomes and
    assert.equal(await page.locator('#refresh-mcp').isDisabled(),true);
    hold=false;releaseCheck();await page.waitForFunction(()=>!document.querySelector('#refresh-mcp').disabled);
    const tail=await page.locator('#setup-log').textContent();
-   for(const result of ['Codex: Login verified · Connection needed','Claude Code: Login needed','OpenCode: Not confirmed','Cursor: Log in again','Hermes: Not installed'])assert.ok(tail.includes(result),result);
+   for(const result of ['Codex: Sign-in confirmed · Connection needed','Claude Code: Sign-in needed','OpenCode: Not confirmed','Cursor: Sign in again','Hermes: Not installed'])assert.ok(tail.includes(result),result);
    assert.doesNotMatch(tail,/[가-힣]/u);assert.doesNotMatch(await page.locator('#tail-last').textContent(),/[가-힣]/u);
    fail=true;await page.locator('#refresh-mcp').click();await page.waitForFunction(()=>document.querySelector('#tail-last').textContent.includes('Could not check connections'));
    assert.doesNotMatch(await page.locator('#setup-log').textContent(),/private-raw/u);fail=false;
@@ -52,7 +52,7 @@ test('runtime fixture setup checks stream localized historical/live outcomes and
    }
    await page.locator('[data-step="1"]').click();await page.waitForFunction(()=>!document.querySelector('#browser-setup-refresh').disabled);
    if(!await page.locator('#browser-alternatives').evaluate(e=>e.open))await page.locator('#browser-alternatives>summary').click();
-   const aside=page.locator('[data-browser=aside]');await aside.locator('.cact button').click();await page.waitForFunction(()=>document.querySelector('#tail-last').textContent.includes('Aside: Connection verified'));
+   const aside=page.locator('[data-browser=aside]');await aside.locator('.cact button').click();await page.waitForFunction(()=>document.querySelector('#tail-last').textContent.includes('Aside: Connection confirmed'));
    assert.match(await page.locator('#tail-last').textContent(),/Permission needed/u);
    await page.screenshot({path:'tests/evidence/phase97/tail-'+width+'-en.png',fullPage:true});
    await page.reload();await page.waitForFunction(()=>!document.querySelector('[data-step="0"]').disabled);
