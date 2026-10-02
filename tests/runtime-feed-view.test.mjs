@@ -11,7 +11,7 @@ test('RSS and Atom feeds become entries with title, link, author, date and a sho
   assert.equal(feedEntries('<html><body><p>not a feed</p></body></html>'),null);
 });
 test('a JSON document is shown as its largest list of objects, short scalar fields only',()=>{
-  const discourse={users:[{id:1,username:'a'}],topic_list:{more_topics_url:'/c/news/14?page=1',topics:[{id:12070,title:'Index-Translate 공개',slug:'index-translate',created_at:'2026-09-30T01:00:00Z',excerpt:'x'.repeat(400),posters:[{user_id:1}],api_key:'no'},{id:12063,title:'결정 모델 d1',slug:'d1',created_at:'2026-09-29T01:00:00Z'},{id:12001,title:'세 번째',slug:'third',created_at:'2026-09-28T01:00:00Z'}]}};
+  const discourse={tags:Array.from({length:40},(_,i)=>({id:i,name:`tag-${i}`,count:i})),users:[{id:1,username:'a'}],topic_list:{more_topics_url:'/c/news/14?page=1',topics:[{id:12070,title:'Index-Translate 공개',slug:'index-translate',created_at:'2026-09-30T01:00:00Z',excerpt:'x'.repeat(400),posters:[{user_id:1}],api_key:'no'},{id:12063,title:'결정 모델 d1',slug:'d1',created_at:'2026-09-29T01:00:00Z'},{id:12001,title:'세 번째',slug:'third',created_at:'2026-09-28T01:00:00Z'}]}};
   assert.deepEqual(jsonListRows(discourse)[0],{id:12070,title:'Index-Translate 공개',slug:'index-translate',created_at:'2026-09-30T01:00:00Z'});assert.equal(jsonListRows(discourse).length,3);
   assert.equal(jsonListRows({a:1,b:{c:[1,2,3]}}),null);
   const view=listView(JSON.stringify(discourse),'application/json; charset=utf-8');assert.equal(view.kind,'json_list');assert.equal(view.text.split('\n').length,3);

@@ -14,10 +14,16 @@ export function feedEntries(xml:string,limit=40):FeedEntry[]|null{
 }
 /** The largest array of objects inside a JSON document, as rows of their short scalar fields. */
 export function jsonListRows(document:unknown,limit=60):Array<Record<string,string|number|boolean|null>>|null{
-  let best:unknown[]|null=null;
+  let best:unknown[]|null=null,bestRank=-1;
+  const score=(items:unknown[])=>{const keys=new Set(Object.keys(items[0] as object).map(key=>key.toLowerCase()));return Number(['title','headline','subject'].some(key=>keys.has(key)))*2+Number([...keys].some(key=>/(?:created|published|updated|date|time)/u.test(key)));};
   const visit=(value:unknown,depth:number)=>{
     if(depth>4||value===null||typeof value!=='object')return;
-    if(Array.isArray(value)){if(value.length>=3&&value.every(item=>item&&typeof item==='object'&&!Array.isArray(item))&&(!best||value.length>best.length))best=value;for(const item of value.slice(0,3))visit(item,depth+1);return;}
+    if(Array.isArray(value)){
+      // The list of a page is the one whose entries have a title and a date; a longer list of tags or users is not
+      // (live: a forum's tag list was shown instead of its topics).
+      if(value.length>=3&&value.every(item=>item&&typeof item==='object'&&!Array.isArray(item))){const rank=score(value);if(!best||rank>bestRank||rank===bestRank&&value.length>best.length){best=value;bestRank=rank;}}
+      for(const item of value.slice(0,3))visit(item,depth+1);return;
+    }
     for(const child of Object.values(value))visit(child,depth+1);
   };
   visit(document,0);if(!best)return null;

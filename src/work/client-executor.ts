@@ -293,9 +293,9 @@ export function executorView(checkpoint:WorkClientCheckpoint):WorkClientCheckpoi
 }
 /** The executor is told how far the run has gone. A wide task has no natural end to exploring (live: ninety reads in
  * twenty minutes and no saved result); past the mark it is asked to save what is established and name what is not. */
-// 22 reads leave room in the 32-receipt window for the save, its readback and the reads of a correction (live: a
+// 24 calls (a plan is sized to 16 reads; context and listing calls count too) leave room in the 32-receipt window for the save, its readback and the reads of a correction (live: a
 // correction's reads pushed cited receipts out and the Work failed on a claim to evidence that was gone).
-const WRAP_UP_READS=16,WRAP_UP_SECONDS=420,READ_LIMIT_BEFORE_RESULT=22,READBACK_TOOLS=new Set(['office_result_read','runtime_pack_status','office_schedule_status','office_pack_source_read']);
+const WRAP_UP_READS=20,WRAP_UP_SECONDS=420,READ_LIMIT_BEFORE_RESULT=24,READBACK_TOOLS=new Set(['office_result_read','runtime_pack_status','office_schedule_status','office_pack_source_read']);
 export function runBudget(checkpoint:WorkClientCheckpoint,nowMs=Date.now()):{run_budget?:{reads_done:number;reads_left:number;elapsed_seconds:number;wrap_up:boolean;instruction:string}}{
   const dispatched=checkpoint.observations.filter(item=>item.invocation.dispatched&&item.invocation.tool_name!=='office_controlled_run_trace');
   if(dispatched.some(item=>item.receipt.status==='succeeded'&&item.invocation.effect!=='read_only'))return {};

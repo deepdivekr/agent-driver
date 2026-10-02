@@ -430,9 +430,9 @@ test('one decision can ask for several reads; the host runs them all before the 
 test('a run that has read much or long is told to save what is established; a run that already saved is not',()=>{
   const observation=(i,tool='browser_read',effect='read_only')=>({invocation:{request_id:`r-${i}`,turn:i,stage_id:'s',tool_name:tool,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{},evidence_ids:[`e-${i}`],effect_state:'none',retry_safe:true},observed_at:'2026-10-01T00:00:00.000Z'});
   const checkpoint=n=>({format:1,work_id:'w',run_id:'r',binding:'b',turn:n,pending:null,observations:Array.from({length:n},(_,i)=>observation(i)),summary:''}),at=Date.parse('2026-10-01T00:01:00.000Z');
-  const early=runBudget(checkpoint(5),at).run_budget;assert.equal(early.wrap_up,false);assert.equal(early.reads_left,17);assert.match(early.instruction,/in the order the request ranks them/u);
-  assert.equal(runBudget(checkpoint(0),at).run_budget.reads_left,22,'The budget is known from the first turn.');
-  assert.equal(runBudget(checkpoint(16),at).run_budget.wrap_up,true);assert.equal(runBudget(checkpoint(16),at).run_budget.reads_done,16);
+  const early=runBudget(checkpoint(5),at).run_budget;assert.equal(early.wrap_up,false);assert.equal(early.reads_left,19);assert.match(early.instruction,/in the order the request ranks them/u);
+  assert.equal(runBudget(checkpoint(0),at).run_budget.reads_left,24,'The budget is known from the first turn.');
+  assert.equal(runBudget(checkpoint(20),at).run_budget.wrap_up,true);assert.equal(runBudget(checkpoint(20),at).run_budget.reads_done,20);
   assert.equal(runBudget(checkpoint(5),Date.parse('2026-10-01T00:08:00.000Z')).run_budget.elapsed_seconds,480);
   const saved=checkpoint(30);saved.observations.push(observation(30,'office_result_draft','local_write'));assert.deepEqual(runBudget(saved,at),{},'Once a result is saved the run is finishing, not exploring.');
 });
@@ -440,10 +440,10 @@ test('a run that has read much or long is told to save what is established; a ru
 // The checkpoint keeps 32 receipts and verification can only judge what is kept: a run stops reading at 30 until it saves.
 test('a run without a saved result is refused a read past the limit and continues after it saves',async()=>{
   const draftTool={name:'office_result_draft',description:'Save a result.',input_schema:{type:'object',properties:{text:{type:'string'}},required:['text'],additionalProperties:false},effect:'local_write'};
-  const queue=[...Array.from({length:23},(_,i)=>choose('browser_read',{url:`https://example.test/${i}`})),{action:'tool',stage_id:'report',tool_name:'office_result_draft',arguments_json:JSON.stringify({text:'Physical AI'}),summary:'Save.',completed_checks:[],wait_reason:null},done(['draft-1'])];
+  const queue=[...Array.from({length:25},(_,i)=>choose('browser_read',{url:`https://example.test/${i}`})),{action:'tool',stage_id:'report',tool_name:'office_result_draft',arguments_json:JSON.stringify({text:'Physical AI'}),summary:'Save.',completed_checks:[],wait_reason:null},done(['draft-1'])];
   const provider=model(queue),executed=[],host=hooks({tools:[readTool,draftTool],async executeTool(name,args){executed.push(name+(args.url?args.url.slice(-3):''));return name==='office_result_draft'?{status:'succeeded',value:{title:'Physical AI'},evidence_ids:['draft-1'],effect_state:'verified',retry_safe:false}:{...receipt,evidence_ids:[`source-${executed.length}`]};},async verifyCompletion(){return true;}});
   const result=await new BoundedWorkClientExecutor(provider).execute({...request,max_turns:40},host);
-  assert.equal(result.status,'succeeded');assert.equal(executed.filter(name=>name.startsWith('browser_read')).length,22,'The 23rd read is not dispatched.');
+  assert.equal(result.status,'succeeded');assert.equal(executed.filter(name=>name.startsWith('browser_read')).length,24,'The 25th read is not dispatched.');
   const refused=result.checkpoint.observations.find(item=>!item.invocation.dispatched&&JSON.stringify(item.receipt.value).includes('WORK_CLIENT_READ_BUDGET_REACHED'));assert.ok(refused,'The refusal is an observation the model can act on.');
   assert.equal(executed.at(-1),'office_result_draft');
 });
