@@ -2,8 +2,10 @@ import {enableOwnerEnvironment} from '../integrations/client-environment.js';
 import {dirname} from 'node:path';
 import {appendSetupActivity} from './setup-activity.js';
 import {startManagedControlService,validControlUrl} from './control-service.js';
+import {enableConnectionWarmup} from '../observability/control-settings.js';
 // A service process works for the owner of this computer: their standing AI instructions and skills come along.
 enableOwnerEnvironment();
+enableConnectionWarmup();
 try{
   const path=process.argv[2],previous=process.argv[3];if(!path||previous&&!validControlUrl(previous))throw Error('INVALID_CONNECTION_OPTIONS');
   const service=await startManagedControlService(path,previous?new URL(previous):undefined,{onReloadState:async state=>{

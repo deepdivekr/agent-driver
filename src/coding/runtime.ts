@@ -105,7 +105,12 @@ export class CodingRuntime {
     const trackedPaths=(await this.git(item.root,['ls-files','-z'])).split('\0').filter(Boolean).filter(path=>!/(?:^|\/)(?:\.env(?:\.[^\/]*)?|\.secrets|credentials(?:\.json)?)$/iu.test(path)).slice(0,300);
     const map=await projectMap(item.root,this.gitRead);
     const rawPlan=await this.model.call('design',PLAN_INSTRUCTIONS,{work_id:input.work_id,prompt:work.prompt,completion_checks:(work.spec as {completion_checks?:unknown})?.completion_checks??[],project_ref:item.id,allow_write:item.allow_write,allow_commit:item.allow_commit,tracked_paths:trackedPaths,codebase_map:map},z.toJSONSchema(codingPlanSchema));
-    const plan=this.validate(codingPlanSchema.parse(rawPlan),item.allow_write,item.allow_commit,work.prompt,trackedPaths);
+    // Which file a stage may write is the host's rule, not the planner's choice: only a README stage has a target,
+    // and it is README.md. A target the planner wrote on any other stage is dropped instead of ending the Work
+    // (live: an implement stage named the source file it would edit and the whole Work stopped for reconciliation
+    // before anything had run).
+    const proposed=codingPlanSchema.parse(rawPlan),hosted={...proposed,stages:proposed.stages.map(stage=>{if(['document','commit_readme'].includes(stage.operation))return stage;const {target_path:_dropped,...rest}=stage;return rest;})};
+    const plan=this.validate(hosted,item.allow_write,item.allow_commit,work.prompt,trackedPaths);
     const checkpoint=await this.gitCheckpoint(item.root);
     const result=this.store.beginCoding(projectId,input.request_id,input.work_id,item.id,item.root,this.config.fingerprint,plan,checkpoint);
     await this.publishCheckpoint(result.run.id);
@@ -157,10 +162,16 @@ export class CodingRuntime {
   }
   private async verify(root:string,stage:CodingStage,item:NonNullable<HostConfig['coding']>['projects'][number]){
     await this.git(root,['diff','--check']);
+    // What the host itself ran and saw is the evidence of a coding stage: the command, its exit code and the end of
+    // its output. A model's summary of the same thing is a claim (live: the change was right and its tests passed, and
+    // completion was refused because the receipt held only summaries and hashes).
+    const checks:Array<{command:string;exit_code:number;output_tail:string}>=[];
     if(stage.operation==='implement'||stage.operation==='document')for(const check of item.verify){
       const result=await this.runner.run({executable:check.executable,args:check.args,cwd:root,timeout_ms:check.timeout_ms});
       requireCondition(result.code===0,'CODING_CONFIGURED_VERIFY_FAILED');
+      checks.push({command:[check.executable.split(/[\\/]/u).pop()??'check',...check.args].join(' ').slice(0,200),exit_code:result.code,output_tail:safe((result.stdout+'\n'+result.stderr).trim().slice(-1500),1500)});
     }
+    return checks;
   }
   private async codex(runId:string,stage:CodingStage,root:string,prompt:string,previousSession:string|null,allowWrite:boolean,owner:string,signal:AbortSignal,selected:string){
     const args=[...(selected==='client_default'?[]:['--model',selected]),'-C',root,'-s',allowWrite?'workspace-write':'read-only','-a','never','exec',...(previousSession?['resume','--json',previousSession]:['--json']),'-'];
@@ -240,8 +251,11 @@ export class CodingRuntime {
         if(!earlier.length)requireCondition(!(await this.git(item.root,['status','--porcelain=v1','--untracked-files=normal'])).trim(),'CODING_PROJECT_DIRTY');
         effectStarted=true;
         attemptedModel=this.selectedModel('codex');const output=await this.codex(run.id,stage,item.root,base,prior?.session_id??null,true,claimed.owner,controller.signal,attemptedModel);
-        await this.verify(item.root,stage,item);
-        receipt={actor:'codex',operation:stage.operation,model:output.model,session_id:output.session_id,output_sha256:output.output_sha256,verify:'git_diff_check_and_configured_checks_passed'};summary=output.summary;
+        const hostChecks=await this.verify(item.root,stage,item),hostDiff=await this.diff(item.root,true),hostGit=await this.gitCheckpoint(item.root);
+        receipt={actor:'codex',operation:stage.operation,model:output.model,session_id:output.session_id,output_sha256:output.output_sha256,verify:'git_diff_check_and_configured_checks_passed',
+          host_observed:{note:'Read and run by the host after the stage, not reported by the model.',working_tree_diff:hostDiff.slice(0,6000),working_tree_diff_truncated:hostDiff.length>6000,working_tree_diff_sha256:hash(hostDiff),configured_checks:hostChecks,
+            // Whether a commit was made is read from Git, not taken from the instruction that forbade it.
+            git:{head_before_stage:expected.head,head_after_stage:hostGit.head,commit_created:expected.head!==hostGit.head}}};summary=output.summary;
       }else if(stage.actor==='code'){
         requireCondition(stage.operation==='commit_readme'&&item.allow_commit&&item.allow_write,'CODING_COMMIT_NOT_AUTHORIZED');
         requireCondition(earlier.some(entry=>run.plan.stages[entry.ordinal]?.operation==='document'&&entry.status==='succeeded'),'CODING_COMMIT_WITHOUT_DOCUMENT');
@@ -274,7 +288,8 @@ export class CodingRuntime {
           const after=await this.gitCheckpoint(item.root);
           requireCondition(expected.head===after.head&&expected.state_sha256===after.state_sha256,'CODING_GIT_CHANGED_DURING_REVIEW');
           const review=output.output as z.infer<typeof reviewSchema>;
-          receipt={actor:output.actor,operation:stage.operation,model:output.model,session_id:output.session_id,diff_sha256:hash(diff),issues:review.issues,approved:review.approved};summary=safe(review.summary);
+          receipt={actor:output.actor,operation:stage.operation,model:output.model,session_id:output.session_id,diff_sha256:hash(diff),issues:review.issues,approved:review.approved,
+            host_observed:{note:'Read by the host after the review, not reported by the model.',git:{head_before_stage:expected.head,head_after_stage:after.head,commit_created:false},working_tree_unchanged_during_review:true}};summary=safe(review.summary);
           if(!review.approved){this.store.finishCodingStage(projectId,run.id,stage.id,claimed.owner,'failed',summary,receipt,after);this.observeContextResult(contextDelivery.delivery.id,'stage_failed',claimed.stage.attempts);await this.publishCheckpointAfterStage(run.id);return this.status({run_id:run.id});}
         }else if(stage.operation==='document'){
           const target=join(item.root,'README.md'),draft=output.output as z.infer<typeof contentSchema>;

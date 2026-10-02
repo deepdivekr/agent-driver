@@ -1035,7 +1035,15 @@ export class WorkExecutionTools {
     // Once dispatched, return the authoritative receipt even if pause/revision
     // changes during the effect. The bounded executor checkpoints it first and
     // applies the live guard before admitting its next operation.
-    const rawValue=await this.api.call(name,input),value=name==='runtime_pack_run'?{...object(rawValue),request_id:requestId}:rawValue;
+    // A coding plan is drawn up and checked before a run exists. A plan the host refuses has written nothing, so
+    // it is a refused request the run can make again, not an effect that needs reconciliation.
+    const rawValue=await this.api.call(name,input).catch(error=>{
+      // Asking to reconcile a run that needs no reconciliation changed nothing either.
+      if(name==='runtime_coding_reconcile'&&error instanceof Error&&error.message==='CODING_RECONCILE_NOT_NEEDED')throw new WorkClientToolInputError(error.message,'This coding run has nothing to reconcile: its stages finished and their effects are known. Read it with runtime_coding_status.');
+      if(name==='runtime_coding_start'&&error instanceof Error&&/^CODING_(?:TARGET_NOT_ALLOWED|ACTOR_OPERATION_MISMATCH|DUPLICATE_STAGE|DOCUMENT_NOT_REQUESTED|COMMIT_NOT_AUTHORIZED|COMMIT_WITHOUT_DOCUMENT|REVIEW_WITHOUT_PREVIOUS_STAGE|SOURCE_PATH_NOT_ALLOWED|SOURCE_NOT_TRACKED)$/u.test(error.message))
+        throw new WorkClientToolInputError(error.message,'The coding plan drawn up for this project was refused by the host before anything ran; nothing was written. Start the coding run again: the plan is drawn up anew.');
+      throw error;
+    }),value=name==='runtime_pack_run'?{...object(rawValue),request_id:requestId}:rawValue;
     if(name==='runtime_files_propose'&&this.folderMovesDelegated()){
       // Delegation policy: the owner granted this folder with move permission. The plan the host just validated
       // (hashes, protected files, in-folder targets) is applied as is; it stays reversible from the Control Center.

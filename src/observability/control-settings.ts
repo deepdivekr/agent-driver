@@ -18,6 +18,9 @@ import {workAutonomy} from '../interface/config.js';
 import {clientEnvironment,clientEnvironmentSummary,type ClientEnvironment} from '../integrations/client-environment.js';
 
 async function readBody(request:IncomingMessage){let size=0;const chunks:Buffer[]=[];for await(const chunk of request){const bytes=Buffer.from(chunk);size+=bytes.length;if(size>20_000)throw Error('SETTINGS_INPUT_TOO_LARGE');chunks.push(bytes);}return JSON.parse(Buffer.concat(chunks).toString('utf8')) as unknown;}
+/** Only a real service process asks the apps ahead of time; a test or a library use never starts them unasked. */
+let connectionWarmup=false;
+export function enableConnectionWarmup(){connectionWarmup=true;}
 export class ControlSettings{
   readonly path:string;private busy=false;private providerProbe:{token:string;fingerprint:string;verification:ApiVerification;expires_at:number}|null=null;
   readonly maintenance:Pick<ClientMaintenanceController,'view'|'save'|'runDue'|'runNow'|'close'>;
@@ -67,12 +70,26 @@ export class ControlSettings{
    * it. The check reads where they are and what they are called (never their values) and shows them, and it looks
    * for the Aside the owner already installed instead of waiting for a click on another screen (live: a new
    * installation asked the owner to set everything up again and did not find the installed Aside). */
-  private async existingEnvironment(clients:SubscriptionClientConnection[]){
+  /** Asking an AI app about itself starts its command-line program and takes seconds (live: 4 to 7 s each for the
+   * sign-in check, the model list and the install check, so the settings page stayed locked for 6 to 18 s on every
+   * visit). The last answer is kept for a short time and shown at once; an explicit check, a sign-in, an install or
+   * a save asks again. */
+  private readonly remembered=new Map<string,{at:number;value:Promise<unknown>}>();
+  private recall<T>(key:string,maxAgeMs:number,load:()=>Promise<T>,fresh=false):Promise<T>{
+    const known=this.remembered.get(key);
+    if(!fresh&&known&&Date.now()-known.at<maxAgeMs)return known.value as Promise<T>;
+    const value=load();this.remembered.set(key,{at:Date.now(),value});
+    value.catch(()=>{if(this.remembered.get(key)?.value===value)this.remembered.delete(key);});
+    return value;
+  }
+  private connections(fresh=false){return this.recall('connections',120_000,()=>this.auth.connections(),fresh);}
+  private async existingEnvironment(clients:SubscriptionClientConnection[],fresh=true){
     const names={codex:'Codex',claude:'Claude Code'} as const,found=new Map<string,ClientEnvironment>();
     for(const client of clients)if((client.id==='codex'||client.id==='claude')&&client.status==='ready'){
       const environment=clientEnvironment(client.id,this.environment);if(!environment.found)continue;
-      found.set(client.id,environment);await this.activity.record('ai','info',names[client.id]+': '+clientEnvironmentSummary(environment));
+      found.set(client.id,environment);if(fresh)await this.activity.record('ai','info',names[client.id]+': '+clientEnvironmentSummary(environment));
     }
+    if(!fresh)return found;
     try{
       // Probing and registering the owner's foreground browser needs the owner's consent. The standing delegation
       // gives it; without it the owner connects Aside from the Browsers & sign-in tab as before.
@@ -91,7 +108,12 @@ export class ControlSettings{
     const settings=publicModelSettings(saved,base);
     return {...settings,...(scope==='coding'&&!saved?{selection:global.selection}:{}),...(scope==='coding'?{applies_to:'next_planner_call_stage_or_new_dialog',attached_dialog_models:'pinned'}:{}),scope,inherit_global:scope==='coding'?(!saved||Boolean(saved.inherit_global)):false,computer:this.connection(),runtime_platform:process.platform,site_login_configured:Boolean(this.config.swarm?.visual.owned_vm),work_model_data:{approved:workModelDataApproved(this.config),editable:this.connection().kind==='local'},execution_approval_unchanged:true};
   }
+  private warmed=false;
+  private models(fresh=false){return this.recall('models:global',600_000,async()=>{const [codex,opencode]=await Promise.all([codexModelCatalog(),opencodeModelCatalog(this.environment)]);return {codex,claude:claudeModelCatalog(),opencode};},fresh);}
   async handle(request:IncomingMessage,response:ServerResponse,suffix:string,host:string){
+    // The first page the owner opens (any page) starts the slow questions to the apps in the background, so the
+    // settings page finds the answers ready (live: its first visit after a start still took 8 s).
+    if(connectionWarmup&&!this.warmed){this.warmed=true;void this.connections().catch(()=>{});void this.models().catch(()=>{});}
     if(suffix!=='settings'&&!suffix.startsWith('settings/'))return false;
     const scope:ModelScope=suffix.startsWith('settings/coding/')?'coding':'global',path=scopedModelSettingsPath(this.path,scope);
     if(scope==='coding'){suffix=suffix.replace('settings/coding/','settings/');if(!['settings/status','settings/models','settings/provider-probe','settings/save'].includes(suffix)){response.writeHead(404);response.end();return true;}}
@@ -102,10 +124,10 @@ export class ControlSettings{
         if(suffix==='settings')send(200,settingsHtml(nonce),true);
         else if(suffix==='settings/status')send(200,this.status(scope));
         else if(suffix==='settings/mcp')send(200,await this.mcp.view());
-        else if(suffix==='settings/bootstrap')send(200,{...this.bootstrap.view(),connections:await this.auth.connections()});
+        else if(suffix==='settings/bootstrap')send(200,{...this.bootstrap.view(),connections:await this.connections()});
         else if(suffix==='settings/browsers')send(200,this.browsers.view());
         else if(suffix==='settings/maintenance/status')send(200,this.maintenance.view());
-        else if(suffix==='settings/models'){const [codex,opencode]=await Promise.all([codexModelCatalog(),opencodeModelCatalog(this.environment)]);send(200,{codex,claude:claudeModelCatalog(),opencode});}
+        else if(suffix==='settings/models')send(200,await this.models(new URL(request.url??'','http://localhost').searchParams.get('fresh')==='1'));
         else if(suffix==='settings/activity'){this.activity.attach(response);return true;}
         else if(suffix==='settings/flows')send(200,{flows:['codex','claude','opencode','cursor','hermes'].map(id=>this.auth.view(id as 'codex'|'claude'|'opencode'|'cursor'|'hermes'))});
         else send(404,{error:'NOT_FOUND'});return true;
@@ -116,6 +138,8 @@ export class ControlSettings{
       this.busy=true;
       try{
         const body=await readBody(request);
+        // Anything the owner changes may change what the apps report.
+        if(suffix!=='settings/refresh'&&suffix!=='settings/provider-probe')this.remembered.clear();
         if(suffix==='settings/maintenance/settings'){
           const value=body&&typeof body==='object'&&!Array.isArray(body)?body as Record<string,unknown>:{};
           if(Object.keys(value).some(key=>!['revision','enabled'].includes(key))||!Number.isSafeInteger(value.revision)||typeof value.enabled!=='boolean')throw Error('CLIENT_MAINTENANCE_SETTINGS_INVALID');
@@ -190,7 +214,12 @@ export class ControlSettings{
           else await this.activity.record('ai','success',proposedBody.selection?.mode==='api'?'API 모델 설정을 저장했습니다.':'구독 AI 설정을 저장했습니다.');
           send(200,scope==='coding'?this.status(scope):saved);
         }
-        else if(suffix==='settings/refresh'){await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');const clients=await this.auth.connections();await this.recordClientChecks(clients);const found=await this.existingEnvironment(clients);await this.activity.record('ai','info','AI 클라이언트 상태 확인을 마쳤습니다.');send(200,{clients:clients.map(client=>found.has(client.id)?{...client,environment:found.get(client.id)}:client)});}
+        else if(suffix==='settings/refresh'){
+          // Opening the tab shows the last check; pressing the check button (force) or having none yet asks the apps.
+          const fresh=(body as {force?:unknown}|null)?.force===true||!this.remembered.has('connections');
+          if(fresh)await this.activity.record('ai','running','로그인된 AI 클라이언트를 확인하는 중입니다.');
+          const clients=await this.connections(fresh);if(fresh)await this.recordClientChecks(clients);const found=await this.existingEnvironment(clients,fresh);if(fresh)await this.activity.record('ai','info','AI 클라이언트 상태 확인을 마쳤습니다.');
+          send(200,{clients:clients.map(client=>found.has(client.id)?{...client,environment:found.get(client.id)}:client),checked:fresh?'now':'remembered'});}
         else if(suffix==='settings/login'){
           const value=body as {client?:unknown;flow?:unknown};
           if(!value||!['codex','claude','opencode','cursor','hermes'].includes(String(value.client))||!['device','browser'].includes(String(value.flow))){send(400,{error:'INVALID_CLIENT_FLOW'});return true;}
