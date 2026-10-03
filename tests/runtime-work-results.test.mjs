@@ -255,7 +255,7 @@ test('runtime contract a destination added after a verified result gets that res
   const runId=randomUUID(),time=new Date().toISOString();
   x.store.hermesState.exec('CREATE TABLE IF NOT EXISTS office_supervisor(run_id TEXT PRIMARY KEY,project_id TEXT,work_id TEXT,work_revision INTEGER,state TEXT,result TEXT,checkpoint TEXT,created_at TEXT)');
   x.store.hermesState.prepare('INSERT INTO office_supervisor VALUES(?,?,?,?,?,?,?,?)').run(runId,project,x.work.id,0,'succeeded',JSON.stringify({summary:'5세트 완성',text:'해설',completion_verified:true}),JSON.stringify({observations:[]}),time);
-  const saved=results.record(project,{work_id:x.work.id,run_id:runId,source_kind:'client',work_revision:0,summary:'파생상품 사례 이미지 5세트',text:'01_레버리지.png / 해설 …',artifacts:[{label:'01_레버리지.png',path:pngPath,sha256:createHash('sha256').update(png).digest('hex'),bytes:png.length,media_type:'image/png'}],sources:[]});
+  const saved=results.record(project,{work_id:x.work.id,run_id:runId,source_kind:'client',work_revision:0,summary:'파생상품 사례 이미지 5세트',text:'01_레버리지.png / 해설 …',artifacts:[{label:'01_레버리지.png',path:pngPath,sha256:createHash('sha256').update(png).digest('hex'),bytes:png.length}],sources:[]});
   assert.equal(saved.verification,'verified');
   results.setSelection(project,x.work.id,{revision:0,target_ids:['app','tg-added']});
   const delivered=await results.dispatchPending(project,x.work.id);
