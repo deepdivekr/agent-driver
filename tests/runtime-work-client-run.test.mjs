@@ -298,4 +298,6 @@ test('runtime fixture the readback of a long saved result covers every page',asy
   assert.equal(pages[0].invocation.arguments.offset,0);assert.equal(pages[1].invocation.arguments.offset,pages[0].receipt.value.page.next_offset);
   assert.equal(pages.at(-1).receipt.value.page.has_more,false);
   assert.equal(pages.reduce((sum,page)=>sum+page.receipt.value.page.returned_bytes,0),pages[0].receipt.value.page.total_bytes,'the pages add up to the whole saved result');
+  const draft=checkpoint.observations.find(item=>item.invocation.tool_name==='office_result_draft');
+  assert.ok(!('_office_compaction' in draft.receipt.value),'the saved record fits a receipt whole');assert.ok(Buffer.byteLength(JSON.stringify(draft.receipt.value))<=16000);
 });
