@@ -1,5 +1,5 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {existsSync,lstatSync,mkdirSync,readdirSync,readFileSync} from 'node:fs';
+import {existsSync,lstatSync,mkdirSync,readdirSync,readFileSync,rmSync} from 'node:fs';
 import {homedir} from 'node:os';
 import {basename,delimiter,dirname,extname,isAbsolute,join,relative} from 'node:path';
 import {type PackStore} from '../packs/store.js';
@@ -290,9 +290,19 @@ function initialPrompt(input:ClientRunInput){
     ...windowsInstructions(input.client).map(item=>`The owner's standing instructions for ${clientName(input.client)} on the Windows side of this computer (${item.file}); this run does not load them by itself. Follow them where they apply:\n${item.text}`),
     'Nobody answers questions during the run. If only the owner can unblock something (a sign-in, a payment, a decision), stop and say exactly what is needed.',
     officeOwns(input),
+    `Also write ${COMPLETION_FILE} in the Work folder: {"checks":[{"id":"<condition id>","met":true|false,"note":"<one line: what shows it, or what is missing>"}]}, one entry per completion condition above. Set met only when your files and reply show it. Office decides completion from this file.`,
     'Finish with a short reply in the language of the request: what you made, each file name, and how each completion condition is met.'].join('\n\n');
 }
 
+/** The client's own completion report (owner decision 2026-10-04: a client run is complete when its client says each
+ * condition is met; Office verifies independently only Works that send or submit outside). Written in the turn it reports. */
+const COMPLETION_FILE='COMPLETION.json';
+export function clientCompletionReport(folder:string,checks:Check[]):{met:boolean;checks:Array<{id:string;met:boolean;note:string}>}|null{
+  let raw:unknown;try{const path=join(folder,COMPLETION_FILE);if(!lstatSync(path).isFile()||lstatSync(path).size>65_536)return null;raw=JSON.parse(readFileSync(path,'utf8'));}catch{return null;}
+  const listed=Array.isArray(object(raw).checks)?(object(raw).checks as unknown[]).map(object):[];
+  const reported=checks.map(check=>{const entry=listed.find(item=>text(item.id)===check.id);return {id:check.id,met:entry?.met===true,note:brief(text(entry?.note),300)};});
+  return listed.length?{met:reported.every(item=>item.met),checks:reported}:null;
+}
 /** The receipts of the latest client turn: from its run record on. Earlier turns stay in the record (the admission prefix)
  * but the result is what the latest turn left (live: a run resumed six times cited all its turns and verification ran out of budget). */
 const latestTurn=(observations:WorkClientCheckpoint['observations'])=>{const start=observations.map(item=>item.invocation.tool_name).lastIndexOf('office_client_run');return start<0?observations:observations.slice(start);};
@@ -315,6 +325,8 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
   for(;;){
     if(next){
       input.guard();update({finished:false,direction_at:latest});extra??=await servers(client).catch(()=>[]);
+      // A completion report is the turn's own: one left by an earlier turn never decides this one.
+      try{rmSync(join(input.folder,COMPLETION_FILE),{force:true});}catch{/* none */}
       input.activity('supervisor.client_run',`${clientName(client)} · ${session().confirmed?'같은 세션을 이어서 실행합니다.':'사용자 설정 그대로 업무 폴더에서 실행을 시작합니다.'}`,meta({status:'running',model_continuity:session().confirmed?'resumed_session':'new_session'}));
       if(extra.length)input.activity('tool.result',`windows_mcp · ${extra.map(server=>server.id).join(', ')}`,meta({tool_name:'windows_mcp',status:'succeeded'}));
       // Live (2026-10-03): given Aside, Codex still read Reddit and X with a headless browser and met their challenges.
@@ -376,6 +388,13 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       input.activity('supervisor.client_run',`${clientName(client)} · 실행을 마쳤습니다. 만든 파일 ${files.length}개를 결과로 저장했습니다.`,meta({status:'succeeded'}));
     }
     input.guard();
+    const report=input.external_effect?null:clientCompletionReport(input.folder,input.checks);
+    if(report){
+      const missing=report.checks.filter(item=>!item.met);
+      input.activity('supervisor.verification',report.met?`${clientName(client)} reported every completion condition met (${report.checks.length}); Office accepts the client's report for a Work that sends or submits nothing outside.`:`${clientName(client)} reported ${missing.length} condition${missing.length===1?'':'s'} not met: ${missing.map(item=>`${item.id}${item.note?` (${item.note})`:''}`).join('; ')}`.slice(0,1000),meta({stage_id:'completion.verify',status:report.met?'verified':'not_verified'}));
+      return report.met?{status:'succeeded',summary:cp.summary,reason:null,completion_verified:true,checkpoint:cp,model_calls:[],...(deliveryText?{delivery_text:deliveryText}:{})}
+        :{status:'awaiting_review',summary:cp.summary,reason:'WORK_CLIENT_REPORTED_INCOMPLETE',completion_verified:false,checkpoint:cp,model_calls:[],...(deliveryText?{delivery_text:deliveryText}:{})};
+    }
     let verified:Awaited<ReturnType<Verify>>;
     try{verified=await input.verify(input.checks,cp.observations,{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:cp.summary,wait_reason:null,completed_checks:input.checks.map(check=>({id:check.id,evidence_ids:latestTurn(cp.observations).map(item=>item.invocation.request_id)}))});}
     catch(error){

@@ -27,8 +27,10 @@ One client per Work for its whole life, Office's own judgments for the Work
 included: no routing or session handoff between clients (a client calling
 another CLI by itself is its own behaviour). Permissions default to everything allowed, as in
 the client app; Office does not approve actions one by one. Office records the
-events, pauses between turns, resumes the same session with new directions or a
-verifier's denial, verifies the result, schedules and delivers. The host-tool
+events, pauses between turns, resumes the same session with new directions,
+schedules and delivers. A client run is complete when its client reports each
+completion condition met (COMPLETION.json, owner 2026-10-04); Office verifies
+independently only a Work that sends or submits outside. The host-tool
 executor is a fallback only. API keys are for Jev only. Execution-tool routing
 (Playwright to Aside) stays.
 
