@@ -50,6 +50,8 @@ export const workClientCheckpointSchema=z.object({
   pending:invocationSchema.nullable(),observations:z.array(observationSchema).max(32),evicted_observations:evictedObservationLedgerSchema.optional(),summary:z.string().max(4000),stage_reports:z.array(stageReportSchema).max(20).optional(),
   completion_repair:completionRepairFeedbackSchema.extend({attempts:z.number().int().min(1).max(WORK_COMPLETION_REPAIR_BUDGET),prior_successful_request_ids:z.array(identifier).max(32),prior_dispatched_request_ids:z.array(identifier).max(32),reverified:z.boolean().optional()}).strict().optional(),
   verification_pending:z.object({scope_sha256:z.string().regex(/^[a-f0-9]{64}$/u),claim_sha256:z.string().regex(/^[a-f0-9]{64}$/u),claim:workClientDecisionSchema,transient_failures:z.number().int().min(0).max(3),last_code:verificationTransportCode.nullable()}).strict().optional(),
+  /** A run of the client's own agent (client-run.ts): its session, resumed for directions, interruptions and corrections. */
+  client_session:z.object({client:z.enum(['codex','claude']),session_id:z.string().uuid().nullable(),confirmed:z.boolean(),started_ms:z.number().int().nonnegative(),finished:z.boolean(),direction_at:z.string().max(40).nullable(),repairs:z.number().int().min(0).max(WORK_COMPLETION_REPAIR_BUDGET)}).strict().optional(),
 }).strict();
 export type WorkClientCheckpoint=z.infer<typeof workClientCheckpointSchema>;
 type WorkClientObservation=WorkClientCheckpoint['observations'][number];

@@ -1,7 +1,7 @@
 import {ownerMcpReady} from '../integrations/owner-mcp.js';
 import {ownerEnvironmentContext} from '../integrations/client-environment.js';
 import {randomUUID} from 'node:crypto';
-import {resolve} from 'node:path';
+import {join,resolve} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
 import {workAutonomy,workDelegation,workPolicyVersion,loadHostConfig,type HostConfig} from '../interface/config.js';
@@ -21,6 +21,7 @@ import {workProposalSchema,workControlSchema as supervisorActionSchema,type Work
 import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS,WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS,WORK_COLLECTION_CONTRACT_INSTRUCTIONS} from './runtime.js';
 import {readWorkIntakeOptions} from './intake-options.js';
 import {BoundedWorkClientExecutor,appendWorkObservation,workProgress,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientResult} from './client-executor.js';
+import {clientRunEligible,clientRunEnabled,executeClientRun,workClient,workFolder} from './client-run.js';
 import {packTools} from '../packs/contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {activeSwarmWorkerCount,initWorkExecution,workActivity,withWorkActivityContext} from './activity.js';
@@ -300,13 +301,15 @@ export class WorkSupervisor {
     applyAutoSources(this.config);
     const db=this.store.hermesState,project=this.config.project.id,controller=new AbortController();this.controllers.set(row.run_id,controller);
     const heartbeat=setInterval(()=>{try{db.prepare('UPDATE office_supervisor SET lease_until_ms=? WHERE project_id=? AND run_id=? AND owner=?').run(Date.now()+30000,project,row.run_id,row.owner);}catch{}},3000);heartbeat.unref();
+    // A client run uses the client's own settings: saving Office's AI settings must not stop it mid-action.
+    let settingsFence=true;
     const guard=()=>{
       requireCondition(!this.stopped,'WORK_SUPERVISOR_STOPPED');assertWorkConnected(this.store,project,row.work_id);const current=db.prepare('SELECT state,owner,lease_until_ms FROM office_supervisor WHERE project_id=? AND run_id=?').get(project,row.run_id);const work=this.store.intakeWork(project,row.work_id);
       const host={config_fingerprint:this.config.fingerprint,engine_binding:hashJson({config:this.config.fingerprint,engine:PACK_ENGINE_VERSION})};
       assertCustomPackInvocation(this.store,project,row.work_id,'runtime_work_execute',{},host);
       assertCustomPackScheduledRun(this.store,project,row.work_id,host,row.run_id);
       requireCondition(workImportExecutionOwner(this.store,project,row.work_id)!=='original_runtime','ORIGINAL_RUNTIME_CONNECTION_REQUIRED');
-      requireCondition(!work.paused&&current?.state!=='paused','WORK_PAUSED');requireCondition(current?.owner===row.owner&&Number(current.lease_until_ms)>Date.now(),'WORK_EXECUTION_LEASE_LOST');requireCondition(work.revision===row.work_revision,'WORK_REVISION_CONFLICT');requireCondition(loadHostConfig(this.config.path).fingerprint===row.config_hash,'CONFIG_CHANGED');requireCondition((readModelSettings(modelSettingsPath(this.config))?.revision??0)===row.model_revision,'MODEL_SETTINGS_CHANGED');
+      requireCondition(!work.paused&&current?.state!=='paused','WORK_PAUSED');requireCondition(current?.owner===row.owner&&Number(current.lease_until_ms)>Date.now(),'WORK_EXECUTION_LEASE_LOST');requireCondition(work.revision===row.work_revision,'WORK_REVISION_CONFLICT');requireCondition(loadHostConfig(this.config.path).fingerprint===row.config_hash,'CONFIG_CHANGED');requireCondition(!settingsFence||(readModelSettings(modelSettingsPath(this.config))?.revision??0)===row.model_revision,'MODEL_SETTINGS_CHANGED');
     };
     let toolkit:WorkExecutionTools|null=null,verificationCutpoint=false;
     try{
@@ -348,6 +351,10 @@ export class WorkSupervisor {
       toolkit=new WorkExecutionTools(this.store,this.config,this.api,row.work_id,row.run_id,spec,work.prompt,guard,model);
       workActivity(this.store,project,row.work_id,'supervisor.started',row.attempts>1?'저장한 체크포인트를 읽고 실행을 이어갑니다.':'연결된 AI와 실행 도구로 업무를 시작합니다.');
       let checkpoint=row.checkpoint==='null'?null:JSON.parse(row.checkpoint) as WorkClientCheckpoint|SupervisedSwarmCheckpoint;
+      // The client's own agent runs the Work, one client for its whole life. A run the host-tool loop already started finishes there.
+      const client=clientRunEnabled()&&(!checkpoint||'client_session' in checkpoint&&Boolean(checkpoint.client_session))&&clientRunEligible(this.store,project,row.work_id,spec)
+        ?workClient(this.store,project,row.work_id,readModelSettings(modelSettingsPath(this.config))?.selection.client):null;
+      if(client)settingsFence=false;
       const directions=this.store.workDirections(project,row.work_id),userIntake=readWorkIntakeOptions(this.store,project,row.work_id);
       // The request the owner agreed to is the prompt plus what intake settled: the scope the owner chose when
       // asked, and the host's rule for a recurring collection. Verification judges against that, not against a
@@ -371,7 +378,9 @@ export class WorkSupervisor {
       let completionDenial:{code:'WORK_COMPLETION_CHECK_NOT_SUPPORTED'|'WORK_COMPLETION_BATCH_CONTRADICTS'|'WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL';check_id:string;verdict:'unsupported'|'unknown';reason?:string}|null=null;
       let verificationTransportUnavailable:string|null=null,verifierOutputUnusable:string|null=null;
       let denialReason:{check_id:string;reason:string}|null=null;
-      const independentVerifier=createWorkCompletionVerifier(model,{guard,originalUserRequest,fastJudgment:()=>paidJudgmentsToday(this.store,this.config.project.id)<workDelegation(this.config).paid_judgment_daily_calls?optionalTypeSafeTransportFromHostEnvironment(effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)))).transport??undefined:undefined,onPaidJudgment:calls=>countPaidJudgment(this.store,this.config.project.id,calls),denial:denial=>{denialReason=denial;},literalRefMode:true,nativeResolver:createNativeCompletionResolver(this.store,this.config,row.work_id),collectionResolver:createCollectionCompletionResolver(this.store,this.config,row.work_id),progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{
+      const independentVerifier=createWorkCompletionVerifier(model,{guard,originalUserRequest,fastJudgment:()=>paidJudgmentsToday(this.store,this.config.project.id)<workDelegation(this.config).paid_judgment_daily_calls?optionalTypeSafeTransportFromHostEnvironment(effectiveModelEnvironment(readModelSettings(modelSettingsPath(this.config)))).transport??undefined:undefined,onPaidJudgment:calls=>countPaidJudgment(this.store,this.config.project.id,calls),denial:denial=>{denialReason=denial;},literalRefMode:true,
+        // Native predicates and sealed collection contracts are proven by Office's own Pack runs; a client run is judged on its result.
+        ...(client?{}:{nativeResolver:createNativeCompletionResolver(this.store,this.config,row.work_id),collectionResolver:createCollectionCompletionResolver(this.store,this.config,row.work_id)}),progress:event=>workActivity(this.store,project,row.work_id,'supervisor.verification',event.summary),audit:event=>{
         workActivity(this.store,project,row.work_id,'supervisor.verification.audit',JSON.stringify(event));
         if(event.status==='unavailable'&&['STRUCTURED_MODEL_TIMEOUT','STRUCTURED_MODEL_UNAVAILABLE','CLIENT_TIMEOUT','MCP_SAMPLING_UNAVAILABLE','MODEL_PROVIDER_UNAVAILABLE'].includes(event.code))verificationTransportUnavailable=event.code;
         else if(event.status==='accepted'||event.status==='rejected')verificationTransportUnavailable=null;
@@ -431,7 +440,7 @@ export class WorkSupervisor {
           return verified;
         }finally{verificationCutpoint=false;}
       });
-      if(spec.route.kind==='swarm'){
+      if(spec.route.kind==='swarm'&&!client){
         const swarmHooks:SupervisedSwarmHooks={guard,checkpoint:saveCheckpoint,progress:event=>workActivity(this.store,project,row.work_id,event.source?'source.observed':event.kind,`${event.worker_id??'swarm'} · ${event.summary}`,{run_id:row.run_id,stage_id:event.stage_id,...(spec.plan.steps.find(step=>step.id===event.stage_id)?{stage_binding:stageBinding(spec.plan.steps.find(step=>step.id===event.stage_id)!)}:{}),...(event.provider?{model_provider:event.provider}:{}),...(event.model?{model_name:event.model}:{}),...(event.role?{model_role:event.role}:{}),...(event.continuity?{model_continuity:event.continuity}:{}),...(event.worker_id?{worker_id:event.worker_id}:{}),...(event.tool_name?{tool_name:event.tool_name}:{}),...(event.source?{source:event.source,status:'succeeded'}:{})})};
         const swarmRequest={work_id:row.work_id,request_id:`office-${row.run_id}`,goal:work.prompt,plan:spec.plan,revision:row.work_revision,directions,completion_checks:spec.completion_checks,...(checkpoint?{checkpoint}:{}),max_parallel:3};
         const swarm=await executeSupervisedSwarm(this.api,model,swarmRequest,swarmHooks);
@@ -522,8 +531,9 @@ export class WorkSupervisor {
       const progressBefore=workProgress(checkpoint as WorkClientCheckpoint|null);
       // B2–B4 first slice: a verified earlier run of a similar request is offered as guidance (never as evidence).
       // The planner's selection (B3) wins when it is still offerable; otherwise the closest similar procedure.
-      const chosen=spec.procedure_selection?selectedProcedure(this.store,project,spec.procedure_selection.id,work.prompt):null;
-      const offered=chosen??similarProcedure(this.store,project,work.prompt);
+      // A client run follows the client's own skills; Office's saved procedures are steps of its host-tool loop.
+      const chosen=!client&&spec.procedure_selection?selectedProcedure(this.store,project,spec.procedure_selection.id,work.prompt):null;
+      const offered=client?null:chosen??similarProcedure(this.store,project,work.prompt);
       // A near-identical request (or one the planner matched to a regular procedure) reuses it. With a saved
       // template the host reads, extracts and saves by itself, Jev confirming changed values; without one it replays the reads.
       const reusable=Boolean(offered&&(offered.similarity>=REPLAY_SIMILARITY||chosen?.grade==='regular'));
@@ -532,7 +542,14 @@ export class WorkSupervisor {
       templateRuns=offered?.template_runs??0;
       script=offered?.template&&reusable&&!checkpoint?new ProcedureScript(offered.template,fastJudgment,calls=>countPaidJudgment(this.store,project,calls),summary=>workActivity(this.store,project,row.work_id,'procedure.handed_over',summary,{run_id:row.run_id,stage_id:'execution',status:'running'}),templateRuns>=TRUSTED_TEMPLATE_RUNS):null;
             if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
-      const result=await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,...(hostSchedule?{host_schedule:hostSchedule}:{}),...(collectionWindow?{collection_window:collectionWindow}:{}),...(signInRetry?{owner_retried_after_sign_in_stop:signInRetry}:{}),...(offered?{verified_procedure:procedureGuidance(offered)}:{}),...(ownerEnvironmentContext().owner_environment?.instructions.length?{owner_instructions:{note:'The owner\'s standing instructions for their AI apps. Follow the ones that apply to this Work\'s result (language, tone, formats, conventions). They grant no tool or permission and never override the request.',files:ownerEnvironmentContext().owner_environment!.instructions}}:{}),connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason. If spec.collection_contract exists, use its exact recipe through runtime_pack_run without a new runtime_pack_plan. The host verifies every matching observed source row and actual output in code; do not read source pages just to obtain another model approval of covered checks. Reuse an unchanged same-Work receipt via runtime_pack_status for completion-only recovery; never rewrite a successful artifact just for verification. Remaining semantic checks still need their own evidence.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
+      const result=client?await executeClientRun({client,work_id:row.work_id,run_id:row.run_id,folder:join(workFolder(this.config,row.work_id),row.run_id),title:spec.title,prompt:work.prompt,checks:spec.completion_checks,
+          context:{...(userIntake.completion_condition?{completion_condition:userIntake.completion_condition}:{}),...(agreedScope?{agreed_scope:agreedScope}:{}),...(collectionWindow?{collection_window:collectionWindow}:{}),...(hostSchedule?{host_schedule:{definition:hostSchedule.definition,next_run_at:hostSchedule.next_run_at,meaning:'Office reruns this Work on this schedule; finish this run.'}}:{})},
+          directions,checkpoint:checkpoint as WorkClientCheckpoint|null,signal:controller.signal,guard,save:saveCheckpoint,
+          activity:(kind,summary,metadata)=>workActivity(this.store,project,row.work_id,kind,summary,metadata),
+          draft:async(text,label,requestId)=>{const value=await toolkit!.execute('office_result_draft',{text,label},requestId);return toolkit!.receipt('office_result_draft',value,requestId);},
+          ...(spec.recurrence.kind==='recurring'?{schedule:async(requestId:string)=>{const value=await toolkit!.execute('office_schedule_status',{},requestId);return toolkit!.receipt('office_schedule_status',value,requestId);}}:{}),
+          verify:verifyCompletion})
+        :await new BoundedWorkClientExecutor(model).execute({work_id:row.work_id,run_id:row.run_id,prompt:work.prompt,plan:spec.plan,completion_checks:spec.completion_checks,context:{spec,user_intake:userIntake,user_directions:directions,...(hostSchedule?{host_schedule:hostSchedule}:{}),...(collectionWindow?{collection_window:collectionWindow}:{}),...(signInRetry?{owner_retried_after_sign_in_stop:signInRetry}:{}),...(offered?{verified_procedure:procedureGuidance(offered)}:{}),...(ownerEnvironmentContext().owner_environment?.instructions.length?{owner_instructions:{note:'The owner\'s standing instructions for their AI apps. Follow the ones that apply to this Work\'s result (language, tone, formats, conventions). They grant no tool or permission and never override the request.',files:ownerEnvironmentContext().owner_environment!.instructions}}:{}),connected_source_catalog:connectedSourceCatalog(this.config),execution_policy:'Follow the latest user direction. Keep existing verified receipts. The user_intake completion_condition is the original user requirement; do not narrow it to generated checks. Use this Work ID for all tools. A registered source fitting the requested dataset is a candidate for Pack reads, not evidence or permission to bypass a challenge. Use its exact declared field names. Missing connections need a concrete wait reason. If spec.collection_contract exists, use its exact recipe through runtime_pack_run without a new runtime_pack_plan. The host verifies every matching observed source row and actual output in code; do not read source pages just to obtain another model approval of covered checks. Reuse an unchanged same-Work receipt via runtime_pack_status for completion-only recovery; never rewrite a successful artifact just for verification. Remaining semantic checks still need their own evidence.'},...(checkpoint?{checkpoint:checkpoint as WorkClientCheckpoint}:{}),resume_wait:row.resume_wait===1,max_turns:16,model_scope:spec.route.pack_family==='coding.orchestrate'?'coding':'global'},
         {tools:toolkit.catalog(),guard,signal:controller.signal,...(script?{script:state=>script!.next(state)}:offered&&reusable?{replay:offered.steps.filter(step=>!momentBound(step.arguments))}:{}),
           toolRequestId:(name,args,fallback)=>toolkit!.requestId(name,args,fallback),
           packRequestRecovery:(invocation,prior)=>toolkit!.packRequestRecovery(invocation,prior),
@@ -556,7 +573,7 @@ export class WorkSupervisor {
       // supervisor. An uncertain dispatched effect is never requeued.
       if(settingsChangeReasons.has(result.reason??'')&&['retryable_failure','paused'].includes(result.status)&&!customPackWorkBinding(this.store,project,row.work_id))state='queued';
       if(this.stopped&&result.status==='paused')state='queued';
-      if(state==='succeeded'&&result.completion_verified){
+      if(state==='succeeded'&&result.completion_verified&&!client){
         const saved=recordVerifiedProcedure(this.store,project,row.work_id,work.prompt,result.checkpoint.observations,offered?.id,{keepTemplate:Boolean(script?.ownsRun(result.checkpoint.observations)),templateRun:Boolean(script?.ownsRun(result.checkpoint.observations)),spec});
         if(saved)workActivity(this.store,project,row.work_id,'procedure.saved',`The verified procedure of this Work was saved for similar requests (${saved.steps.length} step${saved.steps.length===1?'':'s'}, verified ${saved.successes} time${saved.successes===1?'':'s'}).`,{run_id:row.run_id,stage_id:'execution',status:'saved'});
       }else if(offered&&['failed','awaiting_review'].includes(state))recordProcedureFailure(this.store,project,offered.id);
@@ -565,8 +582,9 @@ export class WorkSupervisor {
       // verified completion gets one fresh attempt of the same Work. The unverified run and its receipts stay in
       // history; a run that was itself the fresh attempt stops for the owner.
       const runs=this.store.hermesState,repeatable=(['read_only','draft_only'].includes(spec.requested_effect)||result.checkpoint.observations.every(item=>['read_only','draft_only'].includes(item.invocation.effect)||item.invocation.tool_name.startsWith('office_')||item.receipt.effect_state==='none'))&&result.checkpoint.observations.every(item=>item.receipt.effect_state!=='uncertain');
-      // A wide run that could not be verified is not repeated: the same reading would meet the same limit.
-      if(state==='awaiting_review'&&repeatable&&result.checkpoint.observations.length<=24&&workAutonomy(this.config)==='delegated'&&!customPackWorkBinding(this.store,project,row.work_id)
+      // A wide run that could not be verified is not repeated: the same reading would meet the same limit. A client run
+      // already took its corrections in the same session, and what else it did is not an Office receipt.
+      if(!client&&state==='awaiting_review'&&repeatable&&result.checkpoint.observations.length<=24&&workAutonomy(this.config)==='delegated'&&!customPackWorkBinding(this.store,project,row.work_id)
         &&runs.prepare('SELECT state FROM office_supervisor WHERE run_id=?').get(row.run_id)?.state==='awaiting_review'
         &&!runs.prepare("SELECT 1 FROM office_activity WHERE project_id=? AND work_id=? AND kind='supervisor.fresh_attempt' AND metadata LIKE ? LIMIT 1").get(project,row.work_id,`%"run_id":"${row.run_id}"%`)){
         const id=randomUUID(),stamp=now();

@@ -325,8 +325,9 @@ function semanticGroups<T>(checks:T[]):T[][]{
   }
   return groups;
 }
-/** Office-owned local outputs: result files, Pack artifacts and watch state. */
-const officeOwnedWriteTools=new Set(['office_result_draft','runtime_pack_run','runtime_pack_watch_tick','runtime_pack_watch_pause']);
+/** Office-owned local outputs: result files, Pack artifacts and watch state, and what the client's own run left in its
+ * Office-owned Work folder (the owner lets the client act as in its own app; verification judges the result). */
+const officeOwnedWriteTools=new Set(['office_result_draft','runtime_pack_run','runtime_pack_watch_tick','runtime_pack_watch_pause','office_client_run']);
 /** Verification strength follows the actual effects in the host-sealed trace,
  * never a model declaration. Light: a closed trace with no external write and
  * local writes only to Office-owned outputs. Everything else stays strict. */

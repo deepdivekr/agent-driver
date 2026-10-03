@@ -17,6 +17,19 @@ After EVERY context compaction or session resumption:
 3. Restate the next implementation unit against the plan before editing.
 4. Continue the authorized refactor through meaningful checks and commit/push.
 
+Owner decision (2026-10-03), which decides where it conflicts with the rules below:
+Agent Office is a control center, not a second agent runtime. A Work runs on the
+client's own agent (Codex `exec --json` or Claude Code `-p` stream-json) with the
+owner's own settings, skills, plugins and MCP servers, in an Office-owned Work
+folder (src/work/client-run.ts). One client per Work for its whole life: no
+routing or session handoff between clients (a client calling another CLI by
+itself is its own behaviour). Permissions default to everything allowed, as in
+the client app; Office does not approve actions one by one. Office records the
+events, pauses between turns, resumes the same session with new directions or a
+verifier's denial, verifies the result, schedules and delivers. The host-tool
+executor is a fallback only. API keys are for Jev only. Execution-tool routing
+(Playwright to Aside) stays.
+
 Do not substitute a universal tool marketplace or SaaS integration platform for
 the product. Specific, user-owned recurring work is the center; a custom Pack
 contains its executable procedure, observable completion contract, and recovery.

@@ -28,6 +28,10 @@ export interface ProcessRequest {
   executable:string;args:string[];stdin?:string;cwd?:string;timeout_ms:number;signal?:AbortSignal;
   output_limit_bytes?:number;
   login_browser?:'ui';
+  /** A client running a Work gets the owner's environment instead of the short allowlist. */
+  env?:NodeJS.ProcessEnv;
+  /** false: stdout only streams to onStdout; a long agent run is not held in memory. */
+  keep_stdout?:boolean;
   onStdout?:(text:string)=>void;onStderr?:(text:string)=>void;
 }
 export interface ProcessResult {code:number|null;stdout:string;stderr:string;}
@@ -49,7 +53,7 @@ export const nativeProcessRunner:SafeProcessRunner={run(request){
     // Own process group: a CLI wrapper (npm `codex`) starts the real binary as its
     // child, and stopping only the wrapper left that binary running after a timeout.
     const group=process.platform!=='win32';
-    const child=spawn(request.executable,request.args,{cwd:request.cwd,env:{...executableEnvironment(),...(request.login_browser==='ui'?{NO_OPEN_BROWSER:'1'}:{})},shell:false,windowsHide:true,detached:group,stdio:['pipe','pipe','pipe'],signal:request.signal});
+    const child=spawn(request.executable,request.args,{cwd:request.cwd,env:request.env??{...executableEnvironment(),...(request.login_browser==='ui'?{NO_OPEN_BROWSER:'1'}:{})},shell:false,windowsHide:true,detached:group,stdio:['pipe','pipe','pipe'],signal:request.signal});
     const stop=()=>{try{if(group&&child.pid)process.kill(-child.pid,'SIGKILL');else child.kill('SIGKILL');}catch{child.kill('SIGKILL');}};
     request.signal?.addEventListener('abort',stop,{once:true});
     let stdout='',stderr='',settled=false;
@@ -59,7 +63,7 @@ export const nativeProcessRunner:SafeProcessRunner={run(request){
     // Node's streaming decoder carries an incomplete UTF-8 code point across chunks.
     // Per-chunk Buffer#toString corrupts Korean and other multibyte CLI answers.
     child.stdout.setEncoding('utf8');child.stderr.setEncoding('utf8');
-    child.stdout.on('data',(chunk:string)=>{try{stdout=append(stdout,chunk);request.onStdout?.(chunk);}catch(error){fail(error as Error);}});
+    child.stdout.on('data',(chunk:string)=>{try{if(request.keep_stdout!==false)stdout=append(stdout,chunk);request.onStdout?.(chunk);}catch(error){fail(error as Error);}});
     child.stderr.on('data',(chunk:string)=>{try{stderr=append(stderr,chunk);request.onStderr?.(chunk);}catch(error){fail(error as Error);}});
     child.once('error',fail);
     child.once('close',code=>{if(!settled){settled=true;clearTimeout(timer);resolve({code,stdout,stderr});}});
