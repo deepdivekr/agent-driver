@@ -14,7 +14,7 @@ const timezone=z.string().min(1).max(100).refine(value=>{try{new Intl.DateTimeFo
 const hour=z.number().int().min(0).max(23),minute=z.number().int().min(0).max(59);
 // More clock times on the same days ("8:30 and 21:30 every day"). The first time stays in hour/minute so every earlier
 // saved schedule reads as before (owner direction 2026-10-03: a Work asked to run twice a day ran once).
-const alsoAt=z.array(z.object({hour,minute}).strict()).min(1).max(5).optional();
+const alsoAt=z.array(z.object({hour,minute}).strict()).min(1).max(23).optional();
 const supportedSchedules=[
   z.object({kind:z.literal('daily'),timezone,hour,minute,also_at:alsoAt}).strict(),
   z.object({kind:z.literal('weekly'),timezone,hour,minute,weekdays:z.array(z.number().int().min(0).max(6)).min(1).max(7),also_at:alsoAt}).strict(),
@@ -29,7 +29,7 @@ export type WorkSchedule=z.infer<typeof workScheduleSchema>;
 /** What the model fills in. Subscription CLIs reject a union at the schema root
  * (live: CLIENT_SCHEMA_INVALID on every recurring Work), so the model gets one
  * flat object and the host builds and validates the real schedule from it. */
-const scheduleProposalSchema=z.object({kind:z.enum(['daily','weekly','interval','unsupported']),timezone:z.string().max(100).nullable(),hour:z.number().int().nullable(),minute:z.number().int().nullable(),also_at:z.array(z.object({hour:z.number().int(),minute:z.number().int()}).strict()).max(5).nullable().default(null),weekdays:z.array(z.number().int()).max(7).nullable(),seconds:z.number().int().nullable(),reason:z.string().max(300).nullable()}).strict();
+const scheduleProposalSchema=z.object({kind:z.enum(['daily','weekly','interval','unsupported']),timezone:z.string().max(100).nullable(),hour:z.number().int().nullable(),minute:z.number().int().nullable(),also_at:z.array(z.object({hour:z.number().int(),minute:z.number().int()}).strict()).max(23).nullable().default(null),weekdays:z.array(z.number().int()).max(7).nullable(),seconds:z.number().int().nullable(),reason:z.string().max(300).nullable()}).strict();
 /** The cadence the user's own words state when no clock time is given. Code decides this; a model that
  * answers "unsupported: no time specified" (live) must not leave a watch waiting for a person. */
 export function cadenceInterval(rule:string):number|null{
@@ -42,6 +42,21 @@ export function cadenceInterval(rule:string):number|null{
   if(/daily|every day|once a day|매일|하루(?:에)?\s*한\s*번|하루\s*1\s*회|날마다/iu.test(rule))return 86400;
   if(/watch|monitor|keep checking|감시|모니터링|새\s*글|변경.*확인/iu.test(rule))return 86400;
   return null;
+}
+/** An iCalendar RRULE in the rule (an imported automation keeps its own) is read in code: FREQ=DAILY or WEEKLY with BYHOUR
+ * (several hours become also_at) and BYMINUTE, or FREQ=HOURLY/MINUTELY with INTERVAL (live: a model read "BYHOUR=0,3,…,21"
+ * as once a day). Anything else stays with the normalizer. */
+export function rruleSchedule(rule:string,timezone:string):SupportedSchedule|null{
+  const match=/(?:^|[\s(:])(FREQ=[A-Z]+(?:;[A-Z]+=[A-Za-z0-9,+-]+)*)/u.exec(rule);if(!match)return null;
+  const parts=Object.fromEntries(match[1]!.split(';').map(part=>part.split('=') as [string,string])),numbers=(value:string|undefined)=>value?.split(',').map(Number)??[];
+  const zoneMatch=/\(([A-Za-z]+\/[A-Za-z_+-]+)\)/u.exec(rule),zone=zoneMatch?.[1]??timezone,interval=Number(parts.INTERVAL??1);
+  if(parts.FREQ==='HOURLY'||parts.FREQ==='MINUTELY'){const seconds=interval*(parts.FREQ==='HOURLY'?3600:60);return seconds>=60&&seconds<=31*86400?supportedWorkScheduleSchema.parse({kind:'interval',timezone:zone,seconds}):null;}
+  if(parts.FREQ!=='DAILY'&&parts.FREQ!=='WEEKLY')return null;
+  const hours=numbers(parts.BYHOUR),minutes=numbers(parts.BYMINUTE);if(!hours.length||interval!==1||minutes.length>1)return null;
+  const times=[...new Set(hours)].sort((a,b)=>a-b).map(hour=>({hour,minute:minutes[0]??0})),[first,...rest]=times,also=rest.length?{also_at:rest}:{};
+  const dayNumbers={SU:0,MO:1,TU:2,WE:3,TH:4,FR:5,SA:6} as const,weekdays=(parts.BYDAY??'').split(',').filter(Boolean).map(day=>dayNumbers[day as keyof typeof dayNumbers]);
+  const parsed=supportedWorkScheduleSchema.safeParse(parts.FREQ==='WEEKLY'?{kind:'weekly',timezone:zone,...first,weekdays:weekdays.length?weekdays:[0,1,2,3,4,5,6],...also}:{kind:'daily',timezone:zone,...first,...also});
+  return parsed.success?parsed.data:null;
 }
 export function scheduleFromProposal(raw:unknown,defaultTimezone:string):WorkSchedule{
   const direct=workScheduleSchema.safeParse(raw);if(direct.success)return direct.data;
@@ -153,7 +168,7 @@ export class WorkSchedules {
     db.prepare('INSERT INTO office_work_schedule(project_id,work_id,work_revision,rule_sha256,default_timezone,state,owner,lease_until_ms,anchor_ms,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(work_id) DO UPDATE SET work_revision=excluded.work_revision,rule_sha256=excluded.rule_sha256,default_timezone=excluded.default_timezone,definition=NULL,state=excluded.state,reason=NULL,owner=excluded.owner,lease_until_ms=excluded.lease_until_ms,anchor_ms=excluded.anchor_ms,next_run_ms=NULL,updated_at=excluded.updated_at WHERE office_work_schedule.lease_until_ms<=? OR office_work_schedule.state<>?').run(this.project,workId,revision,ruleHash,inputZone,'preparing',owner,now+90_000,now,stamp(now),stamp(now),now,'preparing');
     requireCondition(this.find(workId)?.owner===owner,'SCHEDULE_PREPARATION_ALREADY_CLAIMED');this.event(workId,'schedule.preparing','Normalizing the recurring Work schedule.');
     try{
-      let definition=scheduleFromProposal(await model.call('design',NORMALIZE_SCHEDULE,{rule,default_timezone:inputZone},z.toJSONSchema(scheduleProposalSchema)),inputZone);
+      let definition:WorkSchedule=rruleSchedule(rule,inputZone)??scheduleFromProposal(await model.call('design',NORMALIZE_SCHEDULE,{rule,default_timezone:inputZone},z.toJSONSchema(scheduleProposalSchema)),inputZone);
       const stated=definition.kind==='unsupported'?cadenceInterval(rule):null;
       if(stated)definition=workScheduleSchema.parse({kind:'interval',timezone:inputZone,seconds:stated});
       assertWorkConnected(this.store,this.project,workId);

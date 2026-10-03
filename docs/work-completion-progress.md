@@ -762,6 +762,15 @@ npm 11.11.0, TypeScript 7.0.2, Playwright 1.63.0, 제품 버전 0.4.0 유지.
   - 같은 실행의 검증: 가져온 완료조건 5개가 실행 종류별 규칙("조용한 실행은 …일 때만", "차단된 실행은 …로 보관")인데 검증기가 전부를 필수로 보고
     `verified_quiet_run`을 거절했다. 가벼운 검증과 최종 판정 지시에 "한 종류의 실행에 대한 규칙은 그 종류에만 적용하고, 결과가 이번 실행의 종류를 밝히고
     영수증이 일치하면 다른 종류의 규칙은 충족"을 더했다.
+- 가져오기 자체의 결함(같은 날, 주인 지적 "가져오기가 매끄럽지 않으면 가져오기 프롬프트도 문제"):
+  - ASTS 초안의 일정 `FREQ=DAILY;BYHOUR=0,3,…,21;BYMINUTE=0`을 정규화 모델이 "하루 1회(interval 86400)"로 읽었다. 규칙에 RRULE이 있으면 코드가 읽는다
+    (`rruleSchedule`: DAILY/WEEKLY의 BYHOUR 여러 개 → also_at, HOURLY/MINUTELY INTERVAL → interval). also_at 상한 5 → 23.
+  - Stack & Sky 초안은 `depends_on`에 단계가 아닌 의존성 id(`d_telegram_gateway` 등)를 적어 `WORK_IMPORT_STEP_DEPENDENCY_INVALID`로 거절됐다.
+    단계가 아닌 참조는 버리고 받아들인다(의존성 목록은 그대로).
+  - 가져오기 프롬프트(ko/en)에 세 가지를 명시: depends_on은 step id만 / 완료조건은 성공한 매 회차의 조건이며 실행 종류별 규칙은 한 조건으로 /
+    일정은 RRULE 원문+시간대, 사람이 메시지로 시작하면 manual, 외부 사건이면 event, 둘 다면 manual + rule에 반복 조건.
+  - Reddit "CDP 시간 초과": WSL에서 Aside MCP로 직접 재현하니 기존 탭 붙이기 5초, 새 탭 0.2초, r/ASTSpaceMobile/new 최신 글 5개가 정상으로 읽혔다.
+    클라이언트가 한 번의 시간 초과를 "주인이 복구할 연결 문제"로 단정한 것이며 사이트 문제가 아니다.
 - 업무 등록 오류 "invalid id"(주인 보고, 2026-10-03): 제어 화면 경로로 재현되지 않았다(등록·실행 정상). 스키마가 거절한 요청은 zod 이슈 배열 원문이
   그대로 화면에 떠서 원인을 알 수 없었으므로, 제어 센터의 등록·질문 답변·제어·가져오기 응답은 `코드: 필드 규칙` 형태로 돌려준다(`requestError`).
 - 검증: `runtime-work-client-run` 17(새 사례 2: 전달 영수증에 비밀값 없음·검증기에 전달됨, 읽기·Office 출력만 한 멈춘 실행의 재개는 클라이언트로/다른 곳에 쓴 실행은 유지),
