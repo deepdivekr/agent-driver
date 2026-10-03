@@ -5,15 +5,14 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {decisionClientCapabilities,supportsStructuredJudgment} from '../dist/integrations/client-capabilities.js';
 import {McpSamplingStructuredModel,SubscriptionAuthFlowController,SubscriptionAwareStructuredModel,nativeProcessRunner,probeSubscriptionClient} from '../dist/integrations/subscription-auth.js';
-import {makeClientHandoff,classifyClientFailure} from '../dist/integrations/client-handoff.js';
+import {classifyClientFailure} from '../dist/integrations/client-failure.js';
 import {structuredModelFromEnvironment} from '../dist/integrations/model-provider.js';
 import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
 import {saveModelSettings} from '../dist/onboarding/model-settings.js';
-import {PackStore} from '../dist/packs/store.js';
 import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 
-const unitCases=new Set(['decision capability contracts gate negotiated sampling without claiming native session transfer','handoff contract rejects uncertain, unbound or self-reported contradictory transfers']);
-const nativeCases=new Set(['persisted handoffs remain project and Work scoped after restarting SQLite','native process cancellation terminates only the owned synthetic client process']);
+const unitCases=new Set(['decision capability contracts gate negotiated sampling without claiming native session transfer']);
+const nativeCases=new Set(['native process cancellation terminates only the owned synthetic client process']);
 const test=(name,fn)=>nodeTest((unitCases.has(name)?'':nativeCases.has(name)?'runtime native ':'runtime contract ')+name,fn);
 
 const schema={type:'object',properties:{choice:{type:'string'}},required:['choice'],additionalProperties:false};
@@ -96,14 +95,13 @@ test('model selection is frozen at invocation start while settings change during
   const model=new SubscriptionAwareStructuredModel({environment:env,runner}),pending=model.call('correct','Choose.',{},schema);env.AGENT_DRIVER_CODEX_MODEL='new-selection';gate.resolve();await pending;assert.equal(args[args.indexOf('--model')+1],'saved-codex');assert.equal(model.calls[0].model,'saved-codex');
 });
 
-test('subscription handoff freezes task input, constraints and receipt hash before awaiting providers',async()=>{
-  const gate=deferred(),input={work_id:'original-work',value:1},constraints=structuredClone(schema),expectedHash=hashJson({instructions:'Choose.',input,schema:constraints}),events=[];let received;
-  const runner={async run(request){if(request.args.join(' ')==='login status'){await gate.promise;return codexReady();}if(request.args.join(' ')==='auth status')return claudeReady();if(request.executable==='/fixture/codex')return result('',1,'quota exhausted');received=request.stdin;return claudeAnswer();}};
-  const model=new SubscriptionAwareStructuredModel({environment:environment(),runner,onHandoff:event=>events.push(event)}),pending=model.call('correct','Choose.',input,constraints);
+test('a judgment keeps its task input and constraints as they were when it was asked',async()=>{
+  const gate=deferred(),input={work_id:'original-work',value:1},constraints=structuredClone(schema);let received;
+  const runner={async run(request){if(request.args.join(' ')==='login status'){await gate.promise;return codexReady();}received=request.stdin;return codexAnswer();}};
+  const model=new SubscriptionAwareStructuredModel({environment:environment(),runner}),pending=model.call('correct','Choose.',input,constraints);
   input.work_id='different-work';input.value=99;constraints.properties.choice.type='number';gate.resolve();await pending;
-  assert.match(received,/"work_id":"original-work","value":1/);assert.doesNotMatch(received,/different-work/);assert.match(received,/"choice":\{"type":"string"\}/);assert.equal(events[0].work_id,'original-work');assert.equal(events[0].input_sha256,expectedHash);
+  assert.match(received,/"work_id":"original-work","value":1/);assert.doesNotMatch(received,/different-work/);assert.match(received,/"choice":\{"type":"string"\}/);
 });
-
 test('two simultaneous login starts join preflight and own just one login process',async()=>{
   const gate=deferred(),login=deferred();let probes=0,starts=0,signal;
   const runner={async run(request){if(request.args.join(' ')==='login status'){probes++;await gate.promise;return signedOut();}starts++;signal=request.signal;request.onStdout('Device code: ABCD-1234');return login.promise;}};
@@ -170,21 +168,15 @@ test('malformed sampling envelopes are validation failures, never connection out
   }
 });
 
-test('sampling transport failure permits a no-tools successor and records its actual failure kind',async()=>{
-  const events=[],sampling=new McpSamplingStructuredModel({available:()=>true,async createMessage(){throw Error('disconnected');}}),runner={async run(request){return request.args.join(' ')==='login status'?codexReady():codexAnswer();}};
-  const model=new SubscriptionAwareStructuredModel({environment:environment({AGENT_DRIVER_LLM_CLIENT:'mcp,codex'}),sampling,runner,onHandoff:event=>events.push(event)});await model.call('correct','Choose.',{work_id:'work-a'},schema);assert.equal(model.calls[0].failure_kind,'provider_unavailable');assert.equal(events[0].target_model,'saved-codex');
+test('a sampling transport failure is reported with its failure kind and no other client answers',async()=>{
+  let turns=0;const sampling=new McpSamplingStructuredModel({available:()=>true,async createMessage(){throw Error('disconnected');}}),runner={async run(request){if(request.args.join(' ')!=='login status')turns++;return request.args.join(' ')==='login status'?codexReady():codexAnswer();}};
+  const model=new SubscriptionAwareStructuredModel({environment:environment({AGENT_DRIVER_LLM_CLIENT:'mcp,codex'}),sampling,runner});
+  await assert.rejects(model.call('correct','Choose.',{work_id:'work-a'},schema),/STRUCTURED_MODEL_UNAVAILABLE/);assert.equal(model.calls[0].failure_kind,'provider_unavailable');assert.equal(turns,0);
 });
-
 test('concurrent sampling receipts remain attached to their own input and model',async()=>{
   const gates=new Map(),sampling=new McpSamplingStructuredModel({available:()=>true,async createMessage(params){const id=JSON.parse(params.messages[0].content.text.split('\nINPUT:\n')[1]).work_id,gate=deferred();gates.set(id,gate);await gate.promise;return {model:'model-'+id,content:{type:'text',text:'{"choice":"A"}'}};}}),model=new SubscriptionAwareStructuredModel({environment:environment({AGENT_DRIVER_LLM_CLIENT:'mcp'}),sampling});
   const inputs=[{work_id:'first'},{work_id:'second'}],pending=inputs.map(input=>model.call('correct','Choose.',input,schema));gates.get('second').resolve();await pending[1];gates.get('first').resolve();await pending[0];assert.equal(model.calls.length,2);
   for(const input of inputs){const call=model.calls.find(item=>item.input_sha256===hashJson({instructions:'Choose.',input,schema}));assert.equal(call.model,'model-'+input.work_id);}
-});
-
-test('handoff receipt failure never replays an already accepted judgment on a third client',async()=>{
-  let turns=0,samplingCalls=0,writes=0;const runner={async run(request){if(request.args.join(' ')==='login status')return codexReady();if(request.args.join(' ')==='auth status')return claudeReady();turns++;return request.executable==='/fixture/codex'?result('',1,'quota exhausted'):claudeAnswer();}};
-  const model=new SubscriptionAwareStructuredModel({environment:environment({AGENT_DRIVER_LLM_CLIENT:'codex,claude,mcp'}),runner,sampling:new McpSamplingStructuredModel({available:()=>true,async createMessage(){samplingCalls++;throw Error('must not run');}}),onHandoff(){writes++;throw Error('disk full and private path');}});
-  await assert.rejects(model.call('correct','Choose.',{},schema),/CLIENT_HANDOFF_PERSIST_FAILED/);assert.equal(turns,2);assert.equal(samplingCalls,0);assert.equal(writes,1);assert.equal(model.calls.at(-1).status,'accepted');
 });
 
 test('API malformed response envelopes and malformed JSON never trigger subscription fallback',async t=>{
@@ -193,37 +185,6 @@ test('API malformed response envelopes and malformed JSON never trigger subscrip
     let fallbacks=0;const model=new ConfiguredStructuredModel(path,{}, {api:env=>structuredModelFromEnvironment(env,async()=>new Response(body,{status:200})),subscription:()=>{fallbacks++;throw Error('must not run');}});
     await assert.rejects(model.call('correct','Choose.',{},schema),/MODEL_PROVIDER_RESPONSE_INVALID/);assert.equal(fallbacks,0);assert.equal(model.calls[0].failure_kind,'invalid_output');
   }
-});
-
-test('API handoff receipt failure is not rewritten as a no-candidate failure',async t=>{
-  const path=await apiSettings(t),events=[];
-  const model=new ConfiguredStructuredModel(path,{}, {api:()=>({calls:[{model:'saved-api',status:'failed',http_status:429}],async call(){throw Error('MODEL_PROVIDER_UNAVAILABLE');}}),subscription:()=>({calls:[],async call(){this.calls.push({model:'saved-codex',provider:'codex',status:'accepted'});return {choice:'A'};}})},event=>{events.push(event);throw Error('write failed');});
-  await assert.rejects(model.call('correct','Choose.',{},schema),/CLIENT_HANDOFF_PERSIST_FAILED/);assert.deepEqual(events.map(event=>event.status),['transferred']);assert.equal(model.calls.filter(call=>call.status==='accepted').length,1);
-});
-
-test('API to subscription handoff uses the original input snapshot and bound receipt',async t=>{
-  const path=await apiSettings(t),gate=deferred(),input={work_id:'api-original',value:1},constraints=structuredClone(schema),expectedHash=hashJson({instructions:'Choose.',input,schema:constraints}),events=[];let received;
-  const model=new ConfiguredStructuredModel(path,{}, {api:()=>({calls:[{model:'saved-api',http_status:429,status:'failed'}],async call(){await gate.promise;throw Error('quota');}}),subscription:()=>({calls:[],async call(_purpose,_instructions,body,contract){received={body,contract};this.calls.push({model:'saved-codex',provider:'codex',status:'accepted'});return {choice:'A'};}})},event=>events.push(event));
-  const pending=model.call('correct','Choose.',input,constraints);input.work_id='changed';constraints.properties.choice.type='number';gate.resolve();await pending;
-  assert.equal(received.body.work_id,'api-original');assert.equal(received.contract.properties.choice.type,'string');assert.equal(events[0].work_id,'api-original');assert.equal(events[0].input_sha256,expectedHash);
-});
-
-test('a fallback without accepted turn provenance cannot claim a successful transfer',async t=>{
-  const path=await apiSettings(t),events=[];const model=new ConfiguredStructuredModel(path,{}, {api:()=>({calls:[{http_status:429}],async call(){throw Error('offline');}}),subscription:()=>({calls:[],async call(){return {choice:'A'};}})},event=>events.push(event));await assert.rejects(model.call('correct','Choose.',{},schema),/CLIENT_HANDOFF_RECEIPT_MISSING/);assert.deepEqual(events,[]);
-});
-
-const receipt={project_id:'p1',work_id:'work-1',run_id:'run-1',stage_id:'stage-1',source:'codex',target:'claude',source_model:'saved-codex',target_model:'saved-claude',reason:'quota_exhausted',effect_state:'none',status:'transferred',input_sha256:'a'.repeat(64)};
-test('handoff contract rejects uncertain, unbound or self-reported contradictory transfers',()=>{
-  assert.equal(makeClientHandoff(receipt).status,'transferred');
-  for(const patch of [{target:null},{target_model:null},{input_sha256:null},{effect_state:'uncertain'},{target:'codex'},{reason:'invalid_output'},{status:'no_candidate'},{status:'requires_reconciliation'},{status:'no_candidate',target:null,target_model:null,effect_state:'uncertain'}])assert.throws(()=>makeClientHandoff({...receipt,...patch}));
-  assert.equal(makeClientHandoff({...receipt,target:null,target_model:null,status:'requires_reconciliation',effect_state:'uncertain'}).status,'requires_reconciliation');
-});
-
-test('persisted handoffs remain project and Work scoped after restarting SQLite',async t=>{
-  const root=await mkdtemp(join(tmpdir(),'driver-continuity-db-')),path=join(root,'store.sqlite');let store=new PackStore(path);
-  t.after(async()=>{store.close();await rm(root,{recursive:true,force:true});});
-  const {project_id,...event}=receipt;store.recordClientHandoff(project_id,event);store.recordClientHandoff('p2',{...event,target:null,target_model:null,status:'requires_reconciliation',effect_state:'uncertain'});store.close();store=new PackStore(path);
-  assert.equal(store.clientHandoffs('p1','work-1')[0].status,'transferred');assert.equal(store.clientHandoffs('p2','work-1')[0].status,'requires_reconciliation');assert.deepEqual(store.clientHandoffs('p1','another-work'),[]);
 });
 
 test('duplicate client names never replay a failed turn on the same client',async()=>{

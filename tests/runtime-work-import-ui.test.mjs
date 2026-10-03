@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {workHtml} from '../dist/observability/work-ui.js';
 import {workFileScript} from '../dist/observability/work-file-ui.js';
-import {taskModelUiScript} from '../dist/observability/task-model-ui.js';
 
 test('Work board exposes three import routes and does not activate on preview',()=>{
   const html=workHtml('safe-nonce');
@@ -106,7 +105,7 @@ test('Jev point and its reason use readable, escaped text in both import preview
   const app={innerHTML:'',querySelectorAll:()=>[],addEventListener:()=>{}};
   const detail={id:'11111111-1111-4111-8111-111111111111',title:'메시지 검토',goal:'메시지 확인',prompt:'메시지 확인',work_status:'ready',run_status:null,spec:{completion_checks:[]},stages:[],progress_percent:null,control:null,work_control:null,jev:{enabled:false,can_change:true},jev_recommendations:[recommendation],jev_recommendation_status:'complete',runs:[],completion_note:''};
   const detailContext={app,detail,editing:null,jevCostAcknowledged:false,esc,labels:{},attention:()=>false,updateConnection:()=>{},window:{officeText:value=>value},document:{getElementById:id=>id==='back'?{onclick:null}:null},showBoard:()=>{},setMessage:()=>{}};
-  vm.runInNewContext(helper+workFileScript()+taskModelUiScript+analysisHelpers+detailFragment+'\nrenderDetailBody();',detailContext);
+  vm.runInNewContext(helper+workFileScript()+analysisHelpers+detailFragment+'\nrenderDetailBody();',detailContext);
   const detailText=app.innerHTML.replace(/<[^>]*>/gu,'');
   assert.match(detailText,/새 메시지가 긴급한지 판단 · 예\/아니오 확인/u);
   assert.match(detailText,/Jev가 맞는 이유: 메시지마다 표현이 달라져/u);

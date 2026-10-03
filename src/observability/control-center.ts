@@ -128,7 +128,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
   const hermesWork=new HermesWorkRuntime(store,config,options.hermes);
   const migrations=new HermesMigrationRuntime(store,config);
   const remoteOffice=new RemoteOffice(store,config,options.remote);
-  const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>store.recordClientHandoff(config.project.id,event));
+  const workModel=options.workModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env);
   const deliverySettings=WorkDeliverySettings.fromConfig(config),results=new WorkResults(store,[],deliverySettings,()=>workDelegation(config).notify);
   const deliveryJobs=new Map<string,Promise<void>>();
   const deliverOutput=(id:string)=>{if(stopped||reloading||deliveryJobs.has(id))return;const job=results.dispatchPending(config.project.id,id,()=>runtimeReady()).then(()=>undefined).catch(()=>{if(!stopped)workActivity(store,config.project.id,id,'delivery.blocked','Result delivery requires checking its stored connection or receipt.',{stage_id:'delivery',status:'blocked',reason:'RESULT_DELIVERY_UNAVAILABLE'});}).finally(()=>deliveryJobs.delete(id));deliveryJobs.set(id,job);};

@@ -43,21 +43,19 @@ const EN:Record<string,string>={
 '역할별 모델':'Role models',
 '기본 모델 사용':'Use default models',
 '역할별 직접 지정':'Assign roles manually',
-'Auto · 태스크별 자동 배분':'Auto · allocate per task',
 '역할별 모델 지정':'Set role models',
 '비워 둔 역할은 앱별 기본 모델을 사용합니다.':'Unspecified roles use the per-app defaults.',
 '적용 범위':'Where this applies',
 '구독 앱을 쓸 때만 적용합니다. 코딩 전용 설정과 API 사용 시에는 적용하지 않습니다.':'Applies only when a subscription app is used, not to coding-only settings or API use.',
 'Auto는 실행 전에 AI가 역할별 모델을 한 번 정합니다. 정하지 못하면 기본 모델로 진행합니다.':'Auto lets the AI pick a model for each role once before the run. If it cannot, the default model is used.',
 '로그인이 확인된 앱만 자동 배분에 씁니다. OpenCode는 로그인 방식을 확인하지 못하면 제외합니다.':'Only apps with a confirmed sign-in are used for automatic assignment. OpenCode is left out when its sign-in type cannot be confirmed.',
-'AI가 업무에 맞게 모델을 배분합니다. 결과와 이유는 업무 상세에서 확인하세요.':'The AI assigns models to fit the Work. See the result and reasons in the Work detail.',
 '계획·실행·검증·종합 역할에만 기본 모델 대신 적용합니다.':'Override defaults for planning, execution, verification and synthesis.',
 '모든 역할에서 위의 앱별 기본 모델을 사용합니다.':'All roles use the per-app defaults above.',
 '기본 클라이언트':'Default client',
-'업무를 처음 분석할 앱입니다. 연결이 안 되면 다른 연결된 앱으로 넘깁니다.':'The app that analyzes a Work first. If it is unavailable, another connected app takes over.',
+'새 업무를 접수할 때 처음 선택돼 있는 앱입니다. 업무마다 고른 앱이 끝까지 맡습니다.':'The app selected first when you start a new Work. Each Work keeps the app chosen for it.',
 '앱별 기본 모델':'Per-app default models',
-'각 앱 안에서 사용할 모델입니다. Auto를 켜면 실행 역할별로 바뀔 수 있습니다.':'The model used inside each app. Auto may override it for individual task roles.',
-'태스크 모델 배분':'Task model allocation',
+'새 업무를 접수할 때 처음 선택돼 있는 모델입니다.':'The model selected first when you start a new Work.',
+
 '기본 모델 유지':'Keep default models',
 '저장된 배분 계획입니다. 실제 사용 모델과 인계는 실행 요약에서 확인하세요.':'This is the saved allocation plan. Actual models and handoffs appear in the activity summary.',
 '구독 모델 후보를 확인할 수 없어 기본 모델을 유지합니다.':'Subscription model candidates could not be verified; keeping the defaults.',
@@ -126,6 +124,8 @@ const EN:Record<string,string>={
 '공개 웹 검색 중':'Searching the public web',
 '출처 조회 확인':'Source observation confirmed',
 'AI 응답 수신':'AI response received',
+'담당 AI':'AI','앱 기본값':'App default','이 업무를 맡을 AI':'The AI that runs this Work',
+'AI는 앱에서 직접 쓸 때와 같은 권한으로 실행합니다.':'The AI runs with the same permissions as when you use the app yourself.',
 '같은 세션을 이어서 실행합니다.':'Continuing in the same session.',
 '사용자 설정 그대로 업무 폴더에서 실행을 시작합니다.':'Starting in the Work folder with your own settings.',
 '실행을 마치고 만든 파일을 결과로 저장했습니다.':'Finished; the files it made are saved as the result.',
@@ -197,7 +197,7 @@ const EN:Record<string,string>={
 '선택 후 시작':'Apply choices and start',
 '업무 요청 중…':'Sending work request…',
 '업무를 시작하면 선택한 AI의 사용량이 듭니다.':'Starting a Work uses your selected AI allowance.',
-'제출·결제·제3자 전송은 따로 확인합니다.':'Submissions, payments and messages to others are confirmed separately.',
+
 '반복 실행도 켭니다. 일시정지할 때까지 실행할 때마다 AI 사용량이 듭니다.':'Also turn on repeat runs. Each run uses AI allowance until you pause.',
 '선택하지 않으면 이번 회차만 실행하며 예약은 켜지지 않습니다.':'If unchecked, only this cycle runs and the schedule stays off.',
 '분석 중':'Analyzing',
@@ -504,7 +504,7 @@ const EN:Record<string,string>={
 '방금':'just now','접수됨':'Received','Task Pack':'Task Pack','Swarm':'Swarm','코딩 업무':'Coding',
 '업무 정의 중':'Defining','AI 연결 필요':'AI connection needed','선택 필요':'Needs choice','실행 대기':'Ready','전달 대기':'Queued','답변 검토 중':'Reviewing answer','사용자 지시 대기':'Waiting for your instruction','종료':'Stopped','결과 확인 필요':'Check result','일시정지':'Pause','일시정지됨':'Paused','사용자 확인 필요':'User confirmation needed','로그인 필요':'Login needed','실행 완료':'Run complete','실패':'Failed','중단 지점 확인 필요':'Check interruption point','근거 부족':'Evidence missing','재시도 대기':'Retry pending','작업 중':'Working','초안 준비':'Draft ready','승인 대기':'Awaiting approval',
 '← 업무 목록':'← Work','업무 읽는 중…':'Reading work…','진행 단계':'Run trace','단계 진척도':'Stage progress','단계별 확인 미지원':'No per-stage verification','선택된 Pack':'Selected pack','아직 선택되지 않음':'Not selected yet','아직 배정되지 않음':'Not assigned yet',
-'작업 제어':'Human control','작업 재개':'Resume','일시정지 미지원':'Pause not supported','실행 이력':'Run history','최근 변경':'Recent changes','클라이언트 인계':'Client handoffs','이어받음':'Taken over','영향 확인 필요':'Effect check needed','미배정':'Unassigned',
+'작업 제어':'Human control','작업 재개':'Resume','일시정지 미지원':'Pause not supported','실행 이력':'Run history','최근 변경':'Recent changes',
 'Run 성공은 Work의 모든 완료조건 충족을 자동으로 뜻하지 않습니다.':'A successful run does not by itself mean every completion check of the work is met.',
 '업무 정의 재시도':'Retry definition','AI 연결을 확인한 뒤 같은 업무를 다시 정의할 수 있습니다.':'Check the AI connection, then define the same work again.','AI 전송 허용 후 재시도':'Allow AI and retry',
 '업무 내용을 AI에 보내도록 허용해 주세요. 허용하면 AI가 업무를 분석합니다.':'Allow sending the Work text to your AI. Once allowed, the AI analyzes the Work.',
@@ -606,11 +606,11 @@ const EN:Record<string,string>={
 '해제하면 코딩에는 아래 설정을 우선 적용합니다. 이미 연결한 코딩 세션과 실행 중인 작업은 기존 모델을 그대로 씁니다.':'When unchecked, the settings below take priority for coding. Sessions already connected and work in progress keep their model.',
 '코드 작업은 Codex·Claude CLI가 합니다. API는 계획과 조언에만 쓰이고, 공급자와 주소가 같으면 전역 API 키를 함께 씁니다.':'Codex or Claude CLI does the code work. The API is used only for planning and advice, and shares the global API key when provider and address match.',
 '코딩 전용 설정입니다. 전역 설정은 바뀌지 않습니다.':'Coding settings only. Global settings stay unchanged.','전역 AI 설정입니다.':'Global AI settings.',
-'AI 연결':'Connect AI','사용 중인 구독이나 API 키를 선택하세요. 선택한 앱을 먼저 쓰고, 연결이 안 되면 다른 연결된 앱으로 넘깁니다.':'Choose the subscription or API key you use. The selected app is used first; if it is unavailable, another connected app takes over.',
+'AI 연결':'Connect AI','사용 중인 구독이나 API 키를 선택하세요. 업무마다 접수할 때 고른 앱이 끝까지 맡고, 다른 앱으로 넘기지 않습니다.':'Choose the subscription or API key you use. Each Work stays with the app chosen when you started it and never moves to another app.',
 '연결 방식':'Connection','구독 사용':'Subscription','API 키 사용':'API key','우선 사용할 클라이언트':'Preferred client','자동 선택':'Automatic','연결된 MCP 클라이언트':'Connected MCP client','연결 상태 확인':'Check connections',
 'Codex 모델':'Codex model','Claude Code 모델':'Claude Code model','OpenCode 모델':'OpenCode model','클라이언트 기본값':'Client default','모델 목록은 연결된 앱에서 확인합니다. 기본값은 앱 업데이트를 따릅니다.':'Model lists come from the connected apps. Defaults follow app updates.',
 '공급자':'Provider','OpenAI 호환 서버':'OpenAI-compatible server','추론 강도':'Reasoning effort','API 주소':'API base URL','모델':'Model','모델 선택':'Choose a model','현재 모델 목록 새로고침':'Refresh model list','목록에 없는 모델 ID':'Model ID not in the list','직접 입력 시 목록 선택보다 우선':'Overrides the list when filled','API 키':'API key','키 입력':'Enter key',
-'API 사용 요금을 확인했습니다.':'I understand API usage is billed.','API 인증·한도 오류 시 연결된 구독 앱으로 이어가기':'On API auth or quota errors, continue with a connected subscription app','저장된 키 관리':'Manage saved keys','저장된 API 키 삭제':'Delete saved API key',
+'API 사용 요금을 확인했습니다.':'I understand API usage is billed.','저장된 키 관리':'Manage saved keys','저장된 API 키 삭제':'Delete saved API key',
 '구독 한도를 소진해도 유료 API로 자동 전환하지 않습니다.':'Subscription limits never trigger an automatic switch to a paid API.',
 '업무 목록을 읽지 못했습니다.':'Could not load the work list.',
 '업무 내용을 선택한 AI로 보내 정의·계획하도록 허용':'Allow sending work content to the selected AI to define and plan it',
@@ -677,7 +677,7 @@ export const controlCenterCopy=buildCopyCatalog({...EN,...extraSourceCopy});
 export const i18nScript=`(()=>{const EN=${JSON.stringify(controlCenterCopy.en)},KO=${JSON.stringify(controlCenterCopy.ko)},RULES=${JSON.stringify(RULES.map(([pattern,replacement])=>[pattern,plainEnglish(replacement!)]))}.map(([p,r])=>[new RegExp(p,'u'),r]),FLAGS=${JSON.stringify(flagSvgs)};
 let lang='en';try{lang=localStorage.getItem('office-lang')==='ko'?'ko':'en'}catch{}
 document.documentElement.lang=lang;window.officeLang=lang;
-const one=(t,depth=0)=>{if(typeof t!=='string'||!t||depth>=8)return null;const dictionary=lang==='en'?EN:KO;if(Object.hasOwn(dictionary,t))return dictionary[t];if(!/[\\uAC00-\\uD7A3]/u.test(t))return null;const named=/^(Playwright|Aside|Neo|BrowserOS Neo|Codex|Claude Code|OpenCode|Cursor|Cursor CLI|Hermes): (.+)$/u.exec(t);if(named){const result=one(named[2],depth+1);if(result!==null)return named[1]+': '+result}if(lang==='en'){if(t.startsWith('현재 확인: '))return 'Checked: '+(one(t.slice(7),depth+1)??t.slice(7));for(const [re,r] of RULES)if(re.test(t)){const out=t.replace(re,(...args)=>r.replace(/\\$(\\d+)/gu,(_,index)=>{const value=args[Number(index)];return typeof value==='string'?(one(value,depth+1)??value):''}));return out.split(' · ').map(p=>Object.hasOwn(EN,p)?EN[p]:p!==out?(one(p,depth+1)??p):p).join(' · ')}}else{const check=/^(Playwright|Aside|Neo|BrowserOS Neo) 연결 점검 (시작|통과) · ([\\d.]+)초$/u.exec(t);if(check)return check[1]+' 연결 확인 '+(check[2]==='통과'?'완료':'시작')+' · '+check[3]+'초';if(/^(Playwright|Aside|Neo|BrowserOS Neo) 연결 점검 시작$/u.test(t))return t.replace('연결 점검','연결 확인');const label=/^(완료 조건|확인된 완료 조건|클라이언트 인계|실행기)([ :·].+)$/u.exec(t);if(label)return ({'완료 조건':'완료 기준','확인된 완료 조건':'확인된 완료 기준','클라이언트 인계':'AI 업무 인계','실행기':'실행 도구'})[label[1]]+label[2]}if(t.includes(' · ')){const parts=t.split(' · '),mapped=parts.map(p=>one(p,depth+1)??p);if(mapped.some((p,i)=>p!==parts[i]))return mapped.join(' · ')}return null};
+const one=(t,depth=0)=>{if(typeof t!=='string'||!t||depth>=8)return null;const dictionary=lang==='en'?EN:KO;if(Object.hasOwn(dictionary,t))return dictionary[t];if(!/[\\uAC00-\\uD7A3]/u.test(t))return null;const named=/^(Playwright|Aside|Neo|BrowserOS Neo|Codex|Claude Code|OpenCode|Cursor|Cursor CLI|Hermes): (.+)$/u.exec(t);if(named){const result=one(named[2],depth+1);if(result!==null)return named[1]+': '+result}if(lang==='en'){if(t.startsWith('현재 확인: '))return 'Checked: '+(one(t.slice(7),depth+1)??t.slice(7));for(const [re,r] of RULES)if(re.test(t)){const out=t.replace(re,(...args)=>r.replace(/\\$(\\d+)/gu,(_,index)=>{const value=args[Number(index)];return typeof value==='string'?(one(value,depth+1)??value):''}));return out.split(' · ').map(p=>Object.hasOwn(EN,p)?EN[p]:p!==out?(one(p,depth+1)??p):p).join(' · ')}}else{const check=/^(Playwright|Aside|Neo|BrowserOS Neo) 연결 점검 (시작|통과) · ([\\d.]+)초$/u.exec(t);if(check)return check[1]+' 연결 확인 '+(check[2]==='통과'?'완료':'시작')+' · '+check[3]+'초';if(/^(Playwright|Aside|Neo|BrowserOS Neo) 연결 점검 시작$/u.test(t))return t.replace('연결 점검','연결 확인');const label=/^(완료 조건|확인된 완료 조건|실행기)([ :·].+)$/u.exec(t);if(label)return ({'완료 조건':'완료 기준','확인된 완료 조건':'확인된 완료 기준','실행기':'실행 도구'})[label[1]]+label[2]}if(t.includes(' · ')){const parts=t.split(' · '),mapped=parts.map(p=>one(p,depth+1)??p);if(mapped.some((p,i)=>p!==parts[i]))return mapped.join(' · ')}return null};
 window.officeText=t=>one(t)??t;
 window.officeCopy=(ko,en)=>{const shown=one(ko);if(lang!=='en')return shown??ko;return shown!==null&&!/[\\uAC00-\\uD7A3]/u.test(shown)?shown:(one(en)??en)};
 const log=t=>t.split('\\n').map(line=>{const m=/^(.*?) \\[([A-Z]+) · (진행|완료|확인 필요|실패|기록|running|done|needs attention|failed|log)\\] (.*)$/u.exec(line);if(!m)return one(line.trim())??line;const status=lang==='en'?({진행:'running',완료:'done','확인 필요':'needs attention',실패:'failed',기록:'log'}):{running:'진행',done:'완료','needs attention':'확인 필요',failed:'실패',log:'기록'};return m[1]+' ['+m[2]+' · '+(status[m[3]]??m[3])+'] '+(one(m[4])??m[4])}).join('\\n');

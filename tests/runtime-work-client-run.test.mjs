@@ -11,7 +11,7 @@ import {WorkRuntime} from '../dist/work/runtime.js';
 import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {WorkResults} from '../dist/work/results.js';
 import {saveModelSettings,modelSettingsPath} from '../dist/onboarding/model-settings.js';
-import {enableClientRun,disableClientRun,workClient,workFolder,clientRunEnvironment,clientRunArgs,clientRunEligible} from '../dist/work/client-run.js';
+import {enableClientRun,disableClientRun,pinWorkClient,workClientChoice,workFolder,clientRunEnvironment,clientRunArgs,clientRunEligible} from '../dist/work/client-run.js';
 
 // Owner direction 2026-10-03: the client's own agent runs the Work with the owner's settings and full permissions;
 // Office streams its events, keeps its session, takes the files it made as the result and verifies them.
@@ -32,7 +32,7 @@ async function setup(t,options={}){
   const root=await mkdtemp(join(tmpdir(),'work-client-run-')),host=join(root,'host.json');
   await writeFile(host,JSON.stringify({schema_version:1,project_id:'client-run-test',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}}));
   const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
-  const model=fixture(options),runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'client-run',prompt:'파생상품 사례 이미지와 짧은 해설을 만들어줘'});
+  const model=fixture(options),runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'client-run',prompt:'파생상품 사례 이미지와 짧은 해설을 만들어줘',...(options.choice?{client:options.choice}:{})});
   const runs=[];enableClientRun({runner:{run:request=>{runs.push(request);return options.client(request,runs.length);}},executable:client=>`/fake/${client}`});
   const supervisor=new WorkSupervisor(store,config,model,{auto_start:false,tick_ms:20});
   t.after(async()=>{supervisor.close();disableClientRun();store.close();await rm(root,{recursive:true,force:true});});
@@ -59,7 +59,7 @@ test('runtime fixture a Work runs on Codex with the owner settings and full perm
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
   const [run]=x.runs,folder=join(workFolder(x.config,x.work.work_id),end.run_id);
   assert.deepEqual([run.args.slice(0,3),run.args.slice(-4)],[['-C',folder,'--dangerously-bypass-approvals-and-sandbox'],['exec','--json','--skip-git-repo-check','-']]);
-  assert.deepEqual(clientRunArgs('codex',folder,null,true).slice(3,5),['-c','mcp_servers.agent-driver.disabled_tools=["runtime_work_start","runtime_work_execute","runtime_work_control"]'],'a run cannot start Works through Office');
+  assert.deepEqual(clientRunArgs({id:'codex',model:null,effort:null},folder,null,true).slice(3,5),['-c','mcp_servers.agent-driver.disabled_tools=["runtime_work_start","runtime_work_execute","runtime_work_control"]'],'a run cannot start Works through Office');
   assert.equal(run.executable,'/fake/codex');assert.equal(run.cwd,folder);assert.equal(run.keep_stdout,false);
   assert.equal(run.env.OPENAI_API_KEY,undefined,'an API key would bill a paid API');assert.equal(run.env.HOME,process.env.HOME);
   assert.match(run.stdin,/파생상품 사례 이미지와 짧은 해설을 만들어줘/u);assert.match(run.stdin,/images: 사례 이미지 파일과 해설이 있다/u);
@@ -70,7 +70,7 @@ test('runtime fixture a Work runs on Codex with the owner settings and full perm
   assert.equal(result.verification,'verified');
   assert.deepEqual(result.artifacts.map(item=>item.label).sort(),['case-1.png','explanations.md'].concat(result.artifacts.filter(item=>item.label.startsWith('report-')).map(item=>item.label)).sort());
   assert.match(result.text,/case-1\.png \(image\/png, 4 bytes\)/u);assert.match(result.text,/옵션 만기일 감마 노출/u);
-  assert.equal(workClient(x.store,x.config.project.id,x.work.work_id,'claude'),'codex','the Work keeps its client');
+  assert.deepEqual(pinWorkClient(x.store,x.config.project.id,x.work.work_id,{id:'claude',model:null,effort:null},null),{id:'codex',model:null,effort:null},'the Work keeps its client');
 });
 
 test('runtime fixture a verification denial goes back to the same Codex session',async t=>{
@@ -82,9 +82,9 @@ test('runtime fixture a verification denial goes back to the same Codex session'
   assert.match(x.runs[1].stdin,/Not met: images \(사례 이미지 파일과 해설이 있다\)\. Reason: Only one image was made; five were asked\./u);
 });
 
-test('runtime fixture a Claude run stopped for a new direction resumes its own session with that direction',async t=>{
+test('runtime fixture the AI chosen at intake runs the Work; a Claude run stopped for a new direction resumes its own session with that direction',async t=>{
   let release;const gate=new Promise(resolve=>{release=resolve;});
-  const x=await setup(t,{client:async(request,count)=>{
+  const x=await setup(t,{choice:{id:'claude',model:'opus',effort:'high'},client:async(request,count)=>{
     const id=request.args[request.args.indexOf(count===1?'--session-id':'--resume')+1];
     request.onStdout(line({type:'system',subtype:'init',session_id:id,permissionMode:'bypassPermissions'}));
     if(count===1){release();await new Promise((_,reject)=>request.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));}
@@ -94,7 +94,6 @@ test('runtime fixture a Claude run stopped for a new direction resumes its own s
     request.onStdout(line({type:'result',subtype:'success',is_error:false,result:'case-1.png 를 만들었습니다.',session_id:id}));
     return {code:0,stdout:'',stderr:''};
   }});
-  workClient(x.store,x.config.project.id,x.work.work_id,'claude');
   x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
   await gate;await delay(50);
   let work=x.store.intakeWork(x.config.project.id,x.work.work_id);x.supervisor.action({work_id:x.work.work_id,revision:work.revision,action:'edit',instruction:'사례는 옵션 만기일 위주로 바꿔줘'});
@@ -102,7 +101,9 @@ test('runtime fixture a Claude run stopped for a new direction resumes its own s
   work=x.store.intakeWork(x.config.project.id,x.work.work_id);x.supervisor.action({work_id:x.work.work_id,revision:work.revision,action:'resume'});x.supervisor.tick();
   const end=await settle(x,['succeeded','failed','awaiting_review','waiting_auth']);assert.equal(end.state,'succeeded',JSON.stringify(end));
   const first=x.runs[0].args,session=first[first.indexOf('--session-id')+1];
-  assert.ok(first.includes('--dangerously-skip-permissions'));assert.equal(first[0],'-p');
+  assert.ok(first.includes('--dangerously-skip-permissions'));assert.equal(first[0],'-p');assert.equal(x.runs[0].executable,'/fake/claude');
+  assert.deepEqual([first[first.indexOf('--model')+1],first[first.indexOf('--effort')+1]],['opus','high']);
+  assert.deepEqual(workClientChoice(x.store,x.config.project.id,x.work.work_id),{id:'claude',model:'opus',effort:'high'});
   assert.equal(first[first.indexOf('--disallowedTools')+1],'mcp__agent-driver__runtime_work_start,mcp__agent-driver__runtime_work_execute,mcp__agent-driver__runtime_work_control');
   assert.deepEqual(x.runs[1].args.slice(-2),['--resume',session]);assert.match(x.runs[1].stdin,/The owner changed the instruction for this Work:\n- 사례는 옵션 만기일 위주로 바꿔줘/u);
   assert.ok(activity(x).some(row=>row.kind==='tool.started'&&row.summary.startsWith('file_change · ')&&row.metadata.model_provider==='claude'));
@@ -144,4 +145,11 @@ test('runtime fixture Works that Office proves in code or writes through approve
 test('runtime fixture the client environment keeps the owner variables and withholds API keys and Office internals',()=>{
   const env=clientRunEnvironment({HOME:'/home/owner',PATH:'/bin',DISPLAY:':0',HTTPS_PROXY:'http://proxy',CODEX_HOME:'/home/owner/.codex',ANTHROPIC_API_KEY:'k',OPENAI_API_KEY:'k',TYPESAFE_API_KEY:'k',AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_OFFICE_OWNER_MCP:'on',CLAUDECODE:'1'});
   assert.deepEqual(Object.keys(env).sort(),['CODEX_HOME','DISPLAY','HOME','HTTPS_PROXY','PATH']);
+});
+
+test('runtime fixture Office judgments for a pinned Work go to its client and model only',async()=>{
+  const {ConfiguredStructuredModel}=await import('../dist/onboarding/configured-model.js');
+  const seen=[],model=new ConfiguredStructuredModel('/nonexistent/models.json',{AGENT_DRIVER_LLM_CLIENT:'codex,claude',PATH:process.env.PATH},{subscription:options=>({calls:[],async call(){seen.push(options.environment);return {ok:true};}})});
+  await model.forWork({work_id:'w1',run_id:'r1'}).forClient('claude','opus').forRole('verifier').call('verify','x',{},{type:'object'});
+  assert.equal(seen[0].AGENT_DRIVER_LLM_CLIENT,'claude');assert.equal(seen[0].AGENT_DRIVER_CLAUDE_MODEL,'opus');
 });

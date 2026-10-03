@@ -44,23 +44,3 @@ test('runtime fixture subscription role settings save exact choices, refresh cat
     assert.deepEqual(errors,[]);await context.close();
   }
 });
-
-test('runtime fixture task Auto persists separately from per-app defaults and manual choices on KO/EN desktop/mobile',{timeout:60000},async t=>{
-  const browser=await chromium.launch({headless:true});t.after(()=>browser.close());await mkdir('tests/evidence/phase108',{recursive:true});
-  for(const width of [1280,390])for(const lang of ['ko','en']){
-    const f=await setup(t),page=await browser.newPage({viewport:{width,height:980},colorScheme:'dark'}),errors=[];page.on('pageerror',e=>errors.push(e.message));
-    await page.addInitScript(value=>localStorage.setItem('office-lang',value),lang);
-    await page.route('**/settings/models',route=>route.fulfill({json:{codex:{status:'available',models:[{id:'selected-model',label:'selected-model'},{id:'manual-reader',label:'manual-reader'}]},claude:{models:[]},opencode:{models:[]}}}));
-    const open=async()=>{await page.goto(f.url);await page.waitForFunction(()=>initialized&&!busy);await page.locator('[data-step="2"]').click();await page.waitForFunction(()=>!busy&&clientsLoaded);};await open();
-    const mode=page.locator('#role-model-mode'),panel=page.locator('#role-model-settings');assert.equal(await mode.inputValue(),'inherit');
-    await mode.selectOption('manual');await panel.locator('summary').click();await page.locator('#role-worker-codex').selectOption('manual-reader');
-    await mode.selectOption('auto');assert.equal(await panel.isVisible(),false);await page.locator('#save-model').click();await page.waitForFunction(()=>!busy);
-    assert.equal(readModelSettings(f.path).selection.role_model_mode,'auto');assert.equal(readModelSettings(f.path).selection.role_models.worker.codex,'manual-reader');assert.equal(readModelSettings(f.path).selection.client_models.codex,'selected-model');
-    await open();assert.equal(await mode.inputValue(),'auto');assert.equal(await panel.isVisible(),false);assert.ok((await page.locator('#default-client-help').innerText()).length>20);
-    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth+1),false);if(lang==='en')assert.doesNotMatch(await page.locator('#step-2').innerText(),/[가-힣]/u);
-    await page.screenshot({path:`tests/evidence/phase108/auto-models-${lang}-${width}.png`,fullPage:true});
-    await page.locator('#mode').selectOption('api');await page.waitForFunction(()=>!busy);assert.equal(await page.locator('#role-model-policy').isVisible(),false);await page.locator('#mode').selectOption('subscription');
-    await mode.selectOption('manual');assert.equal(await page.locator('#role-worker-codex').inputValue(),'manual-reader');await mode.selectOption('inherit');await page.locator('#save-model').click();await page.waitForFunction(()=>!busy);
-    assert.equal(roleModelConfiguration(f.path,'global',{},'worker').environment.AGENT_DRIVER_CODEX_MODEL,'selected-model');assert.deepEqual(errors,[]);await page.close();
-  }
-});

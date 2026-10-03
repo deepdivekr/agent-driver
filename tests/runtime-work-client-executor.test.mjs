@@ -345,14 +345,13 @@ test('checkpoint identity, capability catalog and runtime guard prevent stale or
   const closed=hooks({async guard(){throw Error('WORK_PAUSED');}});assert.equal((await new BoundedWorkClientExecutor(model([])).execute(request,closed)).status,'paused');
 });
 
-test('configured subscription exhaustion transfers a tool judgment to Claude with saved model and same Work/run/stage',async t=>{
-  const path=await fixture(t),events=[],cliCalls=[];saveModelSettings(path,{revision:0,onboarding_step:2,selection},{});
+test('configured subscription exhaustion stops the run for the model and never asks Claude',async t=>{
+  const path=await fixture(t),cliCalls=[];saveModelSettings(path,{revision:0,onboarding_step:2,selection},{});
   let responses=0;
   const runner={async run(call){cliCalls.push(call);if(call.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};if(call.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty'}),stderr:''};if(call.executable==='/fixture/codex')return {code:1,stdout:'',stderr:'Weekly usage limit reached'};if(call.executable==='/fixture/claude')return {code:0,stdout:JSON.stringify({is_error:false,structured_output:responses++?done():choose()}),stderr:''};throw Error('UNEXPECTED_CLIENT');}};
-  const configured=new ConfiguredStructuredModel(path,{AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude'}, {subscription:options=>new SubscriptionAwareStructuredModel({...options,runner})},event=>events.push(event));
-  const result=await new BoundedWorkClientExecutor(configured).execute(request,hooks());assert.equal(result.status,'succeeded');assert.equal(events.length,2);
-  assert.ok(events.every(event=>event.work_id==='work-1'&&event.run_id==='run-1'&&/^turn-[01]$/u.test(event.stage_id)&&event.source==='codex'&&event.target==='claude'&&event.reason==='quota_exhausted'&&event.target_model==='saved-claude'));
-  assert.equal(cliCalls.filter(call=>call.executable==='/fixture/claude'&&call.args.includes('-p')).length,2);assert.ok(cliCalls.filter(call=>call.executable==='/fixture/claude'&&call.args.includes('-p')).every(call=>call.args.includes('saved-claude')&&call.args.includes('--tools')&&call.args.includes('')));
+  const configured=new ConfiguredStructuredModel(path,{AGENT_DRIVER_CODEX_EXECUTABLE:'/fixture/codex',AGENT_DRIVER_CLAUDE_EXECUTABLE:'/fixture/claude'}, {subscription:options=>new SubscriptionAwareStructuredModel({...options,runner})});
+  const result=await new BoundedWorkClientExecutor(configured).execute(request,hooks());assert.equal(result.status,'waiting_model',JSON.stringify(result));
+  assert.equal(cliCalls.some(call=>call.executable==='/fixture/claude'&&call.args.includes('-p')),false);
 });
 
 test('Work-bound coding decisions retain coding model override and record only new calls from reused providers',async t=>{

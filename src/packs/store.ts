@@ -13,7 +13,6 @@ import {BrowserExecutorJournal} from '../browser/executor-journal.js';
 import {type CodingPlan} from '../coding/contracts.js';
 import {type LocalGitCheckpoint} from '../coding/local-checkpoint.js';
 import {sanitizeCodingReply} from '../coding/reply-safety.js';
-import {clientHandoffSchema,makeClientHandoff,type ClientHandoff,type ClientRouteEvent} from '../integrations/client-handoff.js';
 import {assertWorkConnected,assertBoundRunConnected} from '../work/lifecycle.js';
 
 export interface PackRun {id:string;project_id:string;request_id:string;binding:string;recipe:Recipe;status:string;result:unknown;task_id:string|null;}
@@ -632,14 +631,6 @@ export class PackStore extends TerminalStore {
   officeRuns(project:string,workId:string){
     return this.connection.prepare('SELECT source_kind,source_id,created_at FROM office_run WHERE project_id=? AND work_id=? ORDER BY created_at DESC,source_id DESC').all(project,workId) as Array<{source_kind:string;source_id:string;created_at:string}>;
   }
-  recordClientHandoff(project:string,event:ClientRouteEvent):ClientHandoff{
-    const handoff=makeClientHandoff({project_id:project,...event});
-    this.connection.prepare('INSERT INTO client_handoff VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(handoff.id,handoff.project_id,handoff.work_id,handoff.run_id,handoff.stage_id,handoff.source,handoff.target,handoff.source_model,handoff.target_model,handoff.reason,handoff.effect_state,handoff.status,handoff.input_sha256,handoff.created_at);
-    return handoff;
-  }
-  clientHandoffs(project:string,workId:string):ClientHandoff[]{
-    return this.connection.prepare('SELECT * FROM client_handoff WHERE project_id=? AND work_id=? ORDER BY created_at DESC,id DESC LIMIT 50').all(project,workId).map(row=>clientHandoffSchema.parse(row));
-  }
   codingDialog(project:string,id:string):CodingDialog{
     const row=this.connection.prepare('SELECT * FROM coding_dialog WHERE project_id=? AND id=?').get(project,id);
     requireCondition(row,'CODING_DIALOG_NOT_FOUND');
@@ -951,10 +942,6 @@ export class PackStore extends TerminalStore {
     this.codingRun(project,id);
     const result=this.connection.prepare("UPDATE coding_stage SET session_id=? WHERE run_id=? AND stage_id=? AND status='running' AND owner=? AND (session_id IS NULL OR session_id=?)").run(sessionId,id,stageId,owner,sessionId);
     requireCondition(result.changes===1,'CODING_STAGE_NOT_RUNNING');
-  }
-  clearCodingSession(project:string,id:string,stageId:string,owner:string){
-    this.codingRun(project,id);
-    requireCondition(this.connection.prepare("UPDATE coding_stage SET session_id=NULL WHERE run_id=? AND stage_id=? AND status='running' AND owner=?").run(id,stageId,owner).changes===1,'CODING_STAGE_NOT_RUNNING');
   }
   finishCodingStage(project:string,id:string,stageId:string,owner:string,status:'succeeded'|'failed'|'reconciliation_required',summary:string,receipt:unknown,git:LocalGitCheckpoint|null=null){
     return this.transaction(()=>{

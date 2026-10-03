@@ -21,9 +21,11 @@ Owner decision (2026-10-03), which decides where it conflicts with the rules bel
 Agent Office is a control center, not a second agent runtime. A Work runs on the
 client's own agent (Codex `exec --json` or Claude Code `-p` stream-json) with the
 owner's own settings, skills, plugins and MCP servers, in an Office-owned Work
-folder (src/work/client-run.ts). One client per Work for its whole life: no
-routing or session handoff between clients (a client calling another CLI by
-itself is its own behaviour). Permissions default to everything allowed, as in
+folder (src/work/client-run.ts). The owner chooses the client, model and
+reasoning effort for each Work at intake (onboarding only sets the defaults).
+One client per Work for its whole life, Office's own judgments for the Work
+included: no routing or session handoff between clients (a client calling
+another CLI by itself is its own behaviour). Permissions default to everything allowed, as in
 the client app; Office does not approve actions one by one. Office records the
 events, pauses between turns, resumes the same session with new directions or a
 verifier's denial, verifies the result, schedules and delivers. The host-tool

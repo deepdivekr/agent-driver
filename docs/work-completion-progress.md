@@ -644,3 +644,24 @@ npm 11.11.0, TypeScript 7.0.2, Playwright 1.63.0, 제품 버전 0.4.0 유지.
 - MCP 세션 프로세스가 실행을 맡았다가 앱이 닫히면 실행이 끊기고 다음 tick에 같은 세션으로 이어진다. 끊긴 순간의 셸·MCP 동작은 확인하지 않고 이어간다.
 - Office가 죽으면 분리된 프로세스 그룹이 남을 수 있다(재시작 때 고아 프로세스 확인 없음). Windows에는 그룹 종료가 없다.
 - 이미지 내용 자체는 검증하지 않는다(파일 목록과 해설로 판단).
+
+## 업무별 클라이언트 지정, 클라이언트 간 라우팅 제거 — 2단계 (2026-10-03)
+
+사용자 지시(2026-10-03): 범용 AI 설정이 아니라 업무마다 클라이언트를 지정한다. 온보딩은 CLI 연결과 기본값까지만 하고,
+업무 접수 때 드롭다운으로 클라이언트·모델·추론 강도를 고른다. 기준 소스: main `97191a0`. 브랜치 `refactor/one-client-per-work`.
+
+- 접수 화면에 **담당 AI·모델·추론 강도** 선택을 넣었다. 처음 선택값은 연결 설정의 기본값(기본 클라이언트, 그 클라이언트의 모델, Codex 추론 강도)이다.
+  고른 값은 `office_work_client`(client, model, effort)에 고정되고 업무 상세 머리에 표시된다. MCP `runtime_work_start`도 같은 `client` 필드를 받는다.
+  고르지 않은 업무(MCP로 시작했거나 이전 업무)는 기본값으로 처음 한 번 고정된다.
+- 실행: Codex는 `-m <모델> -c model_reasoning_effort=<강도>`, Claude는 `--model <모델> --effort <강도>`로 실행한다.
+- Office 자체 판단(접수 계획, 재계획, 일정 해석, 페이지 요약, 완료 검증)도 그 업무의 클라이언트와 모델을 쓴다(추론 강도는 기본값 — 판단은 짧게 유지).
+- 제거: Office 판단 호출의 클라이언트 대체 체인(실패하면 다음 앱으로 넘기던 것), API→구독 전환, task Auto(역할별 클라이언트 배분)와 그 화면,
+  client_handoff 기록 쓰기와 '클라이언트 인계' 화면, coding의 Claude→Codex 읽기 전용 인계. 실패는 그 클라이언트의 실패로 남고 업무는 기다린다.
+  이전 설정 파일의 `api_to_subscription`, `client:'auto'`, `role_model_mode:'auto'`와 DB의 `client_handoff`·`office_task_models` 행은 그대로 읽힌다(쓰지 않음).
+  실패 분류는 `src/integrations/client-failure.ts`로 옮겼다.
+- 원장: task Auto 요구사항(RQ-875, RQ-876)은 사용자 결정으로 대체되어 `not_run`으로 바꾸고 이유를 남겼다. RQ-731의 근거 파일을 새 모듈로 바꿨다.
+- 아직 남은 것: 설정 화면의 API LLM 모드·역할별 모델·MCP 샘플링 제거(다음 PR), coding 업무를 고정 클라이언트 한 세션으로 옮기기, Office 실행 도구를 업무용 MCP로 열기.
+- 검증: `runtime-work-client-run` 10건(접수 때 고른 Claude·모델·추론 강도로 실행, 고정 클라이언트의 Office 판단 포함), 인계·대체 체인을 검사하던 테스트는
+  "한 클라이언트만 답하고 다른 앱으로 넘기지 않음"으로 바꾸고(`runtime-client-failure`로 이름 변경), task Auto 테스트는 지웠다.
+  전체 quick 2,016/2,020 → 실패 3건(지운 화면 스크립트를 불러오던 테스트)을 고쳐 각 파일 통과. 남은 1건은 이 PC에서만 25초 제한에 걸리는
+  `runtime-control-service-reload`의 기존 실패(main에서도 같고 CI에서는 통과). 접수 화면을 격리 관제센터에서 데스크톱·모바일로 확인했다.

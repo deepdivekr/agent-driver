@@ -3,7 +3,7 @@ import {realpathSync} from 'node:fs';
 import {z} from 'zod';
 import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
-import {classifyClientFailure} from '../integrations/client-handoff.js';
+import {classifyClientFailure} from '../integrations/client-failure.js';
 import {nativeProcessRunner,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
 import {modelSettingsPath,scopedModelConfiguration} from '../onboarding/model-settings.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
@@ -156,7 +156,6 @@ export class CodingDialogRuntime {
         try{this.store.markCodingDialogPreflightFailed(scope,dialogId,turnId,owner,failure);return;}catch{}
       }
       try{this.store.markCodingDialogUncertain(scope,dialogId,turnId,owner,failure);}catch{try{this.store.markExpiredCodingDialogTurn(scope,dialogId);}catch{}}
-      try{const dialog=this.store.codingDialog(scope,dialogId);this.store.recordClientHandoff(scope,{work_id:dialog.work_id,run_id:dialog.id,stage_id:turnId,source:'codex',target:null,source_model:dialog.model,target_model:null,reason:classifyClientFailure(error),effect_state:'uncertain',status:'requires_reconciliation',input_sha256:null});}catch{}
     }finally{clearInterval(heartbeat);if(this.active.get(dialogId)===controller)this.active.delete(dialogId);}
   }
   stop(raw:unknown){

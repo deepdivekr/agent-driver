@@ -5,10 +5,12 @@ import {basename,dirname,extname,join,relative} from 'node:path';
 import {type PackStore} from '../packs/store.js';
 import {type HostConfig} from '../interface/config.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
-import {classifyClientFailure} from '../integrations/client-handoff.js';
+import {classifyClientFailure} from '../integrations/client-failure.js';
 import {nativeProcessRunner,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
 import {sanitizeCodingReply} from '../coding/reply-safety.js';
 import {type WorkActivityMetadata} from './activity.js';
+import {workClientChoiceSchema,type WorkClientChoice} from './contracts.js';
+import {type ModelSettings} from '../onboarding/model-settings.js';
 import {customPackWorkBinding} from './custom-pack-repeat.js';
 import {workImportExecutionOwner} from './import-authority.js';
 import {WORK_COMPLETION_REPAIR_BUDGET,boundWorkToolValue,type WorkClientCheckpoint,type WorkClientResult,type WorkClientToolReceipt} from './client-executor.js';
@@ -32,18 +34,30 @@ export function enableClientRun(options:{runner?:SafeProcessRunner;executable?:(
 export function disableClientRun(){enabled=false;runner=nativeProcessRunner;executable=client=>resolveSubscriptionClientExecutable(client);}
 export const clientRunEnabled=()=>enabled;
 
-/** The client is chosen once, at the Work's first client run, from the owner's default client, and kept for its whole life. */
-export function workClient(store:PackStore,project:string,workId:string,preferred:string|undefined):RunClient|null{
-  const db=store.hermesState;
-  db.exec('CREATE TABLE IF NOT EXISTS office_work_client(project_id TEXT NOT NULL,work_id TEXT NOT NULL,client TEXT NOT NULL,pinned_at TEXT NOT NULL,PRIMARY KEY(project_id,work_id))');
-  const row=db.prepare('SELECT client FROM office_work_client WHERE project_id=? AND work_id=?').get(project,workId) as {client:string}|undefined;
-  if(row)return row.client==='claude'?'claude':'codex';
-  // OpenCode has no client run; its Works stay on the host-tool loop. Otherwise the owner's default client, or the other
-  // one when only that is installed. This is the one choice; later runs never switch.
+const migrated=new WeakSet<object>();
+function pinTable(store:PackStore){
+  const db=store.hermesState;if(migrated.has(db))return db;
+  db.exec('CREATE TABLE IF NOT EXISTS office_work_client(project_id TEXT NOT NULL,work_id TEXT NOT NULL,client TEXT NOT NULL,pinned_at TEXT NOT NULL,model TEXT,effort TEXT,PRIMARY KEY(project_id,work_id))');
+  // The first version of this table held the client only.
+  for(const column of ['model','effort'])try{db.exec(`ALTER TABLE office_work_client ADD COLUMN ${column} TEXT`);}catch{/* already there */}
+  migrated.add(db);return db;
+}
+/** The Work's client, model and reasoning effort, or null when none is pinned (an OpenCode default keeps the host-tool loop). */
+export function workClientChoice(store:PackStore,project:string,workId:string):WorkClientChoice|null{
+  const row=pinTable(store).prepare('SELECT client,model,effort FROM office_work_client WHERE project_id=? AND work_id=?').get(project,workId) as {client:string;model:string|null;effort:string|null}|undefined;
+  if(!row)return null;const parsed=workClientChoiceSchema.safeParse({id:row.client,model:row.model??null,effort:row.effort??null});
+  return parsed.success?parsed.data:{id:row.client==='claude'?'claude':'codex',model:null,effort:null};
+}
+/** Pin the Work's client once: the owner's choice at intake, or, when none was given, the owner's defaults (the
+ * default client, or the other one when only that is installed). Later runs and settings changes never switch it. */
+export function pinWorkClient(store:PackStore,project:string,workId:string,choice:WorkClientChoice|undefined,settings:ModelSettings|null):WorkClientChoice|null{
+  const pinned=workClientChoice(store,project,workId);if(pinned)return pinned;
   const installed=(client:RunClient)=>{try{executable(client);return true;}catch{return false;}};
-  const client=preferred==='opencode'?null:(preferred==='claude'?['claude','codex'] as const:['codex','claude'] as const).find(installed)??null;
-  if(client)db.prepare('INSERT OR IGNORE INTO office_work_client(project_id,work_id,client,pinned_at) VALUES(?,?,?,?)').run(project,workId,client,new Date().toISOString());
-  return client;
+  const preferred=settings?.selection.client,client=choice?.id??(preferred==='opencode'?null:(preferred==='claude'?['claude','codex'] as const:['codex','claude'] as const).find(installed)??null);
+  if(!client)return null;
+  const value:WorkClientChoice=choice??{id:client,model:settings?.selection.client_models[client]??null,effort:client==='codex'?settings?.selection.codex_reasoning_effort??null:null};
+  pinTable(store).prepare('INSERT OR IGNORE INTO office_work_client(project_id,work_id,client,pinned_at,model,effort) VALUES(?,?,?,?,?,?)').run(project,workId,value.id,new Date().toISOString(),value.model,value.effort);
+  return workClientChoice(store,project,workId);
 }
 export const workFolder=(config:Pick<HostConfig,'dbPath'>,workId:string)=>join(dirname(config.dbPath),'work-folders',workId);
 
@@ -56,9 +70,10 @@ export function clientRunEnvironment(base:NodeJS.ProcessEnv=process.env):NodeJS.
 const OFFICE_CONTROL_TOOLS=['runtime_work_start','runtime_work_execute','runtime_work_control'];
 const codexHasOffice=()=>{try{return /^\[mcp_servers\.(?:agent-driver|"agent-driver")\]/mu.test(readFileSync(join(process.env.CODEX_HOME??join(homedir(),'.codex'),'config.toml'),'utf8'));}catch{return false;}};
 /** Everything allowed, as when the owner uses the client app: no sandbox and no approval prompts. */
-export function clientRunArgs(client:RunClient,folder:string,session:{id:string;resume:boolean}|null,officeRegistered=codexHasOffice()){
-  if(client==='codex')return ['-C',folder,'--dangerously-bypass-approvals-and-sandbox',...(officeRegistered?['-c',`mcp_servers.agent-driver.disabled_tools=${JSON.stringify(OFFICE_CONTROL_TOOLS)}`]:[]),'exec',...(session?.resume?['resume','--json','--skip-git-repo-check',session.id,'-']:['--json','--skip-git-repo-check','-'])];
-  return ['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions','--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
+export function clientRunArgs(choice:Pick<WorkClientChoice,'id'|'model'|'effort'>,folder:string,session:{id:string;resume:boolean}|null,officeRegistered=codexHasOffice()){
+  const {model,effort}=choice;
+  if(choice.id==='codex')return ['-C',folder,...(model?['-m',model]:[]),'--dangerously-bypass-approvals-and-sandbox',...(effort?['-c',`model_reasoning_effort=${effort}`]:[]),...(officeRegistered?['-c',`mcp_servers.agent-driver.disabled_tools=${JSON.stringify(OFFICE_CONTROL_TOOLS)}`]:[]),'exec',...(session?.resume?['resume','--json','--skip-git-repo-check',session.id,'-']:['--json','--skip-git-repo-check','-'])];
+  return ['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions',...(model?['--model',model]:[]),...(effort?['--effort',effort]:[]),'--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
 }
 /** Works whose completion Office proves in code (sealed collections, native checks), whose writes go through Office's
  * approved Pack execution, coding Works (their own project), custom Pack repeats and imported Works keep the host's own path. */
@@ -121,7 +136,7 @@ function claudeEvent(event:Json,state:RunState):ClientRunEvent[]{
 
 export interface ClientRunOutcome {session_id:string|null;final_message:string;completed:boolean;reason:string|null;counts:RunState['counts'];}
 /** One run of the client's own agent until its turn ends. Unknown events are tolerated: both clients update themselves. */
-export async function runClient(request:{client:RunClient;folder:string;prompt:string;session:{id:string;resume:boolean}|null;signal:AbortSignal;timeout_ms?:number;onSession:(id:string)=>void;onEvent:(event:ClientRunEvent)=>void}):Promise<ClientRunOutcome>{
+export async function runClient(request:{client:RunClient;model:string|null;effort:WorkClientChoice['effort'];folder:string;prompt:string;session:{id:string;resume:boolean}|null;signal:AbortSignal;timeout_ms?:number;onSession:(id:string)=>void;onEvent:(event:ClientRunEvent)=>void}):Promise<ClientRunOutcome>{
   // A new Claude session's pre-assigned ID is confirmed only when the client reports it.
   const state:RunState={session:request.session?.resume?request.session.id:null,final:'',done:false,turnFailed:false,failure:'',tools:new Map(),counts:{commands:0,file_changes:0,tool_calls:0,web:0}};
   let pending='';
@@ -138,7 +153,7 @@ export async function runClient(request:{client:RunClient;folder:string;prompt:s
     if(pending.length>8_388_608)throw Error('CLIENT_EVENT_TOO_LARGE');
   };
   mkdirSync(request.folder,{recursive:true});
-  const result=await runner.run({executable:executable(request.client),args:clientRunArgs(request.client,request.folder,request.session),cwd:request.folder,stdin:request.prompt,timeout_ms:request.timeout_ms??7_200_000,signal:request.signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:8_388_608,onStdout:observe});
+  const result=await runner.run({executable:executable(request.client),args:clientRunArgs({id:request.client,model:request.model,effort:request.effort},request.folder,request.session),cwd:request.folder,stdin:request.prompt,timeout_ms:request.timeout_ms??7_200_000,signal:request.signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:8_388_608,onStdout:observe});
   observe('\n');
   const completed=result.code===0&&state.done&&!state.turnFailed;
   return {session_id:state.session,final_message:state.final,completed,reason:completed?null:`CLIENT_${classifyClientFailure(`${state.failure}\n${result.stderr.slice(-4000)}`).toUpperCase()}`,counts:state.counts};
@@ -174,7 +189,7 @@ export function clientResultText(finalMessage:string,files:ProducedFile[]){
 }
 
 export interface ClientRunInput {
-  client:RunClient;work_id:string;run_id:string;folder:string;title:string;prompt:string;checks:Check[];
+  client:RunClient;model:string|null;effort:WorkClientChoice['effort'];work_id:string;run_id:string;folder:string;title:string;prompt:string;checks:Check[];
   /** What intake settled with the owner: answers, agreed scope, collection window, the host schedule. */
   context:Json;directions:Array<{instruction:string;created_at:string}>;
   checkpoint:WorkClientCheckpoint|null;signal:AbortSignal;guard:()=>void;save:(checkpoint:WorkClientCheckpoint)=>void;
@@ -220,7 +235,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       let guardFailure:unknown=null;const watch=setInterval(()=>{try{input.guard();}catch(error){guardFailure=error;stop.abort();}},5_000);watch.unref();
       let outcome:ClientRunOutcome;
       try{
-        outcome=await runClient({client,folder:input.folder,prompt:next,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
+        outcome=await runClient({client,model:input.model,effort:input.effort,folder:input.folder,prompt:next,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
           onSession:id=>update({session_id:id,confirmed:true}),onEvent:event=>input.activity(event.kind,`${event.tool_name} · ${event.summary}`,meta({tool_name:event.tool_name,status:event.status}))});
       }catch(error){
         if(stop.signal.aborted){if(guardFailure)throw guardFailure;input.guard();throw Error('WORK_PAUSED');}

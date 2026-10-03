@@ -107,7 +107,7 @@ export class RuntimeApi{
     this.store=new PackStore(config.dbPath);try{this.store.registerProject(config.project);}catch(e){this.store.close();throw e;}
     this.workResults=new WorkResults(this.store,[],WorkDeliverySettings.fromConfig(config),()=>workDelegation(config).notify);
     this.files=this.store.localFileExplorer(config.project.id,dirname(config.dbPath));
-    this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env,{},event=>{this.store.recordClientHandoff(config.project.id,event);});
+    this.model=options.swarmModel??new ConfiguredStructuredModel(modelSettingsPath(config),process.env);
     const windowsDriver=options.windows?.driver??(config.windowsExecutor?(config.windowsExecutor.kind==='cua-desktop'?new CuaDesktopDriver(config.windowsExecutor,this.store.desktopState):new CuaFieldDriver(config.windowsExecutor,this.store.desktopState)):undefined);
     this.windows=new WindowsWorkflowRuntime(this.store,config,{...options.windows,
       ...(windowsDriver?{driver:windowsDriver}:{}),llm:options.windows?.llm??this.model});

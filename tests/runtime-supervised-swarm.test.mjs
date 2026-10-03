@@ -9,10 +9,6 @@ import {loadHostConfig} from '../dist/interface/config.js';
 import {executeSupervisedSwarm,assessSupervisedStages,supervisedSwarmCheckpointSchema} from '../dist/work/swarm-executor.js';
 import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {WorkResults} from '../dist/work/results.js';
-import {ConfiguredStructuredModel} from '../dist/onboarding/configured-model.js';
-import {modelSettingsPath,saveModelSettings} from '../dist/onboarding/model-settings.js';
-import {allocateWorkModels} from '../dist/work/task-models.js';
-import {hashJson} from '../dist/taskpack/adaptive-spec.js';
 import {initialWorkPlan,validateWorkPlan} from '../dist/work/plan.js';
 import {stageBinding} from '../dist/work/stages.js';
 import {observedCompletionFixture} from './helpers/observed-completion-fixture.mjs';
@@ -175,25 +171,6 @@ function saveDirection(x,runId,stepId,instruction){
   });
   return {revision,directions:x.api.store.workDirections(project,work.id)};
 }
-
-test('runtime fixture automatic task models reach Swarm planner source synthesis and quality without replacing shared providers',async t=>{
-  const x=await setup(t),path=modelSettingsPath(x.api.config),roles=['planner','worker','verifier','synthesis'],candidates=roles.map(role=>({id:'codex-'+hashJson(role).slice(0,16),client:'codex',model:role+'-auto',label:role})),seen=[];
-  saveModelSettings(path,{revision:0,onboarding_step:3,selection:{mode:'subscription',client:'codex',role_model_mode:'auto',client_models:{codex:'base-model',claude:null,opencode:null},api_model:'unused-api',reasoning:'high',jev:'off'}},{});
-  const sharedPlanner=x.api.swarm.providers.planner,sharedFallback=x.api.swarm.providers.llm_fallback;
-  const configured=new ConfiguredStructuredModel(path,{}, {api:()=>{throw Error('NO_PAID_API');},taskCandidates:async()=>candidates,subscription:options=>({calls:[],async call(purpose,instructions,input){
-    const model=options.environment.AGENT_DRIVER_CODEX_MODEL;seen.push({instructions,model,session:options.session});
-    const value=instructions.startsWith('Assign the four')?{assignments:roles.map((role,i)=>({role,candidate_id:candidates[i].id,reason:'Fits this role.'}))}:await x.model.call(purpose,instructions,input);
-    this.calls.push({purpose,provider:'codex',model,status:'accepted',elapsed_ms:1,input_sha256:hashJson(input),input_tokens:10,output_tokens:5,total_tokens:15});return value;
-  }})}).forWork({work_id:x.work.work_id,run_id:'supervisor-test'});
-  const model=await allocateWorkModels(x.api.store,x.api.config.project.id,x.work.work_id,configured,{goal},()=>{});
-  const result=await executeSupervisedSwarm(x.api,model,{work_id:x.work.work_id,request_id:'auto-swarm',goal,max_parallel:3},x.hooks);
-  assert.equal(result.status,'succeeded',JSON.stringify(result));assert.equal(x.peak(),3);
-  assert.equal(seen.find(r=>r.instructions.startsWith('You are the supervisor')).model,'planner-auto');
-  const grounded=seen.filter(r=>r.instructions.startsWith('Create a concise'));assert.ok(grounded.some(r=>r.model==='worker-auto'));assert.ok(grounded.some(r=>r.model==='synthesis-auto'));assert.ok(new Set(grounded.map(r=>r.session.actor_id)).size>=8);
-  assert.ok(seen.filter(r=>r.instructions.startsWith('Score each')).every(r=>r.model==='verifier-auto'));
-  assert.equal(x.api.swarm.providers.planner,sharedPlanner);assert.equal(x.api.swarm.providers.llm_fallback,sharedFallback);
-  const view=x.api.swarm.withProviders({planner:sharedPlanner});assert.equal(view.runLocks,x.api.swarm.runLocks,'control and report mutations must share the same lock map');
-});
 
 test('runtime contract supervised Swarm executes three parallel source workers and dependent model workers through existing quality gates',async t=>{
   const x=await setup(t),result=await executeSupervisedSwarm(x.api,x.model,{work_id:x.work.work_id,request_id:'supervised-swarm',goal,max_parallel:3},x.hooks);

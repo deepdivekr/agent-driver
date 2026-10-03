@@ -204,7 +204,7 @@ test('runtime contract evidence-bearing Codex turns extend only their bounded de
   }
 });
 
-test('runtime subscription model falls from failed Codex to Claude while preserving no-tools structured contracts',async()=>{
+test('runtime subscription model keeps a failed Codex judgment on Codex; each client runs with no tools',async()=>{
   const invocations=[];const runner={async run(request){invocations.push(request);
     if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT\n',stderr:''};
     if(request.args.join(' ')==='auth status')return {code:0,stdout:JSON.stringify({loggedIn:true,authMethod:'claude.ai',apiProvider:'firstParty',subscriptionType:'max'}),stderr:''};
@@ -215,12 +215,15 @@ test('runtime subscription model falls from failed Codex to Claude while preserv
     throw Error('unexpected');
   }};
   const model=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'codex,claude'}),runner});
-  assert.deepEqual(await model.call('correct','Choose one.',{},schema),{choice:'B'});
+  await assert.rejects(model.call('correct','Choose one.',{},schema),/STRUCTURED_MODEL_UNAVAILABLE/u);
+  assert.equal(invocations.some(item=>executableId(item)==='claude'&&item.args[0]==='-p'),false,'the judgment never moves to Claude');
+  const claudeModel=new SubscriptionAwareStructuredModel({environment:fixtureEnvironment({AGENT_DRIVER_LLM_CLIENT:'claude'}),runner});
+  assert.deepEqual(await claudeModel.call('correct','Choose one.',{},schema),{choice:'B'});
   const claude=invocations.find(item=>executableId(item)==='claude'&&item.args[0]==='-p');
   assert.ok(claude.args.includes('--tools'));assert.ok(claude.args.includes('--no-session-persistence'));assert.equal(claude.args.includes('--safe-mode'),false);
   const codex=invocations.find(item=>executableId(item)==='codex'&&item.args[0]==='exec');
   assert.ok(codex.args.includes('--ephemeral'));assert.ok(codex.args.includes('--sandbox'));assert.ok(codex.args.includes('read-only'));assert.ok(codex.args.includes('--ignore-rules'));
-  assert.deepEqual(model.calls.map(item=>[item.provider,item.status]),[['codex','failed'],['claude','accepted']]);
+  assert.deepEqual([...model.calls,...claudeModel.calls].map(item=>[item.provider,item.status]),[['codex','failed'],['claude','accepted']]);
   assert.equal(JSON.stringify(model.calls).includes('private provider failure'),false);
 });
 
