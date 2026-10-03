@@ -321,6 +321,8 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     if(verified&&typeof verified==='object'&&session().repairs<WORK_COMPLETION_REPAIR_BUDGET){
       const check=input.checks.find(item=>item.id===verified.repair.check_id);
       update({repairs:session().repairs+1});
+      // The owner sees what the client was asked to fix (live: the reason reached only the client).
+      input.activity('supervisor.client_run',`${clientName(client)} · 검증에서 거절된 조건 ${verified.repair.check_id}의 수정을 같은 세션에 요청합니다 (${session().repairs}/${WORK_COMPLETION_REPAIR_BUDGET})${verified.repair.reason?`: ${brief(verified.repair.reason,400)}`:''}`,meta({status:'running',reason:verified.repair.check_id}));
       next=`Office checked your result against the completion conditions. Not met: ${verified.repair.check_id}${check?` (${check.result})`:''}.${verified.repair.reason?` Reason: ${verified.repair.reason}`:''}\n\nFix this in the same folder, then finish with the updated short reply. If the condition is about the schedule or the delivery, it is Office's part: change nothing and say so.\n\n${OFFICE_OWNS}`;
       continue;
     }
