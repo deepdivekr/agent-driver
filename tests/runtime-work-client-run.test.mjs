@@ -39,16 +39,20 @@ async function setup(t,options={}){
   await writeFile(host,JSON.stringify({schema_version:1,project_id:'client-run-test',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}}));
   const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
   const model=fixture(options),runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'client-run',prompt:'파생상품 사례 이미지와 짧은 해설을 만들어줘',...(options.choice?{client:options.choice}:{})});
-  const runs=[],looks=[];enableClientRun({runner:{run:request=>{
+  const runs=[],looks=[],asks=[];enableClientRun({runner:{run:request=>{
     // The image readback is a separate call of the client: it answers with descriptions and is not a Work turn.
     if(request.args.includes('-i')||/Describe each image below/u.test(request.stdin??'')){looks.push(request);const names=request.args.includes('-i')?request.args.filter((value,index)=>request.args[index-1]==='-i').map(path=>path.split('/').pop()):[...(request.stdin.match(/^- (.+)$/gmu)??[])].map(line=>line.slice(2));
       const reply=JSON.stringify(names.map(file=>({file,description:`공책 손필기 스타일의 질문 이미지. 보이는 글: "${file.replace(/\.png$/u,'')} 사례 질문". 정답은 적혀 있지 않다. `+'세부 묘사가 길게 이어집니다. '.repeat(200)})));
       for(const event of request.args.includes('-i')?[{type:'thread.started',thread_id:'11111111-2222-4333-8444-555555555555'},{type:'item.completed',item:{id:'i0',type:'agent_message',text:reply}},{type:'turn.completed'}]:[{type:'result',subtype:'success',result:reply,session_id:'11111111-2222-4333-8444-555555555555'}])request.onStdout(JSON.stringify(event)+'\n');
       return {code:0,stdout:'',stderr:''};}
+    // The one-line turn that asks for the completion report: a client of these cases answers without one unless told to.
+    if(/^Office decides completion from COMPLETION\.json/u.test(request.stdin??'')){asks.push(request);if(options.report)options.report(request);
+      const resumed=request.args[request.args.indexOf('--resume')+1];
+      for(const event of request.executable.endsWith('claude')?[{type:'result',subtype:'success',result:'checked',session_id:resumed}]:[{type:'item.completed',item:{id:'a0',type:'agent_message',text:'checked'}},{type:'turn.completed'}])request.onStdout(JSON.stringify(event)+'\n');return {code:0,stdout:'',stderr:''};}
     runs.push(request);return options.client(request,runs.length);}},executable:client=>`/fake/${client}`});
   const supervisor=new WorkSupervisor(store,config,model,{auto_start:false,tick_ms:20,...(options.verifyCompletion?{verifyCompletion:options.verifyCompletion}:{})});
   t.after(async()=>{supervisor.close();disableClientRun();store.close();await rm(root,{recursive:true,force:true});});
-  return {root,config,store,model,work,runs,looks,supervisor};
+  return {root,config,store,model,work,runs,looks,asks,supervisor};
 }
 const line=value=>JSON.stringify(value)+'\n';
 const thread='0b7d3c52-8f8e-4b56-9b3e-2f1d4c6a7e10';
@@ -349,4 +353,14 @@ test('runtime fixture the client report decides completion; an external Work sti
   outside.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify({...JSON.parse(row.spec),requested_effect:'external_effect_requested'}),outside.work.work_id);
   outside.supervisor.start(outside.work.work_id,outside.work.revision,true);outside.supervisor.activate();outside.supervisor.tick();
   const verified=await settle(outside);assert.equal(verified.state,'succeeded',JSON.stringify(verified));assert.equal(outside.model.verifications,1);
+});
+
+test('runtime fixture a turn without a completion report is asked for it once in the same session',async t=>{
+  // Live 2026-10-04: a resume with nothing new ran no turn, found no report and fell back to Office's own check, which sent "확인 필요".
+  const x=await setup(t,{client:request=>codexTurn(request),report:request=>writeFileSync(join(request.cwd,'COMPLETION.json'),JSON.stringify({checks:[{id:'images',met:true,note:'다섯 장과 해설이 있다'}]}))});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  assert.equal(x.asks.length,1);assert.equal(x.model.verifications,0,'the report decides; no verifier call');
+  assert.deepEqual(x.asks[0].args.slice(-6),['exec','resume','--json','--skip-git-repo-check',thread,'-'],'the same session is asked');
+  assert.match(x.asks[0].stdin,/- images: 사례 이미지 파일과 해설이 있다/u);
 });

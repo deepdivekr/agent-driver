@@ -321,6 +321,8 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     :!session().finished?'The run was interrupted. Continue the Work where you stopped, in the same folder, and finish with the short reply.':null;
   const meta=(extra:WorkActivityMetadata={}):WorkActivityMetadata=>({run_id,stage_id:'execution',model_provider:client,executor:client,...extra});
   // The owner's Windows-side servers are looked at only when the client actually runs.
+  // A turn that left no completion report (one from before reports existed, or a resume with nothing new) is asked for it once.
+  let askedReport=false;
   let extra:ClientRunMcpServer[]|null=null,deliveryText=input.checkpoint?.client_session?deliveryMessage(input.folder,cp.summary):'';
   for(;;){
     if(next){
@@ -388,7 +390,19 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       input.activity('supervisor.client_run',`${clientName(client)} · 실행을 마쳤습니다. 만든 파일 ${files.length}개를 결과로 저장했습니다.`,meta({status:'succeeded'}));
     }
     input.guard();
-    const report=input.external_effect?null:clientCompletionReport(input.folder,input.checks);
+    let report=input.external_effect?null:clientCompletionReport(input.folder,input.checks);
+    // Live 2026-10-04: a resume with nothing new ran no turn, found no report and fell back to Office's own check, which told
+    // the owner "확인 필요" about a correct result. The client is asked for its report once, in the same session; nothing
+    // else of the result changes, so the saved result and its receipts stay as they are.
+    if(!input.external_effect&&!report&&!askedReport&&session().confirmed&&session().session_id){
+      askedReport=true;
+      try{
+        await runClient({client,model:input.model,effort:input.effort,servers:extra??[],folder:input.folder,session:{id:session().session_id!,resume:true},signal:input.signal,
+          prompt:`Office decides completion from ${COMPLETION_FILE}. Check the files in the Work folder against each completion condition and write ${COMPLETION_FILE}: {"checks":[{"id":"<condition id>","met":true|false,"note":"<one line: what shows it, or what is missing>"}]}.\n${input.checks.map(check=>`- ${check.id}: ${check.result}`).join('\n')}\n\nChange nothing else and reply in one line.`,
+          onSession:()=>{},onEvent:event=>input.activity(event.kind,`${event.tool_name} · ${event.summary}`,meta({tool_name:event.tool_name,status:event.status}))});
+      }catch(error){if(input.signal.aborted)throw error;/* no report: Office's own check below */}
+      input.guard();report=clientCompletionReport(input.folder,input.checks);
+    }
     if(report){
       const missing=report.checks.filter(item=>!item.met);
       input.activity('supervisor.verification',report.met?`${clientName(client)} reported every completion condition met (${report.checks.length}); Office accepts the client's report for a Work that sends or submits nothing outside.`:`${clientName(client)} reported ${missing.length} condition${missing.length===1?'':'s'} not met: ${missing.map(item=>`${item.id}${item.note?` (${item.note})`:''}`).join('; ')}`.slice(0,1000),meta({stage_id:'completion.verify',status:report.met?'verified':'not_verified'}));
