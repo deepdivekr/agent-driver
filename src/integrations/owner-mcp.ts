@@ -1,4 +1,4 @@
-import {readFileSync,statSync} from 'node:fs';
+import {existsSync,readFileSync,statSync} from 'node:fs';
 import {join} from 'node:path';
 import {Client} from '@modelcontextprotocol/sdk/client/index.js';
 import {StdioClientTransport} from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -44,28 +44,59 @@ function launchOf(side:EnvironmentHome['side'],value:{command?:unknown;args?:unk
   // A program configured on the Windows side is a Windows program; it is not started from here.
   return side==='local'&&typeof value.command==='string'&&value.command?{kind:'stdio',command:value.command,args:strings(value.args),env:stringMap(value.env)}:null;
 }
-/** Server sections of a Codex config.toml. Only the keys needed to start a server are read. */
-function codexServers(config:string,side:EnvironmentHome['side']):ServerDefinition[]{
-  const sections=new Map<string,{body:string;env:string}>();
-  for(const match of config.matchAll(/^\[mcp_servers\.(?:"([^"\]]+)"|([A-Za-z0-9_-]+))(\.env)?\]\n([\s\S]*?)(?=^\[|(?![\s\S]))/gmu)){
-    const key=match[1]??match[2]!,entry=sections.get(key)??{body:'',env:''};if(match[3])entry.env=match[4]!;else entry.body=match[4]!;sections.set(key,entry);
+/** A server section as the owner wrote it; only the keys needed to start a server are read. */
+interface ServerEntry {key:string;command?:string|undefined;args:string[];url?:string|undefined;env:Record<string,string>;disabled:boolean;startup_timeout_sec?:number|undefined;tool_timeout_sec?:number|undefined;
+  /** Needs values Office does not pass on (environment variables, headers, tokens), or arguments it could not read. */
+  incomplete:boolean;type?:string|undefined;}
+// A TOML basic "string" (with escapes) or literal 'string' (as written: toml_edit writes any value with a backslash, such as
+// a Windows path, this way).
+const tomlString=String.raw`"((?:[^"\\]|\\.)*)"|'([^'\n]*)'`;
+const basic=(raw:string)=>{try{return JSON.parse(`"${raw}"`) as string;}catch{return raw.replace(/\\\\/gu,'\\').replace(/\\"/gu,'"');}};
+const tomlValue=(basicRaw:string|undefined,literal:string|undefined)=>basicRaw!==undefined?basic(basicRaw):literal;
+/** Server sections of a Codex config.toml. */
+function codexEntries(config:string):ServerEntry[]{
+  const sections=new Map<string,{body:string;env:string;headers:boolean}>();
+  for(const match of config.matchAll(/^\[mcp_servers\.(?:"([^"\]]+)"|([A-Za-z0-9_-]+))(?:\.([A-Za-z0-9_-]+))?\]\n([\s\S]*?)(?=^\[|(?![\s\S]))/gmu)){
+    const key=match[1]??match[2]!,entry=sections.get(key)??{body:'',env:'',headers:false},sub=match[3];
+    if(sub==='env')entry.env=match[4]!;else if(sub)entry.headers||=sub!=='tools'&&match[4]!.trim()!=='';else entry.body=match[4]!;sections.set(key,entry);
   }
-  const scalar=(body:string,key:string)=>new RegExp(`^${key}\\s*=\\s*"((?:[^"\\\\]|\\\\.)*)"`,'mu').exec(body)?.[1]?.replace(/\\\\/gu,'\\').replace(/\\"/gu,'"');
-  const array=(body:string,key:string)=>{const raw=new RegExp(`^${key}\\s*=\\s*(\\[[^\\]]*\\])`,'mu').exec(body)?.[1];try{return raw?strings(JSON.parse(raw)):[];}catch{return [];}};
-  return [...sections].map(([key,entry])=>({id:identity(key),side,disabled:/^enabled\s*=\s*false/mu.test(entry.body),
-    launch:launchOf(side,{command:scalar(entry.body,'command'),args:array(entry.body,'args'),url:scalar(entry.body,'url'),env:Object.fromEntries([...entry.env.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*"((?:[^"\\]|\\.)*)"/gmu)].map(match=>[match[1]!,match[2]!]))})}));
+  const scalar=(body:string,key:string)=>{const match=new RegExp(`^${key}\\s*=\\s*(?:${tomlString})`,'mu').exec(body);return match?tomlValue(match[1],match[2]):undefined;};
+  // A string array, on one line or several, with a trailing comma or comments; null when present but not readable.
+  const array=(body:string,key:string):string[]|null=>{
+    const start=new RegExp(`^${key}\\s*=\\s*\\[`,'mu').exec(body);if(!start)return [];
+    const items:string[]=[];const scan=new RegExp(`${tomlString}|#[^\\n]*|(\\])|([^\\s,])`,'gu');scan.lastIndex=start.index+start[0].length;
+    for(let match=scan.exec(body);match;match=scan.exec(body)){
+      if(match[3])return items;if(match[4])return null;
+      if(match[1]!==undefined||match[2]!==undefined)items.push(tomlValue(match[1],match[2])!);
+    }
+    return null;
+  };
+  const number=(body:string,key:string)=>{const raw=new RegExp(`^${key}\\s*=\\s*([0-9]+(?:\\.[0-9]+)?)\\s*$`,'mu').exec(body)?.[1];return raw?Number(raw):undefined;};
+  return [...sections].map(([key,entry])=>{const args=array(entry.body,'args');return {key,command:scalar(entry.body,'command'),args:args??[],url:scalar(entry.body,'url'),disabled:/^enabled\s*=\s*false/mu.test(entry.body),
+    env:Object.fromEntries([...entry.env.matchAll(new RegExp(`^([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*(?:${tomlString})`,'gmu'))].map(match=>[match[1]!,tomlValue(match[2],match[3])??''])),
+    startup_timeout_sec:number(entry.body,'startup_timeout_sec'),tool_timeout_sec:number(entry.body,'tool_timeout_sec'),
+    incomplete:args===null||entry.headers||/^(?:env|env_vars|bearer_token_env_var|http_headers|env_http_headers)\s*[.=]/mu.test(entry.body)};});
 }
-function jsonServers(path:string,side:EnvironmentHome['side']):ServerDefinition[]{
-  let parsed:{mcpServers?:Record<string,{command?:unknown;args?:unknown;env?:unknown;url?:unknown;disabled?:unknown}>}={};
+/** Whether a Codex config.toml defines this server name in any form: a table, a dotted key, or an entry of [mcp_servers]. */
+function codexDefines(config:string,key:string){
+  const name=`(?:"${key}"|${key})`;
+  if(new RegExp(`^\\s*\\[\\s*mcp_servers\\s*\\.\\s*${name}\\s*[.\\]]|^\\s*mcp_servers\\s*\\.\\s*${name}\\s*[.=]`,'mu').test(config))return true;
+  const table=/^\s*\[\s*mcp_servers\s*\]\s*$([\s\S]*?)(?=^\s*\[|(?![\s\S]))/mu.exec(config)?.[1]??'';
+  return new RegExp(`^\\s*${name}\\s*[.=]`,'mu').test(table);
+}
+function jsonEntries(path:string):ServerEntry[]{
+  let parsed:{mcpServers?:Record<string,{command?:unknown;args?:unknown;env?:unknown;url?:unknown;disabled?:unknown;headers?:unknown;type?:unknown}>}={};
   try{parsed=JSON.parse(text(path)||'{}') as typeof parsed;}catch{return [];}
-  return Object.entries(parsed.mcpServers??{}).map(([key,value])=>({id:identity(key),side,disabled:value?.disabled===true,launch:value&&typeof value==='object'?launchOf(side,value):null}));
+  return Object.entries(parsed.mcpServers??{}).filter(([,value])=>value&&typeof value==='object').map(([key,value])=>({key,command:typeof value.command==='string'?value.command:undefined,args:strings(value.args),url:typeof value.url==='string'?value.url:undefined,env:stringMap(value.env),disabled:value.disabled===true,
+    incomplete:Boolean(value.headers&&typeof value.headers==='object'&&Object.keys(value.headers).length),type:typeof value.type==='string'?value.type:undefined}));
 }
+const definition=(side:EnvironmentHome['side'])=>(entry:ServerEntry):ServerDefinition=>({id:identity(entry.key),side,disabled:entry.disabled,launch:launchOf(side,entry)});
 export function ownerMcpServers(environment:NodeJS.ProcessEnv=process.env,homes:EnvironmentHome[]=environmentHomes(environment)):ServerDefinition[]{
   const found:ServerDefinition[]=[];
   for(const place of homes){
     const codex=place.side==='local'&&environment.CODEX_HOME||join(place.home,'.codex');
-    found.push(...codexServers(text(join(codex,'config.toml')),place.side),...jsonServers(join(place.home,'.claude.json'),place.side));
-    if(place.side==='windows')found.push(...jsonServers(join(place.home,'AppData','Roaming','Claude','claude_desktop_config.json'),place.side));
+    found.push(...[...codexEntries(text(join(codex,'config.toml'))),...jsonEntries(join(place.home,'.claude.json'))].map(definition(place.side)));
+    if(place.side==='windows')found.push(...jsonEntries(join(place.home,'AppData','Roaming','Claude','claude_desktop_config.json')).map(definition(place.side)));
   }
   // One entry per name: a server that can be started here wins over the same name on the other side.
   const byId=new Map<string,ServerDefinition>();
@@ -73,6 +104,47 @@ export function ownerMcpServers(environment:NodeJS.ProcessEnv=process.env,homes:
   return [...byId.values()];
 }
 
+/** An MCP server the owner set up on the Windows side of this computer, as a client run started here can use it. */
+export interface ClientRunMcpServer {id:string;command?:string;args?:string[];url?:string;startup_timeout_sec?:number;tool_timeout_sec?:number;}
+// The Codex desktop app's own runtimes (its REPL and computer-use bridge) work only inside that app.
+const desktopInternal=/[\\/](?:OpenAI[\\/]Codex|WindowsApps[\\/]OpenAI\.Codex)/iu;
+// Office's own server is given to a client run only through the owner's local registration, where its control tools are blocked.
+const officeServer=/agent[-_ ]?(?:driver|office)/iu;
+const urlAnswered=new Map<string,number>();
+/** Whether a URL server answers from here without credentials Office does not have. An answer is remembered for ten
+ * minutes; a server that did not answer is asked again on the next run. */
+async function usableUrl(url:string){
+  const at=urlAnswered.get(url);if(at&&Date.now()-at<600_000)return true;
+  try{const response=await fetch(url,{method:'GET',signal:AbortSignal.timeout(1500)});if([401,403].includes(response.status))return false;urlAnswered.set(url,Date.now());return true;}catch{return false;}
+}
+/** Windows-side servers a client started here cannot see (live 2026-10-03: Aside, the owner's main browser, is registered
+ * only in the Windows Codex app). A Windows program is started from here through the /mnt mount; a URL server is kept when
+ * it answers from here. Left out: a name the local config of this client already defines (that one is used), a name turned
+ * off anywhere on the Windows side, a server that needs values Office does not pass on (environment, headers, tokens) or
+ * whose arguments could not be read, an SSE server, the Codex desktop app's internals and Office's own server. Unlike the
+ * owner's tools Office calls itself, these are handed to the owner's own client. */
+export async function windowsClientServers(client:'codex'|'claude',environment:NodeJS.ProcessEnv=process.env,homes:EnvironmentHome[]=environmentHomes(environment),options:{mount?:string;reachable?:(url:string)=>Promise<boolean>}={}):Promise<ClientRunMcpServer[]>{
+  const windows=homes.find(place=>place.side==='windows'),local=homes.find(place=>place.side==='local');if(!windows)return [];
+  const mount=options.mount??'/mnt',reachable=options.reachable??usableUrl;
+  const localCodex=text(join(environment.CODEX_HOME??(local?join(local.home,'.codex'):''),'config.toml'));
+  const localClaude=local?jsonEntries(join(environment.CLAUDE_CONFIG_DIR??local.home,'.claude.json')):[];
+  // A name the local config defines in any form keeps the local definition; a -c override would merge into it.
+  const defined=(key:string)=>client==='codex'?codexDefines(localCodex,key):localClaude.some(entry=>entry.key===key);
+  const found=[...codexEntries(text(join(windows.home,'.codex','config.toml'))),...jsonEntries(join(windows.home,'.claude.json')),...jsonEntries(join(windows.home,'AppData','Roaming','Claude','claude_desktop_config.json'))];
+  const off=new Set(found.filter(entry=>entry.disabled).map(entry=>entry.key)),names=new Map<string,ServerEntry[]>();
+  for(const entry of found)if(/^[A-Za-z0-9_-]{1,40}$/u.test(entry.key)&&!officeServer.test(entry.key)&&!off.has(entry.key)&&!entry.incomplete&&!Object.keys(entry.env).length&&entry.type!=='sse'&&!defined(entry.key))names.set(entry.key,[...names.get(entry.key)??[],entry]);
+  // For each name the first entry that can actually be started or reached is used.
+  const usable=async(entry:ServerEntry):Promise<ClientRunMcpServer|null>=>{
+    const timeouts={...(entry.startup_timeout_sec?{startup_timeout_sec:entry.startup_timeout_sec}:{}),...(entry.tool_timeout_sec?{tool_timeout_sec:entry.tool_timeout_sec}:{})};
+    if(entry.url)return /^https?:\/\//u.test(entry.url)&&await reachable(entry.url)?{id:entry.key,url:entry.url,...timeouts}:null;
+    const program=entry.command?.match(/^([A-Za-z]):[\\/](.+\.exe)$/iu);
+    if(!program||desktopInternal.test(entry.command!))return null;
+    const path=join(mount,program[1]!.toLowerCase(),...program[2]!.split(/[\\/]/u));
+    return existsSync(path)?{id:entry.key,command:path,args:entry.args,...timeouts}:null;
+  };
+  const servers=await Promise.all([...names.values()].map(async entries=>{for(const entry of entries){const server=await usable(entry);if(server)return server;}return null;}));
+  return servers.filter((server):server is ClientRunMcpServer=>server!==null);
+}
 type Connect=(launch:Launch,environment:NodeJS.ProcessEnv)=>Promise<{client:Pick<Client,'listTools'|'callTool'|'close'>}>;
 const connectLaunch:Connect=async(launch,environment)=>{
   const client=new Client({name:'agent-office',version:'1'});

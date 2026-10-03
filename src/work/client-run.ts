@@ -8,6 +8,8 @@ import {hashJson} from '../taskpack/adaptive-spec.js';
 import {classifyClientFailure} from '../integrations/client-failure.js';
 import {nativeProcessRunner,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
 import {sanitizeCodingReply} from '../coding/reply-safety.js';
+import {ownerMcpEnabled,windowsClientServers,type ClientRunMcpServer} from '../integrations/owner-mcp.js';
+import {ownerEnvironmentContext} from '../integrations/client-environment.js';
 import {type WorkActivityMetadata} from './activity.js';
 import {workClientChoiceSchema,type WorkClientChoice} from './contracts.js';
 import {type ModelSettings} from '../onboarding/model-settings.js';
@@ -25,13 +27,16 @@ export type RunClient='codex'|'claude';
 type Check={id:string;result:string;evidence:string};
 type Verify=(checks:Check[],observations:WorkClientCheckpoint['observations'],claim:{action:'complete';stage_id:null;tool_name:null;arguments_json:null;summary:string;wait_reason:null;completed_checks:Array<{id:string;evidence_ids:string[]}>})=>Promise<boolean|{verified:false;repair:{check_id:string;reason?:string|undefined}}>;
 
-let enabled=false,runner:SafeProcessRunner=nativeProcessRunner,executable:(client:RunClient)=>string=client=>resolveSubscriptionClientExecutable(client);
+// The owner's Windows-side MCP servers (Aside, their main browser, lives there) go to the client only in a process where the
+// owner's own MCP servers may be used: a service process, never a test reading the developer's home.
+const ownerServers=async(client:RunClient):Promise<ClientRunMcpServer[]>=>ownerMcpEnabled()?windowsClientServers(client):[];
+let enabled=false,runner:SafeProcessRunner=nativeProcessRunner,executable:(client:RunClient)=>string=client=>resolveSubscriptionClientExecutable(client),servers=ownerServers;
 /** Service entries make the client's own agent the Work executor; AGENT_OFFICE_CLIENT_RUN=off keeps the host-tool loop. */
-export function enableClientRun(options:{runner?:SafeProcessRunner;executable?:(client:RunClient)=>string}={}){
+export function enableClientRun(options:{runner?:SafeProcessRunner;executable?:(client:RunClient)=>string;servers?:(client:RunClient)=>Promise<ClientRunMcpServer[]>}={}){
   enabled=process.env.AGENT_OFFICE_CLIENT_RUN!=='off';
-  if(options.runner)runner=options.runner;if(options.executable)executable=options.executable;
+  if(options.runner)runner=options.runner;if(options.executable)executable=options.executable;if(options.servers)servers=options.servers;
 }
-export function disableClientRun(){enabled=false;runner=nativeProcessRunner;executable=client=>resolveSubscriptionClientExecutable(client);}
+export function disableClientRun(){enabled=false;runner=nativeProcessRunner;executable=client=>resolveSubscriptionClientExecutable(client);servers=ownerServers;}
 export const clientRunEnabled=()=>enabled;
 
 // On Linux the resolver already checked the program; elsewhere it returns a bare name, installed when it is on PATH.
@@ -77,10 +82,14 @@ export function clientRunEnvironment(base:NodeJS.ProcessEnv=process.env):NodeJS.
 const OFFICE_CONTROL_TOOLS=['runtime_work_start','runtime_work_execute','runtime_work_control'];
 const codexHasOffice=()=>{try{return /^\[mcp_servers\.(?:agent-driver|"agent-driver")\]/mu.test(readFileSync(join(process.env.CODEX_HOME??join(homedir(),'.codex'),'config.toml'),'utf8'));}catch{return false;}};
 /** Everything allowed, as when the owner uses the client app: no sandbox and no approval prompts. */
-export function clientRunArgs(choice:Pick<WorkClientChoice,'id'|'model'|'effort'>,folder:string,session:{id:string;resume:boolean}|null,officeRegistered=codexHasOffice()){
+export function clientRunArgs(choice:Pick<WorkClientChoice,'id'|'model'|'effort'>,folder:string,session:{id:string;resume:boolean}|null,officeRegistered=codexHasOffice(),extra:ClientRunMcpServer[]=[]){
   const {model,effort}=choice;
-  if(choice.id==='codex')return ['-C',folder,...(model?['-m',model]:[]),'--dangerously-bypass-approvals-and-sandbox',...(effort?['-c',`model_reasoning_effort=${effort}`]:[]),...(officeRegistered?['-c',`mcp_servers.agent-driver.disabled_tools=${JSON.stringify(OFFICE_CONTROL_TOOLS)}`]:[]),'exec',...(session?.resume?['resume','--json','--skip-git-repo-check',session.id,'-']:['--json','--skip-git-repo-check','-'])];
-  return ['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions',...(model?['--model',model]:[]),...(effort?['--effort',effort]:[]),'--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
+  if(choice.id==='codex')return ['-C',folder,...(model?['-m',model]:[]),'--dangerously-bypass-approvals-and-sandbox',...(effort?['-c',`model_reasoning_effort=${effort}`]:[]),
+    ...extra.flatMap(server=>[...(server.command?['-c',`mcp_servers.${server.id}.command=${JSON.stringify(server.command)}`,'-c',`mcp_servers.${server.id}.args=${JSON.stringify(server.args??[])}`]:['-c',`mcp_servers.${server.id}.url=${JSON.stringify(server.url)}`]),
+      ...(server.startup_timeout_sec?['-c',`mcp_servers.${server.id}.startup_timeout_sec=${server.startup_timeout_sec}`]:[]),...(server.tool_timeout_sec?['-c',`mcp_servers.${server.id}.tool_timeout_sec=${server.tool_timeout_sec}`]:[])]),
+    ...(officeRegistered?['-c',`mcp_servers.agent-driver.disabled_tools=${JSON.stringify(OFFICE_CONTROL_TOOLS)}`]:[]),'exec',...(session?.resume?['resume','--json','--skip-git-repo-check',session.id,'-']:['--json','--skip-git-repo-check','-'])];
+  return ['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions',...(model?['--model',model]:[]),...(effort?['--effort',effort]:[]),
+    ...(extra.length?['--mcp-config',JSON.stringify({mcpServers:Object.fromEntries(extra.map(server=>[server.id,server.command?{type:'stdio',command:server.command,args:server.args??[]}:{type:'http',url:server.url}]))})]:[]),'--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
 }
 /** Works whose completion Office proves in code (sealed collections, native checks), whose writes go through Office's
  * approved Pack execution, coding Works (their own project), custom Pack repeats and imported Works keep the host's own path. */
@@ -143,7 +152,7 @@ function claudeEvent(event:Json,state:RunState):ClientRunEvent[]{
 
 export interface ClientRunOutcome {session_id:string|null;final_message:string;completed:boolean;reason:string|null;counts:RunState['counts'];}
 /** One run of the client's own agent until its turn ends. Unknown events are tolerated: both clients update themselves. */
-export async function runClient(request:{client:RunClient;model:string|null;effort:WorkClientChoice['effort'];folder:string;prompt:string;session:{id:string;resume:boolean}|null;signal:AbortSignal;timeout_ms?:number;onSession:(id:string)=>void;onEvent:(event:ClientRunEvent)=>void}):Promise<ClientRunOutcome>{
+export async function runClient(request:{client:RunClient;model:string|null;effort:WorkClientChoice['effort'];servers?:ClientRunMcpServer[];folder:string;prompt:string;session:{id:string;resume:boolean}|null;signal:AbortSignal;timeout_ms?:number;onSession:(id:string)=>void;onEvent:(event:ClientRunEvent)=>void}):Promise<ClientRunOutcome>{
   // A new Claude session's pre-assigned ID is confirmed only when the client reports it.
   const state:RunState={session:request.session?.resume?request.session.id:null,final:'',done:false,turnFailed:false,failure:'',tools:new Map(),counts:{commands:0,file_changes:0,tool_calls:0,web:0}};
   let pending='';
@@ -160,7 +169,7 @@ export async function runClient(request:{client:RunClient;model:string|null;effo
     if(pending.length>8_388_608)throw Error('CLIENT_EVENT_TOO_LARGE');
   };
   mkdirSync(request.folder,{recursive:true});
-  const result=await runner.run({executable:executable(request.client),args:clientRunArgs({id:request.client,model:request.model,effort:request.effort},request.folder,request.session),cwd:request.folder,stdin:request.prompt,timeout_ms:request.timeout_ms??7_200_000,signal:request.signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:8_388_608,onStdout:observe});
+  const result=await runner.run({executable:executable(request.client),args:clientRunArgs({id:request.client,model:request.model,effort:request.effort},request.folder,request.session,codexHasOffice(),request.servers),cwd:request.folder,stdin:request.prompt,timeout_ms:request.timeout_ms??7_200_000,signal:request.signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:8_388_608,onStdout:observe});
   observe('\n');
   const completed=result.code===0&&state.done&&!state.turnFailed;
   return {session_id:state.session,final_message:state.final,completed,reason:completed?null:`CLIENT_${classifyClientFailure(`${state.failure}\n${result.stderr.slice(-4000)}`).toUpperCase()}`,counts:state.counts};
@@ -216,6 +225,8 @@ const clientName=(client:RunClient)=>client==='codex'?'Codex':'Claude Code';
 // Live (2026-10-03): told that a schedule condition was not met, Codex went looking through Office's MCP tools and database to
 // enable the schedule itself. The schedule and delivery are Office's; the client's part is the result in its folder.
 const OFFICE_OWNS='Office delivers the result to the owner after checking it and runs any schedule itself. Do not send the result anywhere, do not set up schedules, and do not look into or change Agent Office, its data or its Work records.';
+/** The owner's instruction file for this client on the Windows side; the local one the client loads itself. */
+const windowsInstructions=(client:RunClient)=>(ownerEnvironmentContext().owner_environment?.instructions??[]).filter(item=>item.app===client&&item.file.endsWith('(Windows)'));
 function initialPrompt(input:ClientRunInput){
   return [`Agent Office hands you this Work. Do it yourself, with your own tools, skills and settings, until the result is finished.`,
     `Work folder: ${input.folder}. It is your working directory for this run. Save every deliverable here as files (images, documents, data). Folders of this Work's earlier runs, if any, are next to it.`,
@@ -223,6 +234,7 @@ function initialPrompt(input:ClientRunInput){
     ...(input.directions.length?[`Later directions from the owner (newest last; they change the request where they differ):\n${input.directions.map(item=>`- ${item.instruction}`).join('\n')}`]:[]),
     `Completion conditions Office will check against the files you leave and your final reply:\n${input.checks.map(check=>`- ${check.id}: ${check.result}`).join('\n')}`,
     ...(Object.keys(input.context).length?[`What Office already settled with the owner:\n${JSON.stringify(input.context,null,1)}`]:[]),
+    ...windowsInstructions(input.client).map(item=>`The owner's standing instructions for ${clientName(input.client)} on the Windows side of this computer (${item.file}); this run does not load them by itself. Follow them where they apply:\n${item.text}`),
     'Nobody answers questions during the run. If only the owner can unblock something (a sign-in, a payment, a decision), stop and say exactly what is needed.',
     OFFICE_OWNS,
     'Finish with a short reply in the language of the request: what you made, each file name, and how each completion condition is met.'].join('\n\n');
@@ -242,16 +254,19 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     :fresh.length?`The owner changed the instruction for this Work:\n${fresh.map(item=>`- ${item.instruction}`).join('\n')}\n\nContinue in the same folder with this change. Finish with the same kind of short reply.`
     :!session().finished?'The run was interrupted. Continue the Work where you stopped, in the same folder, and finish with the short reply.':null;
   const meta=(extra:WorkActivityMetadata={}):WorkActivityMetadata=>({run_id,stage_id:'execution',model_provider:client,executor:client,...extra});
+  // The owner's Windows-side servers are looked at only when the client actually runs.
+  let extra:ClientRunMcpServer[]|null=null;
   for(;;){
     if(next){
-      input.guard();update({finished:false,direction_at:latest});
+      input.guard();update({finished:false,direction_at:latest});extra??=await servers(client).catch(()=>[]);
       input.activity('supervisor.client_run',`${clientName(client)} · ${session().confirmed?'같은 세션을 이어서 실행합니다.':'사용자 설정 그대로 업무 폴더에서 실행을 시작합니다.'}`,meta({status:'running',model_continuity:session().confirmed?'resumed_session':'new_session'}));
+      if(extra.length)input.activity('tool.result',`windows_mcp · ${extra.map(server=>server.id).join(', ')}`,meta({tool_name:'windows_mcp',status:'succeeded'}));
       // The owner's pause or direction change aborts the run; the guard turns a lost lease or a changed Work into a stop.
       const stop=new AbortController(),abort=()=>stop.abort();input.signal.addEventListener('abort',abort,{once:true});
       let guardFailure:unknown=null;const watch=setInterval(()=>{try{input.guard();}catch(error){guardFailure=error;stop.abort();}},5_000);watch.unref();
       let outcome:ClientRunOutcome;
       try{
-        outcome=await runClient({client,model:input.model,effort:input.effort,folder:input.folder,prompt:next,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
+        outcome=await runClient({client,model:input.model,effort:input.effort,servers:extra,folder:input.folder,prompt:next,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
           onSession:id=>update({session_id:id,confirmed:true}),onEvent:event=>input.activity(event.kind,`${event.tool_name} · ${event.summary}`,meta({tool_name:event.tool_name,status:event.status}))});
       }catch(error){
         if(stop.signal.aborted){if(guardFailure)throw guardFailure;input.guard();throw Error('WORK_PAUSED');}
