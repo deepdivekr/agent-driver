@@ -351,6 +351,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       next=`Office checked your result against the completion conditions. Not met: ${verified.repair.check_id}${check?` (${check.result})`:''}.${verified.repair.reason?` Reason: ${verified.repair.reason}`:''}\n\nFix this in the same folder, then finish with the updated short reply. If the condition is about the schedule or the delivery, it is Office's part: change nothing and say so.\n\n${officeOwns(input)}`;
       continue;
     }
-    return {status:'awaiting_review',summary:cp.summary,reason:'WORK_CLIENT_COMPLETION_REQUIRES_VERIFICATION',completion_verified:false,checkpoint:cp,model_calls:[]};
+    // The owner is told about a run that stopped for review too: they get the message the client wrote, not the record.
+    return {status:'awaiting_review',summary:cp.summary,reason:'WORK_CLIENT_COMPLETION_REQUIRES_VERIFICATION',completion_verified:false,checkpoint:cp,model_calls:[],...(deliveryText?{delivery_text:deliveryText}:{})};
   }
 }
