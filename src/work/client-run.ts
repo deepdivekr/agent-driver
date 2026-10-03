@@ -92,10 +92,12 @@ export function clientRunArgs(choice:Pick<WorkClientChoice,'id'|'model'|'effort'
     ...(extra.length?['--mcp-config',JSON.stringify({mcpServers:Object.fromEntries(extra.map(server=>[server.id,server.command?{type:'stdio',command:server.command,args:server.args??[]}:{type:'http',url:server.url}]))})]:[]),'--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
 }
 /** Works whose completion Office proves in code (sealed collections, native checks), whose writes go through Office's
- * approved Pack execution, coding Works (their own project), custom Pack repeats and imported Works keep the host's own path. */
+ * approved Pack execution, coding Works (their own project), custom Pack repeats and Works another runtime still owns
+ * keep the host's own path. A pasted Work that Office accepted as its own is run like any other (live 2026-10-03: the
+ * owner's imported derivatives Work was kept on the host path and met its wait again). */
 export function clientRunEligible(store:PackStore,project:string,workId:string,spec:{route:{pack_family:string|null};collection_contract?:unknown;completion_checks:Array<{native_check?:unknown}>}){
   return !['coding.orchestrate','form.draft-submit','record.update','choose.stage'].includes(spec.route.pack_family??'')&&!spec.collection_contract&&!spec.completion_checks.some(check=>check.native_check)
-    &&!customPackWorkBinding(store,project,workId)&&workImportExecutionOwner(store,project,workId)===null;
+    &&!customPackWorkBinding(store,project,workId)&&workImportExecutionOwner(store,project,workId)!=='original_runtime';
 }
 
 export interface ClientRunEvent {kind:'tool.started'|'tool.result'|'model.result';tool_name:string;summary:string;status:'running'|'succeeded'|'failed';}
@@ -202,7 +204,8 @@ export function producedFiles(folder:string):ProducedFile[]{
 export function clientResultText(finalMessage:string,files:ProducedFile[]){
   const list=files.length?`\n\nFiles made in this run (Work folder):\n${files.map(file=>`- ${file.name} (${file.media_type}, ${file.bytes} bytes${file.sha256?'':', too large to download from Office; it stays in the run folder'})`).join('\n')}`:'\n\nNo file was made in the Work folder in this run.';
   let body=`${sanitizeCodingReply(finalMessage.trim()).text.slice(0,6000)||'(no final reply)'}${list}`;
-  for(const file of files.filter(item=>/^text\/|^application\/json$/u.test(item.media_type)&&item.bytes<=65_536)){
+  // Smaller files first, so each one that fits is complete (live: a long JSON cut mid-way left the checks on it undecided).
+  for(const file of files.filter(item=>/^text\/|^application\/json$/u.test(item.media_type)&&item.bytes<=65_536).sort((a,b)=>a.bytes-b.bytes)){
     const room=15_800-body.length;if(room<400)break;
     body+=`\n\n── ${file.name} ──\n${sanitizeCodingReply(readFileSync(file.path,'utf8')).text.slice(0,room-file.name.length-10)}`;
   }
@@ -218,11 +221,14 @@ export interface ClientRunInput {
   resumed:boolean;
   activity:(kind:string,summary:string,metadata?:WorkActivityMetadata)=>void;
   draft:(text:string,label:string,requestId:string)=>Promise<WorkClientToolReceipt>;verify:Verify;
+  /** Office reads its saved result back (office_result_read of the draft), which a check that the result is saved and
+   * readable rests on (live: without it the verifier could not decide "saved and readable"). */
+  readback?:(requestId:string,args:Record<string,unknown>)=>Promise<WorkClientToolReceipt>;
   /** A recurring Work: Office's own schedule record, which a check about future runs rests on (Office runs the schedule, not the client). */
-  schedule?:(requestId:string)=>Promise<WorkClientToolReceipt>;
+  schedule?:(requestId:string,args:Record<string,unknown>)=>Promise<WorkClientToolReceipt>;
   /** Office's own delivery selection, which a check about where the result goes rests on (live: a Work asked that its
    * Telegram chat be set as the target; intake had not recorded it, so nothing in the run could show it). */
-  delivery?:(requestId:string)=>Promise<WorkClientToolReceipt>;
+  delivery?:(requestId:string,args:Record<string,unknown>)=>Promise<WorkClientToolReceipt>;
 }
 const clientName=(client:RunClient)=>client==='codex'?'Codex':'Claude Code';
 // Live (2026-10-03): told that a schedule condition was not met, Codex went looking through Office's MCP tools and database to
@@ -264,12 +270,14 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       input.guard();update({finished:false,direction_at:latest});extra??=await servers(client).catch(()=>[]);
       input.activity('supervisor.client_run',`${clientName(client)} · ${session().confirmed?'같은 세션을 이어서 실행합니다.':'사용자 설정 그대로 업무 폴더에서 실행을 시작합니다.'}`,meta({status:'running',model_continuity:session().confirmed?'resumed_session':'new_session'}));
       if(extra.length)input.activity('tool.result',`windows_mcp · ${extra.map(server=>server.id).join(', ')}`,meta({tool_name:'windows_mcp',status:'succeeded'}));
+      // Live (2026-10-03): given Aside, Codex still read Reddit and X with a headless browser and met their challenges.
+      const browser=extra.find(server=>/aside/iu.test(server.id)),serverNote=extra.length?`\n\nMCP servers from the owner's Windows side of this computer are connected to this run: ${extra.map(server=>server.id).join(', ')}.${browser?` "${browser.id}" is an MCP server, not a shell command: its tools drive the owner's own signed-in browser. Read X, Reddit and every other site that blocks automated browsers or needs a sign-in through those tools, not with a headless browser, a web search or a shell command.`:''}`:'';
       // The owner's pause or direction change aborts the run; the guard turns a lost lease or a changed Work into a stop.
       const stop=new AbortController(),abort=()=>stop.abort();input.signal.addEventListener('abort',abort,{once:true});
       let guardFailure:unknown=null;const watch=setInterval(()=>{try{input.guard();}catch(error){guardFailure=error;stop.abort();}},5_000);watch.unref();
       let outcome:ClientRunOutcome;
       try{
-        outcome=await runClient({client,model:input.model,effort:input.effort,servers:extra,folder:input.folder,prompt:next,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
+        outcome=await runClient({client,model:input.model,effort:input.effort,servers:extra,folder:input.folder,prompt:next+serverNote,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
           onSession:id=>update({session_id:id,confirmed:true}),onEvent:event=>input.activity(event.kind,`${event.tool_name} · ${event.summary}`,meta({tool_name:event.tool_name,status:event.status}))});
       }catch(error){
         if(stop.signal.aborted){if(guardFailure)throw guardFailure;input.guard();throw Error('WORK_PAUSED');}
@@ -292,10 +300,10 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
         {invocation:{request_id:runEvidence,turn:0,stage_id:'execution',tool_name:'office_client_run',arguments:{},effect:'local_write',dispatched:true},receipt:{status:'succeeded',value:runValue,evidence_ids:[runEvidence],effect_state:'verified',retry_safe:false},observed_at:observedAt},
         {invocation:{request_id:draftId,turn:1,stage_id:'execution',tool_name:'office_result_draft',arguments:{},effect:'local_write',dispatched:true},receipt:{...draft,value:boundWorkToolValue(draft.value)},observed_at:new Date().toISOString()}]};
       // Office's own records the checks may rest on; the client neither sets up the schedule nor sends the result.
-      for(const [tool,read] of [['office_schedule_status',input.schedule],['office_delivery_status',input.delivery]] as const){
+      for(const [tool,read,args] of [['office_result_read',input.readback,{request_id:draftId}],['office_schedule_status',input.schedule,{}],['office_delivery_status',input.delivery,{}]] as const){
         if(!read)continue;
-        const requestId=`client-${tool.slice('office_'.length,-'_status'.length)}-${hashJson({run_id,observed_at:observedAt}).slice(0,24)}`,receipt=await read(requestId);
-        cp={...cp,turn:cp.turn+1,observations:[...cp.observations,{invocation:{request_id:requestId,turn:cp.turn,stage_id:'execution',tool_name:tool,arguments:{},effect:'read_only',dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:new Date().toISOString()}]};
+        const requestId=`client-${tool.slice('office_'.length).replace(/_status$/u,'')}-${hashJson({run_id,observed_at:observedAt}).slice(0,24)}`,receipt=await read(requestId,args);
+        cp={...cp,turn:cp.turn+1,observations:[...cp.observations,{invocation:{request_id:requestId,turn:cp.turn,stage_id:'execution',tool_name:tool,arguments:args,effect:'read_only',dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:new Date().toISOString()}]};
       }
       update({finished:true});
       input.activity('supervisor.client_run',`${clientName(client)} · 실행을 마쳤습니다. 만든 파일 ${files.length}개를 결과로 저장했습니다.`,meta({status:'succeeded'}));

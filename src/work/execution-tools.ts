@@ -784,7 +784,7 @@ export class WorkExecutionTools {
     if(name==='office_delivery_status'){
       // Office's own delivery selection for this Work: ids, platforms and labels only, never a target's token or chat.
       const selection=new WorkResults(this.store).selection(this.config.project.id,this.workId),known=WorkDeliverySettings.fromConfig(this.config).publicState().targets;
-      return {status:'succeeded',work_id:this.workId,target_ids:selection.target_ids,targets:selection.target_ids.map(id=>id==='app'?{id,platform:'app',label:'Agent Office app'}:known.find(target=>target.id===id)).filter(target=>target!==undefined).map(({id,platform,label})=>({id,platform,label})),authority:selection.authority,observed_at:new Date().toISOString(),provenance:'host_work_delivery',effect:'read_only'};
+      return {status:'succeeded',work_id:this.workId,target_ids:selection.target_ids,targets:selection.target_ids.map(id=>id==='app'?{id,platform:'app',label:'Agent Office app'}:known.find(target=>target.id===id)).filter(target=>target!==undefined).map(({id,platform,label})=>({id,platform,label})),authority:selection.authority,meaning:'The owner chose these targets for this Work in Office, which sends the verified result to them. A check that the result goes to a channel of the owner (their Telegram chat, Slack or Discord) is met by this record when a target of that platform is listed.',observed_at:new Date().toISOString(),provenance:'host_work_delivery',effect:'read_only'};
     }
     if(name==='office_schedule_status'){
       const status=new WorkSchedules(this.store,this.config.project.id).status(this.workId);

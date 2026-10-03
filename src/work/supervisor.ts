@@ -560,6 +560,7 @@ export class WorkSupervisor {
           directions,checkpoint:checkpoint as WorkClientCheckpoint|null,resumed:row.resume_wait===1,signal:controller.signal,guard,save:saveCheckpoint,
           activity:(kind,summary,metadata)=>workActivity(this.store,project,row.work_id,kind,summary,metadata),
           draft:async(text,label,requestId)=>{const value=await toolkit!.execute('office_result_draft',{text,label},requestId);return toolkit!.receipt('office_result_draft',value,requestId);},
+          readback:async(requestId:string,args:Record<string,unknown>)=>{await toolkit!.validate('office_result_read',args,requestId);const value=await toolkit!.execute('office_result_read',args,requestId);return toolkit!.receipt('office_result_read',value,requestId);},
           ...(spec.recurrence.kind==='recurring'?{schedule:async(requestId:string)=>{const value=await toolkit!.execute('office_schedule_status',{},requestId);return toolkit!.receipt('office_schedule_status',value,requestId);}}:{}),
           delivery:async(requestId:string)=>{const value=await toolkit!.execute('office_delivery_status',{},requestId);return toolkit!.receipt('office_delivery_status',value,requestId);},
           verify:verifyCompletion})

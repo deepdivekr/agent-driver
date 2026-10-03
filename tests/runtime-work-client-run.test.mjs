@@ -132,6 +132,8 @@ test('runtime fixture the verifier sees the Office delivery selection of a clien
   x.supervisor.start(x.work.work_id,x.work.revision,true,'Asia/Seoul',false);x.supervisor.activate();x.supervisor.tick();
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
   assert.ok(evidence[0].includes('office_delivery_status'),JSON.stringify(evidence));
+  // Office reads its saved result back, as the host path did (live: "saved and readable" stayed undecided without it).
+  assert.ok(evidence[0].includes('office_result_read'),JSON.stringify(evidence));
   const checkpoint=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint),delivery=checkpoint.observations.find(item=>item.invocation.tool_name==='office_delivery_status');
   assert.equal(delivery.receipt.status,'succeeded');
   assert.deepEqual(delivery.receipt.value.targets,[{id:'app',platform:'app',label:'Agent Office app'},{id:'tg-owner',platform:'telegram',label:'내 텔레그램'}]);
@@ -250,6 +252,7 @@ test('runtime fixture the client run gets the owner Windows-side MCP servers and
   assert.ok(args.indexOf('mcp_servers.aside.command="/mnt/c/Tools/aside.exe"')<args.indexOf('exec'),'config overrides come before exec');
   assert.match(x.runs[0].stdin,/Browse signed-in sites with Aside\./u);assert.doesNotMatch(x.runs[0].stdin,/Local rules the client loads itself|Claude only/u);
   assert.ok(activity(x).some(row=>row.summary==='windows_mcp · aside, docs'));
+  assert.match(x.runs[0].stdin,/connected to this run: aside, docs\. "aside" is an MCP server, not a shell command: its tools drive the owner's own signed-in browser\. Read X, Reddit/u);
   const claude=clientRunArgs({id:'claude',model:null,effort:null},'/w',null,false,[{id:'aside',command:'/mnt/c/Tools/aside.exe',args:['mcp']},{id:'docs',url:'https://docs.example/mcp'}]);
   assert.deepEqual(JSON.parse(claude[claude.indexOf('--mcp-config')+1]),{mcpServers:{aside:{type:'stdio',command:'/mnt/c/Tools/aside.exe',args:['mcp']},docs:{type:'http',url:'https://docs.example/mcp'}}});
 });
