@@ -178,12 +178,12 @@ export async function runClient(request:{client:RunClient;model:string|null;effo
 }
 
 const mediaTypes:Record<string,string>={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.svg':'image/svg+xml','.pdf':'application/pdf','.md':'text/markdown','.txt':'text/plain','.csv':'text/csv','.json':'application/json','.html':'text/html','.mp4':'video/mp4','.mp3':'audio/mpeg','.zip':'application/zip','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation'};
-export interface ProducedFile {path:string;name:string;sha256:string|null;bytes:number;media_type:string;}
+export interface ProducedFile {path:string;name:string;sha256:string|null;bytes:number;media_type:string;modified_ms:number;}
 // Office offers a result file for download up to 16 MB (WorkResults.readArtifact); a larger one stays in the run folder.
 const DOWNLOAD_BYTES=16*1024*1024;
 /** The files in this run's own folder: what the run produced, whatever their timestamps (a downloaded or unpacked file
  * keeps its original one). Hidden folders are the client's own. */
-export function producedFiles(folder:string):ProducedFile[]{
+export function producedFiles(folder:string,hash=true):ProducedFile[]{
   const found:ProducedFile[]=[];
   // Breadth first: the files the client put at the top come before an unpacked archive's contents.
   const queue:Array<[string,number]>=[[folder,0]];
@@ -195,7 +195,7 @@ export function producedFiles(folder:string):ProducedFile[]{
       if(entry.isDirectory()){if(depth<4)queue.push([path,depth+1]);continue;}
       if(!entry.isFile())continue;
       const stat=lstatSync(path);
-      found.push({path,name:relative(folder,path),sha256:stat.size<=DOWNLOAD_BYTES?createHash('sha256').update(readFileSync(path)).digest('hex'):null,bytes:stat.size,media_type:mediaTypes[extname(entry.name).toLowerCase()]??'application/octet-stream'});
+      found.push({path,name:relative(folder,path),modified_ms:stat.mtimeMs,sha256:hash&&stat.size<=DOWNLOAD_BYTES?createHash('sha256').update(readFileSync(path)).digest('hex'):null,bytes:stat.size,media_type:mediaTypes[extname(entry.name).toLowerCase()]??'application/octet-stream'});
     }
   }
   return found;
@@ -294,6 +294,11 @@ function initialPrompt(input:ClientRunInput){
     'Finish with a short reply in the language of the request: what you made, each file name, and how each completion condition is met.'].join('\n\n');
 }
 
+/** What a turn made: the files that were not in the folder, or not the same, before it (live: a folder that also held copies
+ * of yesterday's cases gave the owner three of today's pictures). A file unpacked with an old timestamp is still new by
+ * name. A turn that wrote nothing (a check) keeps every file. */
+const fileKey=(file:ProducedFile)=>`${file.name}\0${file.bytes}\0${file.modified_ms}`;
+const turnFiles=(files:ProducedFile[],before:Set<string>)=>{const made=files.filter(file=>!before.has(fileKey(file))&&file.name!=='COMPLETION.json');return made.length?made:files;};
 /** The client's own completion report (owner decision 2026-10-04: a client run is complete when its client says each
  * condition is met; Office verifies independently only Works that send or submit outside). Written in the turn it reports. */
 const COMPLETION_FILE='COMPLETION.json';
@@ -334,6 +339,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       // Live (2026-10-03): given Aside, Codex still read Reddit and X with a headless browser and met their challenges.
       const browser=extra.find(server=>/aside/iu.test(server.id)),serverNote=extra.length?`\n\nMCP servers from the owner's Windows side of this computer are connected to this run: ${extra.map(server=>server.id).join(', ')}.${browser?` "${browser.id}" is an MCP server, not a shell command: its tools drive the owner's own signed-in browser. Read X, Reddit and every other site that blocks automated browsers or needs a sign-in through those tools, not with a headless browser, a web search or a shell command.`:''}`:'';
       // The owner's pause or direction change aborts the run; the guard turns a lost lease or a changed Work into a stop.
+      const before=new Set(producedFiles(input.folder,false).map(fileKey));
       const stop=new AbortController(),abort=()=>stop.abort();input.signal.addEventListener('abort',abort,{once:true});
       let guardFailure:unknown=null;const watch=setInterval(()=>{try{input.guard();}catch(error){guardFailure=error;stop.abort();}},5_000);watch.unref();
       let outcome:ClientRunOutcome;
@@ -356,7 +362,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       const files=producedFiles(input.folder),resultText=clientResultText(outcome.final_message,files),observedAt=new Date().toISOString();
       deliveryText=deliveryMessage(input.folder,outcome.final_message);
       const runEvidence=`client-run-${hashJson({run_id,turn:cp.turn,session:outcome.session_id,final:outcome.final_message,files}).slice(0,24)}`;
-      const runValue=boundWorkToolValue({client,session_id:outcome.session_id,folder:input.folder,final_message:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),files:files.filter(file=>file.sha256).slice(0,20).map(({name:_name,...file})=>file),file_count:files.length,observed_by_host:'Files are the ones Office found in the Work folder after the run, with their SHA-256; the counts are the events the client reported. What the client did outside this folder ran under the owner\'s own permissions and is not an Office receipt.',counts:outcome.counts});
+      const runValue=boundWorkToolValue({client,session_id:outcome.session_id,folder:input.folder,final_message:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),files:turnFiles(files,before).filter(file=>file.sha256).slice(0,20).map(({name:_name,...file})=>file),file_count:files.length,observed_by_host:'Files are the ones Office found in the Work folder after the run, with their SHA-256; the counts are the events the client reported. What the client did outside this folder ran under the owner\'s own permissions and is not an Office receipt.',counts:outcome.counts});
       const draftId=`client-output-${hashJson({run_id,turn:cp.turn,text:resultText}).slice(0,24)}`,draft=await input.draft(resultText,input.title.slice(0,120),draftId);
       // Every turn's receipts stay, appended in order: the run's admission checkpoint must remain a prefix of the record
       // (live: a resumed run whose record was rewritten each turn failed the trace's prefix check and could not verify).

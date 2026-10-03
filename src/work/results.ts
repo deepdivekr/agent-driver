@@ -199,16 +199,19 @@ export class WorkResults {
     }
     if(table(this.store,'office_supervisor'))for(const row of this.store.hermesState.prepare("SELECT run_id,work_revision,state,result,checkpoint FROM office_supervisor WHERE project_id=? AND work_id=? AND result IS NOT NULL AND state IN ('succeeded','needs_review','awaiting_review','failed','completed','waiting_auth','waiting_approval','waiting_model','waiting_connection','paused','retry_wait','reconciliation_required') ORDER BY created_at DESC LIMIT 10").all(project,workId)){
       const output=object(JSON.parse(String(row.result))),checkpoint=object(JSON.parse(String(row.checkpoint))),observations=[...(Array.isArray(checkpoint.observations)?checkpoint.observations:[]),...(Array.isArray(checkpoint.final_observations)?checkpoint.final_observations:[]),...Object.values(object(checkpoint.workers)).flatMap(worker=>{const child=object(worker);return Array.isArray(child.observations)?child.observations:[];})],sources:z.infer<typeof sourceSchema>[]=[],artifacts:z.infer<typeof artifactSchema>[]=[];
-      const seen=new Set<string>();let visited=0;
+      const seen=new Set<string>();let visited=0,allowFiles=true;
       const collect=(raw:unknown,observedAt:string|undefined,depth=0):void=>{
         if(depth>4||visited++>400)return;
         if(Array.isArray(raw)){for(const value of raw.slice(0,32))collect(value,observedAt,depth+1);return;}
         const value=object(raw);
         if(typeof value.url==='string'&&safeUrl(value.url)&&sources.length<32&&!seen.has('url:'+safeUrl(value.url))){seen.add('url:'+safeUrl(value.url));sources.push({label:safe(String(value.title||value.url),300)||'source',url:safeUrl(value.url)!,...(observedAt?{observed_at:observedAt}:{})});}
-        if(typeof value.path==='string'&&typeof value.sha256==='string'&&digest.safeParse(value.sha256).success&&isAbsolute(value.path)&&artifacts.length<20&&!seen.has('artifact:'+value.path)){seen.add('artifact:'+value.path);artifacts.push({label:basename(value.path),path:value.path,sha256:value.sha256,...(typeof value.bytes==='number'&&Number.isInteger(value.bytes)&&value.bytes>=0?{bytes:value.bytes}:{})});}
+        if(allowFiles&&typeof value.path==='string'&&typeof value.sha256==='string'&&digest.safeParse(value.sha256).success&&isAbsolute(value.path)&&artifacts.length<20&&!seen.has('artifact:'+value.path)){seen.add('artifact:'+value.path);artifacts.push({label:basename(value.path),path:value.path,sha256:value.sha256,...(typeof value.bytes==='number'&&Number.isInteger(value.bytes)&&value.bytes>=0?{bytes:value.bytes}:{})});}
         for(const child of Object.values(value))if(child&&typeof child==='object')collect(child,observedAt,depth+1);
       };
-      for(const raw of observations.slice(-64)){const observation=object(raw),receipt=object(observation.receipt);if(['succeeded','completed','ok'].includes(String(receipt.status)))collect(receipt.value,typeof observation.observed_at==='string'?observation.observed_at:undefined);}
+      // A client run's result is what its latest turn left: files come from its last run record on, sources from the whole run
+      // (live: copies of yesterday's cases in the folder took the result's file slots and today's pictures were cut to three).
+      const lastRun=observations.map(raw=>String(object(object(raw).invocation).tool_name)).lastIndexOf('office_client_run');
+      for(const raw of observations.slice(-64)){const observation=object(raw),receipt=object(observation.receipt);allowFiles=lastRun<0||observations.indexOf(raw)>=lastRun;if(['succeeded','completed','ok'].includes(String(receipt.status)))collect(receipt.value,typeof observation.observed_at==='string'?observation.observed_at:undefined);}
       // The result is what was saved, not only the executor's sentence about it: the last saved Office result is the text.
       let savedText='';for(const raw of observations){const observation=object(raw),invocation=object(observation.invocation),receipt=object(observation.receipt),value=object(receipt.value);if(invocation.tool_name==='office_result_draft'&&receipt.status==='succeeded'&&typeof value.text==='string')savedText=value.text;}
       this.record(project,{work_id:workId,run_id:String(row.run_id),source_kind:'client',work_revision:Number(row.work_revision),summary:safe(String(output.summary??`client · ${row.state}`),4000)||`client · ${row.state}`,text:safe(savedText||String(output.text??output.summary??'')),...(typeof output.delivery_text==='string'&&output.delivery_text.trim()?{delivery_text:output.delivery_text}:{}),sources,artifacts});
