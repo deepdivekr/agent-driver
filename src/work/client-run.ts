@@ -200,6 +200,12 @@ export function producedFiles(folder:string):ProducedFile[]{
   }
   return found;
 }
+/** What the owner receives: the client's DELIVERY.md when it wrote one, else its final reply (live: the verification
+ * record, with file lists and check notes, reached the owner's Telegram as the result). */
+export function deliveryMessage(folder:string,finalMessage:string){
+  let text='';try{const path=join(folder,'DELIVERY.md');if(lstatSync(path).isFile())text=readFileSync(path,'utf8');}catch{/* none written */}
+  return sanitizeCodingReply((text.trim()||finalMessage).trim()).text.slice(0,12000);
+}
 /** The saved result: the client's final reply, the files it made, and the text of small text files, within 16000 characters. */
 export function clientResultText(finalMessage:string,files:ProducedFile[]){
   const list=files.length?`\n\nFiles made in this run (Work folder):\n${files.map(file=>`- ${file.name} (${file.media_type}, ${file.bytes} bytes${file.sha256?'':', too large to download from Office; it stays in the run folder'})`).join('\n')}`:'\n\nNo file was made in the Work folder in this run.';
@@ -249,6 +255,7 @@ const windowsInstructions=(client:RunClient)=>(ownerEnvironmentContext().owner_e
 function initialPrompt(input:ClientRunInput){
   return [`Agent Office hands you this Work. Do it yourself, with your own tools, skills and settings, until the result is finished.`,
     `Work folder: ${input.folder}. It is your working directory for this run. Save every deliverable here as files (images, documents, data). Folders of this Work's earlier runs, if any, are next to it.`,
+    `Also save DELIVERY.md in the Work folder: the message the owner receives (in the app, Telegram or chat), in the language of the request. Put only the content the request asks for, laid out for reading (for example each case's explanation under its heading); no file lists, no notes about conditions, process or checks. Office sends that text together with the pictures you made.`,
     `Request from the owner:\n${input.prompt}`,
     ...importedPlan(input),
     ...(input.directions.length?[`Later directions from the owner (newest last; they change the request where they differ):\n${input.directions.map(item=>`- ${item.instruction}`).join('\n')}`]:[]),
@@ -275,7 +282,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     :!session().finished?'The run was interrupted. Continue the Work where you stopped, in the same folder, and finish with the short reply.':null;
   const meta=(extra:WorkActivityMetadata={}):WorkActivityMetadata=>({run_id,stage_id:'execution',model_provider:client,executor:client,...extra});
   // The owner's Windows-side servers are looked at only when the client actually runs.
-  let extra:ClientRunMcpServer[]|null=null;
+  let extra:ClientRunMcpServer[]|null=null,deliveryText=input.checkpoint?.client_session?deliveryMessage(input.folder,cp.summary):'';
   for(;;){
     if(next){
       input.guard();update({finished:false,direction_at:latest});extra??=await servers(client).catch(()=>[]);
@@ -304,6 +311,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       }
       input.guard();
       const files=producedFiles(input.folder),resultText=clientResultText(outcome.final_message,files),observedAt=new Date().toISOString();
+      deliveryText=deliveryMessage(input.folder,outcome.final_message);
       const runEvidence=`client-run-${hashJson({run_id,session:outcome.session_id,final:outcome.final_message,files}).slice(0,24)}`;
       const runValue=boundWorkToolValue({client,session_id:outcome.session_id,folder:input.folder,final_message:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),files:files.filter(file=>file.sha256).slice(0,20).map(({name:_name,...file})=>file),file_count:files.length,observed_by_host:'Files are the ones Office found in the Work folder after the run, with their SHA-256; the counts are the events the client reported. What the client did outside this folder ran under the owner\'s own permissions and is not an Office receipt.',counts:outcome.counts});
       const draftId=`client-output-${hashJson({run_id,text:resultText}).slice(0,24)}`,draft=await input.draft(resultText,input.title.slice(0,120),draftId);
@@ -328,7 +336,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       // The client's result is saved: a verifier that is briefly unavailable is waited for (with backoff), never a failed run.
       return {status:reason==='CLIENT_AUTH_EXPIRED'?'waiting_auth':['CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED','STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_TIMEOUT','CLIENT_TIMEOUT','MODEL_PROVIDER_UNAVAILABLE'].includes(reason)?'waiting_model':'retryable_failure',summary:cp.summary,reason,completion_verified:false,checkpoint:cp,model_calls:[]};
     }
-    if(verified===true)return {status:'succeeded',summary:cp.summary,reason:null,completion_verified:true,checkpoint:cp,model_calls:[]};
+    if(verified===true)return {status:'succeeded',summary:cp.summary,reason:null,completion_verified:true,checkpoint:cp,model_calls:[],...(deliveryText?{delivery_text:deliveryText}:{})};
     if(verified&&typeof verified==='object'&&session().repairs<WORK_COMPLETION_REPAIR_BUDGET){
       const check=input.checks.find(item=>item.id===verified.repair.check_id);
       update({repairs:session().repairs+1});

@@ -170,3 +170,11 @@ test('telegram sends the result pictures after the text, one sendPhoto each, and
   assert.ok(calls[1].options.body instanceof FormData);assert.equal(calls[1].options.body.get('caption'),'01_레버리지.png');assert.equal(calls[1].options.redirect,'error');
   const photoBlob=calls[1].options.body.get('photo');assert.equal(photoBlob.type,'image/png');assert.equal(photoBlob.size,png.length);
 });
+
+// Live 2026-10-03: the owner's Telegram got file lists and check notes instead of the five explanations they asked for.
+test('a result that carries the owner message is delivered as that message only',async()=>{
+  const {deliveryContent}=await import('../dist/work/delivery-connectors.js');
+  const result={id:'r-2',work_title:'파생상품 교육자료',source_status:'succeeded',work_completion_verified:true,summary:'case-1.png 과 해설을 만들었습니다. 파일: a, b, c. 완료조건 충족.',text:'Files made in this run (Work folder):\n- a.png\n- b.txt',delivery_text:'## 1. 레버리지\n증거금 10%로 …\n\n## 2. 추가 증거금\n하루 1% 변동이 …',artifacts:[{id:'a'}]};
+  assert.equal(deliveryContent(result),'파생상품 교육자료\n[완료] 검증을 통과했습니다.\n\n## 1. 레버리지\n증거금 10%로 …\n\n## 2. 추가 증거금\n하루 1% 변동이 …\n\nWork result r-2');
+  const long={...result,delivery_text:'가'.repeat(5000)},cut=deliveryContent(long);assert.ok([...cut].length<=4000);assert.match(cut,/전체 내용은 앱에서/u);assert.doesNotMatch(cut,/Files made/u);
+});

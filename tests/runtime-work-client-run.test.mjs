@@ -276,3 +276,14 @@ test('runtime fixture the client run gets the owner Windows-side MCP servers and
   const claude=clientRunArgs({id:'claude',model:null,effort:null},'/w',null,false,[{id:'aside',command:'/mnt/c/Tools/aside.exe',args:['mcp']},{id:'docs',url:'https://docs.example/mcp'}]);
   assert.deepEqual(JSON.parse(claude[claude.indexOf('--mcp-config')+1]),{mcpServers:{aside:{type:'stdio',command:'/mnt/c/Tools/aside.exe',args:['mcp']},docs:{type:'http',url:'https://docs.example/mcp'}}});
 });
+
+test('runtime fixture the owner receives the client DELIVERY.md, not the verification record',async t=>{
+  // Live 2026-10-03: the owner's Telegram got the saved record (file list, check notes) instead of the five explanations.
+  const x=await setup(t,{client:request=>{writeFileSync(join(request.cwd,'DELIVERY.md'),'## 1. 레버리지\n증거금 10%로 계약금액 전체를 거래하면 …\n');return codexTurn(request);}});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  assert.match(x.runs[0].stdin,/save DELIVERY\.md in the Work folder/u);
+  const [result]=await new WorkResults(x.store).capture(x.config.project.id,x.work.work_id);
+  assert.equal(result.delivery_text,'## 1. 레버리지\n증거금 10%로 계약금액 전체를 거래하면 …');
+  assert.match(result.text,/Files made in this run/u,'the saved record keeps the file list for verification');
+});
