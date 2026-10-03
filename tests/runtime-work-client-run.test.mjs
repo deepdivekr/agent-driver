@@ -250,7 +250,7 @@ test('runtime fixture the client run gets the owner Windows-side MCP servers and
   assert.ok(args.indexOf('mcp_servers.aside.command="/mnt/c/Tools/aside.exe"')<args.indexOf('exec'),'config overrides come before exec');
   assert.match(x.runs[0].stdin,/Browse signed-in sites with Aside\./u);assert.doesNotMatch(x.runs[0].stdin,/Local rules the client loads itself|Claude only/u);
   assert.ok(activity(x).some(row=>row.summary==='windows_mcp · aside, docs'));
-  assert.match(x.runs[0].stdin,/connected to this run: aside, docs\. "aside" is the owner's own signed-in browser\. Read X, Reddit/u);
+  assert.match(x.runs[0].stdin,/connected to this run: aside, docs\. "aside" is an MCP server, not a shell command: its tools drive the owner's own signed-in browser\. Read X, Reddit/u);
   const claude=clientRunArgs({id:'claude',model:null,effort:null},'/w',null,false,[{id:'aside',command:'/mnt/c/Tools/aside.exe',args:['mcp']},{id:'docs',url:'https://docs.example/mcp'}]);
   assert.deepEqual(JSON.parse(claude[claude.indexOf('--mcp-config')+1]),{mcpServers:{aside:{type:'stdio',command:'/mnt/c/Tools/aside.exe',args:['mcp']},docs:{type:'http',url:'https://docs.example/mcp'}}});
 });
