@@ -237,6 +237,20 @@ test('runtime fixture a social page is given time to draw its posts, and a page 
   assert.equal((await factory.receipt('office_browser_read',value,'social-late')).status,'succeeded');
 });
 
+// Live (2026-10-03): a retried Work kept the earlier attempt's "sign-in not seen" for Reddit and never looked again.
+test('runtime fixture a resumed run looks again at a site whose sign-in was not seen, but keeps a site\'s own refusal',async t=>{
+  const page='https://www.reddit.com/r/ASTSpaceMobile/',request=`ASTS 주식 종목 reddit 반응을 ${page} 에서 확인해줘`;
+  const blocked=(reason)=>({format:1,work_id:null,run_id:null,binding:'a'.repeat(64),turn:1,pending:null,summary:'earlier attempt',observations:[{
+    invocation:{request_id:'social-before',turn:0,stage_id:'sources',tool_name:'office_browser_read',arguments:{url:page},effect:'read_only',dispatched:true},
+    receipt:{status:'retryable_failure',effect_state:'none',retry_safe:false,evidence_ids:[],value:{status:'retryable_failure',reason,requested_url:page,observed_at:observedAt,social_site:'reddit.com',provenance:'live_browser_dom',executor:aside.id,effect:'read_only',social_access:'not_verified',text:'',links:[]}},observed_at:observedAt}]});
+  for(const [reason,expectRead] of [['WORK_SOCIAL_AUTH_NOT_VERIFIED',true],['WORK_SOCIAL_CHALLENGE',false]]){
+    const x=await setup(t,{browser:null,prompt:request,workPolicy:{model_data_approved:true,autonomy:'delegated'},observe:(target,url)=>observation(url,{title:'r/ASTSpaceMobile',text:'Retail investors discuss the latest launch. '.repeat(20),links:Array.from({length:8},(_,index)=>({text:`Post ${index}`,url:`${page}comments/${index}/`}))})});
+    x.seed({...blocked(reason),work_id:x.work.work_id,run_id:x.run});const tools=x.create();
+    if(expectRead)assert.equal((await tools.execute('office_browser_read',{url:page},'social-again')).title,'r/ASTSpaceMobile',reason);
+    else await assert.rejects(tools.execute('office_browser_read',{url:page},'social-again'),/WORK_SOCIAL_PROFILE_NOT_READY/u,reason);
+  }
+});
+
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host
 // reads such public text resources over HTTPS in bounded pages.
 test('runtime contract a public text resource is read over HTTPS in pages with its hash, never through a browser download',async t=>{

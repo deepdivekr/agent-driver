@@ -300,7 +300,10 @@ export class WorkExecutionTools {
     const add=(raw:string)=>{try{const parsed=new URL(raw);assertBrowserUrl(raw,[parsed.origin],this.config.environment==='fixture');if(Array.from(parsed.searchParams.keys()).some(key=>/auth|session|cookie/iu.test(key)))return;if(!privateHostname(parsed.hostname)||this.config.environment==='fixture'&&parsed.protocol==='http:'&&parsed.hostname==='127.0.0.1')this.allowedUrls.add(parsed.href);}catch{/* Invalid observation is not new navigation authority. */}};
     for(const raw of checkpoint.observations){const observed=object(raw),invocation=object(observed?.invocation),receipt=object(observed?.receipt),value=object(receipt?.value);
       if(!['office_browser_read','office_web_search','office_social_search'].includes(String(invocation?.tool_name))||invocation?.dispatched!==true||invocation.effect!=='read_only'||!['succeeded','retryable_failure'].includes(String(receipt?.status))||receipt?.effect_state!=='none'||value?.provenance!=='live_browser_dom'||value.effect!=='read_only')continue;
-      if(receipt.status==='retryable_failure'&&value.social_access==='not_verified'&&typeof value.social_site==='string'&&Object.hasOwn(knownLoginSites,value.social_site)){this.blockedSocial.add(value.social_site);continue;}
+      // A site's own refusal (a challenge, a login limit) stands. A sign-in that was not seen is tried again when the run
+      // resumes: the owner may have signed in since, and a retry that keeps the old verdict never finds out (live: after
+      // the fix for late-drawing pages, a retried Work still refused Reddit on the earlier attempt's record).
+      if(receipt.status==='retryable_failure'&&value.social_access==='not_verified'&&typeof value.social_site==='string'&&Object.hasOwn(knownLoginSites,value.social_site)){if(value.reason!=='WORK_SOCIAL_AUTH_NOT_VERIFIED')this.blockedSocial.add(value.social_site);continue;}
       const parsed=browserObservationSchema.safeParse({url:value.url,title:value.title,text:value.text,links:value.links,observed_at:value.observed_at});if(!parsed.success)continue;
       const input=invocation?.tool_name==='office_web_search'?searchInput.safeParse(invocation.arguments):null;
       const requested=invocation?.tool_name==='office_browser_read'&&typeof object(invocation.arguments)?.url==='string'?String(object(invocation.arguments)!.url):null;
