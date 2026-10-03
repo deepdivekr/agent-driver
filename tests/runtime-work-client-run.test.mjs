@@ -138,12 +138,12 @@ test('runtime fixture the verifier sees the Office delivery selection of a clien
   assert.doesNotMatch(JSON.stringify(checkpoint),/SECRETTOKEN|987654321/u);
 });
 
-test('runtime fixture a host-tool run that only read moves to the client when the owner resumes it; one that wrote stays',async t=>{
+test('runtime fixture a host-tool run that only read or wrote Office outputs moves to the client when the owner resumes it; one that wrote elsewhere stays',async t=>{
   // Live 2026-10-03: a run parked in the host executor's own wait for a setting met the same wait again on every resume.
-  for(const [effect,expectClient] of [['read_only',true],['local_write',false]]){
+  for(const [tool,effect,expectClient] of [['runtime_pack_catalog','read_only',true],['office_result_draft','local_write',true],['runtime_files_report','local_write',false]]){
     const x=await setup(t,{client:request=>codexTurn(request)});
     const run=randomUUID(),at=new Date().toISOString();
-    const checkpoint={format:1,work_id:x.work.work_id,run_id:run,binding:'',turn:1,pending:null,summary:'',observations:[{invocation:{request_id:'host-read-1',turn:0,stage_id:'execution',tool_name:effect==='read_only'?'runtime_pack_catalog':'office_result_draft',arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{status:'succeeded'},evidence_ids:['host-read-1'],effect_state:effect==='read_only'?'none':'verified',retry_safe:effect==='read_only'},observed_at:at}]};
+    const checkpoint={format:1,work_id:x.work.work_id,run_id:run,binding:'',turn:1,pending:null,summary:'',observations:[{invocation:{request_id:'host-read-1',turn:0,stage_id:'execution',tool_name:tool,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{status:'succeeded'},evidence_ids:['host-read-1'],effect_state:effect==='read_only'?'none':'verified',retry_safe:effect==='read_only'},observed_at:at}]};
     x.store.hermesState.prepare("INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,reason,checkpoint,config_hash,model_revision,current_run_only,created_at,updated_at) VALUES(?,?,?,?,'paused','WORK_CLIENT_WAIT_CONFIGURATION',?,?,0,1,?,?)").run(run,x.config.project.id,x.work.work_id,x.work.revision,JSON.stringify(checkpoint),x.config.fingerprint,at,at);
     x.supervisor.action({work_id:x.work.work_id,revision:x.store.intakeWork(x.config.project.id,x.work.work_id).revision,action:'resume'});x.supervisor.activate();x.supervisor.tick();
     if(expectClient){const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));assert.equal(x.runs.length,1,JSON.stringify(activity(x).map(a=>a.kind+' '+a.summary.slice(0,90))));assert.equal(end.run_id,run,'the same run continues on the client');}

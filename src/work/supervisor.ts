@@ -362,9 +362,10 @@ export class WorkSupervisor {
       workActivity(this.store,project,row.work_id,'supervisor.started',row.attempts>1?'저장한 체크포인트를 읽고 실행을 이어갑니다.':'연결된 AI와 실행 도구로 업무를 시작합니다.');
       let checkpoint=row.checkpoint==='null'?null:JSON.parse(row.checkpoint) as WorkClientCheckpoint|SupervisedSwarmCheckpoint;
       // The client's own agent runs the Work, one client for its whole life. A run the host-tool loop already started finishes
-      // there, unless the owner resumed or retried it while that loop had only read (live 2026-10-03: a run parked in the host
-      // executor's own wait for a setting would otherwise meet the same wait again); its reads stay in the run's history.
-      const handover=(cp:WorkClientCheckpoint|SupervisedSwarmCheckpoint)=>!('kind' in cp)&&!cp.pending&&cp.observations.every(item=>item.invocation.effect==='read_only'||item.receipt.effect_state==='none');
+      // there, unless the owner resumed or retried it while that loop had only read or written Office's own outputs, which a
+      // new run rewrites (live 2026-10-03: a run parked in the host executor's own wait for a setting would otherwise meet
+      // the same wait again); its receipts stay in the run's history.
+      const handover=(cp:WorkClientCheckpoint|SupervisedSwarmCheckpoint)=>!('kind' in cp)&&!cp.pending&&cp.observations.every(item=>(['read_only','draft_only'].includes(item.invocation.effect)||item.invocation.tool_name.startsWith('office_')||item.receipt.effect_state==='none')&&item.receipt.effect_state!=='uncertain');
       const client=pin&&clientRunEnabled()&&(!checkpoint||'client_session' in checkpoint&&Boolean(checkpoint.client_session)||row.resume_wait===1&&handover(checkpoint))&&clientRunEligible(this.store,project,row.work_id,spec)?pin.id:null;
       if(client)settingsFence=false;
       const directions=this.store.workDirections(project,row.work_id),userIntake=readWorkIntakeOptions(this.store,project,row.work_id);
