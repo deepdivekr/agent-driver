@@ -1,7 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {open,realpath} from 'node:fs/promises';
-import {basename,dirname,isAbsolute,relative,resolve,sep} from 'node:path';
+import {basename,dirname,extname,isAbsolute,relative,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
 import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
@@ -243,9 +243,11 @@ export class WorkResults {
     const claim=db.prepare("UPDATE office_result_delivery SET status='sending',attempts=attempts+1,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND status IN ('pending','failed')").run(at(),deliveryId,revision);requireCondition(claim.changes===1,'RESULT_DELIVERY_ALREADY_CLAIMED');
     this.activity(project,workId,'delivery.sending','Sending the saved result.');
     // The pictures the result made go with it to a channel that shows them; one the host cannot reread intact is left out.
-    const images:DeliveryImage[]=[];
-    for(const artifact of result.artifacts.filter(item=>item.download_available&&/^image\/(?:png|jpeg|webp|gif)$/u.test(item.media_type??'')&&(item.bytes??0)<=10*1024*1024).slice(0,10)){
-      try{const file=await this.readArtifact(project,workId,resultId,artifact.id,[dirname(this.store.databasePath)]);images.push({name:artifact.label,media_type:file.media_type,bytes:file.bytes});}catch{/* left out */}
+    const images:DeliveryImage[]=[],imageTypes:Record<string,string>={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif'};
+    // A saved artifact may carry no media type (a client run's files did not); the file name decides then.
+    const imageType=(artifact:WorkResultArtifact)=>/^image\/(?:png|jpeg|webp|gif)$/u.test(artifact.media_type??'')?artifact.media_type!:artifact.media_type?null:imageTypes[extname(artifact.label).toLowerCase()]??null;
+    for(const artifact of result.artifacts.filter(item=>item.download_available&&imageType(item)&&(item.bytes??0)<=10*1024*1024).slice(0,10)){
+      try{const file=await this.readArtifact(project,workId,resultId,artifact.id,[dirname(this.store.databasePath)]);images.push({name:artifact.label,media_type:imageType(artifact)!,bytes:file.bytes});}catch{/* left out */}
     }
     let outcome:Awaited<ReturnType<ResultDeliveryConnector['send']>>;
     let timer:NodeJS.Timeout|undefined;
