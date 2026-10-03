@@ -56,6 +56,8 @@ export interface ControlCenterReloadStatus {state:'idle'|'reloading'|'restored'|
 const terminalStatuses=new Set(['succeeded','cancelled','failed','session_closed','process_exited']);
 const lane=(status:string):ControlLane=>['queued','pending','starting','input_ready','waiting_orchestrator'].includes(status)?'queued':['running','streaming','leased','verifying'].includes(status)?'running':['succeeded','completed','turn_completed','approved'].includes(status)?'done':'attention';
 import {safeControlText} from './safe-text.js';
+// A request the schema rejected names the field and the rule (live: the owner saw a raw issue list as "invalid id").
+const requestError=(error:unknown,fallback:string)=>safeControlText(error instanceof z.ZodError?`${fallback}: ${error.issues.map(issue=>`${issue.path.join('.')||'input'} ${issue.message}`).join('; ')}`:error instanceof Error?error.message:fallback,300);
 export {safeControlText} from './safe-text.js';
 const latestBy=<T>(items:T[],key:(value:T)=>string,time:(value:T)=>string)=>{const map=new Map<string,T>();for(const item of items){const previous=map.get(key(item));if(!previous||time(previous)<time(item))map.set(key(item),item);}return map;};
 
@@ -222,7 +224,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       try{let body='';for await(const chunk of request){body+=String(chunk);if(Buffer.byteLength(body)>8192)throw Error('WORK_REQUEST_TOO_LARGE');}if(rejectStopped())return;const input=JSON.parse(body);
         const value=suffix==='work/control'?supervisor.action(supervisorActionSchema.parse(input)):suffix==='work/adoption/targets'?adoption.targets(input):suffix==='work/adoption/bind'?adoption.bind(input):suffix==='work/adoption/action'?await adoption.action(input):await results.retryDelivery(config.project.id,input.work_id,input.result_id,input.delivery_id,input.revision);
         reply(response,200,JSON.stringify(value),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:safeControlText(error instanceof Error?error.message:'WORK_CONTROL_FAILED',300)}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_CONTROL_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(['work/remote/targets','work/remote/register','work/remote/discover','work/remote/link','work/remote/action'].includes(suffix)){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -272,7 +274,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         }
         const result=suffix==='work/coding/attach'?await codingDialog.attach(raw):suffix==='work/coding/turn'?await codingDialog.turn(raw):suffix==='work/coding/stop'?codingDialog.stop(raw):await codingDialog.reconcile(raw);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:safeControlText(error instanceof Error?error.message:'CODING_DIALOG_FAILED',300)}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'CODING_DIALOG_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/import/paste'||suffix==='work/import/scan'||suffix==='work/import/accept'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -284,12 +286,12 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
             response.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8','cache-control':'no-store','x-content-type-options':'nosniff'});
             const send=(event:unknown)=>{if(!response.destroyed)response.write(JSON.stringify(event)+'\n');};
             try{const result=await imports.scan(input,(stage,analysis_status)=>send({type:'progress',stage,analysis_status}));send({type:'result',result});}
-            catch(error){send({type:'error',error:safeControlText(error instanceof Error?error.message:'WORK_IMPORT_FAILED',300)});}
+            catch(error){send({type:'error',error:requestError(error,'WORK_IMPORT_FAILED')});}
             response.end();return;
           }
           const result=suffix==='work/import/paste'?imports.paste(workImportPasteSchema.parse(raw)):suffix==='work/import/scan'?await imports.scan(workImportScanSchema.parse(raw)):await imports.accept(workImportAcceptSchema.parse(raw));
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_IMPORT_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_IMPORT_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/import/coding/start'||suffix==='work/import/coding/step'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -313,7 +315,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
           const result=await codingRuntime.step({run_id:input.run_id,expected_revision:input.expected_revision});
           reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
         }
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_IMPORT_CODING_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_IMPORT_CODING_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/execute'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -342,12 +344,12 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         if(request.headers.accept==='application/x-ndjson'){
           response.writeHead(200,{'content-type':'application/x-ndjson; charset=utf-8',...headers()});const send=(event:unknown)=>{if(!response.destroyed)response.write(JSON.stringify(event)+'\n');};
           try{const work=await workRuntime.start(input,registered=>{recordStart(registered);send({type:'registered',work:registered});});if(stopped||reloading||options.reloadStatus?.().state==='reloading')throw Error(stopped?'CONTROL_CENTER_CLOSING':'CONTROL_CENTER_RELOADING');send({type:'result',result:finishIntake(work,intent)});}
-          catch(error){send({type:'error',error:safeControlText(error instanceof Error?error.message:'WORK_START_FAILED',300)});}
+          catch(error){send({type:'error',error:requestError(error,'WORK_START_FAILED')});}
           response.end();return;
         }
         const work=await workRuntime.start(input,recordStart);if(rejectStopped())return;const result=finishIntake(work,intent);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_START_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_START_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/define'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -357,7 +359,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         const work=await workRuntime.define(input);if(rejectStopped())return;
         const execute=requestedIntakeRun(work.work_id),result=finishIntake(work,{execute,cost_acknowledged:execute});
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_DEFINE_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_DEFINE_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/answer'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -370,7 +372,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         if(execute)workActivity(store,config.project.id,work.work_id,'dispatch.requested','The owner requested this Work run using the configured AI allowance. External submissions remain separately gated.',{stage_id:'admission',status:'requested'});
         const result=finishIntake(work,{execute,cost_acknowledged,...(timezone?{timezone}:{})});
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_ANSWER_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_ANSWER_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/pause'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -383,7 +385,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         workActivity(store,config.project.id,work.id,'dispatch.requested','The user requested the resumed current Work run using the configured AI allowance; future recurring runs remain separately gated.',{stage_id:'admission',status:'requested'});
         const result=finishIntake(workRuntime.status({work_id:work.id}),{execute,cost_acknowledged,...(timezone?{timezone}:{})});
         reply(response,200,JSON.stringify({...result,scope:'current_run_request'}),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_PAUSE_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_PAUSE_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='work/jev'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -391,7 +393,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
       try{let body='';for await(const chunk of request){body+=String(chunk);if(body.length>2048)throw Error('WORK_REQUEST_TOO_LARGE');}
         if(rejectStopped())return;const input=workJevSchema.parse(JSON.parse(body)),result=workRuntime.jev(input);
         reply(response,200,JSON.stringify({work_id:result.work_id,revision:result.revision,jev:result.jev,scope:'future_decisions'}),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'WORK_JEV_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'WORK_JEV_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix==='office/action'){
       if(request.method!=='POST'){reply(response,405,'method not allowed');return;}
@@ -401,7 +403,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
         const runId=String(input.run_id),revision=input.revision as number,action=input.action as 'pause'|'resume'|'edit';
         const result=store.officeWork(config.project.id,'coding',runId)?action==='edit'?store.codingDirection(config.project.id,runId,revision,String(input.worker_id??''),String(input.instruction??'')):store.pauseCoding(config.project.id,runId,revision,action==='pause'):store.officeAction(config.project.id,runId,action,revision,input.worker_id as string|undefined,input.instruction as string|undefined);
         reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');
-      }catch(error){reply(response,409,JSON.stringify({error:error instanceof Error?error.message:'OFFICE_ACTION_FAILED'}),'application/json; charset=utf-8');}return;
+      }catch(error){reply(response,409,JSON.stringify({error:requestError(error,'OFFICE_ACTION_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(request.method!=='GET'){reply(response,405,'method not allowed');return;}
     if(suffix==='work/result/artifact'){
@@ -409,7 +411,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     }
     if(suffix==='work/coding/sessions'){
       try{const project_ref=url.searchParams.get('project_ref');const result=await codingDialog.sessions({project_ref});reply(response,200,JSON.stringify(result),'application/json; charset=utf-8');}
-      catch(error){reply(response,409,JSON.stringify({error:safeControlText(error instanceof Error?error.message:'CODING_DIALOG_SESSIONS_FAILED',300)}),'application/json; charset=utf-8');}return;
+      catch(error){reply(response,409,JSON.stringify({error:requestError(error,'CODING_DIALOG_SESSIONS_FAILED')}),'application/json; charset=utf-8');}return;
     }
     if(suffix===''){const nonce=randomBytes(18).toString('base64url');reply(response,200,workHtml(nonce),'text/html; charset=utf-8',nonce);return;}
     if(suffix==='work/import/prompt'){reply(response,200,JSON.stringify(imports.prompt()),'application/json; charset=utf-8');return;}
