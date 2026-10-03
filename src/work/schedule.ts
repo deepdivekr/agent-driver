@@ -29,7 +29,7 @@ export type WorkSchedule=z.infer<typeof workScheduleSchema>;
 /** What the model fills in. Subscription CLIs reject a union at the schema root
  * (live: CLIENT_SCHEMA_INVALID on every recurring Work), so the model gets one
  * flat object and the host builds and validates the real schedule from it. */
-const scheduleProposalSchema=z.object({kind:z.enum(['daily','weekly','interval','unsupported']),timezone:z.string().max(100).nullable(),hour:z.number().int().nullable(),minute:z.number().int().nullable(),also_at:z.array(z.object({hour:z.number().int(),minute:z.number().int()}).strict()).max(5).nullable(),weekdays:z.array(z.number().int()).max(7).nullable(),seconds:z.number().int().nullable(),reason:z.string().max(300).nullable()}).strict();
+const scheduleProposalSchema=z.object({kind:z.enum(['daily','weekly','interval','unsupported']),timezone:z.string().max(100).nullable(),hour:z.number().int().nullable(),minute:z.number().int().nullable(),also_at:z.array(z.object({hour:z.number().int(),minute:z.number().int()}).strict()).max(5).nullable().default(null),weekdays:z.array(z.number().int()).max(7).nullable(),seconds:z.number().int().nullable(),reason:z.string().max(300).nullable()}).strict();
 /** The cadence the user's own words state when no clock time is given. Code decides this; a model that
  * answers "unsupported: no time specified" (live) must not leave a watch waiting for a person. */
 export function cadenceInterval(rule:string):number|null{
