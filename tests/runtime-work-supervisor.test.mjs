@@ -30,6 +30,8 @@ function fixture(options={}){const calls=[];return {calls,async call(purpose,ins
     return observed?{id:check.id,verdict:'supported',evidence_ids:resultIds,evidence_quote_refs:refs,reason:'The actual Pack receipt contains the requested title and value 23.'}:{id:check.id,verdict:'unknown',evidence_ids:[],evidence_quote_refs:[],reason:'No observed Pack title and value pair can be cited.'};
   })};
   assert.ok(instructions.startsWith('Execute the registered Work'));
+  options.contexts?.push(input.context);
+  if(options.waitForSignIn&&!input.context?.owner_retried_after_sign_in_stop&&!input.checkpoint.observations.length)return {action:'wait',stage_id:null,tool_name:null,arguments_json:null,summary:'Reddit sign-in was not seen.',completed_checks:[],wait_reason:'authentication'};
   if(options.gate&&input.checkpoint.observations.length===0)await options.gate;
   const result=input.checkpoint.observations.find(o=>o.invocation.tool_name==='runtime_pack_run');
   if(result)return {action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:'Observed source: 23',completed_checks:input.completion_checks.map(c=>({id:c.id,evidence_ids:result.receipt.evidence_ids})),wait_reason:null};
@@ -42,6 +44,17 @@ async function setup(t,options={}){
  const cleanup=[];t.after(async()=>{for(const operation of cleanup.reverse())await operation();store.close();await rm(root,{recursive:true,force:true});});return {root,config,store,model,work,cleanup};
 }
 async function finished(x,states=['succeeded','failed','awaiting_review','reconciliation_required']){for(let i=0;i<120;i++){const s=supervisorStatus(x.store,x.config.project.id,x.work.work_id);if(states.includes(s?.state))return s;await delay(25);}assert.fail(JSON.stringify(supervisorStatus(x.store,x.config.project.id,x.work.work_id)));}
+// Live (2026-10-03): a Work retried after a sign-in stop answered from the old receipts and stopped again without
+// opening anything, twice. The run is told the owner retried after that stop.
+test('runtime fixture a retry after a sign-in stop tells the run that its old sign-in receipts are stale',async t=>{
+ const contexts=[],x=await setup(t,{contexts,waitForSignIn:true});
+ const supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false,tick_ms:20});x.cleanup.push(()=>supervisor.close());
+ supervisor.start(x.work.work_id,x.work.revision,true);supervisor.activate();supervisor.tick();
+ const stopped=await finished(x,['waiting_auth']);assert.equal(stopped.reason,'WORK_CLIENT_WAIT_AUTHENTICATION');assert.equal(contexts[0].owner_retried_after_sign_in_stop,undefined);
+ const work=x.store.intakeWork(x.config.project.id,x.work.work_id);supervisor.action({work_id:x.work.work_id,revision:work.revision,action:'retry'});supervisor.tick();
+ const end=await finished(x);assert.equal(end.state,'succeeded');
+ assert.match(contexts.at(-1).owner_retried_after_sign_in_stop.instruction,/Open those pages again before deciding/u);
+});
 test('runtime fixture maintenance admission fence also stops activated supervisor ticks, then resumes the same queued run',async t=>{
  const x=await setup(t);let allowed=false;
  const supervisor=new WorkSupervisor(x.store,x.config,x.model,{auto_start:false,tick_ms:20,can_start:()=>allowed});x.cleanup.push(()=>supervisor.close());
