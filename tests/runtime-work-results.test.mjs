@@ -240,3 +240,28 @@ test('runtime unit supervised Work detail uses its real run identity and hides l
  }
  context.detail.supervisor=null;context.detail.work_status='paused';context.detail.paused=true;vm.runInNewContext('renderDetailBody()',context);assert.match(app.innerHTML,/<small>실행 전<\/small>/u);
 });
+
+// Live 2026-10-03: the owner added their Telegram chat to a finished Work (image teaching material) and nothing was sent,
+// because only unsent rows were rerouted and the Telegram connector carried text only.
+test('runtime contract a destination added after a verified result gets that result, with its pictures',async t=>{
+  const {WorkDeliverySettings,deliverySettingsPath}=await import('../dist/work/delivery-settings.js');
+  const received=[];const connector={id:'tg-added',channel:'telegram',async send(input){received.push(input);return {status:'delivered',receipt_id:'fixture-receipt'};}};
+  const x=await setup(t),project=x.config.project.id,dataDir=dirname(x.config.dbPath);
+  await mkdir(join(dataDir,'.connection'),{recursive:true,mode:0o700});
+  await writeFile(deliverySettingsPath(x.config),JSON.stringify({format:1,revision:1,targets:[{id:'tg-added',platform:'telegram',label:'내 텔레그램',telegram_bot_token:'123456:FIXTURETOKENVALUE00000000',telegram_chat_id:'1001'}],default_target_ids:['app']}),{mode:0o600});
+  const results=new WorkResults(x.store,[connector],WorkDeliverySettings.fromConfig(x.config));
+  const folder=join(dataDir,'work-folders',x.work.id,'run-1');await mkdir(folder,{recursive:true});
+  const png=Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,1,2,3]),pngPath=join(folder,'case-1.png');await writeFile(pngPath,png);
+  const runId=randomUUID(),time=new Date().toISOString();
+  x.store.hermesState.exec('CREATE TABLE IF NOT EXISTS office_supervisor(run_id TEXT PRIMARY KEY,project_id TEXT,work_id TEXT,work_revision INTEGER,state TEXT,result TEXT,checkpoint TEXT,created_at TEXT)');
+  x.store.hermesState.prepare('INSERT INTO office_supervisor VALUES(?,?,?,?,?,?,?,?)').run(runId,project,x.work.id,0,'succeeded',JSON.stringify({summary:'5세트 완성',text:'해설',completion_verified:true}),JSON.stringify({observations:[]}),time);
+  const saved=results.record(project,{work_id:x.work.id,run_id:runId,source_kind:'client',work_revision:0,summary:'파생상품 사례 이미지 5세트',text:'01_레버리지.png / 해설 …',artifacts:[{label:'01_레버리지.png',path:pngPath,sha256:createHash('sha256').update(png).digest('hex'),bytes:png.length,media_type:'image/png'}],sources:[]});
+  assert.equal(saved.verification,'verified');
+  results.setSelection(project,x.work.id,{revision:0,target_ids:['app','tg-added']});
+  const delivered=await results.dispatchPending(project,x.work.id);
+  assert.equal(received.length,1,'the latest verified result went to the new destination');
+  assert.equal(received[0].images.length,1);assert.equal(received[0].images[0].name,'01_레버리지.png');assert.equal(received[0].images[0].media_type,'image/png');assert.ok(received[0].images[0].bytes.equals(png));
+  assert.ok(delivered.some(item=>item.deliveries.some(delivery=>delivery.target_alias==='tg-added'&&delivery.status==='delivered')));
+  // Selecting the same destination again sends nothing twice.
+  results.setSelection(project,x.work.id,{revision:1,target_ids:['app','tg-added']});await results.dispatchPending(project,x.work.id);assert.equal(received.length,1);
+});

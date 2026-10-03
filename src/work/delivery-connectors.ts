@@ -33,7 +33,7 @@ function failed(status:number){return {status:'failed' as const,effect_state:[40
 /** Provider requests are pinned to exact provider hosts by saved settings validation. Redirects are disabled. */
 export function createDeliveryConnector(target:DeliveryTarget,transport:typeof fetch=fetch):ResultDeliveryConnector{
   const validated=validateDeliveryTarget(target);
-  return {id:validated.id,channel:validated.platform,async send({result,idempotency_key}){
+  return {id:validated.id,channel:validated.platform,async send({result,idempotency_key,images=[]}){
     const full=content(result,validated.platform==='telegram'?4000:validated.platform==='discord'?1850:12000);let url:string,body:BodyInit,headers:HeadersInit|undefined;
     if(validated.platform==='telegram'){
       const base=`https://api.telegram.org/bot${validated.telegram_bot_token}/`;
@@ -58,7 +58,15 @@ export function createDeliveryConnector(target:DeliveryTarget,transport:typeof f
     if(validated.platform==='telegram'){
       const message=object.result&&typeof object.result==='object'?object.result as Record<string,unknown>:{};
       const chat=message.chat&&typeof message.chat==='object'?message.chat as Record<string,unknown>:{};
-      return object.ok===true&&Number.isInteger(message.message_id)&&Number.isSafeInteger(chat.id)&&(validated.telegram_chat_id?.startsWith('@')||String(chat.id)===validated.telegram_chat_id)?{status:'delivered',receipt_id:receipt(`telegram:${chat.id}:${message.message_id}`)}:{status:'failed',effect_state:'uncertain',reason:'DELIVERY_RECEIPT_INVALID'};
+      if(!(object.ok===true&&Number.isInteger(message.message_id)&&Number.isSafeInteger(chat.id)&&(validated.telegram_chat_id?.startsWith('@')||String(chat.id)===validated.telegram_chat_id)))return {status:'failed',effect_state:'uncertain',reason:'DELIVERY_RECEIPT_INVALID'};
+      // The pictures the result made follow the text, one message each (live: an owner asked for image teaching material in Telegram).
+      // The text is the delivery; a picture that fails to send is noted in the receipt, never a retry of the whole result.
+      let sent=0;const api=`https://api.telegram.org/bot${validated.telegram_bot_token}/`;
+      for(const image of images.slice(0,10)){
+        const form=new FormData();form.append('chat_id',validated.telegram_chat_id!);form.append('photo',new Blob([new Uint8Array(image.bytes)],{type:image.media_type}),image.name);form.append('caption',image.name.slice(0,1000));
+        try{const photo=await transport(api+'sendPhoto',{method:'POST',body:form,redirect:'error',signal:AbortSignal.timeout(30_000)});if(photo.ok)sent++;}catch{/* counted below */}
+      }
+      return {status:'delivered',receipt_id:receipt(`telegram:${chat.id}:${message.message_id}${images.length?`:photos:${sent}/${Math.min(images.length,10)}`:''}`)};
     }
     return typeof object.id==='string'&&/^\d{10,25}$/u.test(object.id)?{status:'delivered',receipt_id:receipt(`discord:${object.id}`)}:{status:'failed',effect_state:'uncertain',reason:'DELIVERY_RECEIPT_INVALID'};
   }};

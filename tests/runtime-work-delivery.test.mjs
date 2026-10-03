@@ -158,3 +158,15 @@ test('a long non-ASCII message is acknowledged: the provider echo fits the respo
   const ack=await createDeliveryConnector(target,async()=>new Response(echo,{status:200})).send({result:{id:'r-1',work_title:'t',source_status:'succeeded',work_completion_verified:true,summary:'s',text,artifacts:[]},target_alias:'tg',idempotency_key:'k'});
   assert.equal(ack.status,'delivered');
 });
+
+// Live 2026-10-03: image teaching material had to reach the owner's Telegram chat; the connector carried text only.
+test('telegram sends the result pictures after the text, one sendPhoto each, and the receipt counts them',async()=>{
+  const calls=[];const transport=async(url,options)=>{calls.push({url,options});return new Response(JSON.stringify(/sendPhoto$/u.test(url)?{ok:true,result:{message_id:43,chat:{id:-1001234567890}}}:{ok:true,result:{message_id:42,chat:{id:-1001234567890}}}),{status:200});};
+  const connector=createDeliveryConnector(telegram,transport);
+  const png=Buffer.from([0x89,0x50,0x4e,0x47,1,2,3]);
+  const outcome=await connector.send({result:{id:'r1',work_title:'파생상품 사례',summary:'5세트',text:'해설 본문',artifacts:[],sources:[]},target_alias:'updates',idempotency_key:'k1',images:[{name:'01_레버리지.png',media_type:'image/png',bytes:png},{name:'02_증거금.png',media_type:'image/png',bytes:png}]});
+  assert.equal(outcome.status,'delivered');assert.match(outcome.receipt_id,/:photos:2\/2$/u);
+  assert.match(calls[0].url,/sendMessage$/u);assert.match(calls[1].url,/sendPhoto$/u);assert.match(calls[2].url,/sendPhoto$/u);
+  assert.ok(calls[1].options.body instanceof FormData);assert.equal(calls[1].options.body.get('caption'),'01_레버리지.png');assert.equal(calls[1].options.redirect,'error');
+  const photoBlob=calls[1].options.body.get('photo');assert.equal(photoBlob.type,'image/png');assert.equal(photoBlob.size,png.length);
+});

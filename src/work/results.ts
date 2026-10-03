@@ -1,7 +1,7 @@
 import {createHash,randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {open,realpath} from 'node:fs/promises';
-import {basename,isAbsolute,relative,resolve,sep} from 'node:path';
+import {basename,dirname,isAbsolute,relative,resolve,sep} from 'node:path';
 import {z} from 'zod';
 import {type PackStore} from '../packs/store.js';
 import {assertWorkConnected,readWorkLifecycle} from './lifecycle.js';
@@ -24,7 +24,9 @@ export const workResultGetSchema=z.object({work_id:identity,result_id:z.string()
 type RecordInput=z.input<typeof workResultRecordSchema>;
 type SourceKind=z.infer<typeof workResultRecordSchema>['source_kind'];
 export type ResultDeliveryChannel='telegram'|'slack'|'discord'|'email'|'chat'|'file'|'other';
-export interface ResultDeliveryConnector {id:string;channel:ResultDeliveryChannel;send(input:{result:WorkResult;target_alias:string;idempotency_key:string}):Promise<{status:'delivered';receipt_id:string}|{status:'failed';effect_state:'not_dispatched'|'uncertain';reason:string}>;}
+/** An image the saved result produced, read back and verified by the host, for a channel that can show pictures. */
+export interface DeliveryImage {name:string;media_type:string;bytes:Buffer;}
+export interface ResultDeliveryConnector {id:string;channel:ResultDeliveryChannel;send(input:{result:WorkResult;target_alias:string;idempotency_key:string;images?:DeliveryImage[]}):Promise<{status:'delivered';receipt_id:string}|{status:'failed';effect_state:'not_dispatched'|'uncertain';reason:string}>;}
 export interface WorkResultArtifact {id:string;label:string;sha256:string;bytes:number|null;media_type:string|null;download_available:boolean;}
 export interface WorkResultDelivery {id:string;channel:'app'|ResultDeliveryChannel;authority:'office'|'original_runtime';status:'available'|'unobserved'|'pending'|'sending'|'delivered'|'failed'|'reconciliation_required';target_alias:string|null;connector_id:string|null;revision:number;attempts:number;reason:string|null;receipt_id:string|null;updated_at:string;can_retry:boolean;}
 export interface WorkResult {id:string;project_id:string;work_id:string;run_id:string;source_kind:SourceKind;work_revision:number|null;source_status:string;verification:'verified'|'reported'|'unverified';summary:string;text:string;artifacts:WorkResultArtifact[];sources:Array<z.infer<typeof sourceSchema>>;content_sha256:string;created_at:string;work_completion_verified:boolean;work_title:string;deliveries:WorkResultDelivery[];}
@@ -82,20 +84,25 @@ export class WorkResults {
     requireCondition(new Set(raw.target_ids).size===raw.target_ids.length&&raw.target_ids.every(id=>typeof id==='string'&&/^[a-zA-Z0-9][a-zA-Z0-9._:-]{0,119}$/u.test(id)&&(id==='app'||this.settings?.target(id))),'RESULT_DELIVERY_TARGET_UNAVAILABLE');
     const db=this.store.hermesState;db.exec('SAVEPOINT office_delivery_selection');
     try{
-      const row=db.prepare('SELECT revision FROM office_work_delivery_policy WHERE project_id=? AND work_id=?').get(project,workId);
+      const row=db.prepare('SELECT revision,target_ids FROM office_work_delivery_policy WHERE project_id=? AND work_id=?').get(project,workId);
       requireCondition(raw.revision===Number(row?.revision??0),'RESULT_DELIVERY_SELECTION_CONFLICT');
+      const previous=row?JSON.parse(String(row.target_ids)) as string[]:['app'];
       const latest=db.prepare('SELECT id,body FROM office_result WHERE project_id=? AND work_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1').get(project,workId);
-      let rerouteResultId:string|null=null;
+      let rerouteResultId:string|null=null,newTargets:string[]=[];
       if(latest&&object(JSON.parse(String(latest.body))).completion_verified===true){
-        const prior=db.prepare("SELECT status,reason,target_fingerprint FROM office_result_delivery WHERE project_id=? AND work_id=? AND result_id=? AND authority='office' AND channel<>'app'").all(project,workId,String(latest.id));
+        const prior=db.prepare("SELECT status,reason,target_alias,target_fingerprint FROM office_result_delivery WHERE project_id=? AND work_id=? AND result_id=? AND authority='office' AND channel<>'app'").all(project,workId,String(latest.id));
         const uncertain=prior.some(delivery=>['sending','reconciliation_required'].includes(String(delivery.status)));
         const unsent=prior.some(delivery=>delivery.target_fingerprint&&delivery.status==='pending'||delivery.target_fingerprint&&delivery.status==='failed'&&delivery.reason!=='DELIVERY_SELECTION_CHANGED');
         if(unsent&&!uncertain)rerouteResultId=String(latest.id);
+        // A destination the owner adds now gets the latest verified result too (live: the owner added their Telegram
+        // chat after a Work had finished and nothing was sent, because only unsent rows were rerouted).
+        newTargets=uncertain?[]:raw.target_ids.filter(id=>id!=='app'&&!previous.includes(id)&&!prior.some(delivery=>String(delivery.target_alias)===id&&delivery.status!=='failed'));
       }
       db.prepare('INSERT INTO office_work_delivery_policy(work_id,project_id,revision,target_ids,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(work_id) DO UPDATE SET revision=excluded.revision,target_ids=excluded.target_ids,updated_at=excluded.updated_at').run(workId,project,raw.revision+1,JSON.stringify(raw.target_ids),at());
       const existing=db.prepare("SELECT id,target_alias FROM office_result_delivery WHERE project_id=? AND work_id=? AND authority='office' AND status='pending'").all(project,workId);
       for(const pending of existing)if(!raw.target_ids.includes(String(pending.target_alias)))db.prepare("UPDATE office_result_delivery SET status='failed',reason='DELIVERY_SELECTION_CHANGED',revision=revision+1,updated_at=? WHERE id=? AND status='pending'").run(at(),String(pending.id));
       if(rerouteResultId)this.addPending(project,workId,rerouteResultId,raw.target_ids);
+      else if(newTargets.length&&latest)this.addPending(project,workId,String(latest.id),newTargets);
       db.exec('RELEASE office_delivery_selection');
     }catch(error){db.exec('ROLLBACK TO office_delivery_selection; RELEASE office_delivery_selection');throw error;}
     this.activity(project,workId,'delivery.selected','Delivery destinations updated.');
@@ -235,9 +242,14 @@ export class WorkResults {
     requireCondition(connector&&row.target_alias,'RESULT_DELIVERY_CONNECTOR_UNAVAILABLE');
     const claim=db.prepare("UPDATE office_result_delivery SET status='sending',attempts=attempts+1,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND status IN ('pending','failed')").run(at(),deliveryId,revision);requireCondition(claim.changes===1,'RESULT_DELIVERY_ALREADY_CLAIMED');
     this.activity(project,workId,'delivery.sending','Sending the saved result.');
+    // The pictures the result made go with it to a channel that shows them; one the host cannot reread intact is left out.
+    const images:DeliveryImage[]=[];
+    for(const artifact of result.artifacts.filter(item=>item.download_available&&/^image\/(?:png|jpeg|webp|gif)$/u.test(item.media_type??'')&&(item.bytes??0)<=10*1024*1024).slice(0,10)){
+      try{const file=await this.readArtifact(project,workId,resultId,artifact.id,[dirname(this.store.databasePath)]);images.push({name:artifact.label,media_type:file.media_type,bytes:file.bytes});}catch{/* left out */}
+    }
     let outcome:Awaited<ReturnType<ResultDeliveryConnector['send']>>;
     let timer:NodeJS.Timeout|undefined;
-    try{outcome=await Promise.race([connector.send({result,target_alias:row.target_alias,idempotency_key:`office-result:${deliveryId}`}),new Promise<Awaited<ReturnType<ResultDeliveryConnector['send']>>>(resolve=>{timer=setTimeout(()=>resolve({status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'}),30_000);timer.unref();})]);}catch{outcome={status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'};}finally{if(timer)clearTimeout(timer);}
+    try{outcome=await Promise.race([connector.send({result,target_alias:row.target_alias,idempotency_key:`office-result:${deliveryId}`,...(images.length?{images}:{})}),new Promise<Awaited<ReturnType<ResultDeliveryConnector['send']>>>(resolve=>{timer=setTimeout(()=>resolve({status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'}),30_000);timer.unref();})]);}catch{outcome={status:'failed',effect_state:'uncertain',reason:'DELIVERY_RESPONSE_UNOBSERVED'};}finally{if(timer)clearTimeout(timer);}
     const delivered=outcome.status==='delivered'&&typeof outcome.receipt_id==='string'&&outcome.receipt_id.length>0&&outcome.receipt_id.length<=500;
     const status=delivered?'delivered':outcome.status==='failed'&&outcome.effect_state==='not_dispatched'?'failed':'reconciliation_required';
     db.prepare('UPDATE office_result_delivery SET status=?,revision=revision+1,reason=?,receipt_id=?,updated_at=? WHERE id=? AND status=?').run(status,delivered?null:safe(outcome.status==='failed'?outcome.reason:'DELIVERY_RECEIPT_INVALID',300),delivered?safe((outcome as {receipt_id:string}).receipt_id,500):null,at(),deliveryId,'sending');
