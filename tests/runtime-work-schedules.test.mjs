@@ -87,3 +87,21 @@ test('runtime unit timezone DST gap skips the missing local time and fold runs o
  const interval={kind:'interval',timezone:'UTC',seconds:3600},start=timestamp('2026-09-29T08:00:00Z');
  assert.equal(nextScheduleSlot(interval,start,start),start+3600_000);assert.equal(latestScheduleSlot(interval,start+6*3600_000+1,start),start+6*3600_000);
 });
+
+// Owner direction 2026-10-03: "오전 8시 30분, 저녁 9시 30분" — a Work that runs twice a day.
+test('runtime contract a daily schedule with two clock times runs at both, in order, and an earlier saved schedule reads as before',async()=>{
+  const {scheduleFromProposal,normalizeExplicitWorkSchedule,nextScheduleSlot,latestScheduleSlot}=await import('../dist/work/schedule.js');
+  const proposed=scheduleFromProposal({kind:'daily',timezone:'Asia/Seoul',hour:21,minute:30,also_at:[{hour:8,minute:30}],weekdays:null,seconds:null,reason:null},'UTC');
+  const schedule=normalizeExplicitWorkSchedule(proposed);
+  assert.deepEqual(schedule,{kind:'daily',timezone:'Asia/Seoul',hour:8,minute:30,also_at:[{hour:21,minute:30}]},'Times are kept in order, the earliest first.');
+  const kst=(day,hm)=>Date.parse(`2026-10-${day}T${hm}:00+09:00`),anchor=kst('01','00:00');
+  assert.equal(nextScheduleSlot(schedule,kst('03','10:00'),anchor),kst('03','21:30'));
+  assert.equal(nextScheduleSlot(schedule,kst('03','21:30'),anchor),kst('04','08:30'));
+  assert.equal(nextScheduleSlot(schedule,kst('03','07:00'),anchor),kst('03','08:30'));
+  assert.equal(latestScheduleSlot(schedule,kst('03','22:00'),anchor),kst('03','21:30'));
+  assert.equal(latestScheduleSlot(schedule,kst('03','12:00'),anchor),kst('03','08:30'));
+  assert.throws(()=>normalizeExplicitWorkSchedule({kind:'daily',timezone:'Asia/Seoul',hour:8,minute:30,also_at:[{hour:8,minute:30}]}),/SCHEDULE_TIME_DUPLICATE/u);
+  const single=normalizeExplicitWorkSchedule({kind:'daily',timezone:'Asia/Seoul',hour:9,minute:0});
+  assert.deepEqual(single,{kind:'daily',timezone:'Asia/Seoul',hour:9,minute:0});assert.equal(nextScheduleSlot(single,kst('03','10:00'),anchor),kst('04','09:00'));
+  assert.deepEqual(scheduleFromProposal({kind:'daily',timezone:'Asia/Seoul',hour:9,minute:0,also_at:null,weekdays:null,seconds:null,reason:null},'UTC'),single,'No extra time gives the same schedule as before.');
+});

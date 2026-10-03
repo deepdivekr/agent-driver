@@ -264,6 +264,17 @@ test('runtime fixture a site\'s own "try reloading" page is reloaded, and social
   assert.equal(socialSearchUrlForTest({site:'x.com',query:'ASTS'}),'https://x.com/search?q=ASTS&f=live');
 });
 
+// Owner direction 2026-10-03: on Reddit, find the subreddit in the search results, then read its newest and top posts.
+test('runtime fixture a subreddit seen in the results may be read newest-first or top-of-day; an unseen one may not',async t=>{
+  const search='https://www.reddit.com/search/?q=ASTS&type=posts&sort=new',request='ASTS 주식 종목 reddit 반응을 '+search+' 에서 확인해줘';
+  const results=observation(search,{title:'ASTS - Reddit Search!',text:'Results for ASTS. '.repeat(30),links:[{text:'r/ASTSpaceMobile',url:'https://www.reddit.com/r/ASTSpaceMobile/'},...Array.from({length:6},(_,index)=>({text:`Post ${index}`,url:`https://www.reddit.com/r/ASTSpaceMobile/comments/${index}/`}))]});
+  const x=await setup(t,{browser:null,prompt:request,workPolicy:{model_data_approved:true,autonomy:'delegated'},observe:(target,url)=>url===search?results:observation(url,{title:'r/ASTSpaceMobile',text:'Posts. '.repeat(80),links:Array.from({length:6},(_,index)=>({text:`New ${index}`,url:`https://www.reddit.com/r/ASTSpaceMobile/comments/n${index}/`}))})});
+  const tools=x.create();await tools.execute('office_browser_read',{url:search},'search');
+  assert.equal((await tools.execute('office_browser_read',{url:'https://www.reddit.com/r/ASTSpaceMobile/new/'},'newest')).title,'r/ASTSpaceMobile');
+  assert.equal((await tools.execute('office_browser_read',{url:'https://www.reddit.com/r/ASTSpaceMobile/top/?t=day'},'top')).title,'r/ASTSpaceMobile');
+  assert.throws(()=>tools.validate('office_browser_read',{url:'https://www.reddit.com/r/SomethingElse/new/'},'unseen'),/BROWSER_URL_NOT_OBSERVED/u);
+});
+
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host
 // reads such public text resources over HTTPS in bounded pages.
 test('runtime contract a public text resource is read over HTTPS in pages with its hash, never through a browser download',async t=>{
