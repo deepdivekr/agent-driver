@@ -14,6 +14,9 @@ import {initWorkExecution,workActivity} from './activity.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {browserCatalog} from '../browser/executor-routing.js';
 import {bindWorkIntakeOptions,readWorkIntakeOptions} from './intake-options.js';
+import {pinWorkClient,workClientChoice} from './client-run.js';
+import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
+import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {connectedSourceCatalog,observedWorkSourceSchemas} from '../packs/source-catalog.js';
 import {sealCollectionContract} from './collection-contract.js';
 import {applyAutoSources} from '../packs/auto-sources.js';
@@ -140,13 +143,17 @@ export class WorkRuntime {
     const next_action=work.paused?'resume_work_before_new_dispatch':!runs.length&&file_activity?file_activity.next_action:work.status==='awaiting_details'?'answer_work_questions':work.status==='needs_model'?'connect_model_then_runtime_work_define':work.status==='defining'?'wait_or_retry_runtime_work_define':runs.some(run=>run.kind==='coding_dialog')?'inspect_coding_dialog_and_wait_for_user_instruction':work.status==='ready'&&spec?.route.pack_family==='coding.orchestrate'?'runtime_coding_start_with_work_id_and_project_ref':work.status==='ready'&&spec?.route.pack_family==='file.pipeline'?'connected_agent_choose_file_tools_or_runtime_pack_plan':work.status==='ready'&&spec?.route.kind==='pack'?'runtime_pack_plan_then_run_with_same_request_id':work.status==='ready'&&spec?.route.kind==='swarm'?'runtime_swarm_start_with_same_request_id':work.status==='ready'?'connected_agent_plan_with_same_request_id':work.status==='running'?'inspect_bound_run_and_verify_work_outcome':'inspect_work';
     // A calling agent needs a sentence it can pass on, not a code (clean-install check): what only the owner can do.
     const owner_action=reason==='MODEL_DATA_APPROVAL_REQUIRED'?'One-time owner step: run "agent-office connect", open the Work in the Control Center and press Allow so its text may be sent to the selected AI. The Work then runs by itself; check it with runtime_work_status.':work.status==='awaiting_details'?'Ask the owner the listed questions and send their answers with runtime_work_answer.':undefined;
-    return {...(owner_action?{owner_action}:{}),work_id:work.id,request_id:work.request_id,execution_binding:workExecutionBinding(work),dispatch_owner:'agent-office',status:supervision?.state??work.status,definition_status:work.status,supervision,mode:work.mode,revision:work.revision,prompt:work.prompt,spec,questions:work.questions,answers:work.answers,paused:work.paused,jev:{enabled:work.jev_enabled,cost_consent_at:work.jev_cost_consent_at,optional:true},runs,file_activity,client_handoffs:this.store.clientHandoffs(this.config.project.id,work.id),completion_verified:supervision?.completion_verified??false,created_at:work.created_at,updated_at:work.updated_at,lifecycle,next_action:lifecycle.state!=='connected'?null:supervision?(supervision.state==='succeeded'?'runtime_work_results':'runtime_work_control'):work.status==='ready'&&!file_activity&&!runs.some(run=>run.kind==='coding_dialog')?'runtime_work_execute':next_action,...(reason?{reason}:{})};
+    return {...(owner_action?{owner_action}:{}),work_id:work.id,request_id:work.request_id,execution_binding:workExecutionBinding(work),dispatch_owner:'agent-office',status:supervision?.state??work.status,definition_status:work.status,supervision,mode:work.mode,revision:work.revision,prompt:work.prompt,spec,questions:work.questions,answers:work.answers,paused:work.paused,jev:{enabled:work.jev_enabled,cost_consent_at:work.jev_cost_consent_at,optional:true},runs,file_activity,completion_verified:supervision?.completion_verified??false,created_at:work.created_at,updated_at:work.updated_at,lifecycle,next_action:lifecycle.state!=='connected'?null:supervision?(supervision.state==='succeeded'?'runtime_work_results':'runtime_work_control'):work.status==='ready'&&!file_activity&&!runs.some(run=>run.kind==='coding_dialog')?'runtime_work_execute':next_action,...(reason?{reason}:{})};
   }
   async start(raw:unknown,onRegistered?:(work:ReturnType<WorkRuntime['status']>)=>void){
     const input=workStartSchema.parse(raw);requireCondition(!credential.test(input.prompt)&&!credential.test(input.completion_condition??''),'CREDENTIAL_LIKE_INPUT');
     initWorkExecution(this.store);
     const begun=this.store.beginWork(this.config.project.id,input.request_id,input.prompt,input.intake_mode);
     bindWorkIntakeOptions(this.store,this.config.project.id,begun.work.id,{completion_condition:input.completion_condition?.trim()||null,delivery_target_ids:input.delivery_target_ids??null});
+    // The client, model and effort chosen at intake (or the owner's defaults) stay with this Work.
+    // An unreadable settings file leaves the owner's defaults unknown: without an explicit choice the Work is pinned at its first run.
+    let settings:ReturnType<typeof readModelSettings>=null,readable=true;try{settings=readModelSettings(modelSettingsPath(this.config));}catch{readable=false;}
+    if(input.client||readable)pinWorkClient(this.store,this.config.project.id,begun.work.id,input.client,settings);
     this.onIntake?.(begun.work.id,input,begun.created);
     try{onRegistered?.(this.public(begun.work));}catch{/* A disconnected progress observer cannot change the durable intake. */}
     if(!begun.created)return {...this.public(begun.work),deduplicated:true};
@@ -203,10 +210,13 @@ export class WorkRuntime {
       // decided instead of meeting the Work as a stranger. No process stays running between rounds; the app's own
       // session is resumed, and a missing or expired one starts fresh from this same input.
       const bindable=this.model as StructuredModel&{forWork?:(context:{work_id:string;run_id:string;actor_id?:string})=>StructuredModel};
-      planner=typeof bindable.forWork==='function'?bindable.forWork({work_id,run_id:work_id,actor_id:'intake'}):this.model;plannerCallsBefore=planner.calls?.length??0;
+      planner=typeof bindable.forWork==='function'?bindable.forWork({work_id,run_id:work_id,actor_id:'intake'}):this.model;
+      // The planner is the Work's own client and model.
+      const pinned=workClientChoice(this.store,project,work_id);if(pinned&&planner instanceof ConfiguredStructuredModel)planner=planner.forClient(pinned.id,pinned.model);
+      plannerCallsBefore=planner.calls?.length??0;
       const rawProposal=await planner.call('design',instructions,modelInput,schema);
       assertWorkConnected(this.store,project,work_id);
-      const proposal=await validateOrCorrectWorkProposal(rawProposal,work.mode as WorkMode,Object.keys(work.answers).length>0,{model:this.model,instructions,input:modelInput,onDiagnostic:event=>this.definitionDiagnostic(work_id,event)});
+      const proposal=await validateOrCorrectWorkProposal(rawProposal,work.mode as WorkMode,Object.keys(work.answers).length>0,{model:planner,instructions,input:modelInput,onDiagnostic:event=>this.definitionDiagnostic(work_id,event)});
       // The host accepts a selection only among the candidates it listed; anything else is dropped, not an error.
       if(proposal.procedure_selection&&!candidates.some(item=>item.id===proposal.procedure_selection!.id))delete proposal.procedure_selection;
       if(proposal.procedure_selection===null)delete proposal.procedure_selection;

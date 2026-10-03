@@ -1,14 +1,16 @@
 import {createHash,randomUUID} from 'node:crypto';
-import {lstatSync,mkdirSync,readdirSync,readFileSync} from 'node:fs';
+import {existsSync,lstatSync,mkdirSync,readdirSync,readFileSync} from 'node:fs';
 import {homedir} from 'node:os';
-import {basename,dirname,extname,join,relative} from 'node:path';
+import {basename,delimiter,dirname,extname,isAbsolute,join,relative} from 'node:path';
 import {type PackStore} from '../packs/store.js';
 import {type HostConfig} from '../interface/config.js';
 import {hashJson} from '../taskpack/adaptive-spec.js';
-import {classifyClientFailure} from '../integrations/client-handoff.js';
+import {classifyClientFailure} from '../integrations/client-failure.js';
 import {nativeProcessRunner,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
 import {sanitizeCodingReply} from '../coding/reply-safety.js';
 import {type WorkActivityMetadata} from './activity.js';
+import {workClientChoiceSchema,type WorkClientChoice} from './contracts.js';
+import {type ModelSettings} from '../onboarding/model-settings.js';
 import {customPackWorkBinding} from './custom-pack-repeat.js';
 import {workImportExecutionOwner} from './import-authority.js';
 import {WORK_COMPLETION_REPAIR_BUDGET,boundWorkToolValue,type WorkClientCheckpoint,type WorkClientResult,type WorkClientToolReceipt} from './client-executor.js';
@@ -32,23 +34,42 @@ export function enableClientRun(options:{runner?:SafeProcessRunner;executable?:(
 export function disableClientRun(){enabled=false;runner=nativeProcessRunner;executable=client=>resolveSubscriptionClientExecutable(client);}
 export const clientRunEnabled=()=>enabled;
 
-/** The client is chosen once, at the Work's first client run, from the owner's default client, and kept for its whole life. */
-export function workClient(store:PackStore,project:string,workId:string,preferred:string|undefined):RunClient|null{
-  const db=store.hermesState;
-  db.exec('CREATE TABLE IF NOT EXISTS office_work_client(project_id TEXT NOT NULL,work_id TEXT NOT NULL,client TEXT NOT NULL,pinned_at TEXT NOT NULL,PRIMARY KEY(project_id,work_id))');
-  const row=db.prepare('SELECT client FROM office_work_client WHERE project_id=? AND work_id=?').get(project,workId) as {client:string}|undefined;
-  if(row)return row.client==='claude'?'claude':'codex';
-  // OpenCode has no client run; its Works stay on the host-tool loop. Otherwise the owner's default client, or the other
-  // one when only that is installed. This is the one choice; later runs never switch.
-  const installed=(client:RunClient)=>{try{executable(client);return true;}catch{return false;}};
+// On Linux the resolver already checked the program; elsewhere it returns a bare name, installed when it is on PATH.
+const onPath=(command:string)=>isAbsolute(command)||(process.env.PATH??'').split(delimiter).filter(Boolean).some(directory=>['','.exe','.cmd'].some(extension=>existsSync(join(directory,command+extension))));
+const migrated=new WeakSet<object>();
+function pinTable(store:PackStore){
+  const db=store.hermesState;if(migrated.has(db))return db;
+  db.exec('CREATE TABLE IF NOT EXISTS office_work_client(project_id TEXT NOT NULL,work_id TEXT NOT NULL,client TEXT NOT NULL,pinned_at TEXT NOT NULL,model TEXT,effort TEXT,PRIMARY KEY(project_id,work_id))');
+  // The first version of this table held the client only.
+  for(const column of ['model','effort'])try{db.exec(`ALTER TABLE office_work_client ADD COLUMN ${column} TEXT`);}catch{/* already there */}
+  migrated.add(db);return db;
+}
+/** The Work's client, model and reasoning effort, or null when none is pinned (an OpenCode default keeps the host-tool loop). */
+export function workClientChoice(store:PackStore,project:string,workId:string):WorkClientChoice|null{
+  const row=pinTable(store).prepare('SELECT client,model,effort FROM office_work_client WHERE project_id=? AND work_id=?').get(project,workId) as {client:string;model:string|null;effort:string|null}|undefined;
+  if(!row)return null;const parsed=workClientChoiceSchema.safeParse({id:row.client,model:row.model??null,effort:row.effort??null});
+  return parsed.success?parsed.data:{id:row.client==='claude'?'claude':'codex',model:null,effort:null};
+}
+/** The client, model and effort a Work gets when the owner does not choose: the owner's default client (the other one when
+ * only that is installed) with its saved model and effort. An OpenCode default gets none and keeps the host-tool loop. */
+export function defaultWorkClient(settings:ModelSettings|null):WorkClientChoice|null{
+  const installed=(client:RunClient)=>{try{return onPath(executable(client));}catch{return false;}};
+  const preferred=settings?.selection.client??process.env.AGENT_DRIVER_LLM_CLIENT?.split(',')[0]?.trim();
   const client=preferred==='opencode'?null:(preferred==='claude'?['claude','codex'] as const:['codex','claude'] as const).find(installed)??null;
-  if(client)db.prepare('INSERT OR IGNORE INTO office_work_client(project_id,work_id,client,pinned_at) VALUES(?,?,?,?)').run(project,workId,client,new Date().toISOString());
-  return client;
+  return client?{id:client,model:settings?.selection.client_models[client]??null,effort:client==='codex'?settings?.selection.codex_reasoning_effort??null:null}:null;
+}
+/** Pin the Work's client once: the owner's choice at intake, or, when none was given, the owner's defaults (the
+ * default client, or the other one when only that is installed). Later runs and settings changes never switch it. */
+export function pinWorkClient(store:PackStore,project:string,workId:string,choice:WorkClientChoice|undefined,settings:ModelSettings|null):WorkClientChoice|null{
+  const pinned=workClientChoice(store,project,workId);if(pinned)return pinned;
+  const value=choice??defaultWorkClient(settings);if(!value)return null;
+  pinTable(store).prepare('INSERT OR IGNORE INTO office_work_client(project_id,work_id,client,pinned_at,model,effort) VALUES(?,?,?,?,?,?)').run(project,workId,value.id,new Date().toISOString(),value.model,value.effort);
+  return workClientChoice(store,project,workId);
 }
 export const workFolder=(config:Pick<HostConfig,'dbPath'>,workId:string)=>join(dirname(config.dbPath),'work-folders',workId);
 
 // API keys would move a subscription client onto paid API billing; Office's own and the calling session's variables are not the owner's.
-const withheld=/^(?:OPENAI_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|AZURE_OPENAI_API_KEY|OPENROUTER_API_KEY|TYPESAFE_API_KEY|AGENT_DRIVER_\w+|AGENT_OFFICE_\w+|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SSE_PORT|CODEX_SANDBOX\w*|CODEX_THREAD_ID)$/u;
+const withheld=/^(?:OPENAI_API_KEY|CODEX_API_KEY|ANTHROPIC_API_KEY|ANTHROPIC_AUTH_TOKEN|AZURE_OPENAI_API_KEY|OPENROUTER_API_KEY|TYPESAFE_API_KEY|AGENT_DRIVER_\w+|AGENT_OFFICE_\w+|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|CLAUDE_CODE_SSE_PORT|CODEX_SANDBOX\w*|CODEX_THREAD_ID)$/u;
 export function clientRunEnvironment(base:NodeJS.ProcessEnv=process.env):NodeJS.ProcessEnv{
   return Object.fromEntries(Object.entries(base).filter(([key,value])=>value!==undefined&&!withheld.test(key)));
 }
@@ -56,9 +77,10 @@ export function clientRunEnvironment(base:NodeJS.ProcessEnv=process.env):NodeJS.
 const OFFICE_CONTROL_TOOLS=['runtime_work_start','runtime_work_execute','runtime_work_control'];
 const codexHasOffice=()=>{try{return /^\[mcp_servers\.(?:agent-driver|"agent-driver")\]/mu.test(readFileSync(join(process.env.CODEX_HOME??join(homedir(),'.codex'),'config.toml'),'utf8'));}catch{return false;}};
 /** Everything allowed, as when the owner uses the client app: no sandbox and no approval prompts. */
-export function clientRunArgs(client:RunClient,folder:string,session:{id:string;resume:boolean}|null,officeRegistered=codexHasOffice()){
-  if(client==='codex')return ['-C',folder,'--dangerously-bypass-approvals-and-sandbox',...(officeRegistered?['-c',`mcp_servers.agent-driver.disabled_tools=${JSON.stringify(OFFICE_CONTROL_TOOLS)}`]:[]),'exec',...(session?.resume?['resume','--json','--skip-git-repo-check',session.id,'-']:['--json','--skip-git-repo-check','-'])];
-  return ['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions','--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
+export function clientRunArgs(choice:Pick<WorkClientChoice,'id'|'model'|'effort'>,folder:string,session:{id:string;resume:boolean}|null,officeRegistered=codexHasOffice()){
+  const {model,effort}=choice;
+  if(choice.id==='codex')return ['-C',folder,...(model?['-m',model]:[]),'--dangerously-bypass-approvals-and-sandbox',...(effort?['-c',`model_reasoning_effort=${effort}`]:[]),...(officeRegistered?['-c',`mcp_servers.agent-driver.disabled_tools=${JSON.stringify(OFFICE_CONTROL_TOOLS)}`]:[]),'exec',...(session?.resume?['resume','--json','--skip-git-repo-check',session.id,'-']:['--json','--skip-git-repo-check','-'])];
+  return ['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions',...(model?['--model',model]:[]),...(effort?['--effort',effort]:[]),'--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
 }
 /** Works whose completion Office proves in code (sealed collections, native checks), whose writes go through Office's
  * approved Pack execution, coding Works (their own project), custom Pack repeats and imported Works keep the host's own path. */
@@ -121,7 +143,7 @@ function claudeEvent(event:Json,state:RunState):ClientRunEvent[]{
 
 export interface ClientRunOutcome {session_id:string|null;final_message:string;completed:boolean;reason:string|null;counts:RunState['counts'];}
 /** One run of the client's own agent until its turn ends. Unknown events are tolerated: both clients update themselves. */
-export async function runClient(request:{client:RunClient;folder:string;prompt:string;session:{id:string;resume:boolean}|null;signal:AbortSignal;timeout_ms?:number;onSession:(id:string)=>void;onEvent:(event:ClientRunEvent)=>void}):Promise<ClientRunOutcome>{
+export async function runClient(request:{client:RunClient;model:string|null;effort:WorkClientChoice['effort'];folder:string;prompt:string;session:{id:string;resume:boolean}|null;signal:AbortSignal;timeout_ms?:number;onSession:(id:string)=>void;onEvent:(event:ClientRunEvent)=>void}):Promise<ClientRunOutcome>{
   // A new Claude session's pre-assigned ID is confirmed only when the client reports it.
   const state:RunState={session:request.session?.resume?request.session.id:null,final:'',done:false,turnFailed:false,failure:'',tools:new Map(),counts:{commands:0,file_changes:0,tool_calls:0,web:0}};
   let pending='';
@@ -138,33 +160,38 @@ export async function runClient(request:{client:RunClient;folder:string;prompt:s
     if(pending.length>8_388_608)throw Error('CLIENT_EVENT_TOO_LARGE');
   };
   mkdirSync(request.folder,{recursive:true});
-  const result=await runner.run({executable:executable(request.client),args:clientRunArgs(request.client,request.folder,request.session),cwd:request.folder,stdin:request.prompt,timeout_ms:request.timeout_ms??7_200_000,signal:request.signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:8_388_608,onStdout:observe});
+  const result=await runner.run({executable:executable(request.client),args:clientRunArgs({id:request.client,model:request.model,effort:request.effort},request.folder,request.session),cwd:request.folder,stdin:request.prompt,timeout_ms:request.timeout_ms??7_200_000,signal:request.signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:8_388_608,onStdout:observe});
   observe('\n');
   const completed=result.code===0&&state.done&&!state.turnFailed;
   return {session_id:state.session,final_message:state.final,completed,reason:completed?null:`CLIENT_${classifyClientFailure(`${state.failure}\n${result.stderr.slice(-4000)}`).toUpperCase()}`,counts:state.counts};
 }
 
 const mediaTypes:Record<string,string>={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.svg':'image/svg+xml','.pdf':'application/pdf','.md':'text/markdown','.txt':'text/plain','.csv':'text/csv','.json':'application/json','.html':'text/html','.mp4':'video/mp4','.mp3':'audio/mpeg','.zip':'application/zip','.docx':'application/vnd.openxmlformats-officedocument.wordprocessingml.document','.xlsx':'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','.pptx':'application/vnd.openxmlformats-officedocument.presentationml.presentation'};
-export interface ProducedFile {path:string;name:string;sha256:string;bytes:number;media_type:string;}
-/** Files in the Work folder written since this run started: what the run produced. Hidden folders are the client's own. */
-export function producedFiles(folder:string,sinceMs:number):ProducedFile[]{
+export interface ProducedFile {path:string;name:string;sha256:string|null;bytes:number;media_type:string;}
+// Office offers a result file for download up to 16 MB (WorkResults.readArtifact); a larger one stays in the run folder.
+const DOWNLOAD_BYTES=16*1024*1024;
+/** The files in this run's own folder: what the run produced, whatever their timestamps (a downloaded or unpacked file
+ * keeps its original one). Hidden folders are the client's own. */
+export function producedFiles(folder:string):ProducedFile[]{
   const found:ProducedFile[]=[];
-  const walk=(directory:string,depth:number)=>{
-    let entries;try{entries=readdirSync(directory,{withFileTypes:true});}catch{return;}
+  // Breadth first: the files the client put at the top come before an unpacked archive's contents.
+  const queue:Array<[string,number]>=[[folder,0]];
+  for(let next=queue.shift();next&&found.length<200;next=queue.shift()){
+    const [directory,depth]=next;let entries;try{entries=readdirSync(directory,{withFileTypes:true});}catch{continue;}
     for(const entry of entries.sort((a,b)=>a.name.localeCompare(b.name))){
       if(found.length>=200||entry.name.startsWith('.')||entry.name==='node_modules')continue;
       const path=join(directory,entry.name);
-      if(entry.isDirectory()){if(depth<4)walk(path,depth+1);continue;}
+      if(entry.isDirectory()){if(depth<4)queue.push([path,depth+1]);continue;}
       if(!entry.isFile())continue;
-      const stat=lstatSync(path);if(stat.mtimeMs<sinceMs-1000||stat.size>64*1024*1024)continue;
-      found.push({path,name:relative(folder,path),sha256:createHash('sha256').update(readFileSync(path)).digest('hex'),bytes:stat.size,media_type:mediaTypes[extname(entry.name).toLowerCase()]??'application/octet-stream'});
+      const stat=lstatSync(path);
+      found.push({path,name:relative(folder,path),sha256:stat.size<=DOWNLOAD_BYTES?createHash('sha256').update(readFileSync(path)).digest('hex'):null,bytes:stat.size,media_type:mediaTypes[extname(entry.name).toLowerCase()]??'application/octet-stream'});
     }
-  };
-  walk(folder,0);return found;
+  }
+  return found;
 }
 /** The saved result: the client's final reply, the files it made, and the text of small text files, within 16000 characters. */
 export function clientResultText(finalMessage:string,files:ProducedFile[]){
-  const list=files.length?`\n\nFiles made in this run (Work folder):\n${files.map(file=>`- ${file.name} (${file.media_type}, ${file.bytes} bytes)`).join('\n')}`:'\n\nNo file was made in the Work folder in this run.';
+  const list=files.length?`\n\nFiles made in this run (Work folder):\n${files.map(file=>`- ${file.name} (${file.media_type}, ${file.bytes} bytes${file.sha256?'':', too large to download from Office; it stays in the run folder'})`).join('\n')}`:'\n\nNo file was made in the Work folder in this run.';
   let body=`${sanitizeCodingReply(finalMessage.trim()).text.slice(0,6000)||'(no final reply)'}${list}`;
   for(const file of files.filter(item=>/^text\/|^application\/json$/u.test(item.media_type)&&item.bytes<=65_536)){
     const room=15_800-body.length;if(room<400)break;
@@ -174,10 +201,12 @@ export function clientResultText(finalMessage:string,files:ProducedFile[]){
 }
 
 export interface ClientRunInput {
-  client:RunClient;work_id:string;run_id:string;folder:string;title:string;prompt:string;checks:Check[];
+  client:RunClient;model:string|null;effort:WorkClientChoice['effort'];work_id:string;run_id:string;folder:string;title:string;prompt:string;checks:Check[];
   /** What intake settled with the owner: answers, agreed scope, collection window, the host schedule. */
   context:Json;directions:Array<{instruction:string;created_at:string}>;
   checkpoint:WorkClientCheckpoint|null;signal:AbortSignal;guard:()=>void;save:(checkpoint:WorkClientCheckpoint)=>void;
+  /** The owner resumed or retried this run. */
+  resumed:boolean;
   activity:(kind:string,summary:string,metadata?:WorkActivityMetadata)=>void;
   draft:(text:string,label:string,requestId:string)=>Promise<WorkClientToolReceipt>;verify:Verify;
   /** A recurring Work: Office's own schedule record, which a check about future runs rests on (Office runs the schedule, not the client). */
@@ -207,6 +236,8 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
   const session=()=>cp.client_session!;
   const update=(changes:Partial<NonNullable<WorkClientCheckpoint['client_session']>>)=>{cp={...cp,client_session:{...session(),...changes}};input.save(cp);};
   const fresh=input.directions.filter(item=>!session().direction_at||item.created_at>session().direction_at!);
+  // A new direction starts a new round of corrections, and so does the owner's resume or retry after they ran out.
+  if(session().repairs&&(fresh.length||input.resumed&&session().repairs>=WORK_COMPLETION_REPAIR_BUDGET))update({repairs:0});
   let next:string|null=!session().confirmed?initialPrompt(input)
     :fresh.length?`The owner changed the instruction for this Work:\n${fresh.map(item=>`- ${item.instruction}`).join('\n')}\n\nContinue in the same folder with this change. Finish with the same kind of short reply.`
     :!session().finished?'The run was interrupted. Continue the Work where you stopped, in the same folder, and finish with the short reply.':null;
@@ -220,23 +251,26 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       let guardFailure:unknown=null;const watch=setInterval(()=>{try{input.guard();}catch(error){guardFailure=error;stop.abort();}},5_000);watch.unref();
       let outcome:ClientRunOutcome;
       try{
-        outcome=await runClient({client,folder:input.folder,prompt:next,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
+        outcome=await runClient({client,model:input.model,effort:input.effort,folder:input.folder,prompt:next,session:session().session_id?{id:session().session_id!,resume:session().confirmed}:null,signal:stop.signal,
           onSession:id=>update({session_id:id,confirmed:true}),onEvent:event=>input.activity(event.kind,`${event.tool_name} · ${event.summary}`,meta({tool_name:event.tool_name,status:event.status}))});
       }catch(error){
         if(stop.signal.aborted){if(guardFailure)throw guardFailure;input.guard();throw Error('WORK_PAUSED');}
+        // A run that went past the time limit is resumed in the same session later, like an outage.
+        if(error instanceof Error&&error.message==='CLIENT_TIMEOUT'){input.activity('supervisor.client_run',`${clientName(client)} · 실행이 끝나지 않았습니다: CLIENT_TIMEOUT`,meta({status:'failed',reason:'CLIENT_TIMEOUT'}));return {status:'waiting_model',summary:'',reason:'CLIENT_TIMEOUT',completion_verified:false,checkpoint:cp,model_calls:[]};}
         throw error;
       }finally{clearInterval(watch);input.signal.removeEventListener('abort',abort);}
       if(!outcome.completed){
         const reason=outcome.reason??'CLIENT_PROVIDER_UNAVAILABLE';
         input.activity('supervisor.client_run',`${clientName(client)} · 실행이 끝나지 않았습니다: ${reason}`,meta({status:'failed',reason}));
-        return {status:reason==='CLIENT_AUTH_EXPIRED'?'waiting_auth':['CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED'].includes(reason)?'waiting_model':['CLIENT_CONTEXT_EXHAUSTED','CLIENT_MODEL_UNSUPPORTED'].includes(reason)?'failed':'retryable_failure',summary:outcome.final_message.slice(0,4000),reason,completion_verified:false,checkpoint:cp,model_calls:[]};
+        // An outage of the client's provider is waited for with backoff, as the host path waits for a model.
+        return {status:reason==='CLIENT_AUTH_EXPIRED'?'waiting_auth':['CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED','CLIENT_PROVIDER_UNAVAILABLE','CLIENT_TIMEOUT'].includes(reason)?'waiting_model':['CLIENT_CONTEXT_EXHAUSTED','CLIENT_MODEL_UNSUPPORTED'].includes(reason)?'failed':'retryable_failure',summary:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),reason,completion_verified:false,checkpoint:cp,model_calls:[]};
       }
       input.guard();
-      const files=producedFiles(input.folder,session().started_ms),resultText=clientResultText(outcome.final_message,files),observedAt=new Date().toISOString();
+      const files=producedFiles(input.folder),resultText=clientResultText(outcome.final_message,files),observedAt=new Date().toISOString();
       const runEvidence=`client-run-${hashJson({run_id,session:outcome.session_id,final:outcome.final_message,files}).slice(0,24)}`;
-      const runValue=boundWorkToolValue({client,session_id:outcome.session_id,folder:input.folder,final_message:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),files:files.slice(0,20).map(({name:_name,...file})=>file),file_count:files.length,observed_by_host:'Files are the ones Office found in the Work folder after the run, with their SHA-256; the counts are the events the client reported. What the client did outside this folder ran under the owner\'s own permissions and is not an Office receipt.',counts:outcome.counts});
-      const draftId=`client-output-${hashJson({run_id,text:resultText}).slice(0,24)}`,draft=await input.draft(resultText,input.title,draftId);
-      cp={...cp,turn:2,summary:outcome.final_message.slice(0,4000),observations:[
+      const runValue=boundWorkToolValue({client,session_id:outcome.session_id,folder:input.folder,final_message:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),files:files.filter(file=>file.sha256).slice(0,20).map(({name:_name,...file})=>file),file_count:files.length,observed_by_host:'Files are the ones Office found in the Work folder after the run, with their SHA-256; the counts are the events the client reported. What the client did outside this folder ran under the owner\'s own permissions and is not an Office receipt.',counts:outcome.counts});
+      const draftId=`client-output-${hashJson({run_id,text:resultText}).slice(0,24)}`,draft=await input.draft(resultText,input.title.slice(0,120),draftId);
+      cp={...cp,turn:2,summary:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),observations:[
         {invocation:{request_id:runEvidence,turn:0,stage_id:'execution',tool_name:'office_client_run',arguments:{},effect:'local_write',dispatched:true},receipt:{status:'succeeded',value:runValue,evidence_ids:[runEvidence],effect_state:'verified',retry_safe:false},observed_at:observedAt},
         {invocation:{request_id:draftId,turn:1,stage_id:'execution',tool_name:'office_result_draft',arguments:{},effect:'local_write',dispatched:true},receipt:{...draft,value:boundWorkToolValue(draft.value)},observed_at:new Date().toISOString()}]};
       if(input.schedule){
@@ -252,7 +286,8 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     catch(error){
       const reason=error instanceof Error&&/^[A-Z][A-Z0-9_]+$/u.test(error.message)?error.message:'WORK_CLIENT_VERIFICATION_TRANSIENT';
       if(['WORK_PAUSED','WORK_EXECUTION_LEASE_LOST','WORK_REVISION_CONFLICT','CONFIG_CHANGED','MODEL_SETTINGS_CHANGED'].includes(reason))throw error;
-      return {status:reason==='CLIENT_AUTH_EXPIRED'?'waiting_auth':['CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED'].includes(reason)?'waiting_model':'retryable_failure',summary:cp.summary,reason,completion_verified:false,checkpoint:cp,model_calls:[]};
+      // The client's result is saved: a verifier that is briefly unavailable is waited for (with backoff), never a failed run.
+      return {status:reason==='CLIENT_AUTH_EXPIRED'?'waiting_auth':['CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED','STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_TIMEOUT','CLIENT_TIMEOUT','MODEL_PROVIDER_UNAVAILABLE'].includes(reason)?'waiting_model':'retryable_failure',summary:cp.summary,reason,completion_verified:false,checkpoint:cp,model_calls:[]};
     }
     if(verified===true)return {status:'succeeded',summary:cp.summary,reason:null,completion_verified:true,checkpoint:cp,model_calls:[]};
     if(verified&&typeof verified==='object'&&session().repairs<WORK_COMPLETION_REPAIR_BUDGET){

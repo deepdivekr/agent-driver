@@ -84,8 +84,9 @@ export function effectiveModelEnvironment(saved:ModelSettings|null,base:NodeJS.P
   if(stored!==undefined){for(const name of ['AGENT_DRIVER_API_KEY','OPENAI_API_KEY','ANTHROPIC_API_KEY','OPENROUTER_API_KEY'])delete env[name];if(stored!==null)env.AGENT_DRIVER_API_KEY=stored;}
   if(saved.jev_key!==undefined){delete env.TYPESAFE_API_KEY;if(saved.jev_key!==null)env.TYPESAFE_API_KEY=saved.jev_key;}
   if(saved.selection.jev==='off')delete env.TYPESAFE_API_KEY;
-  const connected=['mcp','codex','claude','opencode'];
-  env.AGENT_DRIVER_LLM_CLIENT=saved.selection.mode==='api'?'api':saved.selection.client==='auto'?connected.join(','):[saved.selection.client,...connected.filter(client=>client!==saved.selection.client)].join(',');
+  // One client answers Office's judgments; nothing falls through to another app. An older 'auto' or 'MCP client'
+  // choice means Codex (the background service has no MCP session to ask).
+  env.AGENT_DRIVER_LLM_CLIENT=saved.selection.mode==='api'?'api':['auto','mcp'].includes(saved.selection.client)?'codex':saved.selection.client;
   for(const client of ['codex','claude','opencode'] as const){const name=`AGENT_DRIVER_${client.toUpperCase()}_MODEL`;if(saved.selection.client_models[client])env[name]=saved.selection.client_models[client]!;else delete env[name];}
   if(saved.selection.codex_reasoning_effort!==undefined){if(saved.selection.codex_reasoning_effort)env.AGENT_DRIVER_CODEX_REASONING_EFFORT=saved.selection.codex_reasoning_effort;else delete env.AGENT_DRIVER_CODEX_REASONING_EFFORT;}
   env.AGENT_DRIVER_API_PROVIDER=saved.selection.api_provider;env.AGENT_DRIVER_API_MODEL=saved.selection.api_model;env.AGENT_DRIVER_API_REASONING=saved.selection.reasoning;

@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {delimiter,isAbsolute,join} from 'node:path';
 import {hashJson,modelCallBudget,type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {requireCondition} from '../core/contracts.js';
-import {classifyClientFailure,handoffContext,isInvalidClientOutput,isNonRetryableClientFailure,recordClientRoute,type ClientRouteEvent,type HandoffClient,type HandoffReason} from './client-handoff.js';
+import {classifyClientFailure,isInvalidClientOutput,isNonRetryableClientFailure,type ClientFailureReason} from './client-failure.js';
 import {decisionClientCapabilities,supportsStructuredJudgment} from './client-capabilities.js';
 import {withDecisionSession,type DecisionSessionScope,type DecisionSessionTurn} from './decision-sessions.js';
 
@@ -479,7 +479,7 @@ export class McpSamplingStructuredModel implements StructuredModel{
 
 export interface SubscriptionAwareModelOptions {
   session?:DecisionSessionScope;
-  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';subscriptionOnly?:boolean;onHandoff?:(event:ClientRouteEvent)=>void;
+  environment?:NodeJS.ProcessEnv;runner?:SafeProcessRunner;sampling?:McpSamplingStructuredModel;fallbackModel?:StructuredModel;fallbackKind?:'api_key'|'configured';
 }
 export class SubscriptionAwareStructuredModel implements StructuredModel{
   readonly calls:ModelCall[]=[];private statuses=new Map<SubscriptionClientId,{value:SubscriptionClientStatus;observed_at:number;binding:string}>();
@@ -499,32 +499,28 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
     return {mcp_sampling:this.options.sampling?.client.available()?'ready':'unavailable',clients,capabilities:clients.map(client=>decisionClientCapabilities(client.id)),fallback:this.options.fallbackModel&&(this.options.environment??process.env).AGENT_DRIVER_LLM_CLIENT==='api'?(this.options.fallbackKind??'configured'):'not_configured',credentials_exposed:false};
   }
   async call(purpose:ModelCall['purpose'],instructions:string,input:unknown,schema:Record<string,unknown>){
-    // A successor must receive the same task and constraints, not a caller's
-    // mutated object after an awaited connection/model operation.
+    // The call keeps the task and constraints it was given, not a caller's object mutated while it awaits.
     input=structuredClone(input);schema=structuredClone(schema);
-    const environment={...this.options.environment??process.env},runner=this.options.runner??nativeProcessRunner,preferred=[...new Set(environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??['mcp','codex','claude','opencode','cursor'])];
-    // Legacy callers can select API explicitly, but no client chain may fall into it.
-    const apiOnly=preferred.length===1&&preferred[0]==='api';
-    type FailedClient={client:HandoffClient;model:string;reason:HandoffReason};
-    let failed:FailedClient|null=null;
+    // One client answers: the first one named (an older saved list keeps its first app; API only when it is the whole
+    // choice). Its failure is reported as that client's failure; the judgment never moves to another client.
+    const environment={...this.options.environment??process.env},runner=this.options.runner??nativeProcessRunner,listed=environment.AGENT_DRIVER_LLM_CLIENT?.split(',').map(item=>item.trim()).filter(Boolean)??[];
+    const apiOnly=listed.length===1&&listed[0]==='api',preferred=[apiOnly?'api':listed.find(item=>item!=='api')??'codex'];
+    type FailedClient={client:string;model:string;reason:ClientFailureReason};
     let invokedFailure:FailedClient|null=null,otherInvokedFailure:FailedClient|null=null,invokedTimeout=false,invokedNonTimeout=false;
-    const representative=()=>invokedFailure??failed;
-    const transferred=(target:HandoffClient,targetModel:string)=>{const source=representative();if(source)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:source.client,target,source_model:source.model,target_model:targetModel,reason:source.reason,effect_state:'none',status:'transferred',input_sha256:hashJson({instructions,input,schema})});};
     for(const id of preferred){
         if(id==='mcp'&&this.options.sampling){
           // Keep per-turn evidence separate while concurrent sampling is in flight.
           const sampling=new McpSamplingStructuredModel(this.options.sampling.client);let value:unknown;
           try{requireCondition(supportsStructuredJudgment('mcp',sampling.client.available()),'MCP_SAMPLING_UNAVAILABLE');value=await sampling.call(purpose,instructions,input,schema);}
-          catch(error){if(isNonRetryableClientFailure(error))throw error;const timeout=error instanceof Error&&error.message==='STRUCTURED_MODEL_TIMEOUT';invokedTimeout ||=timeout;invokedNonTimeout ||=!timeout;failed??={client:'mcp',model:'client_default',reason:classifyClientFailure(error)};continue;}
+          catch(error){if(isNonRetryableClientFailure(error))throw error;const timeout=error instanceof Error&&error.message==='STRUCTURED_MODEL_TIMEOUT';invokedTimeout ||=timeout;invokedNonTimeout ||=!timeout;continue;}
           finally{this.calls.push(...sampling.calls);this.options.sampling.calls.push(...sampling.calls);}
-          transferred('mcp',sampling.calls.at(-1)!.model);return value;
+          return value;
         }
         if(['codex','claude','opencode','cursor'].includes(id)){
           const client=id as Exclude<SubscriptionClientId,'hermes'>,binding=clientBinding(client,environment,runner),state=await this.clientStatus(client,environment);
-          if(state?.status!=='ready'||!state.structured_bridge||!supportsStructuredJudgment(client)){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:state?.status==='expired'||state?.status==='signed_out'?'auth_expired':'provider_unavailable'};continue;}
-          // Unknown CLI credentials may be API-backed (e.g. OpenCode); never adopt
-          // them as an automatic subscription successor. Explicit primary use is separate.
-          if(state.auth==='unknown'&&(client!=='opencode'||failed||this.options.subscriptionOnly)){failed??={client,model:environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',reason:'provider_unavailable'};continue;}
+          if(state?.status!=='ready'||!state.structured_bridge||!supportsStructuredJudgment(client))continue;
+          // Unclassified Codex or Claude credentials may be API-backed and are not used; OpenCode is only ever chosen explicitly.
+          if(state.auth==='unknown'&&client!=='opencode')continue;
           const started=performance.now(),input_sha256=hashJson({instructions,input,schema});let accepted=false,model=environment[`AGENT_DRIVER_${client.toUpperCase()}_MODEL`]??'client_default',value:unknown,failureKind:ModelCall['failure_kind']='invalid_output',continuity:Pick<ModelCall,'continuity'|'session_turn'>={continuity:'checkpoint_only'};
           try{
             requireCondition(binding===clientBinding(client,environment,runner),'CLIENT_CONNECTION_CHANGED');
@@ -535,15 +531,12 @@ export class SubscriptionAwareStructuredModel implements StructuredModel{
             }else result=await invokeCli(client,environment,runner,instructions,input,schema,purpose);
             model=result.model;value=result.value;accepted=true;
           }
-          catch(error){const reason=classifyClientFailure(error);if(reason!=='schema_invalid'){this.statuses.delete(client);invalidateClient(client,runner);}const timeout=error instanceof Error&&error.message==='CLIENT_TIMEOUT';invokedTimeout ||=timeout;invokedNonTimeout ||=!timeout;failureKind=timeout?'timeout':reason==='schema_invalid'?'schema_invalid':reason==='invalid_output'?'invalid_output':reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='model_unsupported'?'model_unsupported':reason==='provider_unavailable'?'provider_unavailable':'incomplete';if(isNonRetryableClientFailure(error))throw error;failed??={client,model,reason};invokedFailure??={client,model,reason};if(reason!=='model_unsupported')otherInvokedFailure??={client,model,reason};continue;}
+          catch(error){const reason=classifyClientFailure(error);if(reason!=='schema_invalid'){this.statuses.delete(client);invalidateClient(client,runner);}const timeout=error instanceof Error&&error.message==='CLIENT_TIMEOUT';invokedTimeout ||=timeout;invokedNonTimeout ||=!timeout;failureKind=timeout?'timeout':reason==='schema_invalid'?'schema_invalid':reason==='invalid_output'?'invalid_output':reason==='auth_expired'?'auth_error':reason==='quota_exhausted'?'quota_exhausted':reason==='rate_limited'?'rate_limited':reason==='model_unsupported'?'model_unsupported':reason==='provider_unavailable'?'provider_unavailable':'incomplete';if(isNonRetryableClientFailure(error))throw error;invokedFailure??={client,model,reason};if(reason!=='model_unsupported')otherInvokedFailure??={client,model,reason};continue;}
           finally{this.calls.push({purpose,provider:client,auth:state.auth==='subscription'?'subscription':'unknown',model,elapsed_ms:Math.round(performance.now()-started),input_sha256,status:accepted?'accepted':'failed',input_tokens:'unobserved',output_tokens:'unobserved',total_tokens:'unobserved',...(accepted?continuity:{failure_kind:failureKind})});}
-          transferred(client,model);return value;
+          return value;
         }
         if(id==='api'&&apiOnly&&this.options.fallbackModel){const value=await this.options.fallbackModel.call(purpose,instructions,input,schema);const last=this.options.fallbackModel.calls.at(-1)!;this.calls.push(last);return value;}
     }
-    // A mixed failure cannot be presented as solely an unsupported model.
-    const source=otherInvokedFailure??representative();
-    if(source)recordClientRoute(this.options.onHandoff,{...handoffContext(input),source:source.client,target:null,source_model:source.model,target_model:null,reason:source.reason,effect_state:'none',status:'no_candidate',input_sha256:hashJson({instructions,input,schema})});
     throw Error(invokedTimeout&&!invokedNonTimeout?'STRUCTURED_MODEL_TIMEOUT':invokedFailure?.reason==='model_unsupported'&&!otherInvokedFailure?'STRUCTURED_MODEL_UNSUPPORTED':'STRUCTURED_MODEL_UNAVAILABLE');
   }
 }

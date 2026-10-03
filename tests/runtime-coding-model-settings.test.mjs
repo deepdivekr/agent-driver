@@ -50,12 +50,12 @@ test('runtime contract coding planner and advice use scoped models while existin
  const native=new RuntimeApi(x.config);x.disposers.push(async()=>{native.close();await native.drain()});const sampling={test:'sampling'};native.attachClientSampling(sampling);assert.equal(native.coding.model.sampling,sampling);assert.equal(native.codingDialog.model.sampling,sampling);
 });
 
-test('runtime contract coding API fallback uses coding CLI choice and subscription never falls into paid API',async t=>{
+test('runtime contract coding API mode never moves to a subscription app, and coding subscription never falls into paid API',async t=>{
  const x=await setup(t);saveModelSettings(x.path,body(0),{});const scoped={...choice,mode:'api',api_to_subscription:true,api_model:'coding-api',client_models:{...choice.client_models,codex:'coding-code'}};
- saveModelSettings(x.coding,body(0,scoped,{inherit_global:false,api_action:'replace',api_key:secret}),{});let apiCalls=0;const events=[];
- const model=new ConfiguredStructuredModel(x.path,{}, {api:env=>({calls:[],async call(){apiCalls++;this.calls.push({model:env.AGENT_DRIVER_API_MODEL,http_status:429,status:'failed'});throw Error('quota')}}),subscription:options=>({calls:[],async call(){assert.equal(options.subscriptionOnly,true);assert.equal(options.environment.AGENT_DRIVER_CODEX_MODEL,'coding-code');this.calls.push({status:'accepted',provider:'codex',model:'coding-code'});return 'fallback'}})},event=>events.push(event),'coding');
- assert.equal(await model.call('correct','',{},{}),'fallback');assert.equal(apiCalls,1);assert.equal(events[0].source_model,'coding-api');assert.equal(events[0].target_model,'coding-code');
- saveModelSettings(x.coding,body(1,{...scoped,mode:'subscription'}),{});const noPaid=new ConfiguredStructuredModel(x.path,{OPENAI_API_KEY:secret},{api:()=>{throw Error('PAID_API_NOT_ALLOWED')},subscription:options=>({calls:[],async call(){assert.equal(options.fallbackModel,undefined);throw Error('QUOTA')}})},undefined,'coding');await assert.rejects(noPaid.call('correct','',{},{}),/QUOTA/);
+ saveModelSettings(x.coding,body(0,scoped,{inherit_global:false,api_action:'replace',api_key:secret}),{});let apiCalls=0,subscriptions=0;
+ const model=new ConfiguredStructuredModel(x.path,{},{api:env=>({calls:[],async call(){apiCalls++;this.calls.push({model:env.AGENT_DRIVER_API_MODEL,http_status:429,status:'failed'});throw Error('quota')}}),subscription:()=>({calls:[],async call(){subscriptions++;return 'fallback';}})},'coding');
+ await assert.rejects(model.call('correct','',{},{}),/quota/u);assert.equal(apiCalls,1);assert.equal(subscriptions,0);
+ saveModelSettings(x.coding,body(1,{...scoped,mode:'subscription'}),{});const noPaid=new ConfiguredStructuredModel(x.path,{OPENAI_API_KEY:secret},{api:()=>{throw Error('PAID_API_NOT_ALLOWED')},subscription:options=>({calls:[],async call(){assert.equal(options.fallbackModel,undefined);throw Error('QUOTA')}})},'coding');await assert.rejects(noPaid.call('correct','',{},{}),/QUOTA/);
 });
 
 async function serverFor(t,x){let providerCalls=0;const auth={async connections(){return []},view(){return {state:'idle'}},close(){},async start(){throw Error('not used')}};

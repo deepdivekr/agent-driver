@@ -30,7 +30,6 @@ test('display copy: short labels agree across intake, settings, import and progr
     ['에이전트 연결','AI 앱 연결','Connect AI apps'],
     ['프로젝트 살펴보기','프로젝트 분석','Analyze project'],
     ['실행기','실행 도구','Execution tool'],
-    ['클라이언트 인계','AI 업무 인계','AI handoffs'],
   ]){assert.equal(ko(source),korean);assert.equal(en(source),english);}
 });
 test('display copy: verification, permissions, delivery uncertainty and API cost are not hidden',()=>{

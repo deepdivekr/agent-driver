@@ -74,12 +74,12 @@ test('runtime contract subscription roles use exact saved models while inherited
   await model.forScope('coding').forRole('verifier').call('correct','',{},schema);assert.equal(seen.at(-1),'review-model');
 });
 
-test('runtime contract API mode and API-to-auth fallback ignore role overrides and subscription never calls a paid API',async t=>{
-  const {path}=await setup(t,{...selection,mode:'api',api_to_subscription:true}),seen=[],events=[];
+test('runtime contract API mode ignores role overrides and never moves a failed call to a subscription app',async t=>{
+  const {path}=await setup(t,{...selection,mode:'api',api_to_subscription:true}),seen=[];
   const api={calls:[],async call(purpose){this.calls.push({purpose,provider:'openai_api',model:'selected-api',status:'failed',http_status:429});throw Error('quota exhausted');}};
-  const model=new ConfiguredStructuredModel(path,{}, {api:environment=>{assert.equal(environment.AGENT_DRIVER_API_MODEL,'selected-api');return api;},subscription:options=>({calls:[],async call(purpose){seen.push(options.environment.AGENT_DRIVER_CODEX_MODEL);this.calls.push({purpose,provider:'codex',model:options.environment.AGENT_DRIVER_CODEX_MODEL,status:'accepted'});return {ok:true};}})},event=>events.push(event));
-  for(const role of ['planner','worker','verifier','synthesis'])assert.deepEqual(await model.forRole(role).call('correct','',{},schema),{ok:true});
-  assert.deepEqual(seen,Array(4).fill('selected-code'));assert.ok(events.every(event=>event.source==='api'&&event.target==='codex'&&event.target_model==='selected-code'));
+  const model=new ConfiguredStructuredModel(path,{},{api:environment=>{assert.equal(environment.AGENT_DRIVER_API_MODEL,'selected-api');return api;},subscription:()=>({calls:[],async call(){seen.push(1);return {ok:true};}})});
+  for(const role of ['planner','worker','verifier','synthesis'])await assert.rejects(model.forRole(role).call('correct','',{},schema),/quota exhausted/u);
+  assert.equal(seen.length,0);
   saveModelSettings(scopedModelSettingsPath(path,'coding'),{revision:0,onboarding_step:3,inherit_global:false,selection},{});
   assert.equal(roleModelConfiguration(path,'coding',{},'verifier').environment.AGENT_DRIVER_CODEX_MODEL,'selected-code');
 });
@@ -151,14 +151,6 @@ test('runtime contract a busy assignee is fenced instead of creating a second pr
   const runner=runnerFor(async()=>{if(blocked){blocked=false;entered();await gate;}}),a=factory(path,runner).forWork(context),b=factory(path,runner).forWork(context);
   const first=a.call('correct','Decide.',input,schema);await started;
   try{await assert.rejects(b.call('correct','Decide.',input,schema),/CLIENT_SESSION_BUSY/u);assert.equal(invocations(runner).length,1);}finally{release();await first;}
-});
-
-test('runtime contract quota handoff starts the receiver session with the same checkpoint but never forwards another provider session ID',async t=>{
-  const {path}=await setup(t),runner=runnerFor(request=>request.executable==='/fixture/codex'?{code:1,stdout:'',stderr:'quota exhausted'}:undefined),events=[];
-  const model=new ConfiguredStructuredModel(path,env,{subscription:options=>new SubscriptionAwareStructuredModel({...options,runner}),api:()=>{throw Error('NO_PAID_API');}},event=>events.push(event)).forWork(context);
-  await model.call('correct','Decide.',input,schema);await model.call('correct','Decide.',input,schema);
-  const claude=invocations(runner).filter(request=>request.executable==='/fixture/claude');assert.ok(claude[0].args.includes('--session-id'));assert.ok(claude[1].args.includes('--resume'));
-  assert.deepEqual(JSON.parse(claude[1].stdin.split('INPUT:\n')[1]).checkpoint,input.checkpoint);assert.equal(events.length,2);assert.ok(events.every(event=>event.source==='codex'&&event.target==='claude'&&event.work_id===context.work_id));
 });
 
 test('runtime contract unbound decisions stay ephemeral and unsafe session storage does not become provider failover',async t=>{

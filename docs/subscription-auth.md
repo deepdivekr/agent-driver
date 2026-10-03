@@ -25,16 +25,11 @@ Agent Driver는 로그인 child process의 bounded 상태만 추적한다. devic
 
 현재 검증된 시작 명령은 Codex `login` / `login --device-auth`, Claude Code `auth login --claudeai`, Hermes `portal login`이다. OpenCode는 `auth list --format json`으로 준비 상태를 확인하되 공급자 선택이 필요한 interactive login 명령을 Agent Driver가 추측 실행하지 않는다. 관제센터에 로그인 버튼이 없을 때는 OpenCode의 `/connect` 또는 `opencode auth login`으로 공급자를 먼저 연결한다. Cursor도 확인된 로그인 계약이 없어 버튼을 만들지 않는다.
 
-## 선택 순서
+## 클라이언트 고정
 
-```text
-MCP client sampling
-  → 같은 OS/PATH의 Codex CLI 구독 로그인
-  → Claude Code 구독 로그인
-  → unavailable
-```
+업무는 접수할 때 고른 클라이언트(Codex 또는 Claude Code)와 모델·추론 강도로 고정된다(`office_work_client`). 고르지 않으면 저장된 기본 클라이언트(설치된 쪽)와 그 모델이 고정된다. 업무 실행은 그 클라이언트의 자체 에이전트가 사용자 설정 그대로 맡고, 같은 업무 안의 Office 판단(접수 계획·재계획·일정 해석·완료 검증)도 같은 클라이언트와 모델을 쓴다. 판단의 추론 강도는 저장된 기본값을 쓴다.
 
-`AGENT_DRIVER_LLM_CLIENT=claude,codex`처럼 최초 저장 전의 호스트 설정에서 순서를 좁힐 수 있다. 코드의 기본 후보 목록은 `mcp,codex,claude,opencode,cursor`이며, 실제 지원 기능과 인증 유형을 통과한 후보만 호출한다. OpenCode의 인증 과금 유형이 불명확하면 자동 구독 후계자로 사용하지 않는다. OpenCode를 직접 우선 선택한 경우에는 그 클라이언트의 설정 공급자를 이용할 수 있다. 관제센터에서 저장한 **구독 방식**은 API로 자동 전환하지 않는다. API 직접 사용은 API 모드 선택 또는 정확히 `AGENT_DRIVER_LLM_CLIENT=api`일 때만 가능하며, API 방식의 구독 대체도 사용자가 별도로 켠 경우에만 동작한다. 각 CLI의 고정된 읽기 전용 status 명령만 실행하며 인증 파일을 직접 열지 않는다. [모델 선택·인계 계약](client-handoff.md).
+한 판단은 클라이언트 하나만 답한다. 로그인 만료·사용량 소진·모델 미지원이면 그 클라이언트의 실패로 기록하고 업무는 기다린다(`waiting_auth`, `waiting_model`). 다른 클라이언트나 API로 넘기지 않는다. 이전 버전이 저장한 순서 목록(`AGENT_DRIVER_LLM_CLIENT=codex,claude`)은 첫 앱만 쓴다. 정확히 `api`일 때만 API 모드다. 관제센터에서 저장한 **구독 방식**은 API로 자동 전환하지 않는다. 인증 과금 유형이 불명확한 Codex·Claude 로그인은 쓰지 않으며, OpenCode는 직접 고른 경우에만 쓴다. 각 CLI의 고정된 읽기 전용 status 명령만 실행하며 인증 파일을 직접 열지 않는다. 예전 `client_handoff` 기록은 DB에 남아 있지만 새로 쓰거나 화면에 보이지 않는다.
 
 | client | auth 확인 | 구조화 판단 경로 | 비고 |
 |---|---|---|---|

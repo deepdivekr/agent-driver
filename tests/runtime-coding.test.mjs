@@ -16,7 +16,7 @@ const proposal={title:'코딩 업무',desired_outcome:'등록된 프로젝트의
 const plan={goal:'프로젝트 구현 및 검토',stages:[{id:'implement',actor:'codex',operation:'implement',instruction:'요청된 기능을 main.txt 파일에 구현한다',evidence:'Git diff 및 검사 통과'},{id:'review',actor:'claude',operation:'review',instruction:'Codex 변경분의 품질과 오류를 독립적으로 검토한다',evidence:'구조화된 검토 판정'}],completion_checks:['코드 차이를 확인한다','검토 결과를 확인한다']};
 const gitExecutable=process.platform==='win32'?'git.exe':'/usr/bin/git';
 
-async function setup(t,{write=true,commit=false,selectedPlan=plan,runnerOverride=null,claudeFailure=false,codexFailure=false,claudeMutatesRepo=false,invalidCodexReview=false}={}){
+async function setup(t,{write=true,commit=false,selectedPlan=plan,runnerOverride=null,claudeFailure=false,codexFailure=false,claudeMutatesRepo=false}={}){
   const root=await mkdtemp(join(tmpdir(),'driver-coding-')),repo=join(root,'repo');await mkdir(repo);
   await writeFile(join(repo,'README.md'),'# Fixture\n');await writeFile(join(repo,'main.txt'),'base\n');
   const git=(...args)=>execFileSync(gitExecutable,['-C',repo,...args],{encoding:'utf8',windowsHide:true});
@@ -29,7 +29,7 @@ async function setup(t,{write=true,commit=false,selectedPlan=plan,runnerOverride
     if(request.executable===gitExecutable)return nativeProcessRunner.run(request);
     if(request.executable==='/fake/codex'){
       if(request.args.join(' ')==='login status')return {code:0,stdout:'Logged in using ChatGPT',stderr:''};
-      if(request.args.includes('--output-schema'))return {code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify(invalidCodexReview?{approved:'not a boolean'}:{approved:true,summary:'Codex reviewed the diff.',issues:[]})}})+'\n',stderr:''};
+      if(request.args.includes('--output-schema'))return {code:0,stdout:JSON.stringify({type:'item.completed',item:{type:'agent_message',text:JSON.stringify({approved:true,summary:'Codex reviewed the diff.',issues:[]})}})+'\n',stderr:''};
       if(codexFailure){await writeFile(join(repo,'main.txt'),'partial implementation\n');return {code:1,stdout:'',stderr:'Weekly usage limit reached'};}
       await writeFile(join(repo,'main.txt'),'implemented\n');
       const stdout=[{type:'thread.started',thread_id:'11111111-1111-4111-8111-111111111111'},{type:'item.completed',item:{type:'agent_message',text:'Implemented fixture change.'}},{type:'turn.completed'}].map(value=>JSON.stringify(value)).join('\n')+'\n';
@@ -175,36 +175,25 @@ test('model-selected source files must be Git tracked and cannot read an untrack
   assert.equal(x.calls.some(item=>item.executable.startsWith('/fake/')),false);
 });
 
-test('Claude auth expiry hands a read-only review to the selected Codex model with a durable Work receipt',async t=>{
+// Owner decision 2026-10-03: no session handoff between clients. A failed Claude stage stays failed; Codex never takes it over.
+test('a Claude review stage that fails on sign-in stops there and is never handed to Codex',async t=>{
   const x=await setup(t,{claudeFailure:true});
   saveModelSettings(modelSettingsPath(x.config),{revision:0,onboarding_step:2,selection:{mode:'subscription',client:'claude',client_models:{codex:'gpt-5.6-luna',claude:'sonnet',opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'gpt-5.6-luna',api_base_url:'',reasoning:'low',jev:'off'}},{});
   const work=await x.api.call('runtime_work_start',{request_id:'coding-handoff',prompt:'demo 프로젝트 구현 후 Claude로 검토해줘'});
   const run=await x.api.call('runtime_coding_start',{request_id:'coding-handoff',work_id:work.work_id,project_ref:'demo'});
   const implemented=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:run.revision});
   const reviewed=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:implemented.revision});
-  assert.equal(reviewed.status,'completed');assert.equal(reviewed.stages[1].receipt.actor,'codex');assert.equal(reviewed.stages[1].receipt.model,'gpt-5.6-luna');
-  assert.deepEqual(reviewed.client_handoffs.map(item=>[item.source,item.target,item.source_model,item.target_model,item.reason,item.effect_state]),[['claude','codex','sonnet','gpt-5.6-luna','auth_expired','none']]);
-  const detail=readWorkDetail(x.api.store,x.config,work.work_id);assert.equal(detail.client_handoffs.length,1);
-  const fallback=x.calls.find(item=>item.executable==='/fake/codex'&&item.args.includes('--output-schema'));
-  assert.ok(fallback);assert.deepEqual(fallback.args.slice(0,2),['--model','gpt-5.6-luna']);
+  assert.equal(reviewed.status,'failed');assert.equal(reviewed.stages[1].status,'failed');assert.equal(reviewed.client_handoffs,undefined);
+  assert.equal(x.calls.some(item=>item.executable==='/fake/codex'&&item.args.includes('--output-schema')),false);
 });
 
-test('invalid coding successor output cannot clear the prior session or record a successful handoff',async t=>{
-  const x=await setup(t,{claudeFailure:true,invalidCodexReview:true});
-  const work=await x.api.call('runtime_work_start',{request_id:'invalid-successor',prompt:'demo 프로젝트 구현 후 Claude로 검토해줘'}),run=await x.api.call('runtime_coding_start',{request_id:'invalid-successor',work_id:work.work_id,project_ref:'demo'});
-  const implemented=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:run.revision});
-  const rejected=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:implemented.revision});
-  assert.equal(rejected.status,'failed');assert.equal(rejected.stages[1].status,'failed');assert.ok(rejected.stages[1].session_id);assert.deepEqual(rejected.client_handoffs,[]);assert.equal(x.calls.filter(call=>call.args.includes('--output-schema')).length,1);
-});
-
-test('runtime fixture coding override controls executor models and Claude to Codex handoff without changing global settings',async t=>{
- const x=await setup(t,{claudeFailure:true}),path=modelSettingsPath(x.config),selection={mode:'subscription',client:'claude',client_models:{codex:'global-codex',claude:'global-claude',opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'global-api',api_base_url:'',reasoning:'low',jev:'off'};
+test('runtime fixture coding override controls executor models without changing global settings',async t=>{
+ const x=await setup(t),path=modelSettingsPath(x.config),selection={mode:'subscription',client:'claude',client_models:{codex:'global-codex',claude:'global-claude',opencode:null},api_to_subscription:false,api_provider:'openai',api_model:'global-api',api_base_url:'',reasoning:'low',jev:'off'};
  saveModelSettings(path,{revision:0,onboarding_step:2,selection},{});const before=await readFile(path,'utf8');
  saveModelSettings(scopedModelSettingsPath(path,'coding'),{revision:0,onboarding_step:2,inherit_global:false,selection:{...selection,client_models:{codex:'coding-codex',claude:'coding-claude',opencode:null}}},{});
  const work=await x.api.call('runtime_work_start',{request_id:'override-work',prompt:'demo 프로젝트 구현 후 Claude로 검토해줘'}),run=await x.api.call('runtime_coding_start',{request_id:'override-run',work_id:work.work_id,project_ref:'demo'});
  const implemented=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:run.revision});assert.equal(implemented.stages[0].receipt.model,'coding-codex');
- const reviewed=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:implemented.revision});assert.equal(reviewed.status,'completed');assert.equal(reviewed.stages[1].receipt.model,'coding-codex');
- assert.deepEqual(reviewed.client_handoffs.map(h=>[h.source_model,h.target_model]),[['coding-claude','coding-codex']]);
+ const reviewed=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:implemented.revision});assert.equal(reviewed.status,'completed');assert.equal(reviewed.stages[1].receipt.model,'coding-claude');
  for(const call of x.calls.filter(c=>c.args.includes('--model')))assert.equal(call.args[call.args.indexOf('--model')+1],call.executable==='/fake/claude'?'coding-claude':'coding-codex');assert.equal(await readFile(path,'utf8'),before);
 });
 
@@ -212,7 +201,6 @@ test('Codex write failure after a possible effect requires reconciliation and ne
   const x=await setup(t,{codexFailure:true}),work=await x.api.call('runtime_work_start',{request_id:'coding-write-uncertain',prompt:'demo 프로젝트의 main.txt 구현해줘'}),run=await x.api.call('runtime_coding_start',{request_id:'coding-write-uncertain',work_id:work.work_id,project_ref:'demo'});
   const stopped=await x.api.call('runtime_coding_step',{run_id:run.run_id,expected_revision:run.revision});
   assert.equal(stopped.status,'reconciliation_required');assert.equal(stopped.stages[0].status,'reconciliation_required');
-  assert.deepEqual(stopped.client_handoffs.map(item=>[item.source,item.target,item.status,item.effect_state,item.reason]),[['codex',null,'requires_reconciliation','uncertain','quota_exhausted']]);
   assert.equal(x.calls.some(item=>item.executable==='/fake/claude'),false);
   assert.equal((await readFile(join(x.repo,'main.txt'),'utf8')),'partial implementation\n');
 });

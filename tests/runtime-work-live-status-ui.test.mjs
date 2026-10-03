@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import vm from 'node:vm';
 import {workHtml} from '../dist/observability/work-ui.js';
 import {i18nScript} from '../dist/observability/i18n.js';
-import {taskModelUiScript} from '../dist/observability/task-model-ui.js';
 
 // Actual UI/i18n functions in a unit DOM contract. No browser, model, runtime,
 // bot, persistent state, external URL or delivery connector is invoked.
@@ -13,7 +12,7 @@ assert.ok(start>=0&&end>start);
 const helpers=script.slice(start,end),at='2026-09-29T15:00:00.000Z';
 function context(language='en'){
   const value={window:{},localStorage:{getItem:()=>language},document:{documentElement:{lang:''},readyState:'loading',addEventListener(){}},labels:{},esc:value=>String(value??'').replace(/[&<>"']/gu,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))};
-  vm.runInNewContext(i18nScript+taskModelUiScript+helpers,value);return value;
+  vm.runInNewContext(i18nScript+helpers,value);return value;
 }
 
 test('runtime unit unsupported app response schema is actionable in Korean and English without suggesting login or quota refresh',()=>{

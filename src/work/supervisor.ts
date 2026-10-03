@@ -12,7 +12,6 @@ import {paidJudgmentsToday,countPaidJudgment} from '../packs/paid-judgments.js';
 import {ProcedureScript} from './procedure-template.js';
 import {optionalTypeSafeTransportFromHostEnvironment} from '../taskpack/typesafe-jev.js';
 import {procedureGuidance,recordProcedureFailure,recordVerifiedProcedure,selectedProcedure,similarProcedure,REPLAY_SIMILARITY,TRUSTED_TEMPLATE_RUNS} from './procedures.js';
-import {allocateWorkModels} from './task-models.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {modelSettingsPath,readModelSettings,effectiveModelEnvironment} from '../onboarding/model-settings.js';
 import {requireCondition} from '../core/contracts.js';
@@ -21,7 +20,7 @@ import {workProposalSchema,workControlSchema as supervisorActionSchema,type Work
 import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS,WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS,WORK_COLLECTION_CONTRACT_INSTRUCTIONS} from './runtime.js';
 import {readWorkIntakeOptions} from './intake-options.js';
 import {BoundedWorkClientExecutor,appendWorkObservation,workProgress,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientResult} from './client-executor.js';
-import {clientRunEligible,clientRunEnabled,executeClientRun,workClient,workFolder} from './client-run.js';
+import {clientRunEligible,clientRunEnabled,executeClientRun,pinWorkClient,workFolder} from './client-run.js';
 import {packTools} from '../packs/contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {activeSwarmWorkerCount,initWorkExecution,workActivity,withWorkActivityContext} from './activity.js';
@@ -44,7 +43,7 @@ const activeStates=['queued','running','retry_wait'];
 /** Model unavailability that resolves by itself (quota windows, rate limits,
  * provider outages). The run waits and resumes automatically; login expiry and
  * unsupported models still need the user. */
-const modelRetryReasons=new Set(['quota_exhausted','rate_limited','provider_unavailable','STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_TIMEOUT','CLIENT_TIMEOUT','MODEL_PROVIDER_UNAVAILABLE','CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED','WORK_CLIENT_VERIFICATION_RETRY_EXHAUSTED']);
+const modelRetryReasons=new Set(['quota_exhausted','rate_limited','provider_unavailable','CLIENT_PROVIDER_UNAVAILABLE','STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_TIMEOUT','CLIENT_TIMEOUT','MODEL_PROVIDER_UNAVAILABLE','CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED','WORK_CLIENT_VERIFICATION_RETRY_EXHAUSTED']);
 const modelRetryDelay=(attempts:number)=>Math.min(30*60_000,60_000*2**Math.min(Math.max(0,attempts-1),5));
 const settingsChangeReasons=new Set(['CONFIG_CHANGED','MODEL_SETTINGS_CHANGED']);
 type Row={run_id:string;project_id:string;work_id:string;work_revision:number;state:string;owner:string|null;lease_until_ms:number;attempts:number;retry_at_ms:number;checkpoint:string;result:string|null;reason:string|null;config_hash:string;model_revision:number;resume_wait:number;replan_required:number;current_run_only:number;timezone:string|null;created_at:string;updated_at:string};
@@ -315,6 +314,10 @@ export class WorkSupervisor {
     try{
       const work=this.store.intakeWork(project,row.work_id);let spec=work.spec as WorkProposal,validatedReplan=false;
       let model=this.model instanceof ConfiguredStructuredModel?this.model.forWork({work_id:row.work_id,run_id:row.run_id},spec.route.pack_family==='coding.orchestrate'?'coding':'global'):this.model;
+      // One client per Work, chosen at intake (an older Work: the owner's defaults at this run). Office's own judgments for
+      // it (replan, schedule, page digests, verification) use the same client and model.
+      const pin=pinWorkClient(this.store,project,row.work_id,undefined,readModelSettings(modelSettingsPath(this.config)));
+      if(pin&&model instanceof ConfiguredStructuredModel)model=model.forClient(pin.id,pin.model);
       if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
       if(row.replan_required){
         guard();workActivity(this.store,project,row.work_id,'supervisor.replanning','새 지침에 맞춰 완료조건과 다음 단계를 갱신합니다. 이전 실행 증거는 보존합니다.');
@@ -334,10 +337,7 @@ export class WorkSupervisor {
         });validatedReplan=true;
       }
       readSealedCollectionContract(this.store,this.config,row.work_id,spec);
-      // The first interpretation uses the user's default model. Allocate only
-      // after a valid task exists, before any tool or independently run worker.
       if(model instanceof ConfiguredStructuredModel)model=model.forScope(spec.route.pack_family==='coding.orchestrate'?'coding':'global');
-      model=await allocateWorkModels(this.store,project,row.work_id,model,{prompt:work.prompt,spec,directions:this.store.workDirections(project,row.work_id)},guard);
       if(spec.recurrence.kind==='recurring'&&row.current_run_only!==1){
         guard();const schedule=await this.schedules.prepare(row.work_id,row.work_revision,model,{...(row.timezone?{default_timezone:row.timezone}:{})});guard();if(schedule?.state==='disabled')this.schedules.enable(row.work_id,row.work_revision,{acknowledged:true});
         if(schedule?.state==='waiting_config')throw Error('SCHEDULE_CONFIGURATION_REQUIRED');
@@ -352,8 +352,7 @@ export class WorkSupervisor {
       workActivity(this.store,project,row.work_id,'supervisor.started',row.attempts>1?'저장한 체크포인트를 읽고 실행을 이어갑니다.':'연결된 AI와 실행 도구로 업무를 시작합니다.');
       let checkpoint=row.checkpoint==='null'?null:JSON.parse(row.checkpoint) as WorkClientCheckpoint|SupervisedSwarmCheckpoint;
       // The client's own agent runs the Work, one client for its whole life. A run the host-tool loop already started finishes there.
-      const client=clientRunEnabled()&&(!checkpoint||'client_session' in checkpoint&&Boolean(checkpoint.client_session))&&clientRunEligible(this.store,project,row.work_id,spec)
-        ?workClient(this.store,project,row.work_id,readModelSettings(modelSettingsPath(this.config))?.selection.client):null;
+      const client=pin&&clientRunEnabled()&&(!checkpoint||'client_session' in checkpoint&&Boolean(checkpoint.client_session))&&clientRunEligible(this.store,project,row.work_id,spec)?pin.id:null;
       if(client)settingsFence=false;
       const directions=this.store.workDirections(project,row.work_id),userIntake=readWorkIntakeOptions(this.store,project,row.work_id);
       // The request the owner agreed to is the prompt plus what intake settled: the scope the owner chose when
@@ -542,9 +541,9 @@ export class WorkSupervisor {
       templateRuns=offered?.template_runs??0;
       script=offered?.template&&reusable&&!checkpoint?new ProcedureScript(offered.template,fastJudgment,calls=>countPaidJudgment(this.store,project,calls),summary=>workActivity(this.store,project,row.work_id,'procedure.handed_over',summary,{run_id:row.run_id,stage_id:'execution',status:'running'}),templateRuns>=TRUSTED_TEMPLATE_RUNS):null;
             if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
-      const result=client?await executeClientRun({client,work_id:row.work_id,run_id:row.run_id,folder:join(workFolder(this.config,row.work_id),row.run_id),title:spec.title,prompt:work.prompt,checks:spec.completion_checks,
+      const result=client?await executeClientRun({client,model:pin!.model,effort:pin!.effort,work_id:row.work_id,run_id:row.run_id,folder:join(workFolder(this.config,row.work_id),row.run_id),title:spec.title,prompt:work.prompt,checks:spec.completion_checks,
           context:{...(userIntake.completion_condition?{completion_condition:userIntake.completion_condition}:{}),...(agreedScope?{agreed_scope:agreedScope}:{}),...(collectionWindow?{collection_window:collectionWindow}:{}),...(hostSchedule?{host_schedule:{definition:hostSchedule.definition,next_run_at:hostSchedule.next_run_at,meaning:'Office reruns this Work on this schedule; finish this run.'}}:{})},
-          directions,checkpoint:checkpoint as WorkClientCheckpoint|null,signal:controller.signal,guard,save:saveCheckpoint,
+          directions,checkpoint:checkpoint as WorkClientCheckpoint|null,resumed:row.resume_wait===1,signal:controller.signal,guard,save:saveCheckpoint,
           activity:(kind,summary,metadata)=>workActivity(this.store,project,row.work_id,kind,summary,metadata),
           draft:async(text,label,requestId)=>{const value=await toolkit!.execute('office_result_draft',{text,label},requestId);return toolkit!.receipt('office_result_draft',value,requestId);},
           ...(spec.recurrence.kind==='recurring'?{schedule:async(requestId:string)=>{const value=await toolkit!.execute('office_schedule_status',{},requestId);return toolkit!.receipt('office_schedule_status',value,requestId);}}:{}),

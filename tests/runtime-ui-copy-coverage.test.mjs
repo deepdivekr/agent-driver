@@ -46,7 +46,6 @@ test('display copy coverage: labels joined with a value at run time use the curr
     ['실행기: Codex','실행 도구: Codex','Execution tool: Codex'],
     ['완료 조건 3개','완료 기준 3개','Completion criteria · 3'],
     ['확인된 완료 조건 2개','확인된 완료 기준 2개','Confirmed completion criteria · 2'],
-    ['클라이언트 인계 2건','AI 업무 인계 2건','AI handoffs · 2'],
     ['Codex · 미관측','Codex · 확인되지 않음','Codex · Not confirmed'],
     ['완료 조건 ·','완료 기준 ·','Completion criterion ·'],
     ['키 입력 후 새로고침하면 최신 목록을 불러옵니다 · 기본 gpt-6','키를 입력하고 새로고침하면 최신 목록을 불러와요 · 기본 gpt-6','Enter a key and refresh for the latest list · default gpt-6'],

@@ -6,7 +6,6 @@ import {tmpdir} from 'node:os';
 import {dirname,join} from 'node:path';
 import {createHash,randomUUID} from 'node:crypto';
 import vm from 'node:vm';
-import {taskModelUiScript} from '../dist/observability/task-model-ui.js';
 import {PackStore} from '../dist/packs/store.js';
 import {loadHostConfig} from '../dist/interface/config.js';
 import {collectSource} from '../dist/packs/sources.js';
@@ -233,7 +232,7 @@ test('runtime unit supervised Work detail uses its real run identity and hides l
  const html=workHtml('detail-contract'),script=html.match(/<script nonce="detail-contract">([\s\S]*?)<\/script>/u)[1],analysis=script.slice(script.indexOf('function activitySummary'),script.indexOf('function renderDetailBody')),body=script.slice(script.indexOf('function renderDetailBody()'),script.indexOf('let activityStream='));
  const app={innerHTML:'',querySelectorAll(){return [];}},back={};
  const context={app,document:{getElementById:id=>id==='back'?back:null},window:{officeText:value=>value},updateConnection(){},showBoard(){},liveStageHtml(){return '';},fileWorkPanel(){return '';},editing:null,aiDataApproved:false,attention:()=>false,labels:{running:'진행 중',awaiting_review:'완료조건 확인 필요',paused:'일시정지됨'},esc:value=>String(value??'').replace(/[&<>"']/gu,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]))};
- vm.runInNewContext(taskModelUiScript+analysis+body,context);
+ vm.runInNewContext(analysis+body,context);
  for(const state of ['running','awaiting_review','paused']){
   context.detail={id:'work-identity',title:'Observed Work',goal:'Actual source',work_status:'ready',display_status:state,run_id:null,supervisor:{run_id:'sup-actual-identity',state},stages:[],runs:[],questions:[],events:[],verified_steps:0,total_steps:0,agent_count:0,progress_percent:null};
   vm.runInNewContext('renderDetailBody()',context);

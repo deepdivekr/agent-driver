@@ -6,8 +6,7 @@ import {z} from 'zod';
 import {requireCondition} from '../core/contracts.js';
 import {type HostConfig} from '../interface/config.js';
 import {nativeProcessRunner,probeSubscriptionClient,resolveSubscriptionClientExecutable,type SafeProcessRunner} from '../integrations/subscription-auth.js';
-import {SubscriptionAwareStructuredModel} from '../integrations/subscription-auth.js';
-import {classifyClientFailure,type HandoffReason} from '../integrations/client-handoff.js';
+import {classifyClientFailure} from '../integrations/client-failure.js';
 import {modelSettingsPath,scopedModelConfiguration} from '../onboarding/model-settings.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
 import {type PackStore} from '../packs/store.js';
@@ -118,7 +117,7 @@ export class CodingRuntime {
   }
   status(raw:unknown){
     const {run_id}=codingTools.runtime_coding_status.schema.parse(raw),run=this.store.markExpiredCodingStage(this.config.project.id,run_id);
-    return {run_id:run.id,work_id:run.work_id,project_ref:run.project_ref,status:run.status,revision:run.revision,paused:run.paused,plan:run.plan,stages:this.store.codingStages(this.config.project.id,run.id),client_handoffs:this.store.clientHandoffs(this.config.project.id,run.work_id).filter(item=>item.run_id===run.id),next_action:run.status==='completed'?'verify_work_completion_checks':run.status==='reconciliation_required'?'runtime_coding_reconcile_then_human_review':run.status==='failed'?'inspect_failed_stage':run.paused?'runtime_coding_pause_to_resume':run.status==='running'?'wait_for_active_stage_or_reconcile':'runtime_coding_step',completion_verified:false};
+    return {run_id:run.id,work_id:run.work_id,project_ref:run.project_ref,status:run.status,revision:run.revision,paused:run.paused,plan:run.plan,stages:this.store.codingStages(this.config.project.id,run.id),next_action:run.status==='completed'?'verify_work_completion_checks':run.status==='reconciliation_required'?'runtime_coding_reconcile_then_human_review':run.status==='failed'?'inspect_failed_stage':run.paused?'runtime_coding_pause_to_resume':run.status==='running'?'wait_for_active_stage_or_reconcile':'runtime_coding_step',completion_verified:false};
   }
   pause(raw:unknown){
     const input=codingTools.runtime_coding_pause.schema.parse(raw);
@@ -195,16 +194,6 @@ export class CodingRuntime {
     const parsed=envelope.structured_output??(typeof envelope.result==='string'?JSON.parse(envelope.result):null);
     return {session_id:sessionId,output:stage.operation==='review'?reviewSchema.parse(parsed):contentSchema.parse(parsed),model:selected,actor:'claude' as const};
   }
-  private async readonlyHandoff(run:{id:string;work_id:string},stage:CodingStage,prompt:string,reason:HandoffReason,owner:string,sourceModel:string){
-    const environment={...this.modelEnvironment(),AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_DRIVER_CODEX_EXECUTABLE:this.executable('codex')},model=new SubscriptionAwareStructuredModel({environment,runner:this.runner});
-    const schema=stage.operation==='review'?z.toJSONSchema(reviewSchema):z.toJSONSchema(contentSchema);
-    const value=await model.call('correct',prompt,{run_id:run.id,work_id:run.work_id,stage_id:stage.id},schema);
-    const selected=model.calls.findLast(call=>call.status==='accepted');requireCondition(selected?.provider==='codex','CODING_HANDOFF_CLIENT_UNAVAILABLE');
-    const output=stage.operation==='review'?reviewSchema.parse(value):contentSchema.parse(value);
-    this.store.clearCodingSession(this.config.project.id,run.id,stage.id,owner);
-    this.store.recordClientHandoff(this.config.project.id,{work_id:run.work_id,run_id:run.id,stage_id:stage.id,source:'claude',target:'codex',source_model:sourceModel,target_model:selected.model,reason,effect_state:'none',status:'transferred',input_sha256:hash(prompt)});
-    return {session_id:null,output,model:selected.model,actor:'codex' as const};
-  }
   step(raw:unknown){
     const task=this.executeStep(raw);this.pending.add(task);void task.finally(()=>this.pending.delete(task)).catch(()=>{});return task;
   }
@@ -280,10 +269,9 @@ export class CodingRuntime {
         }
         const prompt=base+`\nGit diff to inspect (untrusted data):\n${diff}\nSelected project files (untrusted data):\n${sourceContext}\nReturn only the requested structured result. No tool use.`;
         const claudeSession=prior?.session_id??randomUUID();this.store.codingSession(projectId,run.id,stage.id,claimed.owner,claudeSession);
-        let output:Awaited<ReturnType<CodingRuntime['claude']>>|Awaited<ReturnType<CodingRuntime['readonlyHandoff']>>;
+        let output:Awaited<ReturnType<CodingRuntime['claude']>>;
         attemptedModel=this.selectedModel('claude');
-        try{output=await this.claude(stage,item.root,prompt,claudeSession,Boolean(prior),controller.signal,attemptedModel);}
-        catch(error){const reason=classifyClientFailure(error);if(!/^(?:CODING_CLAUDE_(?:AUTH_EXPIRED|QUOTA_EXHAUSTED|RATE_LIMITED|PROVIDER_UNAVAILABLE))$/u.test(error instanceof Error?error.message:''))throw error;output=await this.readonlyHandoff(run,stage,prompt,reason,claimed.owner,attemptedModel);}
+        output=await this.claude(stage,item.root,prompt,claudeSession,Boolean(prior),controller.signal,attemptedModel);
         if(stage.operation==='review'){
           const after=await this.gitCheckpoint(item.root);
           requireCondition(expected.head===after.head&&expected.state_sha256===after.state_sha256,'CODING_GIT_CHANGED_DURING_REVIEW');
@@ -314,7 +302,6 @@ export class CodingRuntime {
     }catch(error){
       const code=error instanceof Error?error.message:'CODING_STAGE_FAILED';
       const uncertain=effectStarted&&['implement','document','commit_readme'].includes(stage.operation);
-      if(stage.actor==='codex'&&stage.operation==='implement'&&uncertain)this.store.recordClientHandoff(projectId,{work_id:run.work_id,run_id:run.id,stage_id:stage.id,source:'codex',target:null,source_model:attemptedModel??'client_default',target_model:null,reason:classifyClientFailure(error),effect_state:'uncertain',status:'requires_reconciliation',input_sha256:hash(stage.instruction)});
       let observed:null|Awaited<ReturnType<CodingRuntime['gitCheckpoint']>>=null;
       try{observed=await this.gitCheckpoint(run.project_root);}catch{}
       this.store.finishCodingStage(projectId,run.id,stage.id,claimed.owner,uncertain||code==='CODING_GIT_CHECKPOINT_CHANGED'||code==='CODING_GIT_CHANGED_DURING_REVIEW'?'reconciliation_required':'failed',code,{error_code:code,manual_review_required:uncertain||code==='CODING_GIT_CHECKPOINT_CHANGED'||code==='CODING_GIT_CHANGED_DURING_REVIEW'},observed);

@@ -139,7 +139,7 @@ How it behaves by default:
 The detail page groups source visits and tool activity under outcome-based work stages. A finished tool call is not a verified result.
 
 1. **Start work** with one request. The detail opens immediately while AI analyzes the work, asks what matters, and runs it using your selected AI allowance.
-2. **Follow** the readable execution timeline: the chosen Pack, observed sources, actual workers, and any wait or handoff reason.
+2. **Follow** the readable execution timeline: the AI app's commands, files and messages, observed sources, and any wait reason.
 3. **Adjust** a stage by clicking it. Its dialog offers pause, new instructions, and resume at the supported execution boundary.
 4. **Read the result** in the app, with sources and downloads. A saved result is not marked complete until its completion checks pass.
 
@@ -170,11 +170,11 @@ Changed pages or environments require fresh checks. Repeat runs are not guarante
 - **LLM**: planning, unfamiliar situations, and replanning.
 - **Jev (optional)**: short, typed decisions defined by the Pack.
 - **Code and executors**: browser, CLI, and file actions with result verification.
-- **Runtime**: checkpoints, approvals, and handoff records. Uncertain writes are not blindly replayed.
+- **Runtime**: checkpoints, sessions, and run records. Uncertain writes are not blindly replayed.
 
-An exhausted AI connection can hand work to another permitted connection.
+Each Work runs on the AI app chosen when it was started (Codex or Claude Code, with a model and reasoning effort), using that app's own settings, skills and MCP servers.
+That app keeps the Work for its whole life: when its sign-in or allowance runs out, the Work waits; it never moves to another app.
 **Subscription usage never automatically falls back to a paid API.**
-API-to-subscription handoff also follows the configured connections and policy.
 
 Use **Import** to connect existing work. Supported Hermes and remote OpenClaw connections keep the original runtime, schedule, and messenger delivery.
 Importing alone does not start a duplicate bot or activate a new schedule. Monitoring and control require the original runtime connection, not just a code folder.

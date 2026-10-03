@@ -2,7 +2,7 @@ import {z} from 'zod';
 import {createHash} from 'node:crypto';
 import {hashJson,type ModelCall,type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
-import {classifyClientFailure,isNonRetryableClientFailure} from '../integrations/client-handoff.js';
+import {classifyClientFailure,isNonRetryableClientFailure} from '../integrations/client-failure.js';
 import {safeControlText} from '../observability/safe-text.js';
 import {requireCondition} from '../core/contracts.js';
 import {type WorkPlan,validateWorkPlan} from './plan.js';

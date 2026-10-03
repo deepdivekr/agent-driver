@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
-import {writeFileSync} from 'node:fs';
+import {writeFileSync,utimesSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {setTimeout as delay} from 'node:timers/promises';
@@ -11,7 +11,8 @@ import {WorkRuntime} from '../dist/work/runtime.js';
 import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {WorkResults} from '../dist/work/results.js';
 import {saveModelSettings,modelSettingsPath} from '../dist/onboarding/model-settings.js';
-import {enableClientRun,disableClientRun,workClient,workFolder,clientRunEnvironment,clientRunArgs,clientRunEligible} from '../dist/work/client-run.js';
+import {enableClientRun,disableClientRun,pinWorkClient,workClientChoice,workFolder,clientRunEnvironment,clientRunArgs,clientRunEligible,defaultWorkClient} from '../dist/work/client-run.js';
+import {mkdirSync} from 'node:fs';
 
 // Owner direction 2026-10-03: the client's own agent runs the Work with the owner's settings and full permissions;
 // Office streams its events, keeps its session, takes the files it made as the result and verifies them.
@@ -20,6 +21,7 @@ function fixture(options={}){const calls=[];let verifications=0;return {calls,ge
   calls.push({purpose,status:'accepted',provider:'fixture',model:'fixture',duration_ms:0});
   if(instructions.startsWith('Define one durable')||instructions.startsWith('Revise this existing'))return options.proposal??proposal;
   if(instructions.startsWith('Normalize the user'))return {kind:'daily',timezone:'Asia/Seoul',hour:8,minute:30,also_at:[{hour:21,minute:30}],weekdays:null,seconds:null,reason:null};
+  if(options.verifyError)throw Error(options.verifyError);
   assert.ok(instructions.startsWith('Verify each completion check of an Office Work'),'a client run is verified by the light tier');
   verifications++;
   const saved=input.evidence.find(item=>item.tool_name==='office_result_draft');
@@ -29,10 +31,12 @@ function fixture(options={}){const calls=[];let verifications=0;return {calls,ge
     :{id:check.id,verdict:'supported',evidence_ids:[saved.evidence_id],quotes:[{evidence_id:saved.evidence_id,quote:'case-1.png'}],reason:'The saved result lists the image and its explanation.'})};
 }};}
 async function setup(t,options={}){
+  // A client order exported in the shell must not decide which client these Works get.
+  const ambient=process.env.AGENT_DRIVER_LLM_CLIENT;delete process.env.AGENT_DRIVER_LLM_CLIENT;t.after(()=>{if(ambient!==undefined)process.env.AGENT_DRIVER_LLM_CLIENT=ambient;});
   const root=await mkdtemp(join(tmpdir(),'work-client-run-')),host=join(root,'host.json');
   await writeFile(host,JSON.stringify({schema_version:1,project_id:'client-run-test',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}}));
   const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
-  const model=fixture(options),runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'client-run',prompt:'파생상품 사례 이미지와 짧은 해설을 만들어줘'});
+  const model=fixture(options),runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'client-run',prompt:'파생상품 사례 이미지와 짧은 해설을 만들어줘',...(options.choice?{client:options.choice}:{})});
   const runs=[];enableClientRun({runner:{run:request=>{runs.push(request);return options.client(request,runs.length);}},executable:client=>`/fake/${client}`});
   const supervisor=new WorkSupervisor(store,config,model,{auto_start:false,tick_ms:20});
   t.after(async()=>{supervisor.close();disableClientRun();store.close();await rm(root,{recursive:true,force:true});});
@@ -59,7 +63,7 @@ test('runtime fixture a Work runs on Codex with the owner settings and full perm
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
   const [run]=x.runs,folder=join(workFolder(x.config,x.work.work_id),end.run_id);
   assert.deepEqual([run.args.slice(0,3),run.args.slice(-4)],[['-C',folder,'--dangerously-bypass-approvals-and-sandbox'],['exec','--json','--skip-git-repo-check','-']]);
-  assert.deepEqual(clientRunArgs('codex',folder,null,true).slice(3,5),['-c','mcp_servers.agent-driver.disabled_tools=["runtime_work_start","runtime_work_execute","runtime_work_control"]'],'a run cannot start Works through Office');
+  assert.deepEqual(clientRunArgs({id:'codex',model:null,effort:null},folder,null,true).slice(3,5),['-c','mcp_servers.agent-driver.disabled_tools=["runtime_work_start","runtime_work_execute","runtime_work_control"]'],'a run cannot start Works through Office');
   assert.equal(run.executable,'/fake/codex');assert.equal(run.cwd,folder);assert.equal(run.keep_stdout,false);
   assert.equal(run.env.OPENAI_API_KEY,undefined,'an API key would bill a paid API');assert.equal(run.env.HOME,process.env.HOME);
   assert.match(run.stdin,/파생상품 사례 이미지와 짧은 해설을 만들어줘/u);assert.match(run.stdin,/images: 사례 이미지 파일과 해설이 있다/u);
@@ -70,7 +74,7 @@ test('runtime fixture a Work runs on Codex with the owner settings and full perm
   assert.equal(result.verification,'verified');
   assert.deepEqual(result.artifacts.map(item=>item.label).sort(),['case-1.png','explanations.md'].concat(result.artifacts.filter(item=>item.label.startsWith('report-')).map(item=>item.label)).sort());
   assert.match(result.text,/case-1\.png \(image\/png, 4 bytes\)/u);assert.match(result.text,/옵션 만기일 감마 노출/u);
-  assert.equal(workClient(x.store,x.config.project.id,x.work.work_id,'claude'),'codex','the Work keeps its client');
+  assert.deepEqual(pinWorkClient(x.store,x.config.project.id,x.work.work_id,{id:'claude',model:null,effort:null},null),{id:'codex',model:null,effort:null},'the Work keeps its client');
 });
 
 test('runtime fixture a verification denial goes back to the same Codex session',async t=>{
@@ -82,9 +86,9 @@ test('runtime fixture a verification denial goes back to the same Codex session'
   assert.match(x.runs[1].stdin,/Not met: images \(사례 이미지 파일과 해설이 있다\)\. Reason: Only one image was made; five were asked\./u);
 });
 
-test('runtime fixture a Claude run stopped for a new direction resumes its own session with that direction',async t=>{
+test('runtime fixture the AI chosen at intake runs the Work; a Claude run stopped for a new direction resumes its own session with that direction',async t=>{
   let release;const gate=new Promise(resolve=>{release=resolve;});
-  const x=await setup(t,{client:async(request,count)=>{
+  const x=await setup(t,{choice:{id:'claude',model:'opus',effort:'high'},client:async(request,count)=>{
     const id=request.args[request.args.indexOf(count===1?'--session-id':'--resume')+1];
     request.onStdout(line({type:'system',subtype:'init',session_id:id,permissionMode:'bypassPermissions'}));
     if(count===1){release();await new Promise((_,reject)=>request.signal.addEventListener('abort',()=>reject(Error('aborted')),{once:true}));}
@@ -94,7 +98,6 @@ test('runtime fixture a Claude run stopped for a new direction resumes its own s
     request.onStdout(line({type:'result',subtype:'success',is_error:false,result:'case-1.png 를 만들었습니다.',session_id:id}));
     return {code:0,stdout:'',stderr:''};
   }});
-  workClient(x.store,x.config.project.id,x.work.work_id,'claude');
   x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
   await gate;await delay(50);
   let work=x.store.intakeWork(x.config.project.id,x.work.work_id);x.supervisor.action({work_id:x.work.work_id,revision:work.revision,action:'edit',instruction:'사례는 옵션 만기일 위주로 바꿔줘'});
@@ -102,7 +105,9 @@ test('runtime fixture a Claude run stopped for a new direction resumes its own s
   work=x.store.intakeWork(x.config.project.id,x.work.work_id);x.supervisor.action({work_id:x.work.work_id,revision:work.revision,action:'resume'});x.supervisor.tick();
   const end=await settle(x,['succeeded','failed','awaiting_review','waiting_auth']);assert.equal(end.state,'succeeded',JSON.stringify(end));
   const first=x.runs[0].args,session=first[first.indexOf('--session-id')+1];
-  assert.ok(first.includes('--dangerously-skip-permissions'));assert.equal(first[0],'-p');
+  assert.ok(first.includes('--dangerously-skip-permissions'));assert.equal(first[0],'-p');assert.equal(x.runs[0].executable,'/fake/claude');
+  assert.deepEqual([first[first.indexOf('--model')+1],first[first.indexOf('--effort')+1]],['opus','high']);
+  assert.deepEqual(workClientChoice(x.store,x.config.project.id,x.work.work_id),{id:'claude',model:'opus',effort:'high'});
   assert.equal(first[first.indexOf('--disallowedTools')+1],'mcp__agent-driver__runtime_work_start,mcp__agent-driver__runtime_work_execute,mcp__agent-driver__runtime_work_control');
   assert.deepEqual(x.runs[1].args.slice(-2),['--resume',session]);assert.match(x.runs[1].stdin,/The owner changed the instruction for this Work:\n- 사례는 옵션 만기일 위주로 바꿔줘/u);
   assert.ok(activity(x).some(row=>row.kind==='tool.started'&&row.summary.startsWith('file_change · ')&&row.metadata.model_provider==='claude'));
@@ -142,6 +147,63 @@ test('runtime fixture Works that Office proves in code or writes through approve
 });
 
 test('runtime fixture the client environment keeps the owner variables and withholds API keys and Office internals',()=>{
-  const env=clientRunEnvironment({HOME:'/home/owner',PATH:'/bin',DISPLAY:':0',HTTPS_PROXY:'http://proxy',CODEX_HOME:'/home/owner/.codex',ANTHROPIC_API_KEY:'k',OPENAI_API_KEY:'k',TYPESAFE_API_KEY:'k',AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_OFFICE_OWNER_MCP:'on',CLAUDECODE:'1'});
+  const env=clientRunEnvironment({HOME:'/home/owner',PATH:'/bin',DISPLAY:':0',HTTPS_PROXY:'http://proxy',CODEX_HOME:'/home/owner/.codex',ANTHROPIC_API_KEY:'k',OPENAI_API_KEY:'k',CODEX_API_KEY:'k',ANTHROPIC_AUTH_TOKEN:'k',TYPESAFE_API_KEY:'k',AGENT_DRIVER_LLM_CLIENT:'codex',AGENT_OFFICE_OWNER_MCP:'on',CLAUDECODE:'1'});
   assert.deepEqual(Object.keys(env).sort(),['CODEX_HOME','DISPLAY','HOME','HTTPS_PROXY','PATH']);
+});
+
+test('runtime fixture Office judgments for a pinned Work go to its client and model only',async()=>{
+  const {ConfiguredStructuredModel}=await import('../dist/onboarding/configured-model.js');
+  const seen=[],model=new ConfiguredStructuredModel('/nonexistent/models.json',{AGENT_DRIVER_LLM_CLIENT:'codex,claude',PATH:process.env.PATH},{subscription:options=>({calls:[],async call(){seen.push(options.environment);return {ok:true};}})});
+  await model.forWork({work_id:'w1',run_id:'r1'}).forClient('claude','opus').forRole('verifier').call('verify','x',{},{type:'object'});
+  assert.equal(seen[0].AGENT_DRIVER_LLM_CLIENT,'claude');assert.equal(seen[0].AGENT_DRIVER_CLAUDE_MODEL,'opus');
+});
+
+// Review of PR #48 (2026-10-03): each case below was a confirmed defect.
+test('runtime fixture a briefly unavailable verifier makes a finished client run wait, not fail',async t=>{
+  const x=await setup(t,{verifyError:'STRUCTURED_MODEL_UNAVAILABLE',client:request=>codexTurn(request)});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x,['retry_wait','failed','succeeded','awaiting_review']);assert.equal(end.state,'retry_wait',JSON.stringify(end));assert.equal(end.reason,'STRUCTURED_MODEL_UNAVAILABLE');
+});
+
+test('runtime fixture every file of the run folder is its result: old timestamps count, large files are listed but not offered',async t=>{
+  const x=await setup(t,{proposal:{...proposal,title:'가'.repeat(150)},client:request=>{
+    writeFileSync(join(request.cwd,'unpacked.csv'),'a,b\n1,2\n');utimesSync(join(request.cwd,'unpacked.csv'),new Date('2020-01-01'),new Date('2020-01-01'));
+    writeFileSync(join(request.cwd,'video.mp4'),Buffer.alloc(17*1024*1024));
+    mkdirSync(join(request.cwd,'data'));for(let i=0;i<210;i++)writeFileSync(join(request.cwd,'data',`row-${String(i).padStart(3,'0')}.txt`),'x');writeFileSync(join(request.cwd,'report.pdf'),'%PDF-1.4');
+    return codexTurn(request,{reply:'case-1.png 완료. token=abcdefghijklmnopqrstuvwxyz0123456789ABCDEF 사용'});
+  }});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  const [result]=await new WorkResults(x.store).capture(x.config.project.id,x.work.work_id);
+  const labels=result.artifacts.map(item=>item.label);assert.ok(labels.includes('unpacked.csv'));assert.ok(labels.includes('report.pdf'),'top-level files come before an unpacked folder');assert.equal(labels.includes('video.mp4'),false);
+  assert.match(result.text,/video\.mp4 \(video\/mp4, 17825792 bytes, too large to download from Office/u);
+  assert.doesNotMatch(JSON.stringify([end.result.summary,result.summary,result.text]),/abcdefghijklmnopqrstuvwxyz0123456789ABCDEF/u);
+});
+
+test('runtime fixture the intake correction call goes to the Work client too',async t=>{
+  const {ConfiguredStructuredModel}=await import('../dist/onboarding/configured-model.js');
+  const root=await mkdtemp(join(tmpdir(),'work-client-correct-')),host=join(root,'host.json');t.after(()=>rm(root,{recursive:true,force:true}));
+  await writeFile(host,JSON.stringify({schema_version:1,project_id:'client-correct',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}}));
+  const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);t.after(()=>store.close());
+  const seen=[];let designs=0;
+  const model=new ConfiguredStructuredModel(join(root,'data','.connection','models.json'),{AGENT_DRIVER_LLM_CLIENT:'codex'},{subscription:options=>({calls:[],async call(purpose){seen.push([purpose,options.environment.AGENT_DRIVER_LLM_CLIENT]);if(purpose==='design'&&designs++===0)return {...proposal,route:{kind:'pack',pack_family:null}};return proposal;}})});
+  await new WorkRuntime(store,config,model).start({request_id:'correct',prompt:'사례 이미지를 만들어줘',client:{id:'claude',model:null,effort:null}});
+  assert.ok(seen.length>=2,JSON.stringify(seen));assert.ok(seen.every(([,client])=>client==='claude'),JSON.stringify(seen));
+});
+
+test('runtime fixture a client provider outage waits with backoff instead of failing after three tries',async t=>{
+  const x=await setup(t,{client:()=>({code:1,stdout:'',stderr:'upstream connect error: service unavailable'})});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x,['retry_wait','failed','waiting_auth']);assert.equal(end.state,'retry_wait',JSON.stringify(end));assert.equal(end.reason,'CLIENT_PROVIDER_UNAVAILABLE');
+});
+
+test('runtime fixture the default client is the owner default, the other installed client, or none for OpenCode',t=>{
+  const selection=client=>({selection:{client,client_models:{codex:'gpt-x',claude:'opus',opencode:null},codex_reasoning_effort:'high'}});
+  enableClientRun({executable:client=>`/fake/${client}`});t.after(()=>disableClientRun());
+  const ambient=process.env.AGENT_DRIVER_LLM_CLIENT;delete process.env.AGENT_DRIVER_LLM_CLIENT;t.after(()=>{if(ambient!==undefined)process.env.AGENT_DRIVER_LLM_CLIENT=ambient;});
+  assert.deepEqual(defaultWorkClient(selection('claude')),{id:'claude',model:'opus',effort:null});
+  assert.deepEqual(defaultWorkClient(selection('auto')),{id:'codex',model:'gpt-x',effort:'high'});
+  assert.equal(defaultWorkClient(selection('opencode')),null);
+  enableClientRun({executable:client=>{if(client==='codex')throw Error('WSL_NATIVE_CLIENT_EXECUTABLE_NOT_FOUND');return '/fake/claude';}});
+  assert.equal(defaultWorkClient(selection('codex')).id,'claude','only Claude is installed');
 });
