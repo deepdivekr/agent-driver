@@ -293,6 +293,9 @@ function initialPrompt(input:ClientRunInput){
     'Finish with a short reply in the language of the request: what you made, each file name, and how each completion condition is met.'].join('\n\n');
 }
 
+/** The receipts of the latest client turn: from its run record on. Earlier turns stay in the record (the admission prefix)
+ * but the result is what the latest turn left (live: a run resumed six times cited all its turns and verification ran out of budget). */
+const latestTurn=(observations:WorkClientCheckpoint['observations'])=>{const start=observations.map(item=>item.invocation.tool_name).lastIndexOf('office_client_run');return start<0?observations:observations.slice(start);};
 /** Run the Work on its pinned client: start or resume its session, save what it made, verify, and send a denial back to the same session. */
 export async function executeClientRun(input:ClientRunInput):Promise<WorkClientResult>{
   const {client,work_id,run_id}=input,latest=input.directions.at(-1)?.created_at??null;
@@ -374,7 +377,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     }
     input.guard();
     let verified:Awaited<ReturnType<Verify>>;
-    try{verified=await input.verify(input.checks,cp.observations,{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:cp.summary,wait_reason:null,completed_checks:input.checks.map(check=>({id:check.id,evidence_ids:cp.observations.map(item=>item.invocation.request_id)}))});}
+    try{verified=await input.verify(input.checks,cp.observations,{action:'complete',stage_id:null,tool_name:null,arguments_json:null,summary:cp.summary,wait_reason:null,completed_checks:input.checks.map(check=>({id:check.id,evidence_ids:latestTurn(cp.observations).map(item=>item.invocation.request_id)}))});}
     catch(error){
       const reason=error instanceof Error&&/^[A-Z][A-Z0-9_]+$/u.test(error.message)?error.message:'WORK_CLIENT_VERIFICATION_TRANSIENT';
       if(['WORK_PAUSED','WORK_EXECUTION_LEASE_LOST','WORK_REVISION_CONFLICT','CONFIG_CHANGED','MODEL_SETTINGS_CHANGED'].includes(reason))throw error;
