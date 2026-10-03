@@ -162,6 +162,9 @@ export class WorkSchedules {
     const passive=this.imported(workId)?'original_runtime':spec.recurrence.kind==='once'?'once':null;
     if(passive){this.store.hermesState.prepare('INSERT INTO office_work_schedule(project_id,work_id,work_revision,rule_sha256,state,anchor_ms,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(work_id) DO UPDATE SET state=excluded.state,work_revision=excluded.work_revision,next_run_ms=NULL,owner=NULL,lease_until_ms=0,updated_at=excluded.updated_at').run(this.project,workId,revision,ruleHash,passive,now,stamp(now),stamp(now));return this.status(workId);}
     requireCondition(typeof rule==='string'&&rule.length>0,'SCHEDULE_RULE_REQUIRED');
+    // A schedule the owner set explicitly (its digest is the stored rule hash) is theirs: the Work's wording is not read
+    // again over it on a scheduled run (live: "매일; 시각 미지정" would have replaced the owner's daily 08:00).
+    if(old?.definition){try{const saved=JSON.parse(old.definition);if(old.rule_sha256===explicitScheduleDigest(saved,null)){this.store.hermesState.prepare('UPDATE office_work_schedule SET work_revision=? WHERE project_id=? AND work_id=?').run(revision,this.project,workId);return this.status(workId);}}catch{/* not an explicit schedule */}}
     // A saved definition is kept unless the rule's own RRULE now reads differently (a definition saved by the normalizer before the code read RRULEs).
     const coded=rruleSchedule(rule,inputZone);
     if(old?.rule_sha256===ruleHash&&old.definition&&(!coded||JSON.stringify(coded)===JSON.stringify(JSON.parse(old.definition)))){this.store.hermesState.prepare('UPDATE office_work_schedule SET work_revision=? WHERE project_id=? AND work_id=?').run(revision,this.project,workId);return this.status(workId);}

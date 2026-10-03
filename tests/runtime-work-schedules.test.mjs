@@ -127,3 +127,13 @@ test('runtime contract a schedule saved before RRULEs were read in code is re-re
   x.store.hermesState.prepare('UPDATE office_work_schedule SET definition=? WHERE work_id=?').run(JSON.stringify({kind:'interval',timezone:'Asia/Seoul',seconds:86400}),x.work.id);
   const again=await x.schedules.prepare(x.work.id,x.work.revision,x.model);assert.equal(again.definition.kind,'daily');assert.equal(again.definition.also_at.length,7);assert.equal(x.calls(),0);
 });
+
+test('runtime contract an owner-set schedule is not normalized again from the Work wording',async t=>{
+  // Live 2026-10-04: the owner asked for a daily send; the Work's rule read "매일; 시각 미지정" and a scheduled run's prepare
+  // would have replaced the owner's daily 08:00 with whatever the normalizer read.
+  const x=await setup(t,{kind:'interval',timezone:'Asia/Seoul',seconds:86400});
+  x.schedules.configureExplicit(x.work.id,x.work.revision,{kind:'daily',timezone:'Asia/Seoul',hour:8,minute:0},{acknowledged:true});
+  x.schedules.enable(x.work.id,x.work.revision,{acknowledged:true});
+  const again=await x.schedules.prepare(x.work.id,x.work.revision,x.model);
+  assert.equal(x.calls(),0,'no normalizer call');assert.equal(again.definition.kind,'daily');assert.equal(again.definition.hour,8);assert.equal(again.enabled,true);
+});
