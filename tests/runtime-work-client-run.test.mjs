@@ -39,10 +39,16 @@ async function setup(t,options={}){
   await writeFile(host,JSON.stringify({schema_version:1,project_id:'client-run-test',caller_ref:'owner',account_ref:'owner',worktree:root,data_dir:join(root,'data'),environment:'production',packs:{sources:[],targets:[],models:'off'},swarm:{enabled:true,model_data_approved:true}}));
   const config=loadHostConfig(host),store=new PackStore(config.dbPath);store.registerProject(config.project);
   const model=fixture(options),runtime=new WorkRuntime(store,config,model),work=await runtime.start({request_id:'client-run',prompt:'파생상품 사례 이미지와 짧은 해설을 만들어줘',...(options.choice?{client:options.choice}:{})});
-  const runs=[];enableClientRun({runner:{run:request=>{runs.push(request);return options.client(request,runs.length);}},executable:client=>`/fake/${client}`});
+  const runs=[],looks=[];enableClientRun({runner:{run:request=>{
+    // The image readback is a separate call of the client: it answers with descriptions and is not a Work turn.
+    if(request.args.includes('-i')||/Describe each image below/u.test(request.stdin??'')){looks.push(request);const names=request.args.includes('-i')?request.args.filter((value,index)=>request.args[index-1]==='-i').map(path=>path.split('/').pop()):[...(request.stdin.match(/^- (.+)$/gmu)??[])].map(line=>line.slice(2));
+      const reply=JSON.stringify(names.map(file=>({file,description:`공책 손필기 스타일의 질문 이미지. 보이는 글: "${file.replace(/\.png$/u,'')} 사례 질문". 정답은 적혀 있지 않다.`})));
+      for(const event of request.args.includes('-i')?[{type:'thread.started',thread_id:'11111111-2222-4333-8444-555555555555'},{type:'item.completed',item:{id:'i0',type:'agent_message',text:reply}},{type:'turn.completed'}]:[{type:'result',subtype:'success',result:reply,session_id:'11111111-2222-4333-8444-555555555555'}])request.onStdout(JSON.stringify(event)+'\n');
+      return {code:0,stdout:'',stderr:''};}
+    runs.push(request);return options.client(request,runs.length);}},executable:client=>`/fake/${client}`});
   const supervisor=new WorkSupervisor(store,config,model,{auto_start:false,tick_ms:20});
   t.after(async()=>{supervisor.close();disableClientRun();store.close();await rm(root,{recursive:true,force:true});});
-  return {root,config,store,model,work,runs,supervisor};
+  return {root,config,store,model,work,runs,looks,supervisor};
 }
 const line=value=>JSON.stringify(value)+'\n';
 const thread='0b7d3c52-8f8e-4b56-9b3e-2f1d4c6a7e10';
@@ -271,6 +277,10 @@ test('runtime fixture the client run gets the owner Windows-side MCP servers and
   enableClientRun({servers:async()=>[{id:'aside',command:'/mnt/c/Tools/aside.exe',args:['mcp','--host','local'],startup_timeout_sec:20},{id:'docs',url:'https://docs.example/mcp'}]});
   x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  // The pictures the run made are read by the client and recorded for the verifier (live: a check on what a PNG shows stayed unknown).
+  assert.equal(x.looks.length,1);assert.ok(x.looks[0].args.includes('-i')&&x.looks[0].args.some(value=>value.endsWith('case-1.png')));
+  const seen=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint).observations.find(item=>item.invocation.tool_name==='office_image_read');
+  assert.equal(seen.receipt.value.images[0].name,'case-1.png');assert.match(seen.receipt.value.images[0].description,/손필기/u);assert.equal(seen.receipt.value.provenance,'client_image_readback');
   const args=x.runs[0].args;
   for(const value of ['mcp_servers.aside.command="/mnt/c/Tools/aside.exe"','mcp_servers.aside.args=["mcp","--host","local"]','mcp_servers.aside.startup_timeout_sec=20','mcp_servers.docs.url="https://docs.example/mcp"'])assert.equal(args[args.indexOf(value)-1],'-c',value);
   assert.ok(args.indexOf('mcp_servers.aside.command="/mnt/c/Tools/aside.exe"')<args.indexOf('exec'),'config overrides come before exec');
