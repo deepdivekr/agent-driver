@@ -578,13 +578,16 @@ export class WorkExecutionTools {
       const bytes=Buffer.from(text,'utf8'),hash=sha(bytes),path=join(dirname(this.config.dbPath),'work-pages',this.workId,`${hash}.txt`);
       await mkdir(dirname(path),{recursive:true,mode:0o700});await writeFile(path,bytes,{mode:0o600});
       const shown=bytes.length>DIGEST_INPUT_BYTES?bytes.subarray(0,DIGEST_INPUT_BYTES).toString('utf8'):text;
-      const answer=pageDigestSchema.parse(await modelForRole(this.model,'worker').call('repair',PAGE_DIGEST_INSTRUCTIONS,{request:this.prompt.slice(0,4000),desired_outcome:this.spec.desired_outcome,page:{url,title,text:shown},links:links.slice(0,40).map(link=>({text:link.text.slice(0,120),url:link.url}))},z.toJSONSchema(pageDigestSchema)));
+      const answer=pageDigestSchema.parse(await (()=>{const reader=modelForRole(this.model,'worker') as StructuredModel&{oneOff?:()=>StructuredModel};return reader.oneOff?.()??reader;})().call('repair',PAGE_DIGEST_INSTRUCTIONS,{request:this.prompt.slice(0,4000),desired_outcome:this.spec.desired_outcome,page:{url,title,text:shown},links:links.slice(0,40).map(link=>({text:link.text.slice(0,120),url:link.url}))},z.toJSONSchema(pageDigestSchema)));
       const sources=answer.source_links.filter(source=>links.some(link=>link.url===source));
       const flat=(value:string)=>value.replace(/\s+/gu,' ').trim(),whole=flat(text),quotes=answer.quotes.filter(quote=>flat(quote).length>=8&&whole.includes(flat(quote)));
       workActivity(this.store,this.config.project.id,this.workId,'source.digested',`A long page (${bytes.length} bytes) was read whole and handed on as a digest; ${quotes.length} quoted passages were found in the page.`,{tool_name:'office_browser_read',status:'succeeded',target_url:url});
       return {text:[answer.summary,...(sources.length?['','Originals this page links to:',...sources]:[]),...(quotes.length?['','Passages copied from the page:',...quotes.map(quote=>`"${flat(quote)}"`)]:[])].join('\n'),
         rendered:{from:'page_digest',text_bytes_total:bytes.length,text_sha256:hash,digest_covers_bytes:Math.min(bytes.length,DIGEST_INPUT_BYTES),quotes_found_in_page:quotes.length,quotes_not_found:answer.quotes.length-quotes.length,note:'The host read the whole page and kept its full text with this Work. The text shown here is a reader model\'s digest of that page for this request; the host found each quoted passage in the page text. This one read covers the page. A read with an offset above 0 returns the page\'s own text from there.'}};
-    }catch{return null;}
+    }catch(error){
+      workActivity(this.store,this.config.project.id,this.workId,'source.digest_failed',`A long page could not be digested (${error instanceof Error&&/^[A-Z][A-Z0-9_]{2,80}$/u.test(error.message)?error.message:'model call failed'}); it is read in parts instead.`,{tool_name:'office_browser_read',status:'retryable_failure',target_url:url});
+      return null;
+    }
   }
   /** An address that starts a download is read as text when it is text. A file that is not (a PDF, an archive) is a
    * read this run cannot make, not the end of the Work (live: one PDF link restarted a run with fifteen good reads). */
@@ -935,20 +938,29 @@ export class WorkExecutionTools {
         },save:cp=>journal.saveCheckpoint(this.config.project.id,checkpointKey,cp)},event:event=>{journal.append(this.config.project.id,this.runId,event);workActivity(this.store,this.config.project.id,this.workId,`browser.${event.kind}`,`${event.engine} / ${event.environment}${event.from?' ← '+event.from:''}${event.reason?' · '+event.reason:''}`,{status:event.kind,executor:event.target_id,engine:event.engine,environment:event.environment,...(event.reason?{reason:event.reason}:{})});}},[origin]);
         try{await browser.open(url);this.browsers.set(key,browser);}catch(error){await browser.close();if(explicit&&downloadStarted(error))return this.downloadedText(explicit);throw error;}
       }else try{await browser.navigate(url);}catch(error){if(explicit&&downloadStarted(error))return this.downloadedText(explicit);throw error;}
-      const observed=browserObservationSchema.parse(await browser.observe());this.guard();
+      let observed=browserObservationSchema.parse(await browser.observe());this.guard();
+      // Social pages draw their posts after the page itself has loaded (live: X showed its signed-in menu with no posts
+      // yet, and the read came back empty). Look again for a few seconds before judging the page.
+      if(socialSite)for(let look=0;look<4&&observed.text.trim().length<400&&!detectAuthGate(observed.url,observed.title,observed.text);look++){await new Promise(done=>setTimeout(done,this.config.environment==='fixture'?0:2000));observed=browserObservationSchema.parse(await browser.observe());this.guard();}
       // Bing wraps each result in a bing.com/ck/a redirect whose `u` parameter is the base64url target.
       if(search?.provider==='bing')observed.links=observed.links.map(link=>({...link,url:bingResultTarget(link.url)}));assertBrowserUrl(observed.url,[origin],this.config.environment==='fixture');
+      let socialSignedIn=false;
       if(socialSite){
         const known=knownLoginSites[socialSite],gate=detectAuthGate(observed.url,observed.title,observed.text);
         const signedIn=!gate&&await browser.extract({ready:known.signed_in,auth_gate:'input[type="password"]',auth_required:false,account_selector:'',account_text:'',rows:known.signed_in,columns:{},max_rows:1}).then(rows=>rows.length>0).catch(()=>false);
         this.guard();
-        if(!signedIn){
+        // A page that shows its posts is a read, whether or not the site's own account menu matched the marker this host
+        // knows (live: Reddit, signed in inside Aside, showed its results but not the expected menu, and the owner was
+        // asked to sign in again). Only a sign-in wall, a challenge or an empty page is a sign-in problem.
+        const readable=!gate&&observed.text.trim().length>=400&&observed.links.length>=5;
+        socialSignedIn=signedIn;
+        if(!signedIn&&!readable){
           this.blockedSocial.add(socialSite);
           workActivity(this.store,this.config.project.id,this.workId,'search.blocked','The registered social browser did not show a current signed-in page. No other profile was tried.',{tool_name:name,status:'retryable_failure',reason:gate==='challenge'?'WORK_SOCIAL_CHALLENGE':'WORK_SOCIAL_AUTH_NOT_VERIFIED',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{})});
           return {status:'retryable_failure',reason:gate==='challenge'?'WORK_SOCIAL_CHALLENGE':gate==='login_limited'?'WORK_SOCIAL_LOGIN_LIMITED':'WORK_SOCIAL_AUTH_NOT_VERIFIED',requested_url:url,observed_at:observed.observed_at,social_site:socialSite,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',social_access:'not_verified',text:'',links:[]};
         }
         // The page showed a signed-in session: remember it, so later runs and the sign-in screen know without a manual check.
-        if(this.unconfirmedSocial.delete(socialSite)&&browser.target){
+        if(signedIn&&this.unconfirmedSocial.delete(socialSite)&&browser.target){
           setSiteAuth(this.store,this.config,socialSite,'ready',false,browser.target);
           workActivity(this.store,this.config.project.id,this.workId,'source.signed_in',`${socialSite} is signed in inside the registered ${browser.target.engine} browser. The sign-in was observed on the page and is remembered.`,{tool_name:name,status:'succeeded',executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment});
         }
@@ -985,7 +997,7 @@ export class WorkExecutionTools {
         workActivity(this.store,this.config.project.id,this.workId,'source.observed',`${observed.title} · ${observed.url}`,{tool_name:name,status:'succeeded',...(browser.target?{executor:browser.target.id,engine:browser.target.engine,environment:browser.target.environment}:{}),source:{url:safeControlText(observed.url,2048),title:safeControlText(observed.title,200),observed_at:observed.observed_at}});
         // Never rewrite observed hrefs or fill absent links with model guesses.
         const fittedLinks=linksThatFit(observed,links);
-        return {...observed,...paging,links:fittedLinks,...(fittedLinks.length<links.length?{links_not_shown:links.length-fittedLinks.length}:{}),omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',...(digest?{rendered:digest.rendered}:{}),...(socialSite?{social_site:socialSite,social_access:'signed_in_marker_observed'}:{}),...(search?{search_provider:search.provider,search_access:'unclassified_dom'}:{})};
+        return {...observed,...paging,links:fittedLinks,...(fittedLinks.length<links.length?{links_not_shown:links.length-fittedLinks.length}:{}),omitted_sensitive_links:observed.links.length-links.length,requested_url:url,provenance:'live_browser_dom',executor:browser.target?.id,effect:'read_only',...(digest?{rendered:digest.rendered}:{}),...(socialSite?{social_site:socialSite,social_access:socialSignedIn?'signed_in_marker_observed':'content_observed'}:{}),...(search?{search_provider:search.provider,search_access:'unclassified_dom'}:{})};
       };
       if(!(explicit&&!search&&pageStart===0&&'has_more' in paging&&paging.has_more))return finish(null);
       const digesting=this.pageDigest(observed.url,observed.title,wholeText,linksThatFit(observed,links).filter(link=>{try{return new URL(link.url).origin!==new URL(observed.url).origin;}catch{return false;}}));
