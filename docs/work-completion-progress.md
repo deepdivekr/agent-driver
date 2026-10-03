@@ -680,3 +680,25 @@ npm 11.11.0, TypeScript 7.0.2, Playwright 1.63.0, 제품 버전 0.4.0 유지.
   - 휴대폰 업무 머리글의 요청 문장, 클라이언트 메시지·오류 행 표시, 설정의 지운 Auto 안내를 고쳤다.
 - 재점검 에이전트 5개가 각 결함의 수정 여부를 다시 확인했다. 전체 quick 2,058/2,059(실패 1건은 OpenCode 기본값에서 접수 화면 스크립트 오류로, 고친 뒤 해당 테스트 통과).
 - 남은 한계: Windows 쪽에만 등록된 MCP 서버(Aside 등)와 Windows 쪽 지침 파일은 아직 WSL 클라이언트 실행에 들어가지 않는다(다음 PR).
+
+## 클라이언트 실행에 Windows 쪽 환경 넘기기 — Aside (2026-10-03)
+
+사용자 지적(2026-10-03): "codex가 aside에 접근 못할리가 없잖아, 클라이언트 세팅을 봐봐. aside가 메인 브라우저급인데 데스크톱 앱에."
+확인 결과, Aside는 Windows Codex 데스크톱 앱 설정(`mcp_servers.aside`: `aside.exe mcp --host local`)과 Windows 쪽 AGENTS.md
+("BrowserOS Neo 우선, 안 되면 Aside, Aside는 `aside` MCP의 `repl` 우선")에만 있다. Office가 실행하는 WSL Codex는 WSL 쪽 설정만 읽어서 둘 다 몰랐다.
+
+- `windowsClientServers`(owner-mcp): Windows 쪽 Codex·Claude 설정의 MCP 서버 가운데, 이 PC에서 띄울 수 있는 Windows 실행 파일(`/mnt/<드라이브>/…`로 실행)과
+  여기서 닿는 주소형 서버를 고른다. WSL 쪽에 같은 이름이 있으면 그쪽을 쓰고, 비활성 서버·환경 값이 필요한 서버·Codex 데스크톱 앱 내부 서버(node_repl, cua_repl)는 뺀다.
+  TOML 작은따옴표 문자열(`'C:\…'`)도 읽게 고쳤다(기존 사용자 MCP 탐색도 같은 이유로 Aside를 놓치고 있었다).
+- 클라이언트 실행: Codex에는 `-c mcp_servers.<이름>.command/args/url/startup_timeout_sec/tool_timeout_sec`, Claude에는 `--mcp-config`로 넘긴다.
+  같은 클라이언트의 Windows 쪽 지침 파일(예: Windows `.codex/AGENTS.md`)을 실행 지시에 붙인다. 둘 다 사용자 MCP 사용이 켜진 서비스 프로세스에서만 읽는다.
+  타임라인에 `windows_mcp · aside, …`로 남긴다.
+- 결과의 링크가 비밀값 가림 규칙(40자 이상 불투명 토큰)에 지워지던 문제: '/'를 토큰의 끝으로 보도록 고쳤다(Reddit 글 링크가 `[REDACTED_OPAQUE_TOKEN]`으로 바뀌었다).
+
+### 실측
+- 격리 data 폴더, "Reddit r/ASTSpaceMobile 최신 글 3개 제목과 게시 시각" 업무, 실제 Codex: Windows MCP `aside`, `openaiDeveloperDocs`를 받아 실행.
+  Codex가 Aside `repl`로 사용자의 로그인된 탭 목록(X 홈 등)을 읽었다. 기존 Reddit 탭에 붙을 때 Aside 데몬이 `CDP command timeout: Page.enable`을 내고
+  잠시 "Aside isn't running"을 돌려줬다(사용자가 말한 '탭이 멈추면 다른 탭으로' 증상과 같다). curl·웹 검색은 Reddit의 사람 확인 페이지에 막혔다.
+  검증 거절 → 같은 세션 수정 1회에서 Aside 브라우저 안의 조회로 최신순 목록(HTTP 200)을 받아 **succeeded, completion_verified**(635초).
+- 남은 것: Aside 탭 멈춤은 Aside 쪽 문제다. Office가 따로 복구하지 않는다(클라이언트가 새 탭·재시도로 스스로 처리했다).
+  BrowserOS Neo(127.0.0.1:9010)는 WSL에서 닿지 않아 넘기지 않았다.

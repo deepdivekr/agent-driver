@@ -207,3 +207,19 @@ test('runtime fixture the default client is the owner default, the other install
   enableClientRun({executable:client=>{if(client==='codex')throw Error('WSL_NATIVE_CLIENT_EXECUTABLE_NOT_FOUND');return '/fake/claude';}});
   assert.equal(defaultWorkClient(selection('codex')).id,'claude','only Claude is installed');
 });
+
+test('runtime fixture the client run gets the owner Windows-side MCP servers and instructions it does not load by itself',async t=>{
+  const {enableOwnerEnvironment,disableOwnerEnvironment}=await import('../dist/integrations/client-environment.js');
+  enableOwnerEnvironment(()=>({instructions:[{app:'codex',file:'AGENTS.md (Windows)',text:'Browse signed-in sites with Aside.'},{app:'codex',file:'AGENTS.md',text:'Local rules the client loads itself.'},{app:'claude',file:'CLAUDE.md (Windows)',text:'Claude only.'}],skills:[]}));t.after(()=>disableOwnerEnvironment());
+  const x=await setup(t,{client:request=>codexTurn(request)});
+  enableClientRun({servers:async()=>[{id:'aside',command:'/mnt/c/Tools/aside.exe',args:['mcp','--host','local'],startup_timeout_sec:20},{id:'docs',url:'https://docs.example/mcp'}]});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  const args=x.runs[0].args;
+  for(const value of ['mcp_servers.aside.command="/mnt/c/Tools/aside.exe"','mcp_servers.aside.args=["mcp","--host","local"]','mcp_servers.aside.startup_timeout_sec=20','mcp_servers.docs.url="https://docs.example/mcp"'])assert.equal(args[args.indexOf(value)-1],'-c',value);
+  assert.ok(args.indexOf('mcp_servers.aside.command="/mnt/c/Tools/aside.exe"')<args.indexOf('exec'),'config overrides come before exec');
+  assert.match(x.runs[0].stdin,/Browse signed-in sites with Aside\./u);assert.doesNotMatch(x.runs[0].stdin,/Local rules the client loads itself|Claude only/u);
+  assert.ok(activity(x).some(row=>row.summary==='windows_mcp · aside, docs'));
+  const claude=clientRunArgs({id:'claude',model:null,effort:null},'/w',null,false,[{id:'aside',command:'/mnt/c/Tools/aside.exe',args:['mcp']},{id:'docs',url:'https://docs.example/mcp'}]);
+  assert.deepEqual(JSON.parse(claude[claude.indexOf('--mcp-config')+1]),{mcpServers:{aside:{type:'stdio',command:'/mnt/c/Tools/aside.exe',args:['mcp']},docs:{type:'http',url:'https://docs.example/mcp'}}});
+});

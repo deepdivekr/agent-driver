@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {ownerMcpServers,refreshOwnerMcp,callOwnerMcp,enableOwnerMcp,disableOwnerMcp,ownerMcpSnapshot} from '../dist/integrations/owner-mcp.js';
+import {ownerMcpServers,refreshOwnerMcp,callOwnerMcp,enableOwnerMcp,disableOwnerMcp,ownerMcpSnapshot,windowsClientServers} from '../dist/integrations/owner-mcp.js';
 
 // Owner direction 2026-10-03: the MCP servers the owner already uses are taken along by themselves. What fits is
 // used, what does not is left out, and nothing is asked one server at a time.
@@ -55,4 +55,25 @@ test('runtime contract server definitions are read from both sides; a Windows pr
   assert.equal(found.sleeping.disabled,true);assert.equal(found.aside.launch,null,'A Windows program is not started from WSL.');
   assert.deepEqual(found.openaideveloperdocs.launch,{kind:'http',url:'https://developers.example.com/mcp'});assert.equal(found.plain.launch,null,'A plain-http address that is not this computer is not used.');
   assert.deepEqual(found.notes.launch,{kind:'http',url:'http://127.0.0.1:9010/mcp'});
+});
+
+// Live 2026-10-03: Aside, the owner's main browser, is registered only in the Windows Codex app, with a literal 'C:\...' path.
+test('runtime fixture a client run gets the Windows-side MCP servers it can start or reach from here',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'windows-mcp-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const local=join(root,'home'),windows=join(root,'win'),mount=join(root,'mnt');
+  await mkdir(join(local,'.codex'),{recursive:true});await mkdir(join(windows,'.codex'),{recursive:true});await mkdir(join(mount,'c','Tools'),{recursive:true});
+  for(const name of ['aside.exe','s.exe','d.exe','p.exe'])await writeFile(join(mount,'c','Tools',name),'');
+  await writeFile(join(local,'.codex','config.toml'),'[mcp_servers.playwright]\ncommand = "npx"\n');
+  await writeFile(join(windows,'.codex','config.toml'),[
+    "[mcp_servers.aside]","command = 'C:\\Tools\\aside.exe'",'args = ["mcp", "--host", "local"]','startup_timeout_sec = 20.0','tool_timeout_sec = 130.0','',
+    "[mcp_servers.node_repl]","command = 'C:\\Users\\o\\AppData\\Local\\OpenAI\\Codex\\runtimes\\node_repl.exe'",'',
+    '[mcp_servers.neo]','url = "http://127.0.0.1:9010/mcp"','',
+    '[mcp_servers.docs]','url = "https://docs.example/mcp"','',
+    "[mcp_servers.secret]","command = 'C:\\Tools\\s.exe'",'[mcp_servers.secret.env]','TOKEN = "never-passed"','',
+    "[mcp_servers.off]","command = 'C:\\Tools\\d.exe'",'enabled = false','',
+    "[mcp_servers.playwright]","command = 'C:\\Tools\\p.exe'",''].join('\n'));
+  await writeFile(join(windows,'.claude.json'),JSON.stringify({mcpServers:{aside:{command:'C:\\Tools\\other.exe'},missing:{command:'C:\\Tools\\gone.exe'}}}));
+  const found=await windowsClientServers({},[{side:'local',home:local},{side:'windows',home:windows}],{mount,reachable:async url=>url.startsWith('https://')});
+  assert.deepEqual(found,[{id:'aside',command:join(mount,'c','Tools','aside.exe'),args:['mcp','--host','local'],startup_timeout_sec:20,tool_timeout_sec:130},{id:'docs',url:'https://docs.example/mcp'}]);
+  assert.deepEqual(await windowsClientServers({},[{side:'local',home:local}]),[],'a computer without a Windows side adds nothing');
 });

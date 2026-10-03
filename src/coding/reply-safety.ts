@@ -11,7 +11,8 @@ export function sanitizeCodingReply(reply:string):{text:string;redacted:boolean}
   text=text.replace(/\beyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}\b/gu,'[REDACTED_JWT]');
   text=text.replace(/-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----[\s\S]*?-----END (?:RSA |EC |OPENSSH )?PRIVATE KEY-----/gu,'[REDACTED_PRIVATE_KEY]');
   text=text.replace(/\b(?:AKIA|ASIA)[A-Z0-9]{16}\b/gu,'[REDACTED_ACCESS_KEY]');
-  // This conservative fallback catches opaque, high-entropy tokens from unknown providers.
-  text=text.replace(/\b(?=[A-Za-z0-9_+/=-]{40,}\b)(?=[A-Za-z0-9_+/=-]*[A-Z])(?=[A-Za-z0-9_+/=-]*[a-z])(?=[A-Za-z0-9_+/=-]*[0-9])[A-Za-z0-9_+/=-]{40,}\b/gu,'[REDACTED_OPAQUE_TOKEN]');
+  // This conservative fallback catches opaque, high-entropy tokens from unknown providers. A '/' ends a token, so a link's
+  // path is not taken for one (live 2026-10-03: a Reddit permalink in a result was masked and the link was lost).
+  text=text.replace(/\b(?=[A-Za-z0-9_+=-]{40,}\b)(?=[A-Za-z0-9_+=-]*[A-Z])(?=[A-Za-z0-9_+=-]*[a-z])(?=[A-Za-z0-9_+=-]*[0-9])[A-Za-z0-9_+=-]{40,}\b/gu,'[REDACTED_OPAQUE_TOKEN]');
   return {text,redacted:text!==reply};
 }

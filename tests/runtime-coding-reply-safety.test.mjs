@@ -21,3 +21,10 @@ test('coding answer keeps ordinary prose but masks credentials before persistenc
     assert.equal(result.text.includes(secret),false,secret);
   }
 });
+
+test('a link path is kept while an opaque token is still masked',()=>{
+  const link='https://www.reddit.com/r/ASTSpaceMobile/comments/1wwdmyw/ast_spacemobile_asts_daily_discussion_thread/';
+  assert.equal(sanitizeCodingReply(`Read ${link}`).text,`Read ${link}`);
+  const token=['Zx9','Qw8','Er7','Ty6','Ui5','Op4','As3','Df2','Gh1','Jk0','LmNoPq','Rs7Tu8'].join('');assert.ok(token.length>=40);
+  assert.equal(sanitizeCodingReply(`key ${token}`).text.includes(token),false);
+});
