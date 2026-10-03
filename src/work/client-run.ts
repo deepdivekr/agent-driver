@@ -317,7 +317,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
   // A new direction starts a new round of corrections, and so does the owner's resume or retry after they ran out.
   if(session().repairs&&(fresh.length||input.resumed&&session().repairs>=WORK_COMPLETION_REPAIR_BUDGET))update({repairs:0});
   let next:string|null=!session().confirmed?initialPrompt(input)
-    :fresh.length?`The owner changed the instruction for this Work:\n${fresh.map(item=>`- ${item.instruction}`).join('\n')}\n\nContinue in the same folder with this change. Finish with the same kind of short reply.`
+    :fresh.length?`The owner changed the instruction for this Work:\n${fresh.map(item=>`- ${item.instruction}`).join('\n')}\n\nContinue in the same folder with this change. Office passed it on as it is and did not change the Work. Where it changes what a completion condition asks, follow the direction and say so in that condition's note. Update DELIVERY.md, write ${COMPLETION_FILE} again, and finish with the same kind of short reply.`
     :!session().finished?'The run was interrupted. Continue the Work where you stopped, in the same folder, and finish with the short reply.':null;
   const meta=(extra:WorkActivityMetadata={}):WorkActivityMetadata=>({run_id,stage_id:'execution',model_provider:client,executor:client,...extra});
   // The owner's Windows-side servers are looked at only when the client actually runs.

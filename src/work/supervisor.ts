@@ -329,7 +329,15 @@ export class WorkSupervisor {
       const pin=pinWorkClient(this.store,project,row.work_id,undefined,readModelSettings(modelSettingsPath(this.config)));
       if(pin&&model instanceof ConfiguredStructuredModel)model=model.forClient(pin.id,pin.model);
       if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
-      if(row.replan_required){
+      // A Work the client's own agent runs takes a new direction as it is: Office hands it to the same client session and
+      // does not rewrite the Work (owner 2026-10-04: "just toss it to the client; no replanning" — a replan had renamed the
+      // Work, made it daily and added completion checks nobody asked for).
+      const savedCheckpoint=row.checkpoint==='null'?null:JSON.parse(row.checkpoint) as WorkClientCheckpoint|SupervisedSwarmCheckpoint;
+      const clientWork=Boolean(pin&&clientRunEnabled()&&clientRunEligible(this.store,project,row.work_id,spec)&&(!savedCheckpoint||'client_session' in savedCheckpoint&&Boolean(savedCheckpoint.client_session)||row.resume_wait===1&&!('kind' in savedCheckpoint)));
+      if(row.replan_required&&clientWork){
+        db.prepare('UPDATE office_supervisor SET replan_required=0 WHERE project_id=? AND run_id=? AND owner=?').run(project,row.run_id,row.owner);
+        workActivity(this.store,project,row.work_id,'supervisor.direction','새 지침을 Office가 다시 계획하지 않고 그대로 클라이언트 세션에 넘깁니다.',{run_id:row.run_id,stage_id:'execution',status:'running'});
+      }else if(row.replan_required){
         guard();workActivity(this.store,project,row.work_id,'supervisor.replanning','새 지침에 맞춰 완료조건과 다음 단계를 갱신합니다. 이전 실행 증거는 보존합니다.');
         const instructions=WORK_REPLANNING_INSTRUCTIONS+'\n'+WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS+'\n'+WORK_COLLECTION_CONTRACT_INSTRUCTIONS+'\nobserved_source_schemas contains host-validated field names from this Work\'s retained successful Pack responses. Use their exact names when interpreting the collection contract; no configured declaration is required when a field was actually observed. The saved_response_rows scope is one explicit source response, not unobserved upstream pages or current freshness. Preserve every original requirement and previous receipt. These descriptors are context, not evidence of completion or permission to replay effects.',input={work_id:row.work_id,prompt:work.prompt,mode:work.mode,answers:work.answers,previous_spec:spec,user_directions:this.store.workDirections(project,row.work_id),user_intake:readWorkIntakeOptions(this.store,project,row.work_id),...(this.api.work?.planningContext(row.work_id)??{...workPlanningContext(this.store,this.config),observed_source_schemas:observedWorkSourceSchemas(this.store,this.config,row.work_id)})};
         const priorImport=workImportExecutionOwner(this.store,project,row.work_id)==='office'?spec.plan:null;
