@@ -86,6 +86,7 @@ test('runtime fixture a verification denial goes back to the same Codex session'
   assert.equal(x.runs.length,2);assert.equal(x.model.verifications,2);
   assert.deepEqual(x.runs[1].args.slice(-6),['exec','resume','--json','--skip-git-repo-check',thread,'-']);
   assert.match(x.runs[1].stdin,/Not met: images \(사례 이미지 파일과 해설이 있다\)\. Reason: Only one image was made; five were asked\./u);
+  assert.ok(activity(x).some(row=>row.kind==='supervisor.client_run'&&/거절된 조건 images의 수정을 같은 세션에 요청합니다 \(1\/3\): Only one image was made/u.test(row.summary)),'the owner sees the repair request');
 });
 
 test('runtime fixture the AI chosen at intake runs the Work; a Claude run stopped for a new direction resumes its own session with that direction',async t=>{
