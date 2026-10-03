@@ -701,7 +701,7 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
       const value=object(item.receipt.value),urls=[item.invocation.arguments.url,value?.url,value?.requested_url].filter((url):url is string=>typeof url==='string'&&url.length>8);
       // The host's own state reads (the schedule) are small and are what a check about that state rests on (live: the
       // schedule read was only listed and the check on it could not be decided).
-      return item.invocation.tool_name===controlledTraceTool||['office_result_draft','office_result_read','office_schedule_status','office_delivery_status'].includes(item.invocation.tool_name)||item.receipt.evidence_ids.some(id=>savedText.includes(id))||savedText.includes(item.invocation.request_id)||urls.some(url=>savedText.includes(url)||savedText.includes(url.replace(/[?#].*$/u,'').replace(/\/$/u,'')));
+      return item.invocation.tool_name===controlledTraceTool||['office_result_draft','office_result_read','office_schedule_status','office_delivery_status','office_image_read'].includes(item.invocation.tool_name)||item.receipt.evidence_ids.some(id=>savedText.includes(id))||savedText.includes(item.invocation.request_id)||urls.some(url=>savedText.includes(url)||savedText.includes(url.replace(/[?#].*$/u,'').replace(/\/$/u,'')));
     };
     // The claim's own citations are normalised by the host to every receipt, so only the saved result decides.
     // A result that names fewer than two of its reads gives no selection, and everything is shown as before.

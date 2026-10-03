@@ -222,6 +222,28 @@ export function clientResultText(finalMessage:string,files:ProducedFile[]){
   return cutBytes(body,RECORD_BYTES);
 }
 
+/** What the pictures a run made show, read by the Work's own client (Codex sees them as input, Claude Code reads the
+ * files): a host receipt the verifier can judge a check about image content against (live: "PNG의 실제 시각 내용은
+ * 제공되지 않아" left a check unknown while everything else was confirmed). One call for up to ten pictures. */
+export async function describeImages(client:RunClient,model:string|null,folder:string,images:ProducedFile[],signal:AbortSignal):Promise<{images:Array<{name:string;description:string}>;raw:string}|null>{
+  const shown=images.slice(0,10);if(!shown.length)return null;
+  const prompt=`Describe each image below for a reviewer who cannot see it. Reply with ONE JSON array only, no prose: [{"file":"<file name>","description":"<what it shows: layout, style (for example notebook handwriting, chart, photo), every piece of visible text quoted exactly, and whether it states a full answer or only a question/hook>"}]. Files, in order:\n${shown.map(file=>`- ${file.name}`).join('\n')}`;
+  const args=client==='codex'?['-C',folder,...(model?['-m',model]:[]),'--dangerously-bypass-approvals-and-sandbox','exec','--json','--skip-git-repo-check',...shown.flatMap(file=>['-i',file.path]),'-']
+    :['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions',...(model?['--model',model]:[])];
+  let pending='',answer='';
+  const observe=(chunk:string)=>{pending+=chunk;for(;;){const at=pending.indexOf('\n');if(at<0)break;const line=pending.slice(0,at);pending=pending.slice(at+1);if(!line.trim())continue;let event:Json;try{event=object(JSON.parse(line));}catch{continue;}
+    if(client==='codex'){const item=object(event.item);if(event.type==='item.completed'&&item.type==='agent_message'&&text(item.text))answer=text(item.text);}
+    else if(event.type==='result'&&text(event.result))answer=text(event.result);}};
+  try{
+    const result=await runner.run({executable:executable(client),args,cwd:folder,stdin:client==='codex'?prompt:`${prompt}\nRead each file with your file tools; the paths are under ${folder}.`,timeout_ms:300_000,signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:2_097_152,onStdout:observe});
+    observe('\n');if(result.code!==0||!answer.trim())return null;
+  }catch{return null;}
+  const raw=sanitizeCodingReply(answer).text.slice(0,12000),match=raw.match(/\[[\s\S]*\]/u);
+  let parsed:Array<{name:string;description:string}>=[];
+  try{const list=JSON.parse(match?.[0]??'[]');if(Array.isArray(list))parsed=list.map(entry=>object(entry)).map(entry=>({name:text(entry.file)||text(entry.name),description:text(entry.description).slice(0,1500)})).filter(entry=>entry.name&&entry.description);}catch{/* the raw text stays */}
+  const byName=new Map(parsed.map(entry=>[basename(entry.name),entry.description]));
+  return {images:shown.map(file=>({name:file.name,description:byName.get(basename(file.name))??byName.get(file.name)??''})).filter(entry=>entry.description),raw:parsed.length?'':raw};
+}
 export interface ClientRunInput {
   client:RunClient;model:string|null;effort:WorkClientChoice['effort'];work_id:string;run_id:string;folder:string;title:string;prompt:string;checks:Check[];
   /** What intake settled with the owner: answers, agreed scope, collection window, the host schedule. */
@@ -336,6 +358,16 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
           if(tool!=='office_result_read'||receipt.status!=='succeeded'||paging.has_more!==true||typeof paging.next_offset!=='number'||page>=7)break;
           offset=paging.next_offset;
         }
+      }
+      // The pictures are read by the Work's client so a check about what they show has a host receipt to rest on.
+      const pictures=files.filter(file=>file.sha256&&/\.(?:png|jpe?g|webp|gif)$/iu.test(file.name)&&file.bytes<=10*1024*1024);
+      if(pictures.length){
+        const seen=await describeImages(client,input.model,input.folder,pictures,input.signal);input.guard();
+        if(seen&&(seen.images.length||seen.raw)){
+          const imagesId=`client-images-${hashJson({run_id,turn:cp.turn,names:pictures.map(file=>file.name)}).slice(0,24)}`;
+          cp={...cp,turn:cp.turn+1,observations:[...cp.observations,{invocation:{request_id:imagesId,turn:cp.turn,stage_id:'execution',tool_name:'office_image_read',arguments:{files:pictures.slice(0,10).map(file=>file.name)},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:boundWorkToolValue({status:'succeeded',images:seen.images,...(seen.raw?{notes:seen.raw}:{}),read_by:`${clientName(client)} (the Work's client) looking at the image files Office found in the Work folder`,provenance:'client_image_readback',effect:'read_only'}),evidence_ids:[imagesId],effect_state:'none',retry_safe:true},observed_at:new Date().toISOString()}]};
+          input.activity('tool.result',`office_image_read · ${seen.images.length}/${pictures.slice(0,10).length}장`,meta({tool_name:'office_image_read',status:'succeeded'}));
+        }else input.activity('tool.result','office_image_read · 이미지 설명을 받지 못했습니다',meta({tool_name:'office_image_read',status:'failed'}));
       }
       update({finished:true});
       input.activity('supervisor.client_run',`${clientName(client)} · 실행을 마쳤습니다. 만든 파일 ${files.length}개를 결과로 저장했습니다.`,meta({status:'succeeded'}));
