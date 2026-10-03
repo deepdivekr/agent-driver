@@ -251,6 +251,19 @@ test('runtime fixture a resumed run looks again at a site whose sign-in was not 
   }
 });
 
+// Live (2026-10-03): X's search showed "문제가 발생했습니다. 새로고침해 보세요." in one tab and worked when opened again.
+test('runtime fixture a site\'s own "try reloading" page is reloaded, and social searches ask for the newest posts',async t=>{
+  const page='https://x.com/search?q=ASTS&f=live',request='ASTS 주식 종목 X 반응을 '+page+' 에서 확인해줘',holder={};
+  // The error page stays until the page is opened again, however long it is watched.
+  const reloaded=()=>holder.x?.events.some(event=>event.kind==='navigate'&&event.url===page);
+  const x=await setup(t,{browser:null,prompt:request,workPolicy:{model_data_approved:true,autonomy:'delegated'},observe:(target,url)=>!reloaded()?observation(url,{title:'X',text:'문제가 발생했습니다. 새로고침해 보세요. 다시 시도',links:[]}):observation(url,{title:'ASTS - 검색 / X',text:'Retail investors discuss the launch. '.repeat(20),links:Array.from({length:8},(_,index)=>({text:`Post ${index}`,url:`https://x.com/user/status/${index}`}))})});
+  holder.x=x;const value=await x.create().execute('office_browser_read',{url:page},'x-reload');
+  assert.equal(value.title,'ASTS - 검색 / X');assert.equal(opens(x).filter(event=>event.url===page).length,2,'The page was opened once and reloaded once.');
+  const {socialSearchUrlForTest}=await import('../dist/work/execution-tools.js');
+  assert.equal(socialSearchUrlForTest({site:'reddit.com',query:'ASTS'}),'https://www.reddit.com/search/?q=ASTS&type=posts&sort=new');
+  assert.equal(socialSearchUrlForTest({site:'x.com',query:'ASTS'}),'https://x.com/search?q=ASTS&f=live');
+});
+
 // B5 (P2 live): a CSV/JSON feed URL only starts a browser download. The host
 // reads such public text resources over HTTPS in bounded pages.
 test('runtime contract a public text resource is read over HTTPS in pages with its hash, never through a browser download',async t=>{
