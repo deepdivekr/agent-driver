@@ -29,10 +29,10 @@ type Verify=(checks:Check[],observations:WorkClientCheckpoint['observations'],cl
 
 // The owner's Windows-side MCP servers (Aside, their main browser, lives there) go to the client only in a process where the
 // owner's own MCP servers may be used: a service process, never a test reading the developer's home.
-const ownerServers=async():Promise<ClientRunMcpServer[]>=>ownerMcpEnabled()?windowsClientServers():[];
+const ownerServers=async(client:RunClient):Promise<ClientRunMcpServer[]>=>ownerMcpEnabled()?windowsClientServers(client):[];
 let enabled=false,runner:SafeProcessRunner=nativeProcessRunner,executable:(client:RunClient)=>string=client=>resolveSubscriptionClientExecutable(client),servers=ownerServers;
 /** Service entries make the client's own agent the Work executor; AGENT_OFFICE_CLIENT_RUN=off keeps the host-tool loop. */
-export function enableClientRun(options:{runner?:SafeProcessRunner;executable?:(client:RunClient)=>string;servers?:()=>Promise<ClientRunMcpServer[]>}={}){
+export function enableClientRun(options:{runner?:SafeProcessRunner;executable?:(client:RunClient)=>string;servers?:(client:RunClient)=>Promise<ClientRunMcpServer[]>}={}){
   enabled=process.env.AGENT_OFFICE_CLIENT_RUN!=='off';
   if(options.runner)runner=options.runner;if(options.executable)executable=options.executable;if(options.servers)servers=options.servers;
 }
@@ -254,10 +254,11 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     :fresh.length?`The owner changed the instruction for this Work:\n${fresh.map(item=>`- ${item.instruction}`).join('\n')}\n\nContinue in the same folder with this change. Finish with the same kind of short reply.`
     :!session().finished?'The run was interrupted. Continue the Work where you stopped, in the same folder, and finish with the short reply.':null;
   const meta=(extra:WorkActivityMetadata={}):WorkActivityMetadata=>({run_id,stage_id:'execution',model_provider:client,executor:client,...extra});
-  const extra=await servers().catch(()=>[]);
+  // The owner's Windows-side servers are looked at only when the client actually runs.
+  let extra:ClientRunMcpServer[]|null=null;
   for(;;){
     if(next){
-      input.guard();update({finished:false,direction_at:latest});
+      input.guard();update({finished:false,direction_at:latest});extra??=await servers(client).catch(()=>[]);
       input.activity('supervisor.client_run',`${clientName(client)} · ${session().confirmed?'같은 세션을 이어서 실행합니다.':'사용자 설정 그대로 업무 폴더에서 실행을 시작합니다.'}`,meta({status:'running',model_continuity:session().confirmed?'resumed_session':'new_session'}));
       if(extra.length)input.activity('tool.result',`windows_mcp · ${extra.map(server=>server.id).join(', ')}`,meta({tool_name:'windows_mcp',status:'succeeded'}));
       // The owner's pause or direction change aborts the run; the guard turns a lost lease or a changed Work into a stop.

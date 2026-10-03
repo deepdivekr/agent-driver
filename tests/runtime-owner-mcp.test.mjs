@@ -61,19 +61,57 @@ test('runtime contract server definitions are read from both sides; a Windows pr
 test('runtime fixture a client run gets the Windows-side MCP servers it can start or reach from here',async t=>{
   const root=await mkdtemp(join(tmpdir(),'windows-mcp-'));t.after(()=>rm(root,{recursive:true,force:true}));
   const local=join(root,'home'),windows=join(root,'win'),mount=join(root,'mnt');
-  await mkdir(join(local,'.codex'),{recursive:true});await mkdir(join(windows,'.codex'),{recursive:true});await mkdir(join(mount,'c','Tools'),{recursive:true});
-  for(const name of ['aside.exe','s.exe','d.exe','p.exe'])await writeFile(join(mount,'c','Tools',name),'');
+  await mkdir(join(local,'.codex'),{recursive:true});await mkdir(join(windows,'.codex'),{recursive:true});await mkdir(join(mount,'c','Tools'),{recursive:true});await mkdir(join(mount,'d','Apps'),{recursive:true});
+  for(const name of ['aside.exe','node.exe','multi.exe','bad.exe','s.exe','v.exe','h.exe','d.exe','p.exe','office.exe'])await writeFile(join(mount,'c','Tools',name),'');
+  await writeFile(join(mount,'d','Apps','slash.exe'),'');
   await writeFile(join(local,'.codex','config.toml'),'[mcp_servers.playwright]\ncommand = "npx"\n');
+  await writeFile(join(local,'.claude.json'),JSON.stringify({mcpServers:{aside:{command:'aside'}}}));
   await writeFile(join(windows,'.codex','config.toml'),[
     "[mcp_servers.aside]","command = 'C:\\Tools\\aside.exe'",'args = ["mcp", "--host", "local"]','startup_timeout_sec = 20.0','tool_timeout_sec = 130.0','',
+    "[mcp_servers.nodejs]","command = 'C:\\Tools\\node.exe'","args = ['C:\\Users\\o\\mcp\\index.js']",'',
+    "[mcp_servers.multi]","command = 'C:\\Tools\\multi.exe'",'args = [','  "serve", # the mode','  \'--port=1\',',']','',
+    "[mcp_servers.bad]","command = 'C:\\Tools\\bad.exe'",'args = [1, 2]','',
+    "[mcp_servers.slash]","command = 'D:/Apps/slash.exe'",'',
     "[mcp_servers.node_repl]","command = 'C:\\Users\\o\\AppData\\Local\\OpenAI\\Codex\\runtimes\\node_repl.exe'",'',
     '[mcp_servers.neo]','url = "http://127.0.0.1:9010/mcp"','',
     '[mcp_servers.docs]','url = "https://docs.example/mcp"','',
+    '[mcp_servers.authed]','url = "https://private.example/mcp"','bearer_token_env_var = "PRIVATE_TOKEN"','',
     "[mcp_servers.secret]","command = 'C:\\Tools\\s.exe'",'[mcp_servers.secret.env]','TOKEN = "never-passed"','',
+    "[mcp_servers.inline]","command = 'C:\\Tools\\v.exe'",'env = { TOKEN = "never-passed" }','',
     "[mcp_servers.off]","command = 'C:\\Tools\\d.exe'",'enabled = false','',
-    "[mcp_servers.playwright]","command = 'C:\\Tools\\p.exe'",''].join('\n'));
-  await writeFile(join(windows,'.claude.json'),JSON.stringify({mcpServers:{aside:{command:'C:\\Tools\\other.exe'},missing:{command:'C:\\Tools\\gone.exe'}}}));
-  const found=await windowsClientServers({},[{side:'local',home:local},{side:'windows',home:windows}],{mount,reachable:async url=>url.startsWith('https://')});
-  assert.deepEqual(found,[{id:'aside',command:join(mount,'c','Tools','aside.exe'),args:['mcp','--host','local'],startup_timeout_sec:20,tool_timeout_sec:130},{id:'docs',url:'https://docs.example/mcp'}]);
-  assert.deepEqual(await windowsClientServers({},[{side:'local',home:local}]),[],'a computer without a Windows side adds nothing');
+    "[mcp_servers.playwright]","command = 'C:\\Tools\\p.exe'",'',
+    "[mcp_servers.agent-driver]","command = 'C:\\Tools\\office.exe'",''].join('\n'));
+  await writeFile(join(windows,'.claude.json'),JSON.stringify({mcpServers:{off:{command:'C:\\Tools\\d.exe'},hosted:{type:'sse',url:'https://sse.example/mcp'},headered:{type:'http',url:'https://h.example/mcp',headers:{Authorization:'x'}},gone:{command:'C:\\Tools\\gone.exe'}}}));
+  const homes=[{side:'local',home:local},{side:'windows',home:windows}],options={mount,reachable:async url=>url.startsWith('https://')};
+  const tools=join(mount,'c','Tools');
+  assert.deepEqual(await windowsClientServers('codex',{},homes,options),[
+    {id:'aside',command:join(tools,'aside.exe'),args:['mcp','--host','local'],startup_timeout_sec:20,tool_timeout_sec:130},
+    {id:'nodejs',command:join(tools,'node.exe'),args:['C:\\Users\\o\\mcp\\index.js']},
+    {id:'multi',command:join(tools,'multi.exe'),args:['serve','--port=1']},
+    {id:'slash',command:join(mount,'d','Apps','slash.exe'),args:[]},
+    {id:'docs',url:'https://docs.example/mcp'}]);
+  const claude=(await windowsClientServers('claude',{},homes,options)).map(server=>server.id);
+  assert.equal(claude.includes('aside'),false,'the local Claude config defines aside, so its own definition is used');
+  assert.ok(claude.includes('playwright'),'only the local Codex config defines playwright');
+  assert.deepEqual(await windowsClientServers('codex',{},[{side:'local',home:local}]),[],'a computer without a Windows side adds nothing');
+});
+
+test('runtime fixture Windows server selection reads TOML like Codex does and never lets a local name or a broken entry hide a working one',async t=>{
+  const root=await mkdtemp(join(tmpdir(),'windows-mcp-toml-'));t.after(()=>rm(root,{recursive:true,force:true}));
+  const local=join(root,'home'),windows=join(root,'win'),mount=join(root,'mnt'),tools=join(mount,'c','Tools');
+  await mkdir(join(local,'.codex'),{recursive:true});await mkdir(join(windows,'.codex'),{recursive:true});await mkdir(tools,{recursive:true});
+  for(const name of ['color.exe','aside.exe','g.exe','x.exe','inline.exe','dotted.exe','hdr.exe','table.exe'])await writeFile(join(tools,name),'');
+  await writeFile(join(local,'.codex','config.toml'),['# mcp_servers: aside was removed','[mcp_servers.aside-dev]','command = "aside"','[mcp_servers]','inline = { url = "http://127.0.0.1:7777/mcp" }','mcp_servers.dotted.url = "http://127.0.0.1:7778/mcp"',''].join('\n'));
+  await writeFile(join(windows,'.codex','config.toml'),[
+    "[mcp_servers.color]","command = 'C:\\Tools\\color.exe'",'args = ["--color=#fff", "tab\\there", \'C:\\\\C#\\\\x\'] # trailing comment','',
+    "[mcp_servers.aside]","command = 'C:\\Tools\\aside.exe'",'',
+    '[mcp_servers.dup]','command = "npx"','',
+    "[mcp_servers.inline]","command = 'C:\\Tools\\inline.exe'",'',
+    "[mcp_servers.dotted]","command = 'C:\\Tools\\dotted.exe'",'',
+    "[mcp_servers.hdr]","command = 'C:\\Tools\\hdr.exe'",'[mcp_servers.hdr.http_headers]','X-Key = "never-passed"','',
+    "[mcp_servers.table]","command = 'C:\\Tools\\table.exe'",'[mcp_servers.table.tools.search]','approve = true',''].join('\n'));
+  await writeFile(join(windows,'.claude.json'),JSON.stringify({mcpServers:{dup:{command:'C:\\Tools\\g.exe'}}}));
+  const found=await windowsClientServers('codex',{},[{side:'local',home:local},{side:'windows',home:windows}],{mount,reachable:async()=>true});
+  assert.deepEqual(found.map(server=>[server.id,server.args]),[['color',['--color=#fff','tab\there','C:\\\\C#\\\\x']],['aside',[]],['dup',[]],['table',[]]]);
+  assert.equal(found.find(server=>server.id==='dup').command,join(tools,'g.exe'),'a later working entry is used when the first cannot be started');
 });

@@ -110,7 +110,7 @@ export function ownerEnvironment(environment:NodeJS.ProcessEnv=process.env,place
   for(const place of homes){
     const codex=place.side==='local'&&environment.CODEX_HOME||join(place.home,'.codex'),claude=place.side==='local'&&environment.CLAUDE_CONFIG_DIR||join(place.home,'.claude'),label=place.side==='windows'?' (Windows)':'';
     for(const [app,path,file] of [['codex',join(codex,'AGENTS.md'),'AGENTS.md'],['claude',join(claude,'CLAUDE.md'),'CLAUDE.md']] as const){
-      const body=standing(path);if(body&&!instructions.some(item=>item.text===body))instructions.push({app,file:file+label,text:body});
+      const body=standing(path);if(body&&!instructions.some(item=>item.app===app&&item.text===body))instructions.push({app,file:file+label,text:body});
     }
     for(const [app,root] of [['codex',join(codex,'skills')],['claude',join(claude,'skills')]] as const)for(const entry of folders(root).sort()){
       const item={app,name:name(entry),description:skillDescription(join(root,entry))};
