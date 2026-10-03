@@ -288,14 +288,17 @@ test('runtime fixture the owner receives the client DELIVERY.md, not the verific
   assert.match(result.text,/Files made in this run/u,'the saved record keeps the file list for verification');
 });
 
-test('runtime fixture the readback of a long saved result covers every page',async t=>{
+test('runtime fixture the saved record fits one readback page whole and the readback covers it',async t=>{
   // Live 2026-10-03: a check on the delivery text stayed unresolved because the one readback page ended mid-way.
   const x=await setup(t,{client:request=>{writeFileSync(join(request.cwd,'explanations-long.md'),Array.from({length:120},(_,i)=>`## 사례 ${i+1}\n파생상품 해설 문장이 이어집니다. 증거금과 레버리지, 만기와 시간가치를 쉬운 말로 설명합니다. 번호 ${i+1}.`).join('\n\n'));return codexTurn(request);}});
   x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
   const checkpoint=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint),pages=checkpoint.observations.filter(item=>item.invocation.tool_name==='office_result_read');
-  assert.ok(pages.length>=2,`pages: ${pages.length}`);
-  assert.equal(pages[0].invocation.arguments.offset,0);assert.equal(pages[1].invocation.arguments.offset,pages[0].receipt.value.page.next_offset);
+  // The record is kept within one readback page; the paging follows has_more when a page ever ends early.
+  assert.ok(pages.length>=1,`pages: ${pages.length}`);assert.equal(pages[0].invocation.arguments.offset,0);
+  for(let i=1;i<pages.length;i++)assert.equal(pages[i].invocation.arguments.offset,pages[i-1].receipt.value.page.next_offset);
   assert.equal(pages.at(-1).receipt.value.page.has_more,false);
   assert.equal(pages.reduce((sum,page)=>sum+page.receipt.value.page.returned_bytes,0),pages[0].receipt.value.page.total_bytes,'the pages add up to the whole saved result');
+  const draft=checkpoint.observations.find(item=>item.invocation.tool_name==='office_result_draft');
+  assert.ok(!('_office_compaction' in draft.receipt.value),'the saved record fits a receipt whole');assert.ok(Buffer.byteLength(JSON.stringify(draft.receipt.value))<=16000);
 });

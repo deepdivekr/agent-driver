@@ -206,16 +206,20 @@ export function deliveryMessage(folder:string,finalMessage:string){
   let text='';try{const path=join(folder,'DELIVERY.md');if(lstatSync(path).isFile())text=readFileSync(path,'utf8');}catch{/* none written */}
   return sanitizeCodingReply((text.trim()||finalMessage).trim()).text.slice(0,12000);
 }
-/** The saved result: the client's final reply, the files it made, and the text of small text files, within 16000 characters. */
+/** The saved result, within one readback page (live: a record split over two pages was judged "cut mid-sentence"): the
+ * message for the owner first (DELIVERY.md), then the client's final reply, the files it made, and small text files. */
+const RECORD_BYTES=9500;
+const cutBytes=(value:string,bytes:number)=>{let used=0,out='';for(const char of value){const size=Buffer.byteLength(char);if(used+size>bytes)break;used+=size;out+=char;}return out;};
 export function clientResultText(finalMessage:string,files:ProducedFile[]){
+  const delivery=files.find(file=>file.name==='DELIVERY.md'&&file.bytes<=65_536),text=(file:ProducedFile)=>sanitizeCodingReply(readFileSync(file.path,'utf8')).text;
   const list=files.length?`\n\nFiles made in this run (Work folder):\n${files.map(file=>`- ${file.name} (${file.media_type}, ${file.bytes} bytes${file.sha256?'':', too large to download from Office; it stays in the run folder'})`).join('\n')}`:'\n\nNo file was made in the Work folder in this run.';
-  let body=`${sanitizeCodingReply(finalMessage.trim()).text.slice(0,6000)||'(no final reply)'}${list}`;
+  let body=`${delivery?`── DELIVERY.md ──\n${cutBytes(text(delivery),6000)}\n\n`:''}Final reply:\n${cutBytes(sanitizeCodingReply(finalMessage.trim()).text,2500)||'(no final reply)'}${cutBytes(list,1500)}`;
   // Smaller files first, so each one that fits is complete (live: a long JSON cut mid-way left the checks on it undecided).
-  for(const file of files.filter(item=>/^text\/|^application\/json$/u.test(item.media_type)&&item.bytes<=65_536).sort((a,b)=>a.bytes-b.bytes)){
-    const room=15_800-body.length;if(room<400)break;
-    body+=`\n\n── ${file.name} ──\n${sanitizeCodingReply(readFileSync(file.path,'utf8')).text.slice(0,room-file.name.length-10)}`;
+  for(const file of files.filter(item=>item!==delivery&&/^text\/|^application\/json$/u.test(item.media_type)&&item.bytes<=65_536).sort((a,b)=>a.bytes-b.bytes)){
+    const room=RECORD_BYTES-Buffer.byteLength(body)-Buffer.byteLength(file.name)-12;if(room<400)break;
+    body+=`\n\n── ${file.name} ──\n${cutBytes(text(file),room)}`;
   }
-  return body.slice(0,16000);
+  return cutBytes(body,RECORD_BYTES);
 }
 
 export interface ClientRunInput {
