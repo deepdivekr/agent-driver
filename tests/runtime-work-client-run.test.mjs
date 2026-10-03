@@ -379,3 +379,15 @@ test('runtime fixture a direction for a client-run Work goes to the client sessi
   const directed=x.runs.at(-1);assert.match(directed.stdin,/The owner changed the instruction for this Work:\n- 사례를 중급 난이도로 올려줘/u);assert.match(directed.stdin,/did not change the Work/u);
   assert.ok(activity(x).some(row=>row.kind==='supervisor.direction'));
 });
+
+test('runtime fixture the result is what the latest turn made; older files in the folder stay out of it',async t=>{
+  // Live 2026-10-04: copies of yesterday's cases in the run folder took the result's file slots; three of today's five pictures went out.
+  const x=await setup(t,{client:(request,turn)=>{if(turn===2){writeFileSync(join(request.cwd,'today.png'),Buffer.from([0x89,0x50,0x4e,0x47,9]));for(const event of [{type:'item.completed',item:{id:'i9',type:'agent_message',text:'today.png 를 만들었습니다.'}},{type:'turn.completed'}])request.onStdout(JSON.stringify(event)+'\n');return {code:0,stdout:'',stderr:''};}return codexTurn(request);}});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();await settle(x);
+  await delay(1100);
+  x.supervisor.action({work_id:x.work.work_id,revision:x.store.intakeWork(x.config.project.id,x.work.work_id).revision,action:'edit',instruction:'오늘 것을 새로 만들어'});
+  x.supervisor.action({work_id:x.work.work_id,revision:x.store.intakeWork(x.config.project.id,x.work.work_id).revision,action:'resume'});x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  const results=await new WorkResults(x.store).capture(x.config.project.id,x.work.work_id),labels=results[0].artifacts.map(item=>item.label);
+  assert.ok(labels.includes('today.png'),JSON.stringify(labels));assert.ok(!labels.includes('case-1.png'),'the first turn\'s picture is not part of this result');
+});
