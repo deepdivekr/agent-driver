@@ -1,5 +1,6 @@
 import {enableOwnerMcp} from '../integrations/owner-mcp.js';
 import {enableOwnerEnvironment} from '../integrations/client-environment.js';
+import {enableClientRun} from '../work/client-run.js';
 import {fileURLToPath} from 'node:url';
 import {acquireMcpProcess,mcpOwner} from './mcp-process.js';
 import {startMcpService} from './mcp-service.js';
@@ -8,6 +9,8 @@ import {mcpServiceVersion} from './mcp-service-manager.js';
 enableOwnerEnvironment();
 // The owner's own MCP servers may be used; they are first looked at when a delegated Work needs them.
 enableOwnerMcp();
+// Works run on the client's own agent (Codex or Claude Code) with the owner's settings.
+enableClientRun();
 const config=process.argv[2]!,port=Number(process.argv[3]);
 let service:Awaited<ReturnType<typeof startMcpService>>|undefined,lease:Awaited<ReturnType<typeof acquireMcpProcess>>|undefined,stopping=false,committed=false;
 let closing:Promise<void>|undefined;

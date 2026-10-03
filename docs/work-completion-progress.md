@@ -603,3 +603,44 @@ npm 11.11.0, TypeScript 7.0.2, Playwright 1.63.0, 제품 버전 0.4.0 유지.
   실제 모델 업무 수용 결과가 아니라 unit/fixture/native 회귀 결과다.
 - 후속 사용자 지시: 현재 변경분을 main에 병합한다. 최신 원격 main `4f72909`과 기준이
   같음을 확인했다. 문구 브랜치를 커밋·푸시하고 보호 규칙을 지키는 PR 경로로 병합한다.
+
+## 클라이언트 자체 에이전트 실행기 — 1단계 (2026-10-03)
+
+사용자 결정(2026-10-03): Office는 관제센터다. 업무는 클라이언트 자체 에이전트(Codex `exec --json`, Claude Code `-p` stream-json)가
+사용자 설정·스킬·플러그인·MCP 그대로 업무 폴더에서 실행한다. 업무마다 클라이언트 하나로 고정하고 클라이언트 사이의 라우팅·세션 인계는 하지 않는다.
+권한 기본값은 전부 허용이다(행동마다 승인하지 않음). 기준 소스: main `a54c4bf`. 브랜치 `feat/client-run-executor`.
+
+- `src/work/client-run.ts`: Codex는 `-C <폴더> --dangerously-bypass-approvals-and-sandbox exec --json --skip-git-repo-check`, Claude는
+  `-p --output-format stream-json --verbose --dangerously-skip-permissions`로 실행한다. 사용자 config를 무시하는 옵션은 쓰지 않는다.
+  환경 변수는 사용자 것을 넘기되 유료 API로 바뀌는 키(OPENAI/ANTHROPIC/OPENROUTER/AZURE 키, ANTHROPIC_AUTH_TOKEN, Jev 키)와 Office 내부 변수는 뺀다.
+- 이벤트(명령·파일 변경·MCP 호출·웹 검색·메시지)를 타임라인에 그대로 남긴다. 세션 ID는 체크포인트 `client_session`에 저장하고,
+  일시정지·지침 변경·중단 뒤에는 같은 세션을 이어서 실행한다(Codex `exec resume`, Claude `--resume`). 새 지침만 보낸다.
+- 업무 폴더는 회차마다 `data/work-folders/<업무>/<실행>`이다. 이번 실행에서 만든 파일은 SHA-256과 함께 `office_client_run` receipt가 되어
+  결과 다운로드 목록에 오르고, 최종 답·파일 목록·작은 텍스트 파일 본문이 `office_result_draft`로 저장된다. 반복 업무는 Office 일정 기록(`office_schedule_status`)을 함께 남긴다.
+- 검증은 기존 검증기가 결과를 판단한다(빠른 판단 → 가벼운 검증). 거절되면 거절 사유를 같은 세션에 보내 고치게 한다(최대 3회).
+- 클라이언트는 업무의 첫 클라이언트 실행 때 사용자 기본 앱(설치된 쪽)으로 고정되고(`office_work_client`), 이후 설정을 바꿔도 바뀌지 않는다.
+  로그인 만료는 다른 클라이언트로 넘기지 않고 `waiting_auth`로 기다린다. Office AI 설정 저장이 실행 중인 클라이언트를 멈추지 않는다.
+- 실행 중인 클라이언트는 Office MCP의 `runtime_work_start/execute/control`을 쓸 수 없다(Codex `mcp_servers.agent-driver.disabled_tools`,
+  Claude `--disallowedTools`; Codex 0.159.2에서 시작 도구만 사라지고 조회 도구는 남는 것을 실측).
+- 지금 경로를 유지하는 업무: coding.orchestrate, 승인 실행이 있는 Pack(form.draft-submit, record.update, choose.stage),
+  봉인된 수집 계약·native check가 있는 업무, 사용자 Pack 반복, 가져온 업무. 이미 host-tool 루프로 시작한 실행도 그 루프에서 끝난다.
+
+### 실측
+- 1차(격리 data 폴더, 파생상품 이미지 업무, 1회만 실행): Codex가 사용자 플러그인과 imagegen 스킬을 읽고 PIL로 질문 이미지 5장과 해설을 만들었다(258초).
+  계획이 넣은 "매일 일정" 조건을 일정 없이 돌린 탓에 검증이 거절했고, 거절을 받은 Codex가 일정을 켜려고 Office MCP(조회 4회)와 격리 DB(읽기 전용)를 뒤지기 시작해 실행을 멈췄다.
+  집 설치본 DB에 그 시간 기록이 없음을 확인했다. 고친 것: 반복 업무의 일정 기록을 검증 근거에 넣고, 일정·전달은 Office 몫이며 Office와 그 데이터를 보거나 바꾸지 말라고 지시에 명시, 업무 제어 도구 차단.
+- 2차(같은 업무, 일정 켬): 정의 43초, Codex 실행 230초, 검증 27초(빠른 판단이 9개 중 7개 확정, 가벼운 검증 1회) — **succeeded, completion_verified**.
+  결과: 질문 이미지 PNG 5장(약 100KB씩), 해설.md, 학습자료.html, cases.json 등 12개 파일. Office MCP·DB 접근 0회.
+
+### 검증
+- `tests/runtime-work-client-run.test.mjs` 9건: 전체 권한 인자와 환경, 결과 파일 receipt·다운로드 목록, 검증 거절 → 같은 Codex 세션, 지침 변경 → 같은 Claude 세션,
+  반복 업무 일정 기록, 설정 저장 중 실행 유지, 로그인 만료 대기, 실행 대상 규칙, 환경 변수.
+- 소스 고정 전 quick 2,071/2,075(실패 4건은 실행 중 바꾼 이 테스트 3건과 입력 지문 검사). ledger:verify, 공개 경계 검사 통과.
+
+### 남은 것 (다음 단계)
+- Office 자체 판단(접수 계획·재계획·검증·일정 해석)을 업무의 고정 클라이언트로 묶고, 클라이언트 간 대체 체인·API→구독 전환·task Auto·client_handoff 기록·MCP 샘플링·API LLM 모드를 제거한다.
+- coding 업무를 고정 클라이언트 한 세션으로 옮기고 Claude→Codex 인계를 없앤다. 세 곳의 JSONL 파서를 하나로 합친다.
+- Office 실행 도구(Playwright→Aside 브라우저, 웹 검색)를 업무 전용 MCP로 열어 클라이언트가 쓰게 한다. 그 뒤 Pack 업무를 옮길지 다시 정한다.
+- MCP 세션 프로세스가 실행을 맡았다가 앱이 닫히면 실행이 끊기고 다음 tick에 같은 세션으로 이어진다. 끊긴 순간의 셸·MCP 동작은 확인하지 않고 이어간다.
+- Office가 죽으면 분리된 프로세스 그룹이 남을 수 있다(재시작 때 고아 프로세스 확인 없음). Windows에는 그룹 종료가 없다.
+- 이미지 내용 자체는 검증하지 않는다(파일 목록과 해설로 판단).
