@@ -42,7 +42,7 @@ async function setup(t,options={}){
   const runs=[],looks=[];enableClientRun({runner:{run:request=>{
     // The image readback is a separate call of the client: it answers with descriptions and is not a Work turn.
     if(request.args.includes('-i')||/Describe each image below/u.test(request.stdin??'')){looks.push(request);const names=request.args.includes('-i')?request.args.filter((value,index)=>request.args[index-1]==='-i').map(path=>path.split('/').pop()):[...(request.stdin.match(/^- (.+)$/gmu)??[])].map(line=>line.slice(2));
-      const reply=JSON.stringify(names.map(file=>({file,description:`공책 손필기 스타일의 질문 이미지. 보이는 글: "${file.replace(/\.png$/u,'')} 사례 질문". 정답은 적혀 있지 않다.`})));
+      const reply=JSON.stringify(names.map(file=>({file,description:`공책 손필기 스타일의 질문 이미지. 보이는 글: "${file.replace(/\.png$/u,'')} 사례 질문". 정답은 적혀 있지 않다. `+'세부 묘사가 길게 이어집니다. '.repeat(200)})));
       for(const event of request.args.includes('-i')?[{type:'thread.started',thread_id:'11111111-2222-4333-8444-555555555555'},{type:'item.completed',item:{id:'i0',type:'agent_message',text:reply}},{type:'turn.completed'}]:[{type:'result',subtype:'success',result:reply,session_id:'11111111-2222-4333-8444-555555555555'}])request.onStdout(JSON.stringify(event)+'\n');
       return {code:0,stdout:'',stderr:''};}
     runs.push(request);return options.client(request,runs.length);}},executable:client=>`/fake/${client}`});
@@ -281,6 +281,8 @@ test('runtime fixture the client run gets the owner Windows-side MCP servers and
   assert.equal(x.looks.length,1);assert.ok(x.looks[0].args.includes('-i')&&x.looks[0].args.some(value=>value.endsWith('case-1.png')));
   const seen=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint).observations.find(item=>item.invocation.tool_name==='office_image_read');
   assert.equal(seen.receipt.value.images[0].name,'case-1.png');assert.match(seen.receipt.value.images[0].description,/손필기/u);assert.equal(seen.receipt.value.provenance,'client_image_readback');
+  // Ten descriptions must fit one receipt whole (live: five long ones were compacted and the verifier saw the fourth cut and the fifth missing).
+  assert.ok(Buffer.byteLength(seen.receipt.value.images[0].description)<=1200);assert.ok(!('_office_compaction' in seen.receipt.value));
   const args=x.runs[0].args;
   for(const value of ['mcp_servers.aside.command="/mnt/c/Tools/aside.exe"','mcp_servers.aside.args=["mcp","--host","local"]','mcp_servers.aside.startup_timeout_sec=20','mcp_servers.docs.url="https://docs.example/mcp"'])assert.equal(args[args.indexOf(value)-1],'-c',value);
   assert.ok(args.indexOf('mcp_servers.aside.command="/mnt/c/Tools/aside.exe"')<args.indexOf('exec'),'config overrides come before exec');

@@ -227,7 +227,7 @@ export function clientResultText(finalMessage:string,files:ProducedFile[]){
  * 제공되지 않아" left a check unknown while everything else was confirmed). One call for up to ten pictures. */
 export async function describeImages(client:RunClient,model:string|null,folder:string,images:ProducedFile[],signal:AbortSignal):Promise<{images:Array<{name:string;description:string}>;raw:string}|null>{
   const shown=images.slice(0,10);if(!shown.length)return null;
-  const prompt=`Describe each image below for a reviewer who cannot see it. Reply with ONE JSON array only, no prose: [{"file":"<file name>","description":"<what it shows: layout, style (for example notebook handwriting, chart, photo), every piece of visible text quoted exactly, and whether it states a full answer or only a question/hook>"}]. Files, in order:\n${shown.map(file=>`- ${file.name}`).join('\n')}`;
+  const prompt=`Describe each image below for a reviewer who cannot see it. Reply with ONE JSON array only, no prose: [{"file":"<file name>","description":"<at most 300 characters: layout, style (for example notebook handwriting, chart, photo), the visible text quoted exactly, and whether it states a full answer or only a question/hook>"}]. Files, in order:\n${shown.map(file=>`- ${file.name}`).join('\n')}`;
   const args=client==='codex'?['-C',folder,...(model?['-m',model]:[]),'--dangerously-bypass-approvals-and-sandbox','exec','--json','--skip-git-repo-check',...shown.flatMap(file=>['-i',file.path]),'-']
     :['-p','--output-format','stream-json','--verbose','--dangerously-skip-permissions',...(model?['--model',model]:[])];
   let pending='',answer='';
@@ -238,9 +238,9 @@ export async function describeImages(client:RunClient,model:string|null,folder:s
     const result=await runner.run({executable:executable(client),args,cwd:folder,stdin:client==='codex'?prompt:`${prompt}\nRead each file with your file tools; the paths are under ${folder}.`,timeout_ms:300_000,signal,env:clientRunEnvironment(),keep_stdout:false,output_limit_bytes:2_097_152,onStdout:observe});
     observe('\n');if(result.code!==0||!answer.trim())return null;
   }catch{return null;}
-  const raw=sanitizeCodingReply(answer).text.slice(0,12000),match=raw.match(/\[[\s\S]*\]/u);
+  const raw=cutBytes(sanitizeCodingReply(answer).text,12000),match=raw.match(/\[[\s\S]*\]/u);
   let parsed:Array<{name:string;description:string}>=[];
-  try{const list=JSON.parse(match?.[0]??'[]');if(Array.isArray(list))parsed=list.map(entry=>object(entry)).map(entry=>({name:text(entry.file)||text(entry.name),description:text(entry.description).slice(0,1500)})).filter(entry=>entry.name&&entry.description);}catch{/* the raw text stays */}
+  try{const list=JSON.parse(match?.[0]??'[]');if(Array.isArray(list))parsed=list.map(entry=>object(entry)).map(entry=>({name:text(entry.file)||text(entry.name),description:cutBytes(text(entry.description),1200)})).filter(entry=>entry.name&&entry.description);}catch{/* the raw text stays */}
   const byName=new Map(parsed.map(entry=>[basename(entry.name),entry.description]));
   return {images:shown.map(file=>({name:file.name,description:byName.get(basename(file.name))??byName.get(file.name)??''})).filter(entry=>entry.description),raw:parsed.length?'':raw};
 }
