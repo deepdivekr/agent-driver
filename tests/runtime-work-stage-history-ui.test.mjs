@@ -26,6 +26,8 @@ test('runtime fixture semantic stage activity is labeled as dated history withou
     const page=await browser.newPage({viewport:{width:390,height:844}});
     await page.addInitScript(value=>localStorage.setItem('office-lang',value),lang);
     await page.goto(base+'/');
+    // The empty board renders after its fetch; inject the card only then so that render cannot replace it.
+    await page.locator('#app .empty').waitFor();
     const rendered=await page.evaluate(value=>{
       const html=stageCardHtml(value,0);
       app.innerHTML=html;
