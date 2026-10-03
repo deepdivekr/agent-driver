@@ -389,6 +389,9 @@ export function createWorkCompletionVerifier(model:StructuredModel,options:WorkC
         const leaves=observableLeaves(item.receipt.value);
         if(!leaves.length)continue;
         const replacedBy=superseded.get(item.receipt.evidence_ids[0]??'');
+        // An earlier turn's Office record of a client run (its run record, picture readback, schedule or delivery read) says
+        // nothing about the result the latest turn left; the newest of its kind is shown instead.
+        if(replacedBy&&['office_client_run','office_image_read','office_schedule_status','office_delivery_status'].includes(item.invocation.tool_name))continue;
         const observable:ObservableEvidence={tool_name:item.invocation.tool_name,observed_at:item.observed_at,evidence_ids:[...new Set(item.receipt.evidence_ids)],effect_state:item.receipt.effect_state,value:structuredClone(item.receipt.value),...(replacedBy?{host_superseded_by:replacedBy}:{}),...(partialTextPage(item.receipt.value)?{host_partial_page:true as const}:{})};
         const record:EvidenceRecord={serialized,leaves,fingerprint:hashJson({value:item.receipt.value,effect_state:item.receipt.effect_state}),observable};
         for(const id of observable.evidence_ids){

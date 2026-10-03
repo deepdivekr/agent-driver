@@ -46,7 +46,7 @@ async function setup(t,options={}){
       for(const event of request.args.includes('-i')?[{type:'thread.started',thread_id:'11111111-2222-4333-8444-555555555555'},{type:'item.completed',item:{id:'i0',type:'agent_message',text:reply}},{type:'turn.completed'}]:[{type:'result',subtype:'success',result:reply,session_id:'11111111-2222-4333-8444-555555555555'}])request.onStdout(JSON.stringify(event)+'\n');
       return {code:0,stdout:'',stderr:''};}
     runs.push(request);return options.client(request,runs.length);}},executable:client=>`/fake/${client}`});
-  const supervisor=new WorkSupervisor(store,config,model,{auto_start:false,tick_ms:20});
+  const supervisor=new WorkSupervisor(store,config,model,{auto_start:false,tick_ms:20,...(options.verifyCompletion?{verifyCompletion:options.verifyCompletion}:{})});
   t.after(async()=>{supervisor.close();disableClientRun();store.close();await rm(root,{recursive:true,force:true});});
   return {root,config,store,model,work,runs,looks,supervisor};
 }
@@ -317,4 +317,15 @@ test('runtime fixture the saved record fits one readback page whole and the read
   assert.equal(pages.reduce((sum,page)=>sum+page.receipt.value.page.returned_bytes,0),pages[0].receipt.value.page.total_bytes,'the pages add up to the whole saved result');
   const draft=checkpoint.observations.find(item=>item.invocation.tool_name==='office_result_draft');
   assert.ok(!('_office_compaction' in draft.receipt.value),'the saved record fits a receipt whole');assert.ok(Buffer.byteLength(JSON.stringify(draft.receipt.value))<=16000);
+});
+
+test('runtime fixture after a denial the claim cites only the latest turn, while the record keeps every turn',async t=>{
+  // Live 2026-10-04: a run resumed six times cited all its turns; verification ran out of budget and the owner got "확인 필요".
+  const claims=[];let calls=0;
+  const x=await setup(t,{client:request=>codexTurn(request,{reply:`turn ${request.stdin.length}`}),verifyCompletion:async(checks,observations,claim)=>{claims.push({ids:claim.completed_checks[0].evidence_ids,all:observations.map(item=>item.invocation.request_id)});calls++;return calls===1?{verified:false,repair:{check_id:'images',reason:'Show all five.'}}:true;}});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));assert.equal(claims.length,2);
+  assert.ok(claims[1].all.length>claims[1].ids.length,'the record keeps the first turn');
+  assert.ok(claims[1].ids.every(id=>!claims[0].ids.includes(id)),'the second claim cites no receipt of the first turn');
+  assert.ok(claims[1].ids.some(id=>id.startsWith('client-run-'))&&claims[1].ids.some(id=>id.startsWith('client-output-')));
 });
