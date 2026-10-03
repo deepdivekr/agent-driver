@@ -234,7 +234,10 @@ export class WorkSupervisor {
         if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
         const custom=this.api.customPackSchedules.binding(due.work_id);
         requireCondition(!this.schedules.customPackRequired(due.work_id)||custom,'CUSTOM_PACK_SCHEDULE_BINDING_MISSING');
-        if((custom&&latest&&!['succeeded','failed'].includes(latest.state))||(!custom&&(!latest||!['succeeded','failed','awaiting_review'].includes(latest.state))))continue;
+        // A run that stopped to wait by itself (live 2026-10-03: an older executor's wait for a setting) does not hold back
+        // the next scheduled run, which starts fresh. A run the owner paused does, and a paused Work has no due slot at all.
+        const executorWait=latest?.state==='paused'&&/^WORK_CLIENT_WAIT_/u.test(latest.reason??'');
+        if((custom&&latest&&!['succeeded','failed'].includes(latest.state))||(!custom&&(!latest||!['succeeded','failed','awaiting_review'].includes(latest.state)&&!executorWait)))continue;
         // Delegation budget: host-started (scheduled) runs stop at the owner's daily limit. The slot stays due and
         // runs once the day turns or the owner raises the limit; one note per Work per day says why.
         const dayStart=new Date(at);dayStart.setHours(0,0,0,0);
