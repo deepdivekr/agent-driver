@@ -765,6 +765,8 @@ npm 11.11.0, TypeScript 7.0.2, Playwright 1.63.0, 제품 버전 0.4.0 유지.
 - 가져오기 자체의 결함(같은 날, 주인 지적 "가져오기가 매끄럽지 않으면 가져오기 프롬프트도 문제"):
   - ASTS 초안의 일정 `FREQ=DAILY;BYHOUR=0,3,…,21;BYMINUTE=0`을 정규화 모델이 "하루 1회(interval 86400)"로 읽었다. 규칙에 RRULE이 있으면 코드가 읽는다
     (`rruleSchedule`: DAILY/WEEKLY의 BYHOUR 여러 개 → also_at, HOURLY/MINUTELY INTERVAL → interval). also_at 상한 5 → 23.
+    집의 ASTS 일정은 규칙 해시가 같아 저장된 정의를 계속 썼으므로 설치 뒤 정의와 다음 슬롯(00:00 KST)을 직접 바로잡았고, 이후로는 저장된 정의가 코드가 읽은
+    RRULE과 다르면 다음 prepare에서 다시 읽는다.
   - Stack & Sky 초안은 `depends_on`에 단계가 아닌 의존성 id(`d_telegram_gateway` 등)를 적어 `WORK_IMPORT_STEP_DEPENDENCY_INVALID`로 거절됐다.
     단계가 아닌 참조는 버리고 받아들인다(의존성 목록은 그대로).
   - 가져오기 프롬프트(ko/en)에 세 가지를 명시: depends_on은 step id만 / 완료조건은 성공한 매 회차의 조건이며 실행 종류별 규칙은 한 조건으로 /
