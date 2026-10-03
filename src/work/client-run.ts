@@ -92,10 +92,12 @@ export function clientRunArgs(choice:Pick<WorkClientChoice,'id'|'model'|'effort'
     ...(extra.length?['--mcp-config',JSON.stringify({mcpServers:Object.fromEntries(extra.map(server=>[server.id,server.command?{type:'stdio',command:server.command,args:server.args??[]}:{type:'http',url:server.url}]))})]:[]),'--disallowedTools',OFFICE_CONTROL_TOOLS.map(tool=>`mcp__agent-driver__${tool}`).join(','),...(session?[session.resume?'--resume':'--session-id',session.id]:[])];
 }
 /** Works whose completion Office proves in code (sealed collections, native checks), whose writes go through Office's
- * approved Pack execution, coding Works (their own project), custom Pack repeats and imported Works keep the host's own path. */
+ * approved Pack execution, coding Works (their own project), custom Pack repeats and Works another runtime still owns
+ * keep the host's own path. A pasted Work that Office accepted as its own is run like any other (live 2026-10-03: the
+ * owner's imported derivatives Work was kept on the host path and met its wait again). */
 export function clientRunEligible(store:PackStore,project:string,workId:string,spec:{route:{pack_family:string|null};collection_contract?:unknown;completion_checks:Array<{native_check?:unknown}>}){
   return !['coding.orchestrate','form.draft-submit','record.update','choose.stage'].includes(spec.route.pack_family??'')&&!spec.collection_contract&&!spec.completion_checks.some(check=>check.native_check)
-    &&!customPackWorkBinding(store,project,workId)&&workImportExecutionOwner(store,project,workId)===null;
+    &&!customPackWorkBinding(store,project,workId)&&workImportExecutionOwner(store,project,workId)!=='original_runtime';
 }
 
 export interface ClientRunEvent {kind:'tool.started'|'tool.result'|'model.result';tool_name:string;summary:string;status:'running'|'succeeded'|'failed';}
