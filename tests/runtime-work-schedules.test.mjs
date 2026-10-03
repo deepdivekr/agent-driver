@@ -116,3 +116,14 @@ test('runtime unit an RRULE in the recurring rule is read in code: every listed 
   const eight=rruleSchedule('FREQ=DAILY;BYHOUR=0,3,6,9,12,15,18,21;BYMINUTE=0','Asia/Seoul'),at=Date.UTC(2026,9,3,13,7),next=nextScheduleSlot(eight,at,at);
   assert.equal(new Date(next).toISOString(),'2026-10-03T15:00:00.000Z','the next slot is the next listed hour (00:00 KST)');
 });
+
+test('runtime contract a schedule saved before RRULEs were read in code is re-read on the next prepare',async t=>{
+  const x=await setup(t,{kind:'interval',timezone:'Asia/Seoul',seconds:86400});
+  const rule='schedule: FREQ=DAILY;BYHOUR=0,3,6,9,12,15,18,21;BYMINUTE=0 (Asia/Seoul)';
+  const row=x.store.hermesState.prepare('SELECT spec FROM office_intake WHERE work_id=?').get(x.work.id);
+  x.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify({...JSON.parse(row.spec),recurrence:{kind:'recurring',rule}}),x.work.id);
+  const first=await x.schedules.prepare(x.work.id,x.work.revision,x.model);assert.equal(first.definition.kind,'daily');assert.equal(x.calls(),0,'an RRULE never asks the normalizer');
+  // Live 2026-10-03: the home install held the normalizer's "once a day" for an 8-times-a-day RRULE and kept it because the rule hash matched.
+  x.store.hermesState.prepare('UPDATE office_work_schedule SET definition=? WHERE work_id=?').run(JSON.stringify({kind:'interval',timezone:'Asia/Seoul',seconds:86400}),x.work.id);
+  const again=await x.schedules.prepare(x.work.id,x.work.revision,x.model);assert.equal(again.definition.kind,'daily');assert.equal(again.definition.also_at.length,7);assert.equal(x.calls(),0);
+});
