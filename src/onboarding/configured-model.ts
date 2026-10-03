@@ -15,6 +15,11 @@ export class ConfiguredStructuredModel implements StructuredModel{
   sampling?:McpSamplingStructuredModel;
   constructor(readonly path:string,readonly base:NodeJS.ProcessEnv=process.env,readonly factories:{api?:(env:NodeJS.ProcessEnv)=>StructuredModel;subscription?:(options:SubscriptionAwareModelOptions)=>StructuredModel;taskCandidates?:(env:NodeJS.ProcessEnv)=>Promise<TaskModelCandidate[]>}={},readonly onHandoff?:(event:ClientRouteEvent)=>void,readonly scope:ModelScope='global',readonly provenance?:ReturnType<typeof handoffContext>,readonly role?:ModelRole,private readonly taskModels?:TaskModelBinding,private readonly actorId?:string){}
   forScope(scope:ModelScope){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,scope,this.provenance,this.role,this.taskModels,this.actorId);if(this.sampling)model.sampling=this.sampling;return model;}
+  /** A copy whose calls are one-off reads for the run, not turns of its conversation: a page digest is one, several
+   * run at once, and a shared session accepts one turn at a time (live: digests of long pages failed and fell back to
+   * parts). */
+  private oneOffCalls=false;
+  oneOff(){const model=this.forRole(this.role??'worker');model.oneOffCalls=true;return model;}
   forRole(role:ModelRole){const model=new ConfiguredStructuredModel(this.path,this.base,this.factories,this.onHandoff,this.scope,this.provenance,role,this.taskModels,this.actorId);model.log=this.log;if(this.sampling)model.sampling=this.sampling;return model;}
   /** Bind all successor calls to the same Work/run even if a capability input omits IDs. */
   forWork(context:{work_id:string;run_id:string;stage_id?:string;actor_id?:string},scope:ModelScope=this.scope){
@@ -49,9 +54,7 @@ export class ConfiguredStructuredModel implements StructuredModel{
     // Reusing a native conversation accumulates prior batches/judgments without
     // adding authority or evidence. Keep assignee continuity for actual work,
     // but make the independent verifier checkpoint-only on every provider.
-    // A synthesis call (a page digest) is a one-off read written for the run, not a turn of its conversation; several
-    // run at once, and a shared session refuses all but one (live: digests of long pages failed and fell back to parts).
-    if(role==='verifier'||role==='synthesis')return {};
+    if(role==='verifier'||this.oneOffCalls)return {};
     const p=this.provenance;
     return p?.work_id&&p.run_id?{session:{root:join(dirname(this.path),'decision-sessions'),work_id:p.work_id,run_id:p.run_id,actor_id:this.actorId??p.stage_id??'supervisor',role}}:{};
   }

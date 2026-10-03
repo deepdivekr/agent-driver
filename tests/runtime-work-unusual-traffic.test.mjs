@@ -189,6 +189,14 @@ test('runtime fixture a long page is one read: its text is kept whole and the ru
 });
 
 // Live: nine long pages digested one after another took 225 seconds.
+// Live: digests went into the run's single app session and all but one failed; Swarm synthesis keeps its session.
+test('runtime contract a page digest is a one-off call outside the run\'s session; other roles keep theirs',async()=>{
+  const {ConfiguredStructuredModel}=await import('../dist/onboarding/configured-model.js');
+  const bound=new ConfiguredStructuredModel('/tmp/settings.json').forWork({work_id:'work-1',run_id:'run-1'});
+  assert.ok(bound.forRole('worker').sessionOptions('worker').session,'The run\'s worker keeps its session.');
+  assert.ok(bound.forRole('synthesis').sessionOptions('synthesis').session,'A Swarm synthesis worker keeps its session.');
+  assert.deepEqual(bound.forRole('worker').oneOff().sessionOptions('worker'),{},'A one-off read has no session.');
+});
 test('runtime fixture the reads of one decision are opened in order and their digests are written at the same time',async t=>{
   const body='Long page. '+'Sentence about the launch cadence of the constellation. '.repeat(400),second='https://example.org/second-report';
   let running=0,most=0;

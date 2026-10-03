@@ -578,7 +578,7 @@ export class WorkExecutionTools {
       const bytes=Buffer.from(text,'utf8'),hash=sha(bytes),path=join(dirname(this.config.dbPath),'work-pages',this.workId,`${hash}.txt`);
       await mkdir(dirname(path),{recursive:true,mode:0o700});await writeFile(path,bytes,{mode:0o600});
       const shown=bytes.length>DIGEST_INPUT_BYTES?bytes.subarray(0,DIGEST_INPUT_BYTES).toString('utf8'):text;
-      const answer=pageDigestSchema.parse(await modelForRole(this.model,'synthesis').call('repair',PAGE_DIGEST_INSTRUCTIONS,{request:this.prompt.slice(0,4000),desired_outcome:this.spec.desired_outcome,page:{url,title,text:shown},links:links.slice(0,40).map(link=>({text:link.text.slice(0,120),url:link.url}))},z.toJSONSchema(pageDigestSchema)));
+      const answer=pageDigestSchema.parse(await (()=>{const reader=modelForRole(this.model,'worker') as StructuredModel&{oneOff?:()=>StructuredModel};return reader.oneOff?.()??reader;})().call('repair',PAGE_DIGEST_INSTRUCTIONS,{request:this.prompt.slice(0,4000),desired_outcome:this.spec.desired_outcome,page:{url,title,text:shown},links:links.slice(0,40).map(link=>({text:link.text.slice(0,120),url:link.url}))},z.toJSONSchema(pageDigestSchema)));
       const sources=answer.source_links.filter(source=>links.some(link=>link.url===source));
       const flat=(value:string)=>value.replace(/\s+/gu,' ').trim(),whole=flat(text),quotes=answer.quotes.filter(quote=>flat(quote).length>=8&&whole.includes(flat(quote)));
       workActivity(this.store,this.config.project.id,this.workId,'source.digested',`A long page (${bytes.length} bytes) was read whole and handed on as a digest; ${quotes.length} quoted passages were found in the page.`,{tool_name:'office_browser_read',status:'succeeded',target_url:url});
