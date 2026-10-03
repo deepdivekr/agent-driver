@@ -364,3 +364,18 @@ test('runtime fixture a turn without a completion report is asked for it once in
   assert.deepEqual(x.asks[0].args.slice(-6),['exec','resume','--json','--skip-git-repo-check',thread,'-'],'the same session is asked');
   assert.match(x.asks[0].stdin,/- images: 사례 이미지 파일과 해설이 있다/u);
 });
+
+// Owner decision 2026-10-04: Office passes a direction to the client session as it is; it does not replan a client-run Work.
+test('runtime fixture a direction for a client-run Work goes to the client session without an Office replan',async t=>{
+  const x=await setup(t,{client:request=>codexTurn(request)});
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  await settle(x);const before=x.store.intakeWork(x.config.project.id,x.work.work_id),calls=x.model.calls.length;
+  x.supervisor.action({work_id:x.work.work_id,revision:before.revision,action:'edit',instruction:'사례를 중급 난이도로 올려줘'});
+  x.supervisor.action({work_id:x.work.work_id,revision:x.store.intakeWork(x.config.project.id,x.work.work_id).revision,action:'resume'});x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  const after=x.store.intakeWork(x.config.project.id,x.work.work_id);
+  assert.deepEqual(after.spec,before.spec,'the Work definition is unchanged');
+  assert.ok(!x.model.calls.slice(calls).some(call=>call.purpose==='correct'),'no replanning call');
+  const directed=x.runs.at(-1);assert.match(directed.stdin,/The owner changed the instruction for this Work:\n- 사례를 중급 난이도로 올려줘/u);assert.match(directed.stdin,/did not change the Work/u);
+  assert.ok(activity(x).some(row=>row.kind==='supervisor.direction'));
+});
