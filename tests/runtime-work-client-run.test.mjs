@@ -10,9 +10,11 @@ import {loadHostConfig} from '../dist/interface/config.js';
 import {WorkRuntime} from '../dist/work/runtime.js';
 import {WorkSupervisor,supervisorStatus} from '../dist/work/supervisor.js';
 import {WorkResults} from '../dist/work/results.js';
+import {WorkDeliverySettings,deliverySettingsPath} from '../dist/work/delivery-settings.js';
 import {saveModelSettings,modelSettingsPath} from '../dist/onboarding/model-settings.js';
 import {enableClientRun,disableClientRun,pinWorkClient,workClientChoice,workFolder,clientRunEnvironment,clientRunArgs,clientRunEligible,defaultWorkClient} from '../dist/work/client-run.js';
 import {mkdirSync} from 'node:fs';
+import {randomUUID} from 'node:crypto';
 
 // Owner direction 2026-10-03: the client's own agent runs the Work with the owner's settings and full permissions;
 // Office streams its events, keeps its session, takes the files it made as the result and verifies them.
@@ -119,6 +121,34 @@ test('runtime fixture a recurring Work run shows the verifier Office schedule re
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
   assert.ok(evidence[0].includes('office_schedule_status'),JSON.stringify(evidence));
   assert.match(x.runs[0].stdin,/do not set up schedules/u);assert.match(x.runs[0].stdin,/"host_schedule"/u);
+});
+
+test('runtime fixture the verifier sees the Office delivery selection of a client run, with no target secret',async t=>{
+  const evidence=[],x=await setup(t,{evidence,client:request=>codexTurn(request)});
+  // Live: a Work asked that the owner's Telegram chat be the delivery target; intake had not recorded it, so no evidence showed it.
+  mkdirSync(join(x.config.dbPath,'..','.connection'),{recursive:true,mode:0o700});
+  writeFileSync(deliverySettingsPath(x.config),JSON.stringify({format:1,revision:1,targets:[{id:'tg-owner',platform:'telegram',label:'내 텔레그램',telegram_bot_token:'123456:SECRETTOKENVALUE0000000000',telegram_chat_id:'987654321'}],default_target_ids:['app']}),{mode:0o600});
+  new WorkResults(x.store,[],WorkDeliverySettings.fromConfig(x.config)).setSelection(x.config.project.id,x.work.work_id,{revision:0,target_ids:['app','tg-owner']});
+  x.supervisor.start(x.work.work_id,x.work.revision,true,'Asia/Seoul',false);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  assert.ok(evidence[0].includes('office_delivery_status'),JSON.stringify(evidence));
+  const checkpoint=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint),delivery=checkpoint.observations.find(item=>item.invocation.tool_name==='office_delivery_status');
+  assert.equal(delivery.receipt.status,'succeeded');
+  assert.deepEqual(delivery.receipt.value.targets,[{id:'app',platform:'app',label:'Agent Office app'},{id:'tg-owner',platform:'telegram',label:'내 텔레그램'}]);
+  assert.doesNotMatch(JSON.stringify(checkpoint),/SECRETTOKEN|987654321/u);
+});
+
+test('runtime fixture a host-tool run that only read or wrote Office outputs moves to the client when the owner resumes it; one that wrote elsewhere stays',async t=>{
+  // Live 2026-10-03: a run parked in the host executor's own wait for a setting met the same wait again on every resume.
+  for(const [tool,effect,expectClient] of [['runtime_pack_catalog','read_only',true],['office_result_draft','local_write',true],['runtime_files_report','local_write',false]]){
+    const x=await setup(t,{client:request=>codexTurn(request)});
+    const run=randomUUID(),at=new Date().toISOString();
+    const checkpoint={format:1,work_id:x.work.work_id,run_id:run,binding:'',turn:1,pending:null,summary:'',observations:[{invocation:{request_id:'host-read-1',turn:0,stage_id:'execution',tool_name:tool,arguments:{},effect,dispatched:true},receipt:{status:'succeeded',value:{status:'succeeded'},evidence_ids:['host-read-1'],effect_state:effect==='read_only'?'none':'verified',retry_safe:effect==='read_only'},observed_at:at}]};
+    x.store.hermesState.prepare("INSERT INTO office_supervisor(run_id,project_id,work_id,work_revision,state,reason,checkpoint,config_hash,model_revision,current_run_only,created_at,updated_at) VALUES(?,?,?,?,'paused','WORK_CLIENT_WAIT_CONFIGURATION',?,?,0,1,?,?)").run(run,x.config.project.id,x.work.work_id,x.work.revision,JSON.stringify(checkpoint),x.config.fingerprint,at,at);
+    x.supervisor.action({work_id:x.work.work_id,revision:x.store.intakeWork(x.config.project.id,x.work.work_id).revision,action:'resume'});x.supervisor.activate();x.supervisor.tick();
+    if(expectClient){const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));assert.equal(x.runs.length,1,JSON.stringify(activity(x).map(a=>a.kind+' '+a.summary.slice(0,90))));assert.equal(end.run_id,run,'the same run continues on the client');}
+    else{await delay(600);assert.equal(x.runs.length,0,'a run that already wrote through Office stays on the host path');}
+  }
 });
 
 test('runtime fixture saving Office AI settings does not stop a running client, which keeps its own settings',async t=>{
