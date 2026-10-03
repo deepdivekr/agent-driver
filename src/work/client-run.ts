@@ -204,7 +204,8 @@ export function producedFiles(folder:string):ProducedFile[]{
 export function clientResultText(finalMessage:string,files:ProducedFile[]){
   const list=files.length?`\n\nFiles made in this run (Work folder):\n${files.map(file=>`- ${file.name} (${file.media_type}, ${file.bytes} bytes${file.sha256?'':', too large to download from Office; it stays in the run folder'})`).join('\n')}`:'\n\nNo file was made in the Work folder in this run.';
   let body=`${sanitizeCodingReply(finalMessage.trim()).text.slice(0,6000)||'(no final reply)'}${list}`;
-  for(const file of files.filter(item=>/^text\/|^application\/json$/u.test(item.media_type)&&item.bytes<=65_536)){
+  // Smaller files first, so each one that fits is complete (live: a long JSON cut mid-way left the checks on it undecided).
+  for(const file of files.filter(item=>/^text\/|^application\/json$/u.test(item.media_type)&&item.bytes<=65_536).sort((a,b)=>a.bytes-b.bytes)){
     const room=15_800-body.length;if(room<400)break;
     body+=`\n\n── ${file.name} ──\n${sanitizeCodingReply(readFileSync(file.path,'utf8')).text.slice(0,room-file.name.length-10)}`;
   }
@@ -220,11 +221,14 @@ export interface ClientRunInput {
   resumed:boolean;
   activity:(kind:string,summary:string,metadata?:WorkActivityMetadata)=>void;
   draft:(text:string,label:string,requestId:string)=>Promise<WorkClientToolReceipt>;verify:Verify;
+  /** Office reads its saved result back (office_result_read of the draft), which a check that the result is saved and
+   * readable rests on (live: without it the verifier could not decide "saved and readable"). */
+  readback?:(requestId:string,args:Record<string,unknown>)=>Promise<WorkClientToolReceipt>;
   /** A recurring Work: Office's own schedule record, which a check about future runs rests on (Office runs the schedule, not the client). */
-  schedule?:(requestId:string)=>Promise<WorkClientToolReceipt>;
+  schedule?:(requestId:string,args:Record<string,unknown>)=>Promise<WorkClientToolReceipt>;
   /** Office's own delivery selection, which a check about where the result goes rests on (live: a Work asked that its
    * Telegram chat be set as the target; intake had not recorded it, so nothing in the run could show it). */
-  delivery?:(requestId:string)=>Promise<WorkClientToolReceipt>;
+  delivery?:(requestId:string,args:Record<string,unknown>)=>Promise<WorkClientToolReceipt>;
 }
 const clientName=(client:RunClient)=>client==='codex'?'Codex':'Claude Code';
 // Live (2026-10-03): told that a schedule condition was not met, Codex went looking through Office's MCP tools and database to
@@ -296,10 +300,10 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
         {invocation:{request_id:runEvidence,turn:0,stage_id:'execution',tool_name:'office_client_run',arguments:{},effect:'local_write',dispatched:true},receipt:{status:'succeeded',value:runValue,evidence_ids:[runEvidence],effect_state:'verified',retry_safe:false},observed_at:observedAt},
         {invocation:{request_id:draftId,turn:1,stage_id:'execution',tool_name:'office_result_draft',arguments:{},effect:'local_write',dispatched:true},receipt:{...draft,value:boundWorkToolValue(draft.value)},observed_at:new Date().toISOString()}]};
       // Office's own records the checks may rest on; the client neither sets up the schedule nor sends the result.
-      for(const [tool,read] of [['office_schedule_status',input.schedule],['office_delivery_status',input.delivery]] as const){
+      for(const [tool,read,args] of [['office_result_read',input.readback,{request_id:draftId}],['office_schedule_status',input.schedule,{}],['office_delivery_status',input.delivery,{}]] as const){
         if(!read)continue;
-        const requestId=`client-${tool.slice('office_'.length,-'_status'.length)}-${hashJson({run_id,observed_at:observedAt}).slice(0,24)}`,receipt=await read(requestId);
-        cp={...cp,turn:cp.turn+1,observations:[...cp.observations,{invocation:{request_id:requestId,turn:cp.turn,stage_id:'execution',tool_name:tool,arguments:{},effect:'read_only',dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:new Date().toISOString()}]};
+        const requestId=`client-${tool.slice('office_'.length).replace(/_status$/u,'')}-${hashJson({run_id,observed_at:observedAt}).slice(0,24)}`,receipt=await read(requestId,args);
+        cp={...cp,turn:cp.turn+1,observations:[...cp.observations,{invocation:{request_id:requestId,turn:cp.turn,stage_id:'execution',tool_name:tool,arguments:args,effect:'read_only',dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:new Date().toISOString()}]};
       }
       update({finished:true});
       input.activity('supervisor.client_run',`${clientName(client)} · 실행을 마쳤습니다. 만든 파일 ${files.length}개를 결과로 저장했습니다.`,meta({status:'succeeded'}));

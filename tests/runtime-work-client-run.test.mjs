@@ -132,6 +132,8 @@ test('runtime fixture the verifier sees the Office delivery selection of a clien
   x.supervisor.start(x.work.work_id,x.work.revision,true,'Asia/Seoul',false);x.supervisor.activate();x.supervisor.tick();
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
   assert.ok(evidence[0].includes('office_delivery_status'),JSON.stringify(evidence));
+  // Office reads its saved result back, as the host path did (live: "saved and readable" stayed undecided without it).
+  assert.ok(evidence[0].includes('office_result_read'),JSON.stringify(evidence));
   const checkpoint=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint),delivery=checkpoint.observations.find(item=>item.invocation.tool_name==='office_delivery_status');
   assert.equal(delivery.receipt.status,'succeeded');
   assert.deepEqual(delivery.receipt.value.targets,[{id:'app',platform:'app',label:'Agent Office app'},{id:'tg-owner',platform:'telegram',label:'내 텔레그램'}]);
