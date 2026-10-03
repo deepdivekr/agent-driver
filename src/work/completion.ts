@@ -207,6 +207,14 @@ export function supersededOutputEvidence(observations:readonly Observation[]):Ma
     if(item.invocation.tool_name!=='office_result_read'||item.receipt.status!=='succeeded'||typeof request!=='string'||!requests.has(request))continue;
     for(const id of item.receipt.evidence_ids)replaced.set(id,requests.get(request)!);
   }
+  // A client run keeps every turn's receipts in order (the admission prefix), but the verifier judges the latest turn:
+  // an earlier turn's run record, picture readback, schedule or delivery record is replaced by the newest of its kind
+  // (live: a run resumed five times carried eleven receipts and the batch summary ran out of budget).
+  for(const tool of ['office_client_run','office_image_read','office_schedule_status','office_delivery_status']){
+    const same=observations.filter(item=>item.invocation.tool_name===tool&&item.invocation.dispatched&&item.receipt.status==='succeeded'&&item.receipt.evidence_ids.length>0),last=same.at(-1);
+    if(!last)continue;
+    for(const item of same)if(item!==last)for(const id of item.receipt.evidence_ids)replaced.set(id,last.receipt.evidence_ids[0]!);
+  }
   return replaced;
 }
 interface EvidenceRecord {serialized:string;leaves:string[];fingerprint:string;observable:ObservableEvidence;}
