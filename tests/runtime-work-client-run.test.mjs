@@ -121,7 +121,7 @@ test('runtime fixture a recurring Work run shows the verifier Office schedule re
   x.supervisor.start(x.work.work_id,x.work.revision,true,'Asia/Seoul',false);x.supervisor.activate();x.supervisor.tick();
   const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
   assert.ok(evidence[0].includes('office_schedule_status'),JSON.stringify(evidence));
-  assert.match(x.runs[0].stdin,/do not set up schedules/u);assert.match(x.runs[0].stdin,/"host_schedule"/u);
+  assert.match(x.runs[0].stdin,/do not set up schedules/iu);assert.match(x.runs[0].stdin,/"host_schedule"/u);
 });
 
 test('runtime fixture the verifier sees the Office delivery selection of a client run, with no target secret',async t=>{
@@ -139,6 +139,25 @@ test('runtime fixture the verifier sees the Office delivery selection of a clien
   assert.equal(delivery.receipt.status,'succeeded');
   assert.deepEqual(delivery.receipt.value.targets,[{id:'app',platform:'app',label:'Agent Office app'},{id:'tg-owner',platform:'telegram',label:'내 텔레그램'}]);
   assert.doesNotMatch(JSON.stringify(checkpoint),/SECRETTOKEN|987654321/u);
+});
+
+test('runtime fixture an imported Work gives the client its own steps and tools, and a request that sends by itself is not told to keep the result',async t=>{
+  // Live 2026-10-03: the imported ASTS Work ran without its runbook and commands, and its own Telegram helper was held back by the Office note.
+  const plan={format:1,revision:1,source:'pasted_import',source_id:'imp-1',source_digest:'a'.repeat(64),provenance:'unverified_external',import_mode:'migrate',steps:[
+    {id:'load_runbook',goal:'Read the runbook and seen state.',depends_on:[],effect:'read_only',tool_hints:['C:\\Users\\owner\\projects\\asts\\docs\\runbook.md'],evidence_ids:[]},
+    {id:'deliver',goal:'Send the new items through the helper.',depends_on:['load_runbook'],effect:'external_write',tool_hints:['py -3.12 scripts\\asts_monitor.py'],evidence_ids:[]}]};
+  const x=await setup(t,{client:request=>codexTurn(request)});
+  // The plan's source and provenance are host-owned (an import writes them), never taken from the planner: set them as an import would.
+  const row=x.store.hermesState.prepare('SELECT spec FROM office_intake WHERE work_id=?').get(x.work.work_id);
+  x.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify({...JSON.parse(row.spec),requested_effect:'external_effect_requested',plan}),x.work.work_id);
+  x.supervisor.start(x.work.work_id,x.work.revision,true);x.supervisor.activate();x.supervisor.tick();
+  const end=await settle(x);assert.equal(end.state,'succeeded',JSON.stringify(end));
+  const stdin=x.runs[0].stdin;
+  assert.match(stdin,/The owner's own automation, as imported into Office[\s\S]*- load_runbook \(read_only\): Read the runbook and seen state\.\n  uses: C:\\Users\\owner\\projects\\asts\\docs\\runbook\.md\n- deliver \(external_write\)[\s\S]*uses: py -3\.12 scripts\\asts_monitor\.py/u);
+  assert.match(stdin,/The request itself includes sending or submitting something[\s\S]*do that part as the request says/u);assert.doesNotMatch(stdin,/Do not send the result anywhere/u);
+  const plain=await setup(t,{client:request=>codexTurn(request)});
+  plain.supervisor.start(plain.work.work_id,plain.work.revision,true);plain.supervisor.activate();plain.supervisor.tick();await settle(plain);
+  assert.match(plain.runs[0].stdin,/Do not send the result anywhere/u);assert.doesNotMatch(plain.runs[0].stdin,/as imported into Office/u);
 });
 
 test('runtime fixture a host-tool run that only read or wrote Office outputs moves to the client when the owner resumes it; one that wrote elsewhere stays',async t=>{
