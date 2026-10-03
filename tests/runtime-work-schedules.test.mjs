@@ -6,7 +6,7 @@ import {tmpdir} from 'node:os';
 import {randomUUID} from 'node:crypto';
 import {spawnSync} from 'node:child_process';
 import {PackStore} from '../dist/packs/store.js';
-import {WorkSchedules,nextScheduleSlot,latestScheduleSlot,workScheduleSchema} from '../dist/work/schedule.js';
+import {WorkSchedules,nextScheduleSlot,latestScheduleSlot,workScheduleSchema,rruleSchedule} from '../dist/work/schedule.js';
 
 test('runtime contract schedule, custom Pack schedule and lifecycle entrypoints load independently without ESM initialization cycles',()=>{
  for(const entry of ['schedule','custom-pack-schedule','lifecycle']){
@@ -104,4 +104,15 @@ test('runtime contract a daily schedule with two clock times runs at both, in or
   const single=normalizeExplicitWorkSchedule({kind:'daily',timezone:'Asia/Seoul',hour:9,minute:0});
   assert.deepEqual(single,{kind:'daily',timezone:'Asia/Seoul',hour:9,minute:0});assert.equal(nextScheduleSlot(single,kst('03','10:00'),anchor),kst('04','09:00'));
   assert.deepEqual(scheduleFromProposal({kind:'daily',timezone:'Asia/Seoul',hour:9,minute:0,also_at:null,weekdays:null,seconds:null,reason:null},'UTC'),single,'No extra time gives the same schedule as before.');
+});
+
+// Live 2026-10-03: an imported automation's "FREQ=DAILY;BYHOUR=0,3,6,9,12,15,18,21;BYMINUTE=0" was normalized by the model as once a day.
+test('runtime unit an RRULE in the recurring rule is read in code: every listed hour, weekly days, hourly intervals',()=>{
+  assert.deepEqual(rruleSchedule('schedule: FREQ=DAILY;BYHOUR=0,3,6,9,12,15,18,21;BYMINUTE=0 (Asia/Seoul)','UTC'),{kind:'daily',timezone:'Asia/Seoul',hour:0,minute:0,also_at:[3,6,9,12,15,18,21].map(hour=>({hour,minute:0}))});
+  assert.deepEqual(rruleSchedule('FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=17;BYMINUTE=30','Asia/Seoul'),{kind:'weekly',timezone:'Asia/Seoul',hour:17,minute:30,weekdays:[1,4]});
+  assert.deepEqual(rruleSchedule('FREQ=HOURLY;INTERVAL=3','UTC'),{kind:'interval',timezone:'UTC',seconds:10800});
+  assert.equal(rruleSchedule('매일 08:30과 21:30','UTC'),null,'a rule in words stays with the normalizer');
+  assert.equal(rruleSchedule('FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9','UTC'),null,'an unsupported frequency stays with the normalizer');
+  const eight=rruleSchedule('FREQ=DAILY;BYHOUR=0,3,6,9,12,15,18,21;BYMINUTE=0','Asia/Seoul'),at=Date.UTC(2026,9,3,13,7),next=nextScheduleSlot(eight,at,at);
+  assert.equal(new Date(next).toISOString(),'2026-10-03T15:00:00.000Z','the next slot is the next listed hour (00:00 KST)');
 });

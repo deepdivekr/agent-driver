@@ -79,3 +79,12 @@ test('external claims cannot grant execution or activation authority',()=>{
   const draft=validateWorkImportDraft(reported());
   assert.equal('activated_at' in draft,false);
 });
+
+// Live 2026-10-03: a pasted draft named its dependencies (a Telegram gateway, an account) in depends_on and was refused.
+test('a step whose depends_on names a dependency instead of a step is accepted with that reference dropped',()=>{
+  const draft=reported();
+  draft.steps[0].depends_on=['d_telegram_gateway',...draft.steps[0].depends_on];
+  const parsed=parseWorkImportDraft(JSON.stringify(draft));
+  assert.ok(!parsed.steps[0].depends_on.includes('d_telegram_gateway'));
+  assert.ok(parsed.steps[0].depends_on.every(id=>parsed.steps.some(step=>step.id===id)));
+});
