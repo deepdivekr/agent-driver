@@ -10,7 +10,11 @@ const ownerNeeded:Record<string,string>={waiting_auth:'로그인이 필요합니
  * A result longer than the platform allows is cut at a line end with a note; the complete file stays in the app. */
 export function deliveryContent(result:WorkResult,limit=4000){
   const head=result.work_completion_verified?'[완료] 검증을 통과했습니다.':ownerNeeded[result.source_status]?`[확인 필요] ${ownerNeeded[result.source_status]}`:`[진행 상황] ${result.source_status}`;
-  const top=`${result.work_title||'Agent Office 업무'}\n${head}\n\n${result.summary}`.slice(0,1200),tail=`\n\nWork result ${result.id}`;
+  const tail=`\n\nWork result ${result.id}`;
+  // A result that carries the owner's message (a client run's DELIVERY.md) is sent as that message, nothing else
+  // (live: the owner got file lists and check notes instead of the five explanations they asked for).
+  if(result.delivery_text?.trim()){const title=`${result.work_title||'Agent Office 업무'}\n${head}\n\n`,room=limit-[...title].length-[...tail].length-60,chars=[...result.delivery_text.trim()];return `${title}${chars.slice(0,Math.max(0,room)).join('')}${chars.length>room?'\n… (전체 내용은 앱에서 볼 수 있습니다.)':''}${tail}`;}
+  const top=`${result.work_title||'Agent Office 업무'}\n${head}\n\n${result.summary}`.slice(0,1200);
   const body=result.text&&result.text.trim()!==result.summary.trim()?result.text.trim():'';
   if(!body)return `${top}${result.artifacts.length?'\n\n원본 파일은 앱에서 내려받을 수 있습니다.':''}${tail}`;
   const lines=body.split('\n'),room=limit-[...top].length-[...tail].length-90;let shown='',count=0;
