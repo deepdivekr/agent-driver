@@ -43,7 +43,7 @@ const activeStates=['queued','running','retry_wait'];
 /** Model unavailability that resolves by itself (quota windows, rate limits,
  * provider outages). The run waits and resumes automatically; login expiry and
  * unsupported models still need the user. */
-const modelRetryReasons=new Set(['quota_exhausted','rate_limited','provider_unavailable','STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_TIMEOUT','CLIENT_TIMEOUT','MODEL_PROVIDER_UNAVAILABLE','CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED','WORK_CLIENT_VERIFICATION_RETRY_EXHAUSTED']);
+const modelRetryReasons=new Set(['quota_exhausted','rate_limited','provider_unavailable','CLIENT_PROVIDER_UNAVAILABLE','STRUCTURED_MODEL_UNAVAILABLE','STRUCTURED_MODEL_TIMEOUT','CLIENT_TIMEOUT','MODEL_PROVIDER_UNAVAILABLE','CLIENT_QUOTA_EXHAUSTED','CLIENT_RATE_LIMITED','WORK_CLIENT_VERIFICATION_RETRY_EXHAUSTED']);
 const modelRetryDelay=(attempts:number)=>Math.min(30*60_000,60_000*2**Math.min(Math.max(0,attempts-1),5));
 const settingsChangeReasons=new Set(['CONFIG_CHANGED','MODEL_SETTINGS_CHANGED']);
 type Row={run_id:string;project_id:string;work_id:string;work_revision:number;state:string;owner:string|null;lease_until_ms:number;attempts:number;retry_at_ms:number;checkpoint:string;result:string|null;reason:string|null;config_hash:string;model_revision:number;resume_wait:number;replan_required:number;current_run_only:number;timezone:string|null;created_at:string;updated_at:string};
@@ -543,7 +543,7 @@ export class WorkSupervisor {
             if(offered&&row.attempts<=1&&!checkpoint)workActivity(this.store,project,row.work_id,'procedure.offered',`A procedure verified ${offered.successes} time${offered.successes===1?'':'s'} for a similar request guides this run.`,{run_id:row.run_id,stage_id:'execution',status:'offered'});
       const result=client?await executeClientRun({client,model:pin!.model,effort:pin!.effort,work_id:row.work_id,run_id:row.run_id,folder:join(workFolder(this.config,row.work_id),row.run_id),title:spec.title,prompt:work.prompt,checks:spec.completion_checks,
           context:{...(userIntake.completion_condition?{completion_condition:userIntake.completion_condition}:{}),...(agreedScope?{agreed_scope:agreedScope}:{}),...(collectionWindow?{collection_window:collectionWindow}:{}),...(hostSchedule?{host_schedule:{definition:hostSchedule.definition,next_run_at:hostSchedule.next_run_at,meaning:'Office reruns this Work on this schedule; finish this run.'}}:{})},
-          directions,checkpoint:checkpoint as WorkClientCheckpoint|null,signal:controller.signal,guard,save:saveCheckpoint,
+          directions,checkpoint:checkpoint as WorkClientCheckpoint|null,resumed:row.resume_wait===1,signal:controller.signal,guard,save:saveCheckpoint,
           activity:(kind,summary,metadata)=>workActivity(this.store,project,row.work_id,kind,summary,metadata),
           draft:async(text,label,requestId)=>{const value=await toolkit!.execute('office_result_draft',{text,label},requestId);return toolkit!.receipt('office_result_draft',value,requestId);},
           ...(spec.recurrence.kind==='recurring'?{schedule:async(requestId:string)=>{const value=await toolkit!.execute('office_schedule_status',{},requestId);return toolkit!.receipt('office_schedule_status',value,requestId);}}:{}),

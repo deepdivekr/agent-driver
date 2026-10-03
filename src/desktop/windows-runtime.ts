@@ -1,4 +1,6 @@
 import {randomUUID} from 'node:crypto';
+import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
+import {workClientChoice} from '../work/client-run.js';
 import {dirname,join} from 'node:path';
 import {hostname} from 'node:os';
 import {type DatabaseSync} from 'node:sqlite';
@@ -80,6 +82,8 @@ export class WindowsWorkflowRuntime {
   private procedures:WindowsProcedureStore;
   private pendingSpecs=new Map<string,{scope:string;spec:WindowsJudgmentSpec}>();
   private designing=new Map<string,Promise<unknown>>();
+  /** Judgments for a Work go to its own client and model (one client per Work). */
+  private llmFor(workId:string){const llm=this.options.llm,pinned=workClientChoice(this.store,this.config.project.id,workId);return pinned&&llm instanceof ConfiguredStructuredModel?llm.forClient(pinned.id,pinned.model):llm;}
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly options:WindowsRuntimeOptions={}){
     this.db=store.desktopState;
     this.procedures=new WindowsProcedureStore(this.db);
@@ -153,14 +157,14 @@ export class WindowsWorkflowRuntime {
         const proposal=desktopPlanResponseSchema.parse(raw);assertDesktopText(JSON.stringify(proposal));
         return proposal.steps.length?null:{status:'waiting_observation',work_id:workId,reason:'WINDOWS_PLANNER_NEEDS_OBSERVATION',explanation:proposal.completion,next_action:'observe_more_or_choose_connected_executor',execution_authority:false,profiles_required:false};
       };
-      const raw=await this.options.llm.call('design',instructions,input,schema);
+      const raw=await this.llmFor(workId)!.call('design',instructions,input,schema);
       checkFresh();const waiting=needsObservation(raw);if(waiting)return waiting;let compiled;
       try{compiled=compileDesktopProcedure(raw,spec,snapshot);}
       catch(error){
         if(!(error instanceof Error)||!['WINDOWS_INITIAL_TARGET_UNOBSERVED','WINDOWS_INITIAL_CONTEXT_UNOBSERVED'].includes(error.message))throw error;
         // One bounded pre-execution correction. No action or approval is replayed.
         // The ordinary compiler checks the replacement against the same scope.
-        const corrected=await this.options.llm.call('repair',instructions+' The first target or its preconditions were absent, disabled or ambiguous in the supplied observation. Copy a unique visible first target label and role exactly from capabilities; do not repair OCR spelling, invent controls, switch the goal or widen effects. If evidence is insufficient, return steps: [] instead of guessing.',{...input,validation_error:error.message,rejected_proposal:raw},schema);
+        const corrected=await this.llmFor(workId)!.call('repair',instructions+' The first target or its preconditions were absent, disabled or ambiguous in the supplied observation. Copy a unique visible first target label and role exactly from capabilities; do not repair OCR spelling, invent controls, switch the goal or widen effects. If evidence is insufficient, return steps: [] instead of guessing.',{...input,validation_error:error.message,rejected_proposal:raw},schema);
         checkFresh();const waiting=needsObservation(corrected);if(waiting)return waiting;compiled=compileDesktopProcedure(corrected,spec,snapshot);
       }
       compiled.workflow.id='windows.work.'+snapshotHash({cacheKey,compiled}).slice(0,32);
@@ -262,7 +266,7 @@ export class WindowsWorkflowRuntime {
     const work=this.fresh(run),policy=this.config.packs,saved=readModelSettings(modelSettingsPath(this.config));
     let plane:DecisionPlane|undefined,llm:StructuredModel|undefined;
     if(policy?.models!=='off'&&policy?.model_data_approved){
-      llm=this.options.llm;
+      llm=this.llmFor(work.id);
       if(saved?.selection.jev!=='off'&&work.jev_enabled!==false){
         const jev=this.options.jev??optionalTypeSafeTransportFromHostEnvironment(effectiveModelEnvironment(saved)).transport;
         if(jev){

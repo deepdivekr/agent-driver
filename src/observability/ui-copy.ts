@@ -149,7 +149,6 @@ export const reviewedCopy: Record<string, readonly [string, string]> = {
   '코딩 업무 전용': ['코딩 업무용 AI', 'AI for coding work'],
   '설정 대상': ['적용할 업무', 'Apply to'],
   '연결 방식': ['AI 사용 방식', 'AI connection'],
-  '연결된 MCP 클라이언트': ['현재 연결된 AI 앱', 'Currently connected AI app'],
   '업무 내용을 선택한 AI로 보내 정의·계획하도록 허용': ['업무 내용을 AI에 보내 분석과 실행 허용', 'Allow AI to analyze and run your work'],
   '빠른 반복 판단에 사용합니다. 연결하지 않아도 LLM으로 진행합니다.': ['짧고 반복적인 판단에 사용해요. 연결하지 않아도 AI로 진행할 수 있어요.', 'Used for short, repeated decisions. Your AI can continue without Jev.'],
   '구독 한도를 소진해도 유료 API로 자동 전환하지 않습니다.': ['구독 한도를 다 써도 유료 API로 자동 전환하지 않아요.', 'A subscription limit never triggers an automatic switch to a paid API.'],

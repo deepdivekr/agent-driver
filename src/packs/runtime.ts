@@ -1,4 +1,6 @@
 import {dirname,join} from 'node:path';
+import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
+import {workClientChoice} from '../work/client-run.js';
 import {z} from 'zod';
 import {requireCondition} from '../core/contracts.js';
 import {loadHostConfig,workDelegation,workModelDataApproved,type HostConfig} from '../interface/config.js';
@@ -184,10 +186,13 @@ export class FamilyRuntime {
       if((policy.models==='jev_llm'||!jevPermitted||!jev)&&!llm)try{llm=structuredModelFromEnvironment(environment);}catch{}
     }else{jev=undefined;llm=undefined;}
     if(!jevPermitted)jev=undefined;
+    // Judgments for a Work go to the Work's own client and model (one client per Work).
+    const pinned=office?workClientChoice(this.store,this.config.project.id,office.id):null;
+    if(pinned&&llm instanceof ConfiguredStructuredModel)llm=llm.forClient(pinned.id,pinned.model);
     const shadow=jev&&(this.providers.shadowJev?{id:'shadow-system-one',systemOne:(request:Parameters<JevSystemOneTransport['systemOne']>[0],settings:Parameters<JevSystemOneTransport['systemOne']>[1])=>this.providers.shadowJev!.systemOne(request,settings)}:policy.decision_shadow.provider==='llm'&&llm?structuredModelShadowProvider(llm):undefined);
     const semantic=catalog.id===SEMANTIC_DECISION_CATALOG.id,fallback=semantic?semanticDecisionProfile(policy.confidence):rowDecisionProfile(policy.confidence),registry=new DecisionProfileRegistry(join(dirname(this.config.dbPath),'decisions','registry')),profile=jev?(await registry.resolve(catalog,this.config.environment==='fixture'?'fixture':'production',fallback)).profile:fallback;
     const plane=jev?new DecisionPlane({catalog,profile,primary:{id:'typesafe-jev',systemOne:(request,settings)=>jev!.systemOne(request,settings)},...(shadow?{shadow}:{}),journal:new FileDecisionJournal(join(dirname(this.config.dbPath),'decisions',semantic?'semantic.jsonl':'family.jsonl')),shadow_sample_rate:shadow?(this.providers.shadowJev?.systemOne?0.1:policy.decision_shadow.sample_rate):0}):undefined;
-    const binding=snapshotHash({settings_revision:saved?.revision??0,selection:saved?.selection??null,model:environment.AGENT_DRIVER_API_MODEL??null,client:environment.AGENT_DRIVER_LLM_CLIENT??null,provider:environment.AGENT_DRIVER_API_PROVIDER??null,profile,models:policy.models,work_jev_enabled:workJevEnabled});
+    const binding=snapshotHash({settings_revision:saved?.revision??0,selection:saved?.selection??null,model:environment.AGENT_DRIVER_API_MODEL??null,client:environment.AGENT_DRIVER_LLM_CLIENT??null,provider:environment.AGENT_DRIVER_API_PROVIDER??null,...(pinned?{pinned}:{}),profile,models:policy.models,work_jev_enabled:workJevEnabled});
     return {jev,llm,policy,plane,binding,workJevEnabled,budgetOpen,settingsRevision:saved?.revision??0};
   }
   private async refreshDecisionProviders(run:PackRun,previous:Awaited<ReturnType<FamilyRuntime['decisionProviders']>>){

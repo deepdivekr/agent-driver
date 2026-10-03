@@ -151,7 +151,9 @@ export class WorkRuntime {
     const begun=this.store.beginWork(this.config.project.id,input.request_id,input.prompt,input.intake_mode);
     bindWorkIntakeOptions(this.store,this.config.project.id,begun.work.id,{completion_condition:input.completion_condition?.trim()||null,delivery_target_ids:input.delivery_target_ids??null});
     // The client, model and effort chosen at intake (or the owner's defaults) stay with this Work.
-    pinWorkClient(this.store,this.config.project.id,begun.work.id,input.client,readModelSettings(modelSettingsPath(this.config)));
+    // An unreadable settings file leaves the owner's defaults unknown: without an explicit choice the Work is pinned at its first run.
+    let settings:ReturnType<typeof readModelSettings>=null,readable=true;try{settings=readModelSettings(modelSettingsPath(this.config));}catch{readable=false;}
+    if(input.client||readable)pinWorkClient(this.store,this.config.project.id,begun.work.id,input.client,settings);
     this.onIntake?.(begun.work.id,input,begun.created);
     try{onRegistered?.(this.public(begun.work));}catch{/* A disconnected progress observer cannot change the durable intake. */}
     if(!begun.created)return {...this.public(begun.work),deduplicated:true};
@@ -214,7 +216,7 @@ export class WorkRuntime {
       plannerCallsBefore=planner.calls?.length??0;
       const rawProposal=await planner.call('design',instructions,modelInput,schema);
       assertWorkConnected(this.store,project,work_id);
-      const proposal=await validateOrCorrectWorkProposal(rawProposal,work.mode as WorkMode,Object.keys(work.answers).length>0,{model:this.model,instructions,input:modelInput,onDiagnostic:event=>this.definitionDiagnostic(work_id,event)});
+      const proposal=await validateOrCorrectWorkProposal(rawProposal,work.mode as WorkMode,Object.keys(work.answers).length>0,{model:planner,instructions,input:modelInput,onDiagnostic:event=>this.definitionDiagnostic(work_id,event)});
       // The host accepts a selection only among the candidates it listed; anything else is dropped, not an error.
       if(proposal.procedure_selection&&!candidates.some(item=>item.id===proposal.procedure_selection!.id))delete proposal.procedure_selection;
       if(proposal.procedure_selection===null)delete proposal.procedure_selection;

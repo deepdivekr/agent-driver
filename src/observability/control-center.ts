@@ -1,4 +1,5 @@
 import {serveUiAsset} from './ui-assets.js';
+import {defaultWorkClient} from '../work/client-run.js';
 import {FileExplorerRoutes} from './files-http.js';
 import {dirname} from 'node:path';
 import {randomBytes} from 'node:crypto';
@@ -25,7 +26,7 @@ import {CodingRuntime,type CodingRuntimeOptions} from '../coding/runtime.js';
 import {CodingDialogRuntime} from '../coding/conversation.js';
 import {codingDialogAttachSchema,codingDialogTurnSchema} from '../coding/contracts.js';
 import {ConfiguredStructuredModel} from '../onboarding/configured-model.js';
-import {modelSettingsPath} from '../onboarding/model-settings.js';
+import {modelSettingsPath,readModelSettings} from '../onboarding/model-settings.js';
 import {type StructuredModel} from '../taskpack/adaptive-spec.js';
 import {HermesWorkRuntime,type HermesWorkOptions} from '../work/hermes.js';
 import {HermesMigrationRuntime} from '../work/hermes-migration.js';
@@ -412,6 +413,7 @@ export async function startControlCenter(config:HostConfig,options:{port?:number
     }
     if(suffix===''){const nonce=randomBytes(18).toString('base64url');reply(response,200,workHtml(nonce),'text/html; charset=utf-8',nonce);return;}
     if(suffix==='work/import/prompt'){reply(response,200,JSON.stringify(imports.prompt()),'application/json; charset=utf-8');return;}
+    if(suffix==='work/client-default'){let settings=null;try{settings=readModelSettings(modelSettingsPath(config));}catch{}reply(response,200,JSON.stringify({client:defaultWorkClient(settings)}),'application/json; charset=utf-8');return;}
     if(suffix==='work/board'){reply(response,200,JSON.stringify(readWorkBoard(store,config)),'application/json; charset=utf-8');return;}
     if(suffix==='work/detail'){
       const id=url.searchParams.get('id');if(!id||id.length>128){reply(response,400,'work id required');return;}
