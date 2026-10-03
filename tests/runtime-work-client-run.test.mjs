@@ -329,3 +329,24 @@ test('runtime fixture after a denial the claim cites only the latest turn, while
   assert.ok(claims[1].ids.every(id=>!claims[0].ids.includes(id)),'the second claim cites no receipt of the first turn');
   assert.ok(claims[1].ids.some(id=>id.startsWith('client-run-'))&&claims[1].ids.some(id=>id.startsWith('client-output-')));
 });
+
+// Owner decision 2026-10-04: a client run is complete when its client reports each condition met; Office verifies
+// independently only Works that send or submit outside.
+test('runtime fixture the client report decides completion; an external Work still gets independent verification',async t=>{
+  const report=(request,met)=>writeFileSync(join(request.cwd,'COMPLETION.json'),JSON.stringify({checks:[{id:'images',met,note:met?'다섯 장과 해설이 폴더에 있다':'세 장만 만들었다'}]}));
+  const done=await setup(t,{client:request=>{report(request,true);return codexTurn(request);}});
+  done.supervisor.start(done.work.work_id,done.work.revision,true);done.supervisor.activate();done.supervisor.tick();
+  const ok=await settle(done);assert.equal(ok.state,'succeeded',JSON.stringify(ok));assert.equal(done.model.verifications,0,'no verifier call');
+  assert.match(done.runs[0].stdin,/Also write COMPLETION\.json in the Work folder/u);
+  assert.ok(activity(done).some(row=>row.kind==='supervisor.verification'&&/reported every completion condition met/u.test(row.summary)));
+  const short=await setup(t,{client:request=>{report(request,false);return codexTurn(request);}});
+  short.supervisor.start(short.work.work_id,short.work.revision,true);short.supervisor.activate();short.supervisor.tick();
+  const review=await settle(short);assert.equal(review.state,'awaiting_review');assert.equal(review.reason,'WORK_CLIENT_REPORTED_INCOMPLETE');assert.equal(short.model.verifications,0);
+  assert.ok(activity(short).some(row=>/images \(세 장만 만들었다\)/u.test(row.summary)));
+  // A Work whose request sends something outside keeps Office's own check, whatever the client reports.
+  const outside=await setup(t,{client:request=>{report(request,true);return codexTurn(request);}});
+  const row=outside.store.hermesState.prepare('SELECT spec FROM office_intake WHERE work_id=?').get(outside.work.work_id);
+  outside.store.hermesState.prepare('UPDATE office_intake SET spec=? WHERE work_id=?').run(JSON.stringify({...JSON.parse(row.spec),requested_effect:'external_effect_requested'}),outside.work.work_id);
+  outside.supervisor.start(outside.work.work_id,outside.work.revision,true);outside.supervisor.activate();outside.supervisor.tick();
+  const verified=await settle(outside);assert.equal(verified.state,'succeeded',JSON.stringify(verified));assert.equal(outside.model.verifications,1);
+});
