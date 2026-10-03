@@ -321,8 +321,14 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       // Office's own records the checks may rest on; the client neither sets up the schedule nor sends the result.
       for(const [tool,read,args] of [['office_result_read',input.readback,{request_id:draftId}],['office_schedule_status',input.schedule,{}],['office_delivery_status',input.delivery,{}]] as const){
         if(!read)continue;
-        const requestId=`client-${tool.slice('office_'.length).replace(/_status$/u,'')}-${hashJson({run_id,observed_at:observedAt}).slice(0,24)}`,receipt=await read(requestId,args);
-        cp={...cp,turn:cp.turn+1,observations:[...cp.observations,{invocation:{request_id:requestId,turn:cp.turn,stage_id:'execution',tool_name:tool,arguments:args,effect:'read_only',dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:new Date().toISOString()}]};
+        // The readback covers the whole saved result, page by page (live: a check on the delivery text stayed unresolved because the first page ended mid-way).
+        for(let offset=0,page=0;;page++){
+          const pageArgs=tool==='office_result_read'?{...args,offset}:args,requestId=`client-${tool.slice('office_'.length).replace(/_status$/u,'')}-${hashJson({run_id,observed_at:observedAt,page}).slice(0,24)}`,receipt=await read(requestId,pageArgs);
+          cp={...cp,turn:cp.turn+1,observations:[...cp.observations,{invocation:{request_id:requestId,turn:cp.turn,stage_id:'execution',tool_name:tool,arguments:pageArgs,effect:'read_only',dispatched:true},receipt:{...receipt,value:boundWorkToolValue(receipt.value)},observed_at:new Date().toISOString()}]};
+          const paging=object(object(receipt.value).page);
+          if(tool!=='office_result_read'||receipt.status!=='succeeded'||paging.has_more!==true||typeof paging.next_offset!=='number'||page>=7)break;
+          offset=paging.next_offset;
+        }
       }
       update({finished:true});
       input.activity('supervisor.client_run',`${clientName(client)} · 실행을 마쳤습니다. 만든 파일 ${files.length}개를 결과로 저장했습니다.`,meta({status:'succeeded'}));
