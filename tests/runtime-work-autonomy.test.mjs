@@ -195,8 +195,9 @@ test('B1: a due scheduled run waits at the daily limit with one note, and starts
 
 // Live 2026-10-03: a recurring Work whose last run stopped in an older executor's wait for a setting never started its
 // scheduled runs again. Such a wait does not hold back the next slot; a run with no executor wait still does.
-test('B1: a scheduled run starts after a run that stopped in an executor wait, not after one paused otherwise',async t=>{
-  const {PackStore}=await import('../dist/packs/store.js'),{WorkRuntime}=await import('../dist/work/runtime.js'),{WorkSupervisor}=await import('../dist/work/supervisor.js');
+test('B1: a scheduled run on the client agent starts after a host-tool run stopped in its own wait; otherwise the wait holds',async t=>{
+  const {PackStore}=await import('../dist/packs/store.js'),{WorkRuntime}=await import('../dist/work/runtime.js'),{WorkSupervisor}=await import('../dist/work/supervisor.js'),{enableClientRun,disableClientRun}=await import('../dist/work/client-run.js');
+  t.after(()=>disableClientRun());
   const proposal={title:'자료 확인',desired_outcome:'원본의 값을 결과에 남긴다',completion_checks:[{id:'records',result:'원본 제목과 값 23 확인',evidence:'실제 파일 조회 결과'}],assumptions:[],route:{kind:'pack',pack_family:'research.search'},requested_effect:'read_only',recurrence:{kind:'recurring',rule:'Every day at 20:00 UTC'},questions:[]};
   const recipe={version:1,family:'research.search',request:'매일 자료를 확인해줘',sources:[{id:'records',parameters:{}}],filters:[],deduplicate_by:['id'],query:'',search_fields:['title'],sort:null,limit:10};
   const root=await mkdtemp(join(tmpdir(),'work-wait-schedule-')),host=join(root,'host.json');await writeFile(join(root,'source.json'),JSON.stringify([{id:'one',title:'Observed source',value:23}]));
@@ -222,11 +223,10 @@ test('B1: a scheduled run starts after a run that stopped in an executor wait, n
   db.prepare("UPDATE office_supervisor SET state='paused',reason=NULL WHERE work_id=?").run(started.work_id);due();
   await new Promise(resolve=>setTimeout(resolve,400));assert.equal(runs().length,1,'a run paused without an executor wait holds the slot');
   db.prepare("UPDATE office_supervisor SET state='paused',reason='WORK_CLIENT_WAIT_CONFIGURATION' WHERE work_id=?").run(started.work_id);
-  await until(()=>runs().length===2&&runs()[1]==='succeeded','scheduled run after an executor wait');
-  // A scheduled run that stops in such a wait ends its slot too, so the following slot is not held as busy.
-  db.prepare("UPDATE office_supervisor SET state='paused',reason='WORK_CLIENT_WAIT_AUTHENTICATION' WHERE work_id=? AND rowid=(SELECT max(rowid) FROM office_supervisor WHERE work_id=?)").run(started.work_id,started.work_id);
-  const slot=()=>db.prepare("SELECT state FROM office_work_schedule_slot WHERE work_id=? AND run_id=(SELECT run_id FROM office_supervisor WHERE work_id=? AND rowid=(SELECT max(rowid) FROM office_supervisor WHERE work_id=?))").get(started.work_id,started.work_id,started.work_id)?.state;
-  await until(()=>slot()&&slot()!=='started','the waiting run releases its slot');
+  await new Promise(resolve=>setTimeout(resolve,400));assert.equal(runs().length,1,'the next run would meet the same host-tool wait, so the wait holds');
+  // With the client's own agent as the executor, the next run does not share that wait and starts.
+  enableClientRun({runner:{run:async()=>({code:1,stdout:'',stderr:'authentication required'})},executable:client=>`/fake/${client}`});
+  await until(()=>runs().length===2,'scheduled client run after a host-tool wait');
 });
 
 // Plan B3: the planner chooses among verified procedures the host lists; the host accepts only a listed id.

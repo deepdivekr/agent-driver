@@ -110,8 +110,10 @@ const customTerminalStates=new Set(['succeeded','completed','cancelled','aborted
 export class WorkSchedules {
   private readonly clock:()=>number;
   private readonly defaultTimezone:string;
-  constructor(readonly store:PackStore,readonly project:string,options:{clock?:()=>number;default_timezone?:string}={}){
-    this.clock=options.clock??(()=>Date.now());this.defaultTimezone=timezone.parse(options.default_timezone??Intl.DateTimeFormat().resolvedOptions().timeZone);
+  /** Whether a run that stopped in its executor's own wait ends its slot: only when the Work's next run changes executor. */
+  private readonly waitEnds:(workId:string)=>boolean;
+  constructor(readonly store:PackStore,readonly project:string,options:{clock?:()=>number;default_timezone?:string;waitEnds?:(workId:string)=>boolean}={}){
+    this.clock=options.clock??(()=>Date.now());this.waitEnds=options.waitEnds??(()=>false);this.defaultTimezone=timezone.parse(options.default_timezone??Intl.DateTimeFormat().resolvedOptions().timeZone);
     store.hermesState.exec(`CREATE TABLE IF NOT EXISTS office_work_schedule(project_id TEXT NOT NULL,work_id TEXT PRIMARY KEY REFERENCES office_work(id),work_revision INTEGER NOT NULL,rule_sha256 TEXT NOT NULL,definition TEXT,state TEXT NOT NULL,reason TEXT,owner TEXT,lease_until_ms INTEGER NOT NULL DEFAULT 0,anchor_ms INTEGER NOT NULL,next_run_ms INTEGER,last_slot TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
       CREATE INDEX IF NOT EXISTS office_work_schedule_due ON office_work_schedule(project_id,state,next_run_ms);
       CREATE TABLE IF NOT EXISTS office_work_schedule_slot(project_id TEXT NOT NULL,work_id TEXT NOT NULL REFERENCES office_work(id),slot_key TEXT NOT NULL,scheduled_ms INTEGER NOT NULL,owner TEXT NOT NULL,lease_until_ms INTEGER NOT NULL,state TEXT NOT NULL,run_id TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(project_id,work_id,slot_key));`);
@@ -195,8 +197,8 @@ export class WorkSchedules {
   }
   disable(workId:string,revision:number){assertWorkConnected(this.store,this.project,workId);const work=this.store.intakeWork(this.project,workId);requireCondition(work.revision===revision,'WORK_REVISION_CONFLICT');requireCondition(!this.imported(workId),'SCHEDULE_ORIGINAL_RUNTIME_AUTHORITY');requireCondition(this.find(workId),'SCHEDULE_NOT_PREPARED');this.store.hermesState.prepare("UPDATE office_work_schedule SET state='disabled',next_run_ms=NULL,updated_at=? WHERE project_id=? AND work_id=?").run(stamp(this.clock()),this.project,workId);this.event(workId,'schedule.disabled','Recurring execution is disabled.');return this.status(workId);}
   private observedRun(workId:string,runId:string):string|null{
-    // A run that stopped to wait by itself (an executor's wait for a sign-in or a setting) ends its slot, so the next slot can start.
-    const db=this.store.hermesState;if(db.prepare("SELECT 1 FROM sqlite_master WHERE name='office_supervisor'").get()){const row=db.prepare('SELECT state,reason FROM office_supervisor WHERE project_id=? AND work_id=? AND run_id=?').get(this.project,workId,runId);if(row)return row.state==='paused'&&/^WORK_CLIENT_WAIT_/u.test(String(row.reason??''))?'executor_wait':String(row.state);}
+    // A run that stopped in the host-tool executor's own wait ends its slot when the Work's next run is a client run, which does not share that wait.
+    const db=this.store.hermesState;if(db.prepare("SELECT 1 FROM sqlite_master WHERE name='office_supervisor'").get()){const row=db.prepare('SELECT state,reason FROM office_supervisor WHERE project_id=? AND work_id=? AND run_id=?').get(this.project,workId,runId);if(row)return row.state==='paused'&&/^WORK_CLIENT_WAIT_/u.test(String(row.reason??''))&&this.waitEnds(workId)?'executor_wait':String(row.state);}
     const run=this.store.officeRuns(this.project,workId).find(value=>value.source_id===runId);if(!run)return null;
     if(run.source_kind==='pack')return this.store.packRun(this.project,runId).status;
     if(run.source_kind==='swarm')return (this.store.swarmRun(this.project,runId).snapshot as {status:string}).status;

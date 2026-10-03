@@ -20,7 +20,7 @@ import {workProposalSchema,workControlSchema as supervisorActionSchema,type Work
 import {validateOrCorrectWorkProposal,workPlanningContext,WORK_REPLANNING_INSTRUCTIONS,WORK_INTAKE_REQUIREMENTS_INSTRUCTIONS,WORK_COLLECTION_CONTRACT_INSTRUCTIONS} from './runtime.js';
 import {readWorkIntakeOptions} from './intake-options.js';
 import {BoundedWorkClientExecutor,appendWorkObservation,workProgress,boundWorkToolValue,workClientCheckpointSchema,type WorkClientCheckpoint,type WorkClientResult} from './client-executor.js';
-import {clientRunEligible,clientRunEnabled,executeClientRun,pinWorkClient,workFolder} from './client-run.js';
+import {clientRunEligible,clientRunEnabled,defaultWorkClient,executeClientRun,pinWorkClient,workClientChoice,workFolder} from './client-run.js';
 import {packTools} from '../packs/contracts.js';
 import {type SwarmRunSnapshot} from '../swarm/contracts.js';
 import {activeSwarmWorkerCount,initWorkExecution,workActivity,withWorkActivityContext} from './activity.js';
@@ -170,7 +170,7 @@ export class WorkSupervisor {
   private timer:NodeJS.Timeout|null=null;private activated=false;private api:RuntimeApi|null=null;
   readonly schedules:WorkSchedules;
   constructor(readonly store:PackStore,readonly config:HostConfig,readonly model:StructuredModel,readonly options:{api?:RuntimeApi;tick_ms?:number;max_parallel?:number;auto_start?:boolean;can_start?:()=>boolean;onResult?:(workId:string)=>void;verifyCompletion?:Parameters<BoundedWorkClientExecutor['execute']>[1]['verifyCompletion']}={}){
-    initWorkSupervisor(store);this.api=options.api??null;this.schedules=new WorkSchedules(store,config.project.id);
+    initWorkSupervisor(store);this.api=options.api??null;this.schedules=new WorkSchedules(store,config.project.id,{waitEnds:workId=>this.clientRunNext(workId)});
     if(options.auto_start!==false)this.activate();
   }
   activate(){requireCondition(!this.stopped,'WORK_SUPERVISOR_CLOSED');if(this.activated)return;this.activated=true;this.timer=setInterval(()=>this.tick(),this.options.tick_ms??1000);this.timer.unref();this.tick();}
@@ -234,9 +234,10 @@ export class WorkSupervisor {
         if(!this.api)this.api=new RuntimeApi(this.config,{swarmModel:this.model});
         const custom=this.api.customPackSchedules.binding(due.work_id);
         requireCondition(!this.schedules.customPackRequired(due.work_id)||custom,'CUSTOM_PACK_SCHEDULE_BINDING_MISSING');
-        // A run that stopped to wait by itself (live 2026-10-03: an older executor's wait for a setting) does not hold back
-        // the next scheduled run, which starts fresh. A run the owner paused does, and a paused Work has no due slot at all.
-        const executorWait=latest?.state==='paused'&&/^WORK_CLIENT_WAIT_/u.test(latest.reason??'');
+        // A run that stopped in the host-tool executor's own wait (live 2026-10-03: a wait for a setting) does not hold back
+        // the next scheduled run when that run is a client run, which does not share the wait. A host-tool Work keeps its
+        // wait for the owner; a run the owner paused holds the schedule, and a paused Work has no due slot at all.
+        const executorWait=latest?.state==='paused'&&/^WORK_CLIENT_WAIT_/u.test(latest.reason??'')&&this.clientRunNext(due.work_id);
         if((custom&&latest&&!['succeeded','failed'].includes(latest.state))||(!custom&&(!latest||!['succeeded','failed','awaiting_review'].includes(latest.state)&&!executorWait)))continue;
         // Delegation budget: host-started (scheduled) runs stop at the owner's daily limit. The slot stays due and
         // runs once the day turns or the owner raises the limit; one note per Work per day says why.
@@ -298,6 +299,12 @@ export class WorkSupervisor {
       const owner=randomUUID();const claim=db.prepare("UPDATE office_supervisor SET state='running',owner=?,lease_until_ms=?,attempts=attempts+1,updated_at=? WHERE project_id=? AND run_id=? AND state IN ('queued','running','retry_wait') AND (owner IS NULL OR lease_until_ms<=?) AND (SELECT COUNT(*) FROM office_supervisor WHERE project_id=? AND state='running' AND owner IS NOT NULL AND lease_until_ms>?)<?").run(owner,at+30000,now(),project,row.run_id,at,project,at,this.options.max_parallel??2);if(!claim.changes)continue;
       const operation=this.execute({...row,owner,state:'running',attempts:row.attempts+1});this.active.set(row.run_id,operation);void operation.finally(()=>{this.active.delete(row.run_id);this.controllers.delete(row.run_id);}).catch(()=>{});
     }
+  }
+  /** Whether this Work's next run is a run of the client's own agent. */
+  private clientRunNext(workId:string){
+    if(!clientRunEnabled())return false;
+    const project=this.config.project.id,spec=this.store.intakeWork(project,workId).spec as WorkProposal|null;if(!spec||!clientRunEligible(this.store,project,workId,spec))return false;
+    try{return Boolean(workClientChoice(this.store,project,workId)??defaultWorkClient(readModelSettings(modelSettingsPath(this.config))));}catch{return false;}
   }
   private async execute(row:Row){
     applyAutoSources(this.config);
