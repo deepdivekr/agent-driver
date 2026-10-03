@@ -216,6 +216,10 @@ export interface ClientRunInput {
   client:RunClient;model:string|null;effort:WorkClientChoice['effort'];work_id:string;run_id:string;folder:string;title:string;prompt:string;checks:Check[];
   /** What intake settled with the owner: answers, agreed scope, collection window, the host schedule. */
   context:Json;directions:Array<{instruction:string;created_at:string}>;
+  /** The Work's plan. An imported one is the owner's own automation (its steps, files, commands and tools), which the client follows. */
+  plan?:{source:'request'|'pasted_import'|'project_scan';steps:Array<{id:string;goal:string;effect:string;tool_hints:string[]}>};
+  /** The request itself includes a send or submission (its own helper or scripts), which is the client's part, not Office's. */
+  external_effect?:boolean;
   checkpoint:WorkClientCheckpoint|null;signal:AbortSignal;guard:()=>void;save:(checkpoint:WorkClientCheckpoint)=>void;
   /** The owner resumed or retried this run. */
   resumed:boolean;
@@ -233,19 +237,26 @@ export interface ClientRunInput {
 const clientName=(client:RunClient)=>client==='codex'?'Codex':'Claude Code';
 // Live (2026-10-03): told that a schedule condition was not met, Codex went looking through Office's MCP tools and database to
 // enable the schedule itself. The schedule and delivery are Office's; the client's part is the result in its folder.
-const OFFICE_OWNS='Office delivers the result to the owner after checking it and runs any schedule itself. Do not send the result anywhere, do not set up schedules, and do not look into or change Agent Office, its data or its Work records.';
+// Live (2026-10-03): an imported Work whose own helper sends to Telegram was told not to send anything and kept the result in files.
+const officeOwns=(input:Pick<ClientRunInput,'external_effect'>)=>`${input.external_effect
+  ?'The request itself includes sending or submitting something (its own scripts, helper or channel): do that part as the request says, with its own gates. Office may also deliver the saved result to the owner through its own settings and runs any schedule itself.'
+  :'Office delivers the result to the owner after checking it and runs any schedule itself. Do not send the result anywhere.'} Do not set up schedules, and do not look into or change Agent Office, its data or its Work records.`;
+/** An imported plan is the owner's own automation: its steps, with the files, commands and tools they used, are the procedure. */
+const importedPlan=(input:Pick<ClientRunInput,'plan'>)=>input.plan&&input.plan.source!=='request'&&input.plan.steps.length
+  ?[`The owner's own automation, as imported into Office. Follow its steps with the files, commands and tools they name (Windows paths are reachable from here under /mnt/<drive>/…):\n${input.plan.steps.map(step=>`- ${step.id} (${step.effect}): ${step.goal}${step.tool_hints.length?`\n  uses: ${step.tool_hints.join(' | ')}`:''}`).join('\n')}`]:[];
 /** The owner's instruction file for this client on the Windows side; the local one the client loads itself. */
 const windowsInstructions=(client:RunClient)=>(ownerEnvironmentContext().owner_environment?.instructions??[]).filter(item=>item.app===client&&item.file.endsWith('(Windows)'));
 function initialPrompt(input:ClientRunInput){
   return [`Agent Office hands you this Work. Do it yourself, with your own tools, skills and settings, until the result is finished.`,
     `Work folder: ${input.folder}. It is your working directory for this run. Save every deliverable here as files (images, documents, data). Folders of this Work's earlier runs, if any, are next to it.`,
     `Request from the owner:\n${input.prompt}`,
+    ...importedPlan(input),
     ...(input.directions.length?[`Later directions from the owner (newest last; they change the request where they differ):\n${input.directions.map(item=>`- ${item.instruction}`).join('\n')}`]:[]),
     `Completion conditions Office will check against the files you leave and your final reply:\n${input.checks.map(check=>`- ${check.id}: ${check.result}`).join('\n')}`,
     ...(Object.keys(input.context).length?[`What Office already settled with the owner:\n${JSON.stringify(input.context,null,1)}`]:[]),
     ...windowsInstructions(input.client).map(item=>`The owner's standing instructions for ${clientName(input.client)} on the Windows side of this computer (${item.file}); this run does not load them by itself. Follow them where they apply:\n${item.text}`),
     'Nobody answers questions during the run. If only the owner can unblock something (a sign-in, a payment, a decision), stop and say exactly what is needed.',
-    OFFICE_OWNS,
+    officeOwns(input),
     'Finish with a short reply in the language of the request: what you made, each file name, and how each completion condition is met.'].join('\n\n');
 }
 
@@ -323,7 +334,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       update({repairs:session().repairs+1});
       // The owner sees what the client was asked to fix (live: the reason reached only the client).
       input.activity('supervisor.client_run',`${clientName(client)} · 검증에서 거절된 조건 ${verified.repair.check_id}의 수정을 같은 세션에 요청합니다 (${session().repairs}/${WORK_COMPLETION_REPAIR_BUDGET})${verified.repair.reason?`: ${brief(verified.repair.reason,400)}`:''}`,meta({status:'running',reason:verified.repair.check_id}));
-      next=`Office checked your result against the completion conditions. Not met: ${verified.repair.check_id}${check?` (${check.result})`:''}.${verified.repair.reason?` Reason: ${verified.repair.reason}`:''}\n\nFix this in the same folder, then finish with the updated short reply. If the condition is about the schedule or the delivery, it is Office's part: change nothing and say so.\n\n${OFFICE_OWNS}`;
+      next=`Office checked your result against the completion conditions. Not met: ${verified.repair.check_id}${check?` (${check.result})`:''}.${verified.repair.reason?` Reason: ${verified.repair.reason}`:''}\n\nFix this in the same folder, then finish with the updated short reply. If the condition is about the schedule or the delivery, it is Office's part: change nothing and say so.\n\n${officeOwns(input)}`;
       continue;
     }
     return {status:'awaiting_review',summary:cp.summary,reason:'WORK_CLIENT_COMPLETION_REQUIRES_VERIFICATION',completion_verified:false,checkpoint:cp,model_calls:[]};
