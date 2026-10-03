@@ -111,3 +111,10 @@ test('A1: an unresolved partial page of a paged text resource does not block a c
   assert.equal(await verifyComplete(checks,[page(0,false),...rest],claimFor(current)),false,'A receipt the host does not know to be a partial page keeps blocking.');
   assert.ok(rejected.some(event=>event.code==='WORK_COMPLETION_BATCH_UNRESOLVED_MATERIAL'));
 });
+
+// Live 2026-10-04: a client run resumed five times kept every turn's receipts (the admission prefix) and the batch summary ran out of budget.
+test('A1: an earlier turn\'s run record, picture readback, schedule or delivery record is replaced by the newest of its kind',()=>{
+  const obs=(turn,tool,id)=>({invocation:{request_id:id,turn,stage_id:'execution',tool_name:tool,arguments:{},effect:'read_only',dispatched:true},receipt:{status:'succeeded',value:{status:'succeeded',turn},evidence_ids:[`ev-${id}`],effect_state:'none',retry_safe:true},observed_at:new Date().toISOString()});
+  const replaced=supersededOutputEvidence([obs(0,'office_client_run','run-0'),obs(3,'office_image_read','img-3'),obs(4,'office_delivery_status','dlv-4'),obs(5,'office_client_run','run-5'),obs(8,'office_image_read','img-8'),obs(9,'office_delivery_status','dlv-9'),obs(10,'office_web_search','web-10'),obs(11,'office_web_search','web-11')]);
+  assert.deepEqual([...replaced.entries()].sort(),[['ev-dlv-4','ev-dlv-9'],['ev-img-3','ev-img-8'],['ev-run-0','ev-run-5']],'reads of sources are never replaced by a later read');
+});
