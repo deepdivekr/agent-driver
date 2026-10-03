@@ -87,6 +87,10 @@ test('runtime fixture a verification denial goes back to the same Codex session'
   assert.deepEqual(x.runs[1].args.slice(-6),['exec','resume','--json','--skip-git-repo-check',thread,'-']);
   assert.match(x.runs[1].stdin,/Not met: images \(사례 이미지 파일과 해설이 있다\)\. Reason: Only one image was made; five were asked\./u);
   assert.ok(activity(x).some(row=>row.kind==='supervisor.client_run'&&/거절된 조건 images의 수정을 같은 세션에 요청합니다 \(1\/3\): Only one image was made/u.test(row.summary)),'the owner sees the repair request');
+  // Every turn's receipts stay in order (live: a record rewritten each turn failed the trace's admission-prefix check on resume).
+  const record=JSON.parse(x.store.hermesState.prepare('SELECT checkpoint FROM office_supervisor WHERE run_id=?').get(end.run_id).checkpoint).observations;
+  const drafts=record.filter(item=>item.invocation.tool_name==='office_result_draft');assert.equal(drafts.length,2);assert.ok(drafts[0].invocation.turn<drafts[1].invocation.turn);
+  assert.equal(new Set(record.map(item=>item.invocation.request_id)).size,record.length,'request ids stay unique across turns');
 });
 
 test('runtime fixture the AI chosen at intake runs the Work; a Claude run stopped for a new direction resumes its own session with that direction',async t=>{

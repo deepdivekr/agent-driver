@@ -316,12 +316,15 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
       input.guard();
       const files=producedFiles(input.folder),resultText=clientResultText(outcome.final_message,files),observedAt=new Date().toISOString();
       deliveryText=deliveryMessage(input.folder,outcome.final_message);
-      const runEvidence=`client-run-${hashJson({run_id,session:outcome.session_id,final:outcome.final_message,files}).slice(0,24)}`;
+      const runEvidence=`client-run-${hashJson({run_id,turn:cp.turn,session:outcome.session_id,final:outcome.final_message,files}).slice(0,24)}`;
       const runValue=boundWorkToolValue({client,session_id:outcome.session_id,folder:input.folder,final_message:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),files:files.filter(file=>file.sha256).slice(0,20).map(({name:_name,...file})=>file),file_count:files.length,observed_by_host:'Files are the ones Office found in the Work folder after the run, with their SHA-256; the counts are the events the client reported. What the client did outside this folder ran under the owner\'s own permissions and is not an Office receipt.',counts:outcome.counts});
-      const draftId=`client-output-${hashJson({run_id,text:resultText}).slice(0,24)}`,draft=await input.draft(resultText,input.title.slice(0,120),draftId);
-      cp={...cp,turn:2,summary:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),observations:[
-        {invocation:{request_id:runEvidence,turn:0,stage_id:'execution',tool_name:'office_client_run',arguments:{},effect:'local_write',dispatched:true},receipt:{status:'succeeded',value:runValue,evidence_ids:[runEvidence],effect_state:'verified',retry_safe:false},observed_at:observedAt},
-        {invocation:{request_id:draftId,turn:1,stage_id:'execution',tool_name:'office_result_draft',arguments:{},effect:'local_write',dispatched:true},receipt:{...draft,value:boundWorkToolValue(draft.value)},observed_at:new Date().toISOString()}]};
+      const draftId=`client-output-${hashJson({run_id,turn:cp.turn,text:resultText}).slice(0,24)}`,draft=await input.draft(resultText,input.title.slice(0,120),draftId);
+      // Every turn's receipts stay, appended in order: the run's admission checkpoint must remain a prefix of the record
+      // (live: a resumed run whose record was rewritten each turn failed the trace's prefix check and could not verify).
+      const turn=cp.turn;
+      cp={...cp,turn:turn+2,summary:sanitizeCodingReply(outcome.final_message).text.slice(0,4000),observations:[...cp.observations,
+        {invocation:{request_id:runEvidence,turn,stage_id:'execution',tool_name:'office_client_run',arguments:{},effect:'local_write',dispatched:true},receipt:{status:'succeeded',value:runValue,evidence_ids:[runEvidence],effect_state:'verified',retry_safe:false},observed_at:observedAt},
+        {invocation:{request_id:draftId,turn:turn+1,stage_id:'execution',tool_name:'office_result_draft',arguments:{},effect:'local_write',dispatched:true},receipt:{...draft,value:boundWorkToolValue(draft.value)},observed_at:new Date().toISOString()}]};
       // Office's own records the checks may rest on; the client neither sets up the schedule nor sends the result.
       for(const [tool,read,args] of [['office_result_read',input.readback,{request_id:draftId}],['office_schedule_status',input.schedule,{}],['office_delivery_status',input.delivery,{}]] as const){
         if(!read)continue;
