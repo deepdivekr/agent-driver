@@ -342,7 +342,7 @@ test('runtime fixture the client report decides completion; an external Work sti
   done.supervisor.start(done.work.work_id,done.work.revision,true);done.supervisor.activate();done.supervisor.tick();
   const ok=await settle(done);assert.equal(ok.state,'succeeded',JSON.stringify(ok));assert.equal(done.model.verifications,0,'no verifier call');
   assert.match(done.runs[0].stdin,/Also write COMPLETION\.json in the Work folder/u);
-  assert.ok(activity(done).some(row=>row.kind==='supervisor.verification'&&/reported every completion condition met/u.test(row.summary)));
+  assert.ok(activity(done).some(row=>row.kind==='supervisor.verification'&&/완료 조건 1개를 모두 충족했다고 보고했어요/u.test(row.summary)));
   const short=await setup(t,{client:request=>{report(request,false);return codexTurn(request);}});
   short.supervisor.start(short.work.work_id,short.work.revision,true);short.supervisor.activate();short.supervisor.tick();
   const review=await settle(short);assert.equal(review.state,'awaiting_review');assert.equal(review.reason,'WORK_CLIENT_REPORTED_INCOMPLETE');assert.equal(short.model.verifications,0);

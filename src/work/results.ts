@@ -244,7 +244,7 @@ export class WorkResults {
     if(!connector&&targetSnapshot)connector=createDeliveryConnector(targetSnapshot.target);
     requireCondition(connector&&row.target_alias,'RESULT_DELIVERY_CONNECTOR_UNAVAILABLE');
     const claim=db.prepare("UPDATE office_result_delivery SET status='sending',attempts=attempts+1,revision=revision+1,updated_at=? WHERE id=? AND revision=? AND status IN ('pending','failed')").run(at(),deliveryId,revision);requireCondition(claim.changes===1,'RESULT_DELIVERY_ALREADY_CLAIMED');
-    this.activity(project,workId,'delivery.sending','Sending the saved result.');
+    this.activity(project,workId,'delivery.sending','저장한 결과를 보내는 중이에요.');
     // The pictures the result made go with it to a channel that shows them; one the host cannot reread intact is left out.
     const images:DeliveryImage[]=[],imageTypes:Record<string,string>={'.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.webp':'image/webp','.gif':'image/gif'};
     // A saved artifact may carry no media type (a client run's files did not); the file name decides then.
@@ -258,7 +258,7 @@ export class WorkResults {
     const delivered=outcome.status==='delivered'&&typeof outcome.receipt_id==='string'&&outcome.receipt_id.length>0&&outcome.receipt_id.length<=500;
     const status=delivered?'delivered':outcome.status==='failed'&&outcome.effect_state==='not_dispatched'?'failed':'reconciliation_required';
     db.prepare('UPDATE office_result_delivery SET status=?,revision=revision+1,reason=?,receipt_id=?,updated_at=? WHERE id=? AND status=?').run(status,delivered?null:safe(outcome.status==='failed'?outcome.reason:'DELIVERY_RECEIPT_INVALID',300),delivered?safe((outcome as {receipt_id:string}).receipt_id,500):null,at(),deliveryId,'sending');
-    this.activity(project,workId,`delivery.${status}`,status==='delivered'?'Saved result delivered.':status==='failed'?'Delivery failed before dispatch.':'Delivery response needs reconciliation.');
+    this.activity(project,workId,`delivery.${status}`,status==='delivered'?'저장한 결과를 전달했어요.':status==='failed'?'보내기 전에 실패해서 전달하지 못했어요.':'전달 응답을 확인해야 해요.');
     return this.get(project,workId,resultId);
   }
   /** Retry the stored delivery, not the original Work. Uncertain sends require reconciliation. */
