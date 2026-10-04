@@ -143,7 +143,7 @@ test('runtime fixture Control Center alignment and compact right actions hold in
     assert.equal(await page.locator('#codex-model').inputValue(),selectedCodexModel,'Manage must focus the existing model setting without changing it');
     assert.equal(await page.locator('#codex-reasoning').inputValue(),selectedCodexEffort);
     await rightEdge(page,'#refresh-clients','#subscription-fields');await rightEdge(page,'#step-2>.actions button','#step-2');await noOverflow(page);
-    const models=await page.locator('#codex-model,#claude-model,#opencode-model').evaluateAll(items=>items.map(e=>e.getBoundingClientRect().width));
+    const models=await page.locator('#codex-model,#claude-model').evaluateAll(items=>items.map(e=>e.getBoundingClientRect().width));
     assert.ok(models.every(w=>Math.abs(w-models[0])<1),JSON.stringify(models));
     assert.equal(await page.locator('.terminal pre').evaluate(e=>getComputedStyle(e).textAlign),'start');
     assert.deepEqual(errors,[]);
@@ -201,7 +201,8 @@ test('runtime fixture client management opens actual settings without changing t
   await page.waitForFunction(()=>document.activeElement?.id==='codex-model');
   assert.equal(await page.locator('#codex-model').inputValue(),'fixture-model');
   assert.equal(await page.locator('#codex-reasoning').inputValue(),'medium');
-  await page.locator('#mode').selectOption('api');await settled(page,'save-model');
+  // The API mode is a legacy path hidden from the page unless saved; this case drives it on purpose.
+  await page.evaluate(()=>{document.getElementById('mode-field').hidden=false;});await page.locator('#mode').selectOption('api');await settled(page,'save-model');
   await page.locator('[data-step="0"]').click();await settled(page,'refresh-mcp');
   await page.getByRole('button',{name:'Manage Codex',exact:true}).click();
   await page.waitForFunction(()=>document.activeElement?.id==='mode');

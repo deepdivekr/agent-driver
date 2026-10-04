@@ -213,6 +213,7 @@ export const reviewedCopy: Record<string, readonly [string, string]> = {
   'REVIEW FIRST': ['먼저 확인해 주세요', 'Review first'],
   'IMPORT WORK': ['가져오기', 'Import'],
   'AI 앱': ['AI 앱', 'AI apps'],
+  '업무를 맡는 앱은 Codex와 Claude Code예요. 다른 앱은 Office에 업무를 건네는 연결만 해요.': ['업무를 맡는 앱은 Codex와 Claude Code예요. 다른 앱은 Office에 업무를 건네는 연결만 해요.', 'Codex and Claude Code take on Work. The other apps only hand Work to Office.'],
   'AI 설정': ['AI 설정', 'AI settings'],
   'run not started': ['아직 실행 전', 'Not started'],
   'work': ['업무', 'Work'],
