@@ -411,7 +411,7 @@ export async function executeClientRun(input:ClientRunInput):Promise<WorkClientR
     }
     if(report){
       const missing=report.checks.filter(item=>!item.met);
-      input.activity('supervisor.verification',report.met?`${clientName(client)} reported every completion condition met (${report.checks.length}); Office accepts the client's report for a Work that sends or submits nothing outside.`:`${clientName(client)} reported ${missing.length} condition${missing.length===1?'':'s'} not met: ${missing.map(item=>`${item.id}${item.note?` (${item.note})`:''}`).join('; ')}`.slice(0,1000),meta({stage_id:'completion.verify',status:report.met?'verified':'not_verified'}));
+      input.activity('supervisor.verification',report.met?`${clientName(client)}가 완료 조건 ${report.checks.length}개를 모두 충족했다고 보고했어요. 외부로 보내는 일이 없는 업무라 그 보고로 완료 처리해요.`:`${clientName(client)}가 충족하지 못한 조건 ${missing.length}개를 보고했어요: ${missing.map(item=>`${item.id}${item.note?` (${item.note})`:''}`).join('; ')}`.slice(0,1000),meta({stage_id:'completion.verify',status:report.met?'verified':'not_verified'}));
       return report.met?{status:'succeeded',summary:cp.summary,reason:null,completion_verified:true,checkpoint:cp,model_calls:[],...(deliveryText?{delivery_text:deliveryText}:{})}
         :{status:'awaiting_review',summary:cp.summary,reason:'WORK_CLIENT_REPORTED_INCOMPLETE',completion_verified:false,checkpoint:cp,model_calls:[],...(deliveryText?{delivery_text:deliveryText}:{})};
     }
